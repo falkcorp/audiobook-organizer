@@ -1,0 +1,20 @@
+# file: core/.errcheck-baseline
+# version: 1.0.0
+# guid: 640872fa-4e9d-4b60-8411-f75919f42f6f
+# last-edited: 2026-11-06
+
+# The number of `errcheck` findings tolerated in the core module. A ONE-WAY
+# RATCHET like the root's .errcheck-baseline: core/scripts/ci/check-errcheck-ratchet.sh
+# fails if the count goes UP and prints a notice if it goes DOWN (lower this file
+# to it in the PR that earned the drop, or let the scheduled ratchet-lower job).
+#
+# Separate from the root's baseline on purpose (09 §9.4 R1's CI classification):
+# the root's number was measured over the root module's ./... only, which never
+# reached core/, and it stays where it was. Code moving into core is counted here,
+# against core's own number, so a move cannot silently re-baseline either file.
+#
+# Set 2026-11-06 to the count measured by the script itself on core's own code
+# (R1-03; core/scripts/ci/check-errcheck-ratchet.sh --measure): 1, the unchecked
+# `f.Close` at core/buildid/buildid.go:83. Re-measure when rebasing onto a PR that
+# moves packages into core before trusting this number.
+1

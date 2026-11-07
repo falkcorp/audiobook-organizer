@@ -1,7 +1,7 @@
 # file: core/Makefile
-# version: 1.0.0
+# version: 1.1.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 # core's own Makefile (12 §12.3.11). It must run from an export of core/ alone
 # (12 SC4) and, after the split, the core repo has nothing else, so every
@@ -17,20 +17,29 @@ export GOTOOLCHAIN := go1.27.3
 
 PYTHON ?= python3
 
-.PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check
+.PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
+	errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor test-nightly
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
 print-toolchain:
 	@echo $(GOTOOLCHAIN)
 
-## ci: core's merge gate, the parts that exist at R1's first core PR.
+## ci: core's merge gate, the parts that exist at this point of R1.
 ##
-## 12 §12.3.11's full list adds vet-darwin vet-integration staticcheck
-## coverage-floor replace-check version-check errcheck-ratchet interface-width
-## mocks-check pprof-check web-test embed-check; each joins this target in the
-## PR that creates its subject or script (R1-03 owns the classification, R1-02
-## the darwin and integration vets).
-ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check
+## 09 §9.4 R1's CI classification decides what runs here and what runs from the
+## root: per-module gates (build vet test-short fmt-check tidy-check, and the two
+## ratchets over core's own baselines) run in both modules, `fix-check` runs
+## here only, the rest of the root's `make ci` is root only. Gates whose subject
+## core does not have yet (web-test, mocks-check, coverage-floor) print one
+## "not applicable" line and exit 0; each one fails loudly the moment its
+## subject appears without the real check being wired, so "not applicable" can
+## not outlive its reason.
+##
+## 12 §12.3.11's full list also has vet-darwin vet-integration staticcheck
+## replace-check version-check embed-check; each joins this target in the PR that
+## creates its subject or script (the darwin and integration vets run over core
+## from the root's `make ci` already, R1-02).
+ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor
 	@echo "core ci passed"
 
 build:
@@ -41,6 +50,11 @@ vet:
 
 test-short:
 	go test ./... -short -race -count=1 -timeout 25m
+
+## test-nightly: everything -short skips (property tests and the rest), for
+## nightly.yml's core job. Not part of ci.
+test-nightly:
+	go test ./... -race -count=1 -timeout 25m
 
 ## fmt-check: gofmt -l, excluding the npm trees (they ship .go files).
 fmt-check:
@@ -75,3 +89,45 @@ exclude-check:
 ## the root guard's job (12 SC10).
 toolchain-check:
 	$(PYTHON) scripts/ci/check_core_toolchain.py
+
+## errcheck-ratchet: errcheck findings in core against core/.errcheck-baseline
+## (one-way; core's own copy of the root script, so an export of core/ runs it).
+errcheck-ratchet:
+	@bash scripts/ci/check-errcheck-ratchet.sh
+
+## interface-width: interfacebloat findings in core against
+## core/.interface-width-baseline (one-way, core's own copy).
+interface-width:
+	@bash scripts/ci/check-interface-width.sh
+
+## pprof-check: vet and run the pprof-tagged tests (no other gate compiles with
+## -tags pprof). A package with no Pprof test just passes `go test -run`.
+pprof-check:
+	go vet -tags pprof ./...
+	go test -tags pprof -run Pprof -count=1 ./...
+	@echo "pprof-check: OK"
+
+## mocks-check: core's mockery config, from the first core interface with a mock.
+## Not applicable until core/.mockery.yaml exists; if it appears this target must
+## be wired to check it first, so it refuses rather than passing.
+mocks-check:
+	@if [ -e .mockery.yaml ]; then \
+		echo "mocks-check: .mockery.yaml exists but this target does not check it; wire it (09 §9.4 R1: mocks-check is per module)"; exit 1; \
+	fi
+	@echo "mocks-check: not applicable (no core/.mockery.yaml yet)"
+
+## web-test: core/web's npm workspace tests, from R1-30 which creates core/web.
+## Not applicable until then; refuses if core/web appears before it is wired.
+web-test:
+	@if [ -e web ]; then \
+		echo "web-test: core/web exists but this target does not test it; wire it (09 §9.4 R1: web-test is per npm workspace)"; exit 1; \
+	fi
+	@echo "web-test: not applicable (no core/web yet)"
+
+## coverage-floor: core's coverage ratchet floor, from the storage move (R1-23).
+## No floor yet; refuses if a floor file appears before it is enforced.
+coverage-floor:
+	@if [ -e .ci/coverage-floor.txt ]; then \
+		echo "coverage-floor: .ci/coverage-floor.txt exists but this target does not enforce it; wire it"; exit 1; \
+	fi
+	@echo "coverage-floor: no floor yet"
