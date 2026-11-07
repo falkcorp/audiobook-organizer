@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -853,6 +853,9 @@ func TestRedact_PairScanIsLinear(t *testing.T) {
 		// The empty-field reading inside an open brace, which never rescans
 		// back for the '{'.
 		"{Token: Name:", "{Token: Name:x ", "{{{{Password: URL:x}",
+		// Re-verification residuals: the Digest auth-param lookahead and the
+		// %+v brace lookahead are bounded.
+		`Digest a="`, "Digest a=b, ", "Digest a=b,c=", `{"a":1 Token: V2:x `, `{"`, "{" + strings.Repeat("A", 300),
 	} {
 		// 64 KiB first, so a quadratic shape fails fast instead of running
 		// for minutes at 1 MiB.
@@ -1293,5 +1296,77 @@ func TestRedact_VerificationReviewForms(t *testing.T) {
 	}
 	if !strings.Contains(text, "Err:<nil>") {
 		t.Errorf("text = %s, want Err:<nil>", text)
+	}
+}
+
+// Re-verification review of R1-32 (three residuals):
+//
+//  1. A URL-keyed value past the bound was cut at a '&', ';', '#' or
+//     whitespace inside its userinfo, leaking a password prefix.
+//  2. "digest" in prose followed by any name=value ("verified digest
+//     sha256=...") was read as a Digest credential.
+//  3. An unclosed JSON '{' switched on the %+v empty-field reading, so
+//     "Token: V2:<t>" after it was read as an empty field.
+func TestRedact_ReverificationResiduals(t *testing.T) {
+	r := NewRedactor(nil)
+	long := strings.Repeat("a", 70000)
+	for _, c := range []struct{ name, key, in string }{
+		{"1 ';' in userinfo", "url", "https://bruce:pa;" + fakePass + "@example.test/" + long},
+		{"1 '&' in userinfo", "url", "https://bruce:pa&" + fakePass + "@example.test/" + long},
+		{"1 '#' in userinfo", "url", "https://bruce:pa#" + fakePass + "@example.test/" + long},
+		{"1 space in userinfo", "url", "https://bruce:pa " + fakePass + "@example.test/" + long},
+		{"1 '@' past the bound", "url", "https://bruce:pa;" + long + fakePass + "@example.test/"},
+		{"1 another URL key", "http.url", "https://bruce:pa;" + fakePass + "@example.test/" + long},
+		{"1 url.query key", "url.query", "a=1&next=https://bruce:pa;" + fakePass + "@example.test/" + long},
+		{"1 second URL after whitespace", "url", "https://example.test/a https://bruce:pa;" + fakePass + "@example.test/" + long},
+		{"1 nested query URL", "url", "https://h.example/?next=https://bruce:pa;" + fakePass + "@h2.example/" + long},
+		{"1 nested query URL, space", "url", "https://h.example/?next=https://bruce:pa " + fakePass + "@h2.example/" + long},
+		{"1 second URL, '/' in password", "url", "https://example.test/a https://bruce:pa;x/" + fakePass + "@example.test/" + long},
+		{"1 second URL after whitespace, '&'", "url", "https://example.test/a https://bruce:pa&" + fakePass + "@example.test/" + long},
+		{"2 Digest header", "msg", `Authorization: Digest username="bruce", realm="gotham", nonce="n", response="` + fakePass + `"`},
+		{"2 Digest prose, RFC 7616 name", "msg", `retrying with Digest realm="gotham", response="` + fakePass + `"`},
+		{"2 Digest prose, upper-case name", "msg", `retrying with Digest Username="bruce", response="` + fakePass + `"`},
+		{"2 Digest prose, two auth-params", "msg", `retrying with Digest foo=bar, response="` + fakePass + `"`},
+		{"2 Digest prose, token68", "msg", "got Digest " + fakePass + fakePass},
+		{"3 unclosed JSON brace", "msg", `payload={"a":1 Token: V2:` + fakePass},
+		{"3 closed JSON brace", "msg", `payload={"a":1} Token: V2:` + fakePass},
+		{"3 JSON inside a struct, then outside", "msg", `{Name:x Body:{"k":1}} Token: V2:` + fakePass},
+	} {
+		got, k := r.StringKinds(c.key, c.in)
+		assertAbsent(t, c.name, got, fakePass, "bruce:pa", "pa;", "pa&", "pa#")
+		if k == 0 {
+			t.Errorf("%s: StringKinds reported no kind", c.name)
+		}
+	}
+	for _, c := range []struct{ name, in string }{
+		{"2 checksum in prose", "verified digest sha256=abcdef0123 path=/library/a.m4b"},
+		{"2 two space-separated pairs", "file digest md5=abc size=12"},
+		{"2 one pair", "checksum digest algo=sha256"},
+		{"3 struct with a JSON field", `{Name:x Body:{"k":1} Token: Name:y}`},
+		{"3 lower-case first field", "{ssn:x Token: Name:y}"},
+		{"3 pointer to struct", "&{Name:x Token: Title:Hush}"},
+	} {
+		assertUnchanged(t, r, "msg", c.in)
+	}
+	// A cut after the authority still keeps the head: the query separator
+	// before the bound is where the value is cut.
+	in := "https://bruce:" + fakePass + "@example.test/a?x=1&" + long
+	if got := r.String("url", in); got != "https://example.test/a?x=1&[REDACTED]" {
+		t.Errorf("cut after the authority = %q", got[:min(len(got), 120)])
+	}
+	if got := r.URL(in); got != "https://example.test/a?x=1&[REDACTED]" {
+		t.Errorf("URL cut after the authority = %q", got[:min(len(got), 120)])
+	}
+	// A cut inside the userinfo replaces the whole value.
+	for _, in := range []string{
+		"https://bruce:pa;" + fakePass + "@example.test/" + long,
+		"https://bruce:pa " + fakePass + "@example.test/" + long,
+	} {
+		if got := r.URL(in); got != "[REDACTED]" {
+			t.Errorf("URL(cut in userinfo) = %q", got[:min(len(got), 120)])
+		}
+		if got := r.String("url", in); got != "[REDACTED]" {
+			t.Errorf("String(url, cut in userinfo) = %q", got[:min(len(got), 120)])
+		}
 	}
 }
