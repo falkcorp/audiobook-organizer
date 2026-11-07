@@ -1,5 +1,5 @@
 // file: core/auth/method.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 52a74e31-1d25-42c9-950d-3275d209be9e
 // last-edited: 2026-11-06
 
@@ -26,8 +26,13 @@ const (
 )
 
 // Interactive and MayChangeCredentials keep today's allowlist semantics
-// (internal/auth/context.go:63-90): only MethodSession is interactive and may
-// change credentials among core methods. MethodAuthDisabled is explicitly
+// (internal/auth/context.go): among core methods only MethodSession is
+// interactive. MethodSession and MethodSessionDelegated may change
+// credentials: the reset-password flow is an admin minting a temp-login link
+// and the user's delegated session then setting the password, and every route
+// that mints a delegated session is itself guarded by this check, so a key
+// cannot reach one (owner decision 2026-11-06, amending 05-authn §3.1's "only
+// MethodSession"; seams.d/R1-12.md). MethodAuthDisabled is explicitly
 // non-interactive and MayChangeCredentials=false (fail closed). This is a
 // deliberate tightening: HEAD's credential guard is a pass-through with auth
 // off (credential_routes.go:79-82), stated in R2's release note (§4.11, SEC5-8).
@@ -35,8 +40,11 @@ const (
 // Extensions declare their own classification at registration (MethodSpec).
 func (m Method) Interactive() bool { return m == MethodSession }
 
-// MayChangeCredentials: see Interactive.
-func (m Method) MayChangeCredentials() bool { return m == MethodSession }
+// MayChangeCredentials: see Interactive. An allowlist, so a method nobody
+// classified fails closed.
+func (m Method) MayChangeCredentials() bool {
+	return m == MethodSession || m == MethodSessionDelegated
+}
 
 type Assurance uint8
 
