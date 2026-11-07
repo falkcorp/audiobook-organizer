@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package activity
 
@@ -577,9 +577,10 @@ func ParseLogLineFull(line string) ParsedLogLine {
 	// attrs, and dropping them is what left the activity log saying "cover art
 	// saved to" without saying where.
 	if isSlogTextLine(line) {
-		p.OpID = extractSlogAttr(line, "op_id", "operation_id", "opID")
-		p.Component = extractSlogAttr(line, "component", "subsystem", "pkg")
-		for _, a := range scanSlogAttrs(line) {
+		attrs := scanSlogAttrs(line)
+		p.OpID = firstAttrValue(attrs, "op_id", "operation_id", "opID")
+		p.Component = firstAttrValue(attrs, "component", "subsystem", "pkg")
+		for _, a := range attrs {
 			if _, structural := structuralSlogKeys[a.Key]; structural {
 				continue
 			}
@@ -598,40 +599,22 @@ func ParseLogLineFull(line string) ParsedLogLine {
 	return p
 }
 
-// extractSlogAttr scans the slog key=value attrs in a text-format log line for
-// any of the supplied key names and returns the first matching value. Values may
-// be quoted or bare. Returns "" if none match.
-func extractSlogAttr(line string, keys ...string) string {
+// firstAttrValue returns the value of the first attr whose key equals one of
+// keys, trying keys in the order given (so "op_id" outranks "opID" when a line
+// carries both). Keys are matched exactly against scanSlogAttrs' output, so
+// text inside a quoted value -- a message or a folder name such as
+// "moved x opID=other" -- can never be read as an attribute. The msg attr is
+// never a candidate, even if a caller passes "msg". Returns "" if none match.
+func firstAttrValue(attrs []LogAttr, keys ...string) string {
 	for _, key := range keys {
-		needle := " " + key + "="
-		_, after, ok := strings.Cut(line, needle)
-		if !ok {
+		if key == "msg" {
 			continue
 		}
-		rest := after
-		if rest == "" {
-			continue
-		}
-		if rest[0] == '"' {
-			// Quoted value: find the closing quote (skip escaped quotes).
-			i := 1
-			for i < len(rest) {
-				if rest[i] == '\\' {
-					i += 2
-					continue
-				}
-				if rest[i] == '"' {
-					return rest[1:i]
-				}
-				i++
+		for _, a := range attrs {
+			if a.Key == key {
+				return a.Value
 			}
-			continue
 		}
-		// Bare value: ends at next space.
-		if sp := strings.IndexByte(rest, ' '); sp > 0 {
-			return rest[:sp]
-		}
-		return rest
 	}
 	return ""
 }
