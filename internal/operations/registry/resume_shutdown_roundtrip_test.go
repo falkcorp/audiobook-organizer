@@ -1,13 +1,14 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
-// last-edited: 2026-10-03
+// last-edited: 2026-11-07
 
 package registry_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -201,12 +202,38 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndResumable(t *testing.T) {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer shutCancel()
 	shutdownReturned := make(chan struct{})
+	var shutdownErr error
 	go func() {
-		_ = r.Shutdown(shutCtx)
+		shutdownErr = r.Shutdown(shutCtx)
 		close(shutdownReturned)
 	}()
-	// The drain deadline must expire while the op is still in r.running.
-	time.Sleep(400 * time.Millisecond)
+
+	// Wait for Shutdown to RETURN, not for a wall-clock interval to pass.
+	//
+	// The timeout branch stamps the stuck run's row (registry.go, the
+	// <-ctx.Done() case of Shutdown) on Shutdown's own goroutine, once the 200ms
+	// drain deadline expires, and it does so before Shutdown returns. This test
+	// used to sleep 400ms and then read the store, which is a race between two
+	// wall-clock timers: on a CPU-starved CI agent the Shutdown goroutine could
+	// still be waiting to run its stamp when the sleep ended, and the row read
+	// "running" (Woodpecker pipeline 2517). That was the test sampling too early,
+	// not Shutdown leaving the row unstamped: a timed-out Shutdown always stamps
+	// every cancellable run before it returns. The returned channel is the
+	// happens-before edge, so every read below sees the stamp however slowly the
+	// machine ran. The 10s bound only turns a genuine hang into a failure.
+	//
+	// This does not depend on the op's goroutine finishing: it ignores
+	// cancellation and stays blocked on release until the end of the test, and
+	// Shutdown returns without waiting for it (it is a zombie, not a joined
+	// goroutine).
+	select {
+	case <-shutdownReturned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Shutdown never returned")
+	}
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
+		t.Errorf("Shutdown error = %v, want context.DeadlineExceeded (the drain deadline must be what ended the wait)", shutdownErr)
+	}
 
 	if got := store.statusOf(opID); got != "interrupted_quiesced" {
 		t.Errorf("after a timed-out Shutdown status=%q, want %q", got, "interrupted_quiesced")
