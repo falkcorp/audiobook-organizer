@@ -751,3 +751,93 @@ type statusValuer struct{ status string }
 func (s *statusValuer) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("opStatus", s.status))
 }
+
+// Fixture value for TestHandler_WithGroupRedactedLikeGroupValue.
+const groupSecret = "grp_test_bane_000"
+
+// A deny-listed WithGroup name hides its members exactly as a slog.Group
+// value of the same shape does: the logger's groups and attrs are assembled
+// into one tree and redacted on the same code path (security review of R1-36).
+func TestHandler_WithGroupRedactedLikeGroupValue(t *testing.T) {
+	ctx := context.Background()
+	render := func(f Format, emit func(*slog.Logger)) (string, []Record) {
+		var buf syncBuffer
+		l := newTestLogging(t, &buf, f, LevelInfo, nil)
+		var rec tapRecorder
+		l.Tap("t", LevelInfo, 4, rec.fn)
+		emit(l.Root())
+		closeDrained(t, l)
+		return buf.String(), rec.records()
+	}
+	cases := []struct {
+		name          string
+		viaWithGroup  func(*slog.Logger)
+		viaGroupValue func(*slog.Logger)
+	}{
+		{
+			name:          "record attr in WithGroup(password)",
+			viaWithGroup:  func(l *slog.Logger) { l.WithGroup("password").InfoContext(ctx, "x", "value", groupSecret) },
+			viaGroupValue: func(l *slog.Logger) { l.InfoContext(ctx, "x", slog.Group("password", "value", groupSecret)) },
+		},
+		{
+			name:          "With attr in WithGroup(password)",
+			viaWithGroup:  func(l *slog.Logger) { l.WithGroup("password").With("value", groupSecret).InfoContext(ctx, "x") },
+			viaGroupValue: func(l *slog.Logger) { l.InfoContext(ctx, "x", slog.Group("password", "value", groupSecret)) },
+		},
+		{
+			name: "nested WithGroup(a).WithGroup(token)",
+			viaWithGroup: func(l *slog.Logger) {
+				l.WithGroup("a").With("keep", "robin").WithGroup("token").InfoContext(ctx, "x", "value", groupSecret)
+			},
+			viaGroupValue: func(l *slog.Logger) {
+				l.InfoContext(ctx, "x", slog.Group("a", "keep", "robin", slog.Group("token", "value", groupSecret)))
+			},
+		},
+	}
+	for _, c := range cases {
+		for _, f := range []Format{FormatText, FormatJSON} {
+			t.Run(fmt.Sprintf("%s/%d", c.name, f), func(t *testing.T) {
+				gotW, recsW := render(f, c.viaWithGroup)
+				gotG, recsG := render(f, c.viaGroupValue)
+				if strings.Contains(gotW, groupSecret) || strings.Contains(gotG, groupSecret) {
+					t.Fatalf("secret reached the output:\nWithGroup:  %s\nGroupValue: %s", gotW, gotG)
+				}
+				if !strings.Contains(gotW, "[REDACTED]") {
+					t.Errorf("WithGroup path wrote no redaction: %s", gotW)
+				}
+				if stripTime(gotW) != stripTime(gotG) {
+					t.Errorf("paths disagree:\nWithGroup:  %s\nGroupValue: %s", gotW, gotG)
+				}
+				if len(recsW) != 1 || len(recsG) != 1 {
+					t.Fatalf("tap records: %d and %d", len(recsW), len(recsG))
+				}
+				if dw, dg := fmt.Sprint(recsW[0].Attrs), fmt.Sprint(recsG[0].Attrs); dw != dg || strings.Contains(dw, groupSecret) {
+					t.Errorf("tap records disagree or leak:\nWithGroup:  %s\nGroupValue: %s", dw, dg)
+				}
+			})
+		}
+	}
+
+	// An unused group prints nothing, not "[REDACTED]".
+	var buf syncBuffer
+	l := newTestLogging(t, &buf, FormatText, LevelInfo, nil)
+	l.Root().WithGroup("token").Info("plain")
+	if strings.Contains(buf.String(), "token") {
+		t.Errorf("empty group written: %q", buf.String())
+	}
+}
+
+// stripTime drops the time field of a text or JSON line.
+func stripTime(s string) string {
+	if i := strings.Index(s, "time="); i >= 0 {
+		if j := strings.IndexByte(s[i:], ' '); j >= 0 {
+			return s[:i] + s[i+j+1:]
+		}
+	}
+	if i := strings.Index(s, `"time":"`); i >= 0 {
+		if j := strings.Index(s[i+8:], `",`); j >= 0 {
+			return s[:i] + s[i+8+j+2:]
+		}
+	}
+	return s
+}

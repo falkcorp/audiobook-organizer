@@ -25,6 +25,10 @@ import (
 //  2. the context's attributes (WithAttrs) and the trace and span IDs of
 //     trace.SpanContextFromContext(ctx) are added;
 //  3. every attribute and the message go through the pipeline's Redactor;
+//     the logger's own attributes (WithAttrs) and its open groups (WithGroup)
+//     are first assembled into the same attribute tree a slog.Group value
+//     would make, and that tree is redacted as one, so WithGroup("password")
+//     and slog.Group("password", ...) take the same code path;
 //  4. fan-out: the primary stdlib Text or JSON handler, then each tap at or
 //     above its minimum level. Taps therefore only ever see redacted records.
 //
@@ -36,12 +40,12 @@ import (
 type handler struct {
 	l      *Logging
 	sc     *scope
-	pre    []slog.Attr // WithAttrs before any WithGroup, already redacted
+	pre    []slog.Attr // WithAttrs before any WithGroup, unredacted
 	groups []openGroup // WithGroup names, each with the attrs added after it
 }
 
-// openGroup is one WithGroup and the (redacted) attrs added while it was the
-// innermost open group.
+// openGroup is one WithGroup and the (unredacted) attrs added while it was
+// the innermost open group.
 type openGroup struct {
 	name  string
 	attrs []slog.Attr
@@ -52,14 +56,16 @@ func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= h.sc.gate.Level()
 }
 
-// WithAttrs redacts attrs once, here (the stdlib handlers also resolve a
-// logger's attrs when it is built), and keeps them inside the innermost open
-// group.
+// WithAttrs keeps attrs, unredacted, inside the innermost open group. They
+// are redacted per record in Handle, together with the groups around them,
+// so a group name the deny-list matches hides them exactly as it hides the
+// members of a slog.Group value; a LogValuer among them is resolved at log
+// time.
 func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	red := h.l.redactAll(nil, attrs)
+	red := slices.Clone(attrs)
 	nh := *h
 	if len(h.groups) == 0 {
 		nh.pre = append(slices.Clip(h.pre), red...)
@@ -108,15 +114,19 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 		traceID, spanID = sc.TraceID().String(), sc.SpanID().String()
 	}
 
-	// Step 3: redact. The logger's own attrs were redacted by WithAttrs. The
-	// message is redacted under the empty key: no key rule applies to it, and
-	// the text scan (URLs, paths, key=value pairs, auth schemes) does.
-	recAttrs = l.redactAll(recAttrs[:0], recAttrs)
+	// Step 3: redact. The logger's attrs, its open groups and the record's
+	// attrs form one tree, redacted top-level attr by top-level attr through
+	// Redactor.attr (which recurses into groups and applies the key rule to
+	// group names). The message is redacted under the empty key: no key rule
+	// applies to it, and the text scan (URLs, paths, key=value pairs, auth
+	// schemes) does.
+	tree := make([]slog.Attr, 0, len(h.pre)+1)
+	tree = append(tree, h.pre...)
+	tree = append(tree, h.nest(recAttrs)...)
+	body := l.redactAll(tree[:0], tree)
 	ctxRed := l.redactAll(nil, ctxAttrs(ctx))
 	msg, mk := l.redactor.StringKinds("", r.Message)
 	l.countRedactions(mk)
-
-	body := h.nest(recAttrs)
 	t := r.Time
 	if l.now != nil {
 		t = l.now()
@@ -129,7 +139,6 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	if h.sc.subsystem != "" {
 		out.AddAttrs(slog.String(KeySubsystem, h.sc.subsystem))
 	}
-	out.AddAttrs(h.pre...)
 	out.AddAttrs(body...)
 	out.AddAttrs(ctxRed...)
 	if traceID != "" {
@@ -148,8 +157,7 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 			continue
 		}
 		if first {
-			attrs = make([]slog.Attr, 0, len(h.pre)+len(body)+len(ctxRed))
-			attrs = appendFlat(attrs, h.pre)
+			attrs = make([]slog.Attr, 0, len(body)+len(ctxRed))
 			attrs = appendFlat(attrs, body)
 			attrs = appendFlat(attrs, ctxRed)
 		}
@@ -173,11 +181,17 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // nest wraps the record's attrs in the open groups, each group holding the
-// attrs added while it was innermost, then the next group.
+// attrs added while it was innermost, then the next group: the tree a
+// slog.Group value of the same shape would be. A group left with no members
+// is dropped, as the stdlib handlers drop it, so an unused WithGroup prints
+// nothing (and no "[REDACTED]" for an empty denied group).
 func (h *handler) nest(recAttrs []slog.Attr) []slog.Attr {
 	inner := recAttrs
 	for i := len(h.groups) - 1; i >= 0; i-- {
 		g := h.groups[i]
+		if len(g.attrs) == 0 && len(inner) == 0 {
+			continue
+		}
 		children := make([]slog.Attr, 0, len(g.attrs)+len(inner))
 		children = append(children, g.attrs...)
 		children = append(children, inner...)
@@ -188,6 +202,7 @@ func (h *handler) nest(recAttrs []slog.Attr) []slog.Attr {
 
 // redactAll appends the redaction of each of in to dst, counting the kinds.
 // dst may alias in's backing array at the same index (in-place redaction).
+// It is the only place the pipeline redacts attributes.
 func (l *Logging) redactAll(dst, in []slog.Attr) []slog.Attr {
 	for _, a := range in {
 		ra, k := l.redactor.attr(a)
