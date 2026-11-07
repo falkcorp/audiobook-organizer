@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e9d797ab-e187-456c-b23a-12fae047e7b9
 // last-edited: 2026-11-07
 
@@ -179,15 +179,32 @@ func TestStopOrder(t *testing.T) {
 
 func TestStartRollbackReverseOrder(t *testing.T) {
 	failed := errors.New("Bane broke the cowl")
+	never := time.Duration(-1) // release only after Run returned
 	for _, tc := range []struct {
-		name  string
-		start func(ctx context.Context, release <-chan struct{}) error
-		want  error
+		name    string
+		start   func(ctx context.Context, release <-chan struct{}) error
+		release time.Duration // when the test releases a Start that ignores its ctx
+		want    error
+		took    time.Duration // 0 = not checked
+		stops   []string      // every Stop called, once the late Start is released
 	}{
-		{"error", func(context.Context, <-chan struct{}) error { return failed }, failed},
-		{"panic", func(context.Context, <-chan struct{}) error { panic("venom overdose") }, nil},
-		{"timeout honouring ctx", func(ctx context.Context, _ <-chan struct{}) error { <-ctx.Done(); return ctx.Err() }, context.DeadlineExceeded},
-		{"timeout ignoring ctx", func(_ context.Context, release <-chan struct{}) error { <-release; return nil }, context.DeadlineExceeded},
+		{name: "error", start: func(context.Context, <-chan struct{}) error { return failed }, want: failed,
+			stops: []string{"stop:alfred.cape", "stop:alfred.cowl"}},
+		{name: "panic", start: func(context.Context, <-chan struct{}) error { panic("venom overdose") },
+			stops: []string{"stop:alfred.cape", "stop:alfred.cowl"}},
+		{name: "timeout honouring ctx", start: func(ctx context.Context, _ <-chan struct{}) error { <-ctx.Done(); return ctx.Err() },
+			want: context.DeadlineExceeded, took: startTimeout, stops: []string{"stop:alfred.cape", "stop:alfred.cowl"}},
+		// The review's m1: a Start abandoned at the timeout that returns nil
+		// later has started its hook, so the hook is stopped, first.
+		{name: "timeout ignoring ctx, starts late", start: func(_ context.Context, release <-chan struct{}) error { <-release; return nil },
+			release: startTimeout + time.Second, want: context.DeadlineExceeded, took: startTimeout + time.Second,
+			stops: []string{"stop:bane.venom", "stop:alfred.cape", "stop:alfred.cowl"}},
+		// Still running when the rollback's budget runs out: like a Stop that
+		// holds the budget, it starves the rest, whose Stops are then called
+		// unawaited; its own Stop runs in the background if it ever starts.
+		{name: "timeout ignoring ctx, never starts in time", start: func(_ context.Context, release <-chan struct{}) error { <-release; return nil },
+			release: never, want: context.DeadlineExceeded, took: startTimeout + defaultShutdownBudget,
+			stops: []string{"stop:alfred.cape", "stop:alfred.cowl", "stop:bane.venom"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -200,19 +217,29 @@ func TestStartRollbackReverseOrder(t *testing.T) {
 					return nil
 				})
 				k := mustNew(t, supervised(t, rec, hooked("alfred", rec), bane))
+				var once sync.Once
+				free := func() { once.Do(func() { close(release) }) }
+				defer free() // a failed check must not leave the Start blocked in the bubble
+				if tc.release > 0 {
+					time.AfterFunc(tc.release, free)
+				}
 				begin := time.Now()
 				err := k.Run(t.Context())
-				close(release)
+				took := time.Since(begin)
 				if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) || !strings.Contains(err.Error(), "bane.venom") {
 					t.Fatalf("Run = %v, want an error naming bane.venom (%v)", err, tc.want)
 				}
-				if tc.want == context.DeadlineExceeded {
-					if took := time.Since(begin); took != startTimeout {
-						t.Fatalf("start gave up after %s, want core.lifecycle.start_timeout %s", took, startTimeout)
-					}
+				if tc.took != 0 && took != tc.took {
+					t.Fatalf("Run returned after %s, want %s", took, tc.took)
 				}
-				if got, want := rec.matching("stop:"), []string{"stop:alfred.cape", "stop:alfred.cowl"}; !slices.Equal(got, want) {
-					t.Fatalf("rollback stops = %v, want the started hooks in reverse: %v", got, want)
+				// The Stops called unawaited after the budget run now; a Start
+				// still running can only be stopped once it returns, so its
+				// Stop comes last.
+				synctest.Wait()
+				free()
+				synctest.Wait()
+				if got := rec.matching("stop:"); !slices.Equal(got, tc.stops) {
+					t.Fatalf("rollback stops = %v, want %v", got, tc.stops)
 				}
 				for _, never := range []string{"worker:alfred", "r1values", "ready"} {
 					if rec.index(never) >= 0 {
@@ -258,15 +285,15 @@ func TestStopTimeoutAbandons(t *testing.T) {
 				err := <-done
 				took := time.Since(begin)
 				close(release)
+				synctest.Wait() // the hooks reached after the budget are stopped unawaited
 				if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "joker.laugh") {
 					t.Fatalf("Run = %v, want the abandoned joker.laugh", err)
 				}
-				// The stop order continued past the abandoned hook.
+				// The stop order continued past the abandoned hook, in order.
 				if got, want := rec.matching("stop:"), []string{"stop:joker.laugh", "stop:alfred.cape", "stop:alfred.cowl"}; !slices.Equal(got, want) {
 					t.Fatalf("stops = %v, want %v", got, want)
 				}
-				// Each later Stop finishes inside lateStopFloor; the joker hook
-				// held the budget.
+				// The joker hook held the budget; the rest add nothing.
 				if took < tc.want || took > tc.want+lateStopFloor {
 					t.Fatalf("stop took %s, want the budget %s", took, tc.want)
 				}
@@ -342,11 +369,11 @@ func TestRestartRequest_ExitsRestartCode(t *testing.T) {
 		k := mustNew(t, supervised(t, rec, hooked("alfred", rec)))
 		done := run(t.Context(), k)
 		synctest.Wait()
-		k.Lifecycle().RequestRestart("Bruce staged a restore")
-		k.Lifecycle().RequestRestart("a second request is a no-op")
+		k.lifecycle.RequestRestart("Bruce staged a restore")
+		k.lifecycle.RequestRestart("a second request is a no-op")
 		err := <-done
-		if !errors.Is(err, ErrRestartRequested) || !strings.Contains(err.Error(), "Bruce staged a restore") {
-			t.Fatalf("Run = %v, want ErrRestartRequested with the first reason", err)
+		if !errors.Is(err, errRestartRequested) || !strings.Contains(err.Error(), "Bruce staged a restore") {
+			t.Fatalf("Run = %v, want errRestartRequested with the first reason", err)
 		}
 		ev := rec.list()
 		if got := rec.matching("exit:"); !slices.Equal(got, []string{"exit:75"}) {
@@ -396,6 +423,102 @@ func TestRunTwice(t *testing.T) {
 		cancel()
 		if err := <-done; err != nil {
 			t.Fatal(err)
+		}
+	})
+}
+
+// TestStopBudget_LateHooksNotAwaited is the review's M1: with the budget
+// spent by the first Stop, the hooks after it get no time of their own (a
+// floor each would overrun the budget by one floor per hook). Their Stops
+// are still called, in reverse order, with an expired ctx.
+func TestStopBudget_LateHooksNotAwaited(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		const budget = 2 * time.Second
+		gcpd := mod("gcpd", func(r *module.Registrar) error {
+			for _, name := range []string{"gordon", "bullock", "montoya", "allen"} {
+				r.Hook(module.Hook{Name: "gcpd." + name, Stop: func(ctx context.Context) error {
+					rec.add("stop:%s", name)
+					<-ctx.Done() // honours its ctx, and blocks until it is done
+					return ctx.Err()
+				}})
+			}
+			return nil
+		})
+		c := supervised(t, rec, gcpd)
+		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: budget} }
+		k := mustNew(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		synctest.Wait()
+		begin := time.Now()
+		cancel()
+		err := <-done
+		took := time.Since(begin)
+		synctest.Wait()
+		if took > budget+lateStopFloor {
+			t.Fatalf("stop took %s with 4 blocking hooks, want at most the budget %s plus one floor %s", took, budget, lateStopFloor)
+		}
+		if got, want := rec.matching("stop:"), []string{"stop:allen", "stop:montoya", "stop:bullock", "stop:gordon"}; !slices.Equal(got, want) {
+			t.Fatalf("stops = %v, want every hook told to stop, in reverse order: %v", got, want)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "gcpd.montoya, gcpd.bullock, gcpd.gordon") {
+			t.Fatalf("Run = %v, want the hooks reached after the budget named", err)
+		}
+	})
+}
+
+// TestR1ValuesPanic_StopsInOrder is the review's m7: R1Values is module-free
+// app code, so a panic in it is an error like any other start failure, and
+// the hooks and workers already started are stopped.
+func TestR1ValuesPanic_StopsInOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		c := supervised(t, rec, hooked("alfred", rec))
+		c.R1Values = func() R1Values { panic("Riddler swapped the config") }
+		k := mustNew(t, c)
+		err := k.Run(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "panic: Riddler swapped the config") {
+			t.Fatalf("Run = %v, want the R1Values panic as an error", err)
+		}
+		if got, want := rec.matching("stop:"), []string{"stop:alfred.cape", "stop:alfred.cowl"}; !slices.Equal(got, want) {
+			t.Fatalf("stops = %v, want the started hooks stopped in reverse: %v", got, want)
+		}
+		if rec.index("worker-exit:alfred") < 0 {
+			t.Fatal("the started worker was not stopped")
+		}
+		for _, never := range rec.list() {
+			if strings.HasPrefix(never, "listen:") || never == "ready" {
+				t.Fatalf("%s happened after R1Values panicked: %v", never, rec.list())
+			}
+		}
+	})
+}
+
+// TestDepsRequestRestart is Deps.RequestRestart: a module that asks for a
+// restart through its Deps leaves Run through the restart path, exit 75.
+func TestDepsRequestRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		lucius := mod("lucius", func(r *module.Registrar) error {
+			d := r.Deps()
+			r.Worker(module.Worker{Name: "swap", Policy: module.DegradeOnExit, Run: func(ctx context.Context) error {
+				d.RequestRestart("Lucius staged a swap")
+				<-ctx.Done()
+				return ctx.Err()
+			}})
+			return nil
+		})
+		k := mustNew(t, supervised(t, rec, hooked("alfred", rec), lucius))
+		err := k.Run(t.Context())
+		if !errors.Is(err, errRestartRequested) || !strings.Contains(err.Error(), "Lucius staged a swap") {
+			t.Fatalf("Run = %v, want errRestartRequested with the module's reason", err)
+		}
+		if got := rec.matching("exit:"); !slices.Equal(got, []string{"exit:75"}) {
+			t.Fatalf("exits = %v, want exactly one exit(75)", got)
+		}
+		if rec.index("stop:alfred.cowl") < 0 || rec.index("stop:alfred.cowl") > rec.index("exit:75") {
+			t.Fatalf("exit(75) is not after the stop order: %v", rec.list())
 		}
 	})
 }

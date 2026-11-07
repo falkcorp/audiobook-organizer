@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-07
 
@@ -28,17 +28,19 @@ const (
 	httpDrain             = 10 * time.Second // core.shutdown.http_drain
 	startTimeout          = 60 * time.Second // core.lifecycle.start_timeout
 	restartExitCode       = 75               // core.lifecycle.restart_exit_code
-	// lateStopFloor is the least time a stop step gets once the budget is
-	// spent: a Stop hook called after the cap, so a hook that releases its
-	// resources without blocking still finishes before the stop order moves
-	// on, and the final close of metrics and logging.
+	// lateStopFloor is the least time the final close of metrics and logging
+	// gets once the budget is spent, so buffered records still reach their
+	// outputs. It is the one step with a floor: Stop hooks reached after the
+	// deadline get none (stopHooks), so a stop overruns the budget by at most
+	// this much.
 	lateStopFloor = time.Second
 )
 
-// ErrRestartRequested is what Run returns after a restart request's stop
-// order when the exit func returns (a test's); in production the process has
-// exited with restartExitCode by then.
-var ErrRestartRequested = errors.New("kernel: restart requested")
+// errRestartRequested is what Run returns after a restart request's stop
+// order when Config.Exit returns (a test's); in production the process has
+// exited with restartExitCode by then, so no caller outside the kernel can
+// observe it and it is not exported.
+var errRestartRequested = errors.New("kernel: restart requested")
 
 var errRunTwice = errors.New("kernel: Run called more than once")
 
@@ -126,32 +128,42 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// P5; the realtime hub lands with realtime.
 	// (2) Module hooks, modules in ID order, each module's in registration
 	// order (the reset hook arrives with storage).
-	started, err := k.startHooks(ctx)
+	started, late, err := k.startHooks(ctx)
 	if err != nil {
+		// R1Values (and core.shutdown.budget with it) is read at start step
+		// 7, after the hooks, so a start failure rolls back within core's
+		// default budget. A hook whose Start was abandoned is the newest:
+		// it is stopped first, if its Start returns nil in time.
 		deadline := time.Now().Add(defaultShutdownBudget)
-		return errors.Join(err, k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
+		return errors.Join(err, k.stopLateStart(ctx, late, deadline), k.stopHooks(ctx, started, deadline),
+			k.closeCore(ctx, deadline))
 	}
 	// (3) Module workers. Steps (3a) to (6) arrive with storage, health,
 	// events and tasks.
 	ws := k.startWorkers(ctx)
 	// (7) Listeners: R1Values once (05-config §1.12.1), then the listener.
-	v := k.r1Values()
+	v, err := k.r1Values()
 	budget := v.ShutdownBudget
 	if budget == 0 {
 		budget = defaultShutdownBudget
 	}
 	var srv Server
-	if budget < 0 {
+	switch {
+	case err != nil:
+		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
+	case budget < 0:
 		err = fmt.Errorf("kernel: core.shutdown.budget %s is negative", v.ShutdownBudget)
 		budget = defaultShutdownBudget
-	} else {
-		srv, err = k.listen(httpapi.ListenOptions{Addr: v.Listen, TLSCertFile: v.TLSCertFile, TLSKeyFile: v.TLSKeyFile},
-			k.handler, k.coreLog("http"))
+	default:
+		if srv, err = k.listen(httpapi.ListenOptions{Addr: v.Listen, TLSCertFile: v.TLSCertFile, TLSKeyFile: v.TLSKeyFile},
+			k.handler, k.coreLog("http")); err != nil {
+			err = fmt.Errorf("kernel: listener: %w", err)
+		}
 	}
 	if err != nil {
 		deadline := time.Now().Add(budget)
-		return errors.Join(fmt.Errorf("kernel: listener: %w", err), k.stopWorkers(ctx, ws, deadline),
-			k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
+		return errors.Join(err, k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
+			k.closeCore(ctx, deadline))
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve() }()
@@ -180,7 +192,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	stopErr := k.stop(ctx, deadline, srv, served, serveDone, ws, started)
 	if restart {
 		k.exit(restartExitCode)
-		return errors.Join(fmt.Errorf("%w: %s", ErrRestartRequested, k.lifecycle.reason), stopErr)
+		return errors.Join(fmt.Errorf("%w: %s", errRestartRequested, k.lifecycle.reason), stopErr)
 	}
 	return errors.Join(cause, stopErr)
 }
@@ -220,50 +232,98 @@ func (k *Kernel) stop(ctx context.Context, deadline time.Time, srv Server, serve
 	return errors.Join(errs...)
 }
 
+// lateStart is a hook whose Start was abandoned (it outlived
+// core.lifecycle.start_timeout or Run's ctx) and may still return nil.
+type lateStart struct {
+	hook   moduleHook
+	result <-chan error
+}
+
 // startHooks starts every hook in order, each within startTimeout and its
 // own goroutine, so a Start that never returns is abandoned at the timeout.
 // It returns the hooks whose Start succeeded (a hook with no Start counts as
-// started, so its Stop runs).
-func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, error) {
+// started, so its Stop runs) and, when a Start was abandoned, that hook.
+func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, *lateStart, error) {
 	var started []moduleHook
 	for _, h := range k.hooks {
 		if h.hook.Start != nil {
 			sctx, cancel := context.WithTimeout(ctx, startTimeout)
-			done, err := k.await(sctx, h, "start", h.hook.Start)
+			pending, err := k.await(sctx, h, "start", h.hook.Start)
 			cancel()
 			switch {
-			case !done && errors.Is(sctx.Err(), context.DeadlineExceeded):
+			case pending != nil && errors.Is(sctx.Err(), context.DeadlineExceeded):
 				k.log.ErrorContext(ctx, "kernel: hook start exceeded core.lifecycle.start_timeout",
 					"module", h.module, "hook", h.hook.Name, "timeout", startTimeout.String())
-				return started, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s: %w",
+				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s: %w",
 					h.hook.Name, startTimeout, context.DeadlineExceeded)
-			case !done:
-				return started, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, sctx.Err())
+			case pending != nil:
+				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, sctx.Err())
 			case err != nil:
 				k.log.ErrorContext(ctx, "kernel: hook start failed", "module", h.module, "hook", h.hook.Name, "err", err)
-				return started, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, err)
+				return started, nil, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, err)
 			}
 		}
 		started = append(started, h)
 	}
-	return started, nil
+	return started, nil, nil
 }
 
-// stopHooks stops started hooks in exact reverse order. Each Stop's ctx
-// carries the budget's deadline (at least lateStopFloor from its call); a
-// Stop still running then is abandoned with an ERROR naming it, and the stop
-// order continues with the next hook.
+// stopLateStart waits until deadline for an abandoned Start's result: a
+// Start that returned nil started its hook, so its Stop runs (within the
+// same deadline) before the hooks started earlier. A Start still running at
+// the deadline is abandoned with an ERROR; if it returns nil later, a
+// background goroutine calls its Stop with an expired ctx, unawaited.
+func (k *Kernel) stopLateStart(ctx context.Context, late *lateStart, deadline time.Time) error {
+	if late == nil {
+		return nil
+	}
+	h := late.hook
+	ok, startErr := waitUntil(late.result, deadline)
+	switch {
+	case !ok:
+		k.log.ErrorContext(ctx, "kernel: abandoned hook start still running at the shutdown budget", "module", h.module, "hook", h.hook.Name)
+		k.stopInBackground(ctx, []moduleHook{h}, deadline, late.result)
+		return fmt.Errorf("kernel: hook %s start still running at the shutdown budget: %w", h.hook.Name, context.DeadlineExceeded)
+	case startErr != nil || h.hook.Stop == nil:
+		return nil // it never started, or there is nothing to stop
+	}
+	return k.stopHooks(ctx, []moduleHook{h}, deadline)
+}
+
+// stopHooks stops started hooks in exact reverse order, each within the
+// budget's deadline; a Stop still running at the deadline is abandoned with
+// an ERROR naming it, and the order continues. The hooks reached after the
+// deadline get no time of their own (a floor each would overrun the budget
+// by one floor per hook): their Stops are still called, in the same reverse
+// order, from one background goroutine with an expired ctx, and not awaited,
+// so every hook is told to stop and the stop keeps to the budget plus
+// closeCore's one floor.
 func (k *Kernel) stopHooks(ctx context.Context, started []moduleHook, deadline time.Time) error {
-	var errs []error
+	var hooks []moduleHook
 	for _, h := range slices.Backward(started) {
-		if h.hook.Stop == nil {
-			continue
+		if h.hook.Stop != nil {
+			hooks = append(hooks, h)
 		}
-		sctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
-		done, err := k.await(sctx, h, "stop", h.hook.Stop)
+	}
+	var errs []error
+	for i, h := range hooks {
+		if !time.Now().Before(deadline) {
+			names := make([]string, 0, len(hooks)-i)
+			for _, l := range hooks[i:] {
+				names = append(names, l.hook.Name)
+			}
+			k.log.ErrorContext(ctx, "kernel: hook stops reached after the shutdown budget; called, not awaited",
+				"hooks", strings.Join(names, ", "))
+			errs = append(errs, fmt.Errorf("kernel: hooks %s stopped after the shutdown budget, not awaited: %w",
+				strings.Join(names, ", "), context.DeadlineExceeded))
+			k.stopInBackground(ctx, hooks[i:], deadline, nil)
+			break
+		}
+		sctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		pending, err := k.await(sctx, h, "stop", h.hook.Stop)
 		cancel()
 		switch {
-		case !done:
+		case pending != nil:
 			k.log.ErrorContext(ctx, "kernel: hook stop abandoned at the shutdown budget", "module", h.module, "hook", h.hook.Name)
 			errs = append(errs, fmt.Errorf("kernel: hook %s stop abandoned: %w", h.hook.Name, context.DeadlineExceeded))
 		case err != nil:
@@ -274,19 +334,41 @@ func (k *Kernel) stopHooks(ctx context.Context, started []moduleHook, deadline t
 	return errors.Join(errs...)
 }
 
-// await runs fn(ctx) in its own goroutine, turning a panic into an error, and
-// waits until it returns (done) or ctx is done (abandoned: the goroutine is
-// left to finish on its own).
-func (k *Kernel) await(ctx context.Context, h moduleHook, op string, fn func(context.Context) error) (done bool, err error) {
+// stopInBackground calls each hook's Stop in order from one goroutine with a
+// ctx already past deadline, unawaited. With started set, it first waits for
+// that abandoned Start's result and stops only if it was nil. A Stop's
+// error or panic is logged; the primary log output outlives closeCore.
+func (k *Kernel) stopInBackground(ctx context.Context, hooks []moduleHook, deadline time.Time, started <-chan error) {
+	lctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	go func() {
+		defer cancel()
+		if started != nil {
+			if err := <-started; err != nil {
+				return // it never started
+			}
+		}
+		for _, h := range hooks {
+			if err := k.protect(h.module, h.hook.Name, "stop", func() error { return h.hook.Stop(lctx) }); err != nil {
+				k.log.Error("kernel: late hook stop failed", "module", h.module, "hook", h.hook.Name, "err", err)
+			}
+		}
+	}()
+}
+
+// await runs fn(ctx) in its own goroutine, turning a panic into an error,
+// and waits until it returns or ctx is done. pending is nil when fn returned
+// (err is its result); otherwise fn was abandoned and pending delivers its
+// result whenever it returns.
+func (k *Kernel) await(ctx context.Context, h moduleHook, op string, fn func(context.Context) error) (pending <-chan error, err error) {
 	ch := make(chan error, 1)
 	go func() {
 		ch <- k.protect(h.module, h.hook.Name, op, func() error { return fn(ctx) })
 	}()
 	select {
 	case err := <-ch:
-		return true, err
+		return nil, err
 	case <-ctx.Done():
-		return false, nil
+		return ch, nil
 	}
 }
 
@@ -380,12 +462,18 @@ func (k *Kernel) stopWorkers(ctx context.Context, ws *workerSet, deadline time.T
 	return fmt.Errorf("kernel: workers %s abandoned: %w", strings.Join(names, ", "), context.DeadlineExceeded)
 }
 
-// r1Values calls Config.R1Values once; nil means every value at its default.
-func (k *Kernel) r1Values() R1Values {
+// r1Values calls Config.R1Values once; nil means every value at its
+// default. It is app code: a panic is recovered into an error, so the stop
+// order still runs.
+func (k *Kernel) r1Values() (v R1Values, err error) {
 	if k.cfg.R1Values == nil {
-		return R1Values{}
+		return R1Values{}, nil
 	}
-	return k.cfg.R1Values()
+	err = k.protect("", "R1Values", "call", func() error {
+		v = k.cfg.R1Values()
+		return nil
+	})
+	return v, err
 }
 
 // signal logs a failed readiness signal; it never fails the app.

@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-07
 
@@ -157,6 +157,10 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		ServerName: serviceName,
 		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.cfg.AppID + "_session"},
 	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider()})
+	// Core's group claims /api/core/ now, before any module registers, so a
+	// module's legacy prefix over it collides at P7 (05-http-api §4.9). Core
+	// routes join it as their packages land.
+	k.router.CoreGroup()
 	return nil
 }
 

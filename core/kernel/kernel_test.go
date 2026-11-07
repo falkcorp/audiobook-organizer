@@ -1,5 +1,5 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
 // last-edited: 2026-11-07
 
@@ -135,6 +135,31 @@ func TestCatalog_EnablementAndDisabledClaims(t *testing.T) {
 	_, err := New(t.Context(), testConfig(t, wayne, thief))
 	if !hasKind(err, module.ProblemLegacyPrefixCollision) || !errors.Is(err, httpapi.ErrPrefixCollision) {
 		t.Fatalf("claim inside a disabled module's prefix = %v, want ProblemLegacyPrefixCollision", err)
+	}
+}
+
+// TestModuleRootsClaimed is the review's B1: every catalog entry's
+// /api/<id>/ is claimed, enabled or not, and so is core's /api/core/, so a
+// legacy prefix over any of them fails boot now, not on the day the module is
+// enabled or the first core route lands (06 §6.5.1 P1; 05-http-api §4.9).
+func TestModuleRootsClaimed(t *testing.T) {
+	bane := mod("bane", nil).with(func(m *module.Manifest) { m.DefaultEnabled = false })
+	joker := mod("joker", nil).with(func(m *module.Manifest) {
+		m.LegacyPrefixes = []string{"/api/bane/", "/api/core/", "/api/alfred/venom"}
+	})
+	_, err := New(t.Context(), testConfig(t, bane, joker, mod("alfred", nil)))
+	if !errors.Is(err, httpapi.ErrPrefixCollision) {
+		t.Fatalf("New = %v, want ErrPrefixCollision", err)
+	}
+	var got []string
+	for _, p := range problems(t, err) {
+		if p.Module != "joker" || p.Kind != module.ProblemLegacyPrefixCollision {
+			t.Fatalf("problem %v, want only joker's ProblemLegacyPrefixCollision", p)
+		}
+		got = append(got, p.Detail)
+	}
+	if len(got) != 3 {
+		t.Fatalf("problems = %q, want one per prefix over a claimed root (disabled bane, core, enabled alfred)", got)
 	}
 }
 
@@ -393,13 +418,23 @@ func TestDepsScoping(t *testing.T) {
 
 func TestRegistrarClosedAfterRegister(t *testing.T) {
 	var kept *module.Registrar
-	k := mustNew(t, testConfig(t, mod("batcave", func(r *module.Registrar) error { kept = r; return nil })))
+	capture := coretest.NewLogCapture(t)
+	c := testConfig(t, mod("batcave", func(r *module.Registrar) error { kept = r; return nil }))
+	c.Logger = capture.Logger()
+	k := mustNew(t, c)
 	kept.Hook(module.Hook{Name: "batcave.late", Start: func(context.Context) error { t.Error("a late hook ran"); return nil }})
 	if !errors.Is(kept.Err(), module.ErrRegistrarClosed) {
 		t.Fatalf("late Hook: Err() = %v, want ErrRegistrarClosed", kept.Err())
 	}
 	if len(k.hooks) != 0 {
 		t.Fatalf("the kernel holds %d hooks, want none", len(k.hooks))
+	}
+	// The review's m4: the kernel read Err once, so a late call is logged,
+	// not lost.
+	if !slices.ContainsFunc(capture.Records(), func(r slog.Record) bool {
+		return r.Level == slog.LevelError && strings.Contains(r.Message, "registrar call after Register returned")
+	}) {
+		t.Fatalf("no ERROR for the late registrar call: %v", capture.Messages())
 	}
 }
 
