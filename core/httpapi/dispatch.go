@@ -1,5 +1,5 @@
 // file: core/httpapi/dispatch.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a494f53-6f15-4cca-bfe7-f575ea6913a4
 // last-edited: 2026-11-07
 
@@ -18,13 +18,17 @@ import (
 // unclean path never reaches the mux (no 301), an unmatched path gets problem
 // 404/405 (with the Allow header the mux computed) instead of the mux's
 // plain-text body, an unmatched path under a legacy owner's claim gets 404 in
-// the legacy shape, and the "/" owner receives only what NonSPA lets through.
+// the legacy shape, a legacy mount's Redirects answer the unmatched paths they
+// cover, and the "/" owner receives only what NonSPA lets through.
 type dispatcher struct {
 	mux          *http.ServeMux
 	root         http.Handler // the "/" owner, or nil
 	nonSPA       func(*http.Request) bool
 	legacyClaims []string
-	log          *slog.Logger
+	// redirect is the legacy mounts' Redirects consult (legacy.go), nil when
+	// no mount has one.
+	redirect func(*http.Request) (location string, covered bool)
+	log      *slog.Logger
 }
 
 func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +57,19 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeProblem(ctx, w, r, Problem{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed"}, hdr, d.log)
 		return
+	}
+	if d.redirect != nil {
+		// A legacy redirect covers what no pattern and no native claim does
+		// (05-http-api §4.9 item 3): a 301, or 404 in the legacy shape for a
+		// request the rule excludes.
+		if loc, covered := d.redirect(r); covered {
+			if loc != "" {
+				http.Redirect(w, r, loc, http.StatusMovedPermanently)
+				return
+			}
+			writeLegacyNotFound(ctx, w, d.log)
+			return
+		}
 	}
 	if d.underLegacyClaim(r.URL.Path) {
 		writeLegacyNotFound(ctx, w, d.log)

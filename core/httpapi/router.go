@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-07
 
@@ -46,7 +46,8 @@ type Router struct {
 	spaOpt SPAOptions // stage 8 reads BasicExemptAssets (R1-17)
 	public map[string]map[string]bool
 	errs   []error
-	built  bool // set by Build: a registration after it could never be served
+	built  bool        // set by Build: a registration after it could never be served
+	legacy legacyState // legacy.go: manifests, admissions and built infos (R1-14)
 
 	// stage is a test seam standing in for the perimeter stages between
 	// stage 2 and the mux (R1-17's chain takes its place); observe receives
@@ -129,18 +130,18 @@ const (
 )
 
 // LegacyMount is an http.Handler mounted on a module's legacy prefixes
-// (05-http-api §8.2). The manifest half (Routes, its collision rule, the
-// redirects and the LegacyAuthGin/OwnAuth admission) is R1-14's
-// (core/httpapi/legacy.go); this row records the mount, its claims and its
-// ownership of "/".
+// (05-http-api §8.2). Router.MountLegacy and Build (legacy.go) register its
+// manifest routes as ServeMux patterns under the route collision rule (§4.8),
+// apply the LegacyAuthGin/OwnAuth admissions and answer its Redirects.
 type LegacyMount struct {
 	Owner             string                     // "books"; set by module.Registrar
 	Handler           http.Handler               // *gin.Engine
-	Routes            iter.Seq[LegacyRoute]      // manifest: every gin route (R1-14)
+	Routes            iter.Seq[LegacyRoute]      // manifest: every gin route; each its own mux pattern or a member of one generalised pattern (§4.8)
 	Auth              LegacyAuth                 // LegacyAuthGin only while app.Options.LegacyAuthGinUntil names Owner (R1) | LegacyAuthCore
 	ServesSPA         bool                       // owns "/" and serves the SPA through gin NoRoute (§4.10)
 	DefaultCSP        func(*http.Request) string // stage 5 policy for this mount's responses, evaluated per response (FE2-1)
 	CSPReport         string                     // Reporting-Endpoints URL for DefaultCSP (ABO: "/api/v1/csp-report")
+	Redirects         []LegacyRedirect           // the /api/* -> /api/v1/* rule and its exclusions (§4.9 item 3)
 	TopSegments       []string                   // top-level server paths of the mount: reserved IDs + NonSPA (03 §3.6)
 	SPAShared         []string                   // top-level segments shared with SPA pages, excluded from NonSPA (§3.5, SEC3-16)
 	BuildID           string                     // stage 5's X-App-Build until the shell flip (FE3-2, FE4-1, R5-7)
@@ -287,45 +288,6 @@ func splitPattern(p string) (method, path string) {
 		return m, strings.TrimSpace(rest)
 	}
 	return "", p
-}
-
-// MountLegacy records a legacy mount (05-http-api §8.2). This row implements
-// the root-owner half: the mount's TopSegments and SPAShared feed NonSPA, a
-// ServesSPA mount owns "/" (a second owner of "/" is ErrPrefixCollision,
-// FE-1), and an unmatched path under its owner's claims is answered 404 in
-// the legacy error shape. Manifest routes are R1-14's: a mount whose Routes
-// yields any entry is refused (ErrLegacyManifest) until then, fail-closed.
-func (r *Router) MountLegacy(m LegacyMount) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := r.late("MountLegacy " + m.Owner); err != nil {
-		return err
-	}
-	var errs []error
-	if m.Owner == "" || m.Handler == nil {
-		errs = append(errs, fmt.Errorf("%w: legacy mount needs an Owner and a Handler", ErrLegacyManifest))
-	}
-	if m.Auth != LegacyAuthCore && m.Auth != LegacyAuthGin {
-		errs = append(errs, fmt.Errorf("%w: %s: legacy mount Auth %d is neither LegacyAuthCore nor LegacyAuthGin", ErrLegacyManifest, m.Owner, m.Auth))
-	}
-	if m.Routes != nil {
-		for lr := range m.Routes {
-			errs = append(errs, fmt.Errorf("%w: %s %s %s: legacy manifest routes are registered by R1-14's MountLegacy",
-				ErrLegacyManifest, m.Owner, lr.Method, lr.GinPath))
-			break
-		}
-	}
-	if m.ServesSPA && r.rootOwned() {
-		errs = append(errs, fmt.Errorf("%w: %s: \"/\" already has an owner (FE-1)", ErrPrefixCollision, m.Owner))
-	}
-	if err := errors.Join(errs...); err != nil {
-		r.record(err)
-		return err
-	}
-	m.TopSegments = slices.Clone(m.TopSegments)
-	m.SPAShared = slices.Clone(m.SPAShared)
-	r.mounts = append(r.mounts, m)
-	return nil
 }
 
 // SPA makes h the owner of "/" (05-http-api §4.10). It returns
@@ -515,16 +477,18 @@ func firstSegment(p string) string {
 }
 
 // Routes returns every registered route: native and infra routes in
-// registration order, then the "/" owner when one is set (Kind SPA).
+// registration order, then the legacy manifest routes of the last successful
+// Build (legacy.go), then the "/" owner when one is set (Kind SPA).
 // The sequence is a snapshot taken when iteration starts, so a yield that
 // calls back into the router cannot deadlock.
 func (r *Router) Routes() iter.Seq[RouteInfo] {
 	return func(yield func(RouteInfo) bool) {
 		r.mu.Lock()
-		infos := make([]RouteInfo, 0, len(r.routes)+1)
+		infos := make([]RouteInfo, 0, len(r.routes)+len(r.legacy.infos)+1)
 		for _, e := range r.routes {
 			infos = append(infos, e.info)
 		}
+		infos = append(infos, r.legacy.infos...)
 		if _, owner := r.rootOwner(); owner != "" {
 			infos = append(infos, RouteInfo{Owner: owner, Pattern: "/", Name: "spa", Perm: rbac.Public,
 				RateClass: RateExempt, Kind: RouteKindSPA})
@@ -581,6 +545,7 @@ func (r *Router) Build() (http.Handler, error) {
 			errs = append(errs, err)
 		}
 	}
+	errs = append(errs, r.buildLegacy(mux)...)
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -590,6 +555,7 @@ func (r *Router) Build() (http.Handler, error) {
 		root:         root,
 		nonSPA:       nonSPAPredicate(r.nonSPASegments()),
 		legacyClaims: r.legacyClaims(),
+		redirect:     r.legacyRedirect(),
 		log:          r.deps.Log,
 	}
 	var next http.Handler = d

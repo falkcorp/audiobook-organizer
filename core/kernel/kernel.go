@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-07
 
@@ -350,9 +350,11 @@ func callRegister(m module.Module, r *module.Registrar) (err error) {
 // consume is P7 at R1: every manifest's claims (a disabled module's stay
 // reserved), each enabled module's public route names, its legacy mounts with
 // the one "/" owner (ProblemSPAOwner), the mount post-checks of 03 §3.6, and
-// the hooks and workers the supervisor runs. AuthMethods, LogPathRules and
-// LogOtherUserData stay recorded: their consumers (auth, the redactor's live
-// rules, the journal) land later.
+// the hooks and workers the supervisor runs, and the router's legacy-mount
+// admission (the module's auth method names).
+// AuthMethods' specs, LogPathRules and LogOtherUserData stay recorded
+// otherwise: their consumers (auth, the redactor's live rules, the journal)
+// land later.
 func (k *Kernel) consume() error {
 	var probs []module.Problem
 	// The router records each refusal for Build as well; P7 fails on the
@@ -398,6 +400,14 @@ func (k *Kernel) consume() error {
 			probs = append(probs, k.checkMountSegments(id, declared, m)...)
 			probs = append(probs, problemsFrom(id, k.router.MountLegacy(m))...)
 		}
+		// The admission Build applies to the mounts' manifests (05-http-api
+		// §8.2, SEC2-17): an OwnAuth route names a method this module
+		// registered. LegacyAuthGin is the Registrar's check (P6).
+		methods := make([]string, 0, len(e.rec.AuthMethods))
+		for _, spec := range e.rec.AuthMethods {
+			methods = append(methods, string(spec.Method))
+		}
+		k.router.AllowAuthMethods(string(id), methods...)
 		for _, h := range e.rec.Hooks {
 			k.hooks = append(k.hooks, moduleHook{module: id, hook: h})
 		}
