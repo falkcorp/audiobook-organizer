@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -80,7 +79,6 @@ func TestTrace_NoApikeyInSpanAttributes(t *testing.T) {
 	))
 	s1.AddEvent("exception", trace.WithAttributes(
 		attribute.String("exception.message", `Get "https://example.test/x?token=`+spanFakeToken+`": EOF`)))
-	s1.SetStatus(codes.Error, `Get "https://example.test/x?apikey=`+spanFakeAPIKey+`": EOF`)
 	s1.End()
 
 	_, s2 := tr.Start(ctx, "GET "+invite, trace.WithAttributes(
@@ -179,6 +177,23 @@ func TestNew_TracingWithoutRedactorFails(t *testing.T) {
 	if _, _, err := newTracerProvider(ctx, &OTLPTracing{Endpoint: "collector.example.invalid:4317"},
 		newResource("a", "v", "id", ""), grpcExporters().span, nil); !errors.Is(err, errNoRedactor) {
 		t.Errorf("newTracerProvider(nil redactor) = %v, want the redactor refusal", err)
+	}
+}
+
+// The status description carries error text (an http client error quotes
+// the URL it fetched), so it is redacted too.
+func TestRedactingExporter_StatusDescription(t *testing.T) {
+	stub := tracetest.SpanStub{
+		Name:   "op",
+		Status: sdktrace.Status{Description: `Get "https://example.test/x?apikey=` + spanFakeAPIKey + `": EOF`},
+	}
+	var n tally
+	got := testSpanRedactor(t).span(stub.Snapshot(), &n)
+	if d := got.Status().Description; strings.Contains(d, spanFakeAPIKey) || !strings.Contains(d, "[REDACTED]") {
+		t.Errorf("status description = %q", d)
+	}
+	if n != (tally{0, 1, 0}) {
+		t.Errorf("tally = %v, want one url redaction", n)
 	}
 }
 

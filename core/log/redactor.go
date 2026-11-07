@@ -6,8 +6,13 @@
 package log
 
 import (
+	"encoding"
+	"fmt"
 	"log/slog"
 	"net/url"
+	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -16,11 +21,50 @@ import (
 const (
 	redactedText  = InviteTokenRedacted
 	redactedPanic = "[REDACTED:panic]"
+	redactedDepth = "[REDACTED:depth]"
 )
 
-// maxResolve bounds how many LogValue calls one value may chain, as
-// slog.Value.Resolve does. A value still unresolved after that fails closed.
-const maxResolve = 100
+// Bounds that keep one redaction finite whatever the value holds.
+const (
+	// maxResolve bounds how many LogValue calls one value may chain, as
+	// slog.Value.Resolve does. A value still unresolved after that fails
+	// closed.
+	maxResolve = 100
+	// maxAnyDepth and maxAnyNodes bound the walk of a KindAny value (maps,
+	// structs, slices, pointers): a cyclic or very deep value cannot hang or
+	// overflow the stack, and a part beyond either bound is
+	// "[REDACTED:depth]".
+	maxAnyDepth = 8
+	maxAnyNodes = 4096
+	// maxURLDepth bounds URL handling of a URL inside a query value
+	// (?next=/invite/<token>, ?redirect_uri=https://...).
+	maxURLDepth = 2
+)
+
+// builtinCredentialKeys are credential names ABO already masks beyond the
+// spec's DefaultRedactKeys (credentialHeaders in
+// internal/server/middleware/recovery_redact.go, secretPairRE in
+// internal/metadata/detail_redact.go), normalised as normKey does. They are
+// part of every Redactor's deny-list but not of DefaultRedactKeys, which stays
+// 05-logging §3's list verbatim.
+func builtinCredentialKeys() []string {
+	return []string{"proxyauthorization", "xapikey", "cfaccessjwtassertion", "cfaccessclientsecret", "bearer"}
+}
+
+// credentialSuffixes: a normalised key that ends in one of these is denied
+// (x-api-key, csrf_token, db.password, http.request.header.authorization).
+func credentialSuffixes() []string {
+	return []string{"token", "secret", "password", "passwd", "apikey", "authorization", "cookie", "privatekey",
+		"credential", "credentials", "sessionid", "bearer", "jwtassertion"}
+}
+
+// harmlessSuffixes: a normalised key that ends in one of these names a flag
+// about a credential, never the credential, so the suffix rule spares it.
+// Exact deny-list entries (DefaultRedactKeys, extra keys) still win.
+func harmlessSuffixes() []string {
+	return []string{"haspassword", "hassecret", "hastoken", "hasapikey", "hascookie", "hasauthorization",
+		"hascredential", "hascredentials"}
+}
 
 // RedactionKind is a set of redaction kinds: what a redaction replaced. The
 // kinds are the "kind" label values of mediacore_log_redactions_total
@@ -111,10 +155,15 @@ func URLKeys() []string {
 // and rule slice are never written again), so one value is safe for
 // concurrent use without a lock.
 type Redactor struct {
-	keys    map[string]struct{} // normalised deny-listed keys (normKey)
-	query   map[string]struct{} // lower-case credential query names
-	urlKeys map[string]struct{} // lower-case URL keys
-	rules   []PathRule
+	keys     map[string]struct{} // normalised deny-listed keys (normKey)
+	suffixes []string            // credentialSuffixes()
+	harmless []string            // harmlessSuffixes()
+	query    map[string]struct{} // lower-case credential query names
+	urlKeys  map[string]struct{} // lower-case URL keys
+	rules    []PathRule
+	// bearerRE finds "Bearer <credential>" in free text. *regexp.Regexp is
+	// safe for concurrent use.
+	bearerRE *regexp.Regexp
 }
 
 // NewRedactor builds a Redactor from the defaults (fresh copies) plus
@@ -123,11 +172,17 @@ type Redactor struct {
 // a nil Fn redacts nothing and is skipped.
 func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor {
 	r := &Redactor{
-		keys:    map[string]struct{}{},
-		query:   map[string]struct{}{},
-		urlKeys: map[string]struct{}{},
+		keys:     map[string]struct{}{},
+		suffixes: credentialSuffixes(),
+		harmless: harmlessSuffixes(),
+		query:    map[string]struct{}{},
+		urlKeys:  map[string]struct{}{},
+		// A value never starts with '[', so an already-redacted
+		// "[REDACTED]" is not matched again.
+		bearerRE: regexp.MustCompile(`(?i)\bbearer\s+([^\s"'<>;,()\[\]{}]+)`),
 	}
-	for _, k := range append(DefaultRedactKeys(), extraKeys...) {
+	keys := append(DefaultRedactKeys(), builtinCredentialKeys()...)
+	for _, k := range append(keys, extraKeys...) {
 		if n := normKey(k); n != "" {
 			r.keys[n] = struct{}{}
 		}
@@ -164,19 +219,32 @@ func normKey(k string) string {
 	return b.String()
 }
 
-// keyDenied reports whether key is on the deny-list: the whole key, or its
-// last dot-separated segment (http.request.header.authorization, db.password),
-// normalised.
+// keyDenied reports whether key names a credential, normalised (normKey):
+// the whole key or its last dot-separated segment is on the deny-list, or the
+// key ends in a credential suffix (credentialSuffixes) and not in a harmless
+// one (harmlessSuffixes).
 func (r *Redactor) keyDenied(key string) bool {
-	if key == "" {
+	n := normKey(key)
+	if n == "" {
 		return false
 	}
-	if _, ok := r.keys[normKey(key)]; ok {
+	if _, ok := r.keys[n]; ok {
 		return true
 	}
 	if i := strings.LastIndexByte(key, '.'); i >= 0 && i < len(key)-1 {
-		_, ok := r.keys[normKey(key[i+1:])]
-		return ok
+		if _, ok := r.keys[normKey(key[i+1:])]; ok {
+			return true
+		}
+	}
+	for _, h := range r.harmless {
+		if strings.HasSuffix(n, h) {
+			return false
+		}
+	}
+	for _, s := range r.suffixes {
+		if strings.HasSuffix(n, s) {
+			return true
+		}
 	}
 	return false
 }
@@ -200,7 +268,7 @@ func (r *Redactor) queryDenied(name string) bool {
 // replaces a deny-listed key's value (a whole group included) with
 // "[REDACTED]", recurses into groups, and gives values under URLKeys(),
 // *url.URL and url.URL values, URL-shaped strings and the text of an error
-// the URL and path treatment.
+// the URL and path treatment. Any other KindAny value is walked (anyValue).
 func (r *Redactor) Attr(a slog.Attr) slog.Attr {
 	out, _ := r.attr(a)
 	return out
@@ -233,36 +301,173 @@ func (r *Redactor) attr(a slog.Attr) (slog.Attr, RedactionKind) {
 			return slog.String(a.Key, s), k
 		}
 	case slog.KindAny:
-		if s, k, ok := r.anyText(v.Any()); !ok {
+		if out, k, ok := r.anyValue(v.Any()); !ok {
 			return slog.String(a.Key, redactedPanic), RedactValuer
 		} else if k != 0 {
-			return slog.String(a.Key, s), k
+			return slog.Attr{Key: a.Key, Value: out}, k
 		}
 	}
 	return slog.Attr{Key: a.Key, Value: v}, 0
 }
 
-// anyText redacts the URL and error values a KindAny attribute can carry: the
-// redacted text and its kinds when something was replaced. ok is false when
-// the value's own method panicked.
-func (r *Redactor) anyText(x any) (s string, k RedactionKind, ok bool) {
+// anyValue redacts a KindAny value and reports what it replaced; with nothing
+// replaced the caller keeps the original. ok is false when one of the value's
+// own methods (String, Error, MarshalText) panicked.
+//
+//   - *url.URL and url.URL: URL handling of its text;
+//   - error: the text scan (scanTokens) of Error();
+//   - anything else is walked to maxAnyDepth and maxAnyNodes: map and struct
+//     entries go through the key rule (a struct field by its json name, else
+//     its Go name; unexported fields are not walked), strings through the text
+//     scan; a redacted value becomes the rebuilt map[string]any / []any,
+//     unchanged branches kept as they were;
+//   - when the walk replaced nothing, the text a handler may print instead
+//     (String(), MarshalText(), or %+v for a composite, which shows unexported
+//     fields) goes through the text scan, and a redacted text replaces the
+//     value.
+func (r *Redactor) anyValue(x any) (out slog.Value, k RedactionKind, ok bool) {
 	defer func() {
 		if recover() != nil {
-			s, k, ok = "", 0, false
+			out, k, ok = slog.Value{}, 0, false
 		}
 	}()
 	switch v := x.(type) {
+	case nil:
+		return slog.AnyValue(x), 0, true
 	case *url.URL:
 		if v == nil {
-			return "", 0, true
+			return slog.AnyValue(x), 0, true
 		}
-		s, k = r.urlKinds(v.String())
+		s, k := r.urlKinds(v.String(), 0)
+		return slog.StringValue(s), k, true
 	case url.URL:
-		s, k = r.urlKinds(v.String())
+		s, k := r.urlKinds(v.String(), 0)
+		return slog.StringValue(s), k, true
 	case error:
-		s, k = r.scanTokens(v.Error())
+		s, k := r.scanTokens(v.Error())
+		return slog.StringValue(s), k, true
 	}
-	return s, k, true
+	budget := maxAnyNodes
+	if w, k := r.walk(reflect.ValueOf(x), 0, &budget); k != 0 {
+		return slog.AnyValue(w), k, true
+	}
+	if text, has := printedText(x); has {
+		if s, k := r.scanTokens(text); k != 0 {
+			return slog.StringValue(s), k, true
+		}
+	}
+	return slog.AnyValue(x), 0, true
+}
+
+// printedText is the text a handler may print for x when it is not walked:
+// String(), MarshalText() (the text handler prefers it), or %+v for a
+// composite.
+func printedText(x any) (string, bool) {
+	switch v := x.(type) {
+	case fmt.Stringer:
+		return v.String(), true
+	case encoding.TextMarshaler:
+		b, err := v.MarshalText()
+		if err != nil {
+			return "", false
+		}
+		return string(b), true
+	}
+	switch reflect.ValueOf(x).Kind() {
+	case reflect.Struct, reflect.Pointer, reflect.Map, reflect.Slice, reflect.Array, reflect.Interface:
+		return fmt.Sprintf("%+v", x), true
+	}
+	return "", false
+}
+
+// walk redacts rv (see anyValue) and returns the rebuilt value and what it
+// replaced; with nothing replaced the result is discarded by the caller.
+func (r *Redactor) walk(rv reflect.Value, depth int, budget *int) (any, RedactionKind) {
+	if !rv.IsValid() {
+		return nil, 0
+	}
+	*budget--
+	if depth > maxAnyDepth || *budget < 0 {
+		return redactedDepth, RedactValuer
+	}
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if rv.IsNil() {
+			return valueOf(rv), 0
+		}
+		return r.walk(rv.Elem(), depth+1, budget)
+	case reflect.String:
+		if s, k := r.scanTokens(rv.String()); k != 0 {
+			return s, k
+		}
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			break
+		}
+		m := make(map[string]any, rv.Len())
+		var kinds RedactionKind
+		for it := rv.MapRange(); it.Next(); {
+			kinds |= r.walkEntry(m, it.Key().String(), it.Value(), depth, budget)
+		}
+		return m, kinds
+	case reflect.Struct:
+		t := rv.Type()
+		m := make(map[string]any, t.NumField())
+		var kinds RedactionKind
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			name := f.Name
+			if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag == "-" {
+				continue
+			} else if tag != "" {
+				name = tag
+			}
+			kinds |= r.walkEntry(m, name, rv.Field(i), depth, budget)
+		}
+		return m, kinds
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			break
+		}
+		out := make([]any, rv.Len())
+		var kinds RedactionKind
+		for i := range out {
+			w, k := r.walk(rv.Index(i), depth+1, budget)
+			if k == 0 {
+				w = valueOf(rv.Index(i))
+			}
+			out[i], kinds = w, kinds|k
+		}
+		return out, kinds
+	}
+	return valueOf(rv), 0
+}
+
+// walkEntry sets m[key] to v redacted (a deny-listed key's non-zero value is
+// "[REDACTED]"; a zero value hides nothing; an unchanged value is kept as it
+// was) and returns what it replaced.
+func (r *Redactor) walkEntry(m map[string]any, key string, v reflect.Value, depth int, budget *int) RedactionKind {
+	if r.keyDenied(key) && !v.IsZero() {
+		m[key] = redactedText
+		return RedactKey
+	}
+	w, k := r.walk(v, depth+1, budget)
+	if k == 0 {
+		w = valueOf(v)
+	}
+	m[key] = w
+	return k
+}
+
+// valueOf is rv as an interface value, or nil when it cannot be one.
+func valueOf(rv reflect.Value) any {
+	if rv.IsValid() && rv.CanInterface() {
+		return rv.Interface()
+	}
+	return nil
 }
 
 // resolve is slog.Value.Resolve that reports a panicking or endless LogValuer
@@ -288,7 +493,7 @@ func resolve(v slog.Value) (out slog.Value, ok bool) {
 // URL returns raw with userinfo removed, credential query (and fragment)
 // parameter values replaced with "[REDACTED]" and the path rules applied.
 func (r *Redactor) URL(raw string) string {
-	out, _ := r.urlKinds(raw)
+	out, _ := r.urlKinds(raw, 0)
 	return out
 }
 
@@ -312,10 +517,10 @@ func (r *Redactor) String(key, value string) string {
 //   - "url.query": the value is a query string; its credential parameters are
 //     replaced;
 //   - any other key in URLKeys(): the whole value gets URL handling (URL),
-//     then every whitespace-separated URL-shaped token in it does too;
-//   - any other key: every whitespace-separated token that starts with "/" or
-//     contains "://" gets URL handling, so "GET /invite/<token>" (a span
-//     name) and an error's "Get \"https://...?token=...\"" are covered.
+//     then the text scan;
+//   - any other key: the text scan (scanTokens), which covers a span name
+//     "GET /invite/<token>", an error's "Get \"https://...?token=...\"",
+//     "token=<t>" pairs and "Bearer <t>".
 func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 	if r.keyDenied(key) {
 		if value == redactedText {
@@ -326,14 +531,14 @@ func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 	lk := strings.ToLower(key)
 	if lk == "url.query" {
 		q, hadMark := strings.CutPrefix(value, "?")
-		out, k := r.maskQuery(q)
+		out, k := r.maskQuery(q, 0)
 		if hadMark {
 			out = "?" + out
 		}
 		return out, k
 	}
 	if _, ok := r.urlKeys[lk]; ok {
-		out, k := r.urlKinds(value)
+		out, k := r.urlKinds(value, 0)
 		out2, k2 := r.scanTokens(out)
 		return out2, k | k2
 	}
@@ -377,7 +582,9 @@ func applyRule(rule PathRule, p string) (out string) {
 //     it, they run again over the whole rest with '?' and '#' as path text (a
 //     decoded /invite/?<token> is still a token); if that redacts, it is the
 //     result, with anything after a '?' it left still masked as a query.
-func (r *Redactor) urlKinds(raw string) (string, RedactionKind) {
+//
+// depth counts URLs nested in query values (maskQuery), up to maxURLDepth.
+func (r *Redactor) urlKinds(raw string, depth int) (string, RedactionKind) {
 	if raw == "" {
 		return raw, 0
 	}
@@ -430,13 +637,13 @@ func (r *Redactor) urlKinds(raw string) (string, RedactionKind) {
 	b.WriteString(prefix)
 	b.WriteString(path)
 	if hasQuery {
-		q, k := r.maskQuery(query)
+		q, k := r.maskQuery(query, depth)
 		kinds |= k
 		b.WriteByte('?')
 		b.WriteString(q)
 	}
 	if hasFrag {
-		f, k := r.maskQuery(frag)
+		f, k := r.maskQuery(frag, depth)
 		kinds |= k
 		b.WriteByte('#')
 		b.WriteString(f)
@@ -450,8 +657,9 @@ func (r *Redactor) urlKinds(raw string) (string, RedactionKind) {
 // maskQuery replaces the value of every credential parameter in q (split on
 // '&' and ';', which some servers also accept). Order, other parameters, the
 // raw spelling of names and separators are kept; a name without '=' has no
-// value to replace.
-func (r *Redactor) maskQuery(q string) (string, RedactionKind) {
+// value to replace. Another parameter's value that holds a URL or a path
+// (?next=/invite/<token>) gets URL handling, up to maxURLDepth.
+func (r *Redactor) maskQuery(q string, depth int) (string, RedactionKind) {
 	if strings.IndexByte(q, '=') < 0 {
 		return q, 0
 	}
@@ -464,12 +672,22 @@ func (r *Redactor) maskQuery(q string) (string, RedactionKind) {
 			continue
 		}
 		part := q[start:i]
-		if name, val, hasValue := strings.Cut(part, "="); hasValue && val != redactedText && r.queryDenied(name) {
+		name, val, hasValue := strings.Cut(part, "=")
+		switch {
+		case hasValue && val != redactedText && r.queryDenied(name):
 			b.WriteString(name)
 			b.WriteByte('=')
 			b.WriteString(redactedText)
-			kinds = RedactURL
-		} else {
+			kinds |= RedactURL
+		case hasValue && depth < maxURLDepth && urlStart(val) >= 0:
+			at := urlStart(val)
+			nested, k := r.urlKinds(val[at:], depth+1)
+			b.WriteString(name)
+			b.WriteByte('=')
+			b.WriteString(val[:at])
+			b.WriteString(nested)
+			kinds |= k
+		default:
 			b.WriteString(part)
 		}
 		if i < len(q) {
@@ -483,10 +701,25 @@ func (r *Redactor) maskQuery(q string) (string, RedactionKind) {
 	return b.String(), kinds
 }
 
-// scanTokens gives every whitespace-separated URL-shaped token of s (one that
-// starts with "/" or contains "://") the URL treatment, keeping the rest of s
-// and its whitespace as written.
+// scanTokens is the text scan for a string that is not URL-keyed: free text
+// such as a span name, an error message or %+v output. It keeps s as written
+// except for what it replaces:
+//
+//  1. URLs and paths: in every whitespace-separated token, the URL or path
+//     that starts at the token, at a "<scheme>://", or at a '/' right after
+//     one of `"'<([{=:` and a backtick (a quoted, bracketed or key=/path
+//     form) gets URL handling. Trailing punctuation stays with the last
+//     segment or query value, which is replaced whole.
+//  2. Pairs: "name=value" and "name:value" (a log line's or %+v's field)
+//     whose name is denied by the key rule have the value replaced
+//     (RedactKey), as do "Bearer <credential>" values.
 func (r *Redactor) scanTokens(s string) (string, RedactionKind) {
+	out, kinds := r.scanURLs(s)
+	out, k := r.scanPairs(out)
+	return out, kinds | k
+}
+
+func (r *Redactor) scanURLs(s string) (string, RedactionKind) {
 	if strings.IndexByte(s, '/') < 0 {
 		return s, 0
 	}
@@ -502,9 +735,10 @@ func (r *Redactor) scanTokens(s string) (string, RedactionKind) {
 		for j < len(s) && !isSpace(s[j]) {
 			j++
 		}
-		if tok := s[i:j]; strings.HasPrefix(tok, "/") || strings.Contains(tok, "://") {
-			if out, k := r.urlKinds(tok); k != 0 {
-				b.WriteString(s[last:i])
+		tok := s[i:j]
+		if at := urlStart(tok); at >= 0 {
+			if out, k := r.urlKinds(tok[at:], 0); k != 0 {
+				b.WriteString(s[last : i+at])
 				b.WriteString(out)
 				last, kinds = j, kinds|k
 			}
@@ -516,6 +750,95 @@ func (r *Redactor) scanTokens(s string) (string, RedactionKind) {
 	}
 	b.WriteString(s[last:])
 	return b.String(), kinds
+}
+
+// urlStart is where the URL or path in tok starts, or -1: 0 when tok holds a
+// "<scheme>://" (urlKinds keeps any text before the scheme) or starts with
+// '/', else the first '/' right after a quote, bracket, '=' or ':'.
+func urlStart(tok string) int {
+	if strings.Index(tok, "://") > 0 || strings.HasPrefix(tok, "/") {
+		return 0
+	}
+	for k := 1; k < len(tok); k++ {
+		if tok[k] == '/' && strings.IndexByte("\"'<([{=:`", tok[k-1]) >= 0 {
+			return k
+		}
+	}
+	return -1
+}
+
+func (r *Redactor) scanPairs(s string) (string, RedactionKind) {
+	if strings.IndexAny(s, "=:") < 0 && !containsFold(s, "bearer") {
+		return s, 0
+	}
+	var spans [][2]int // value ranges to replace
+	// Every '=' and ':' is a candidate separator on its own, so one pair
+	// cannot hide the next ("1:token=<t>" in a %+v of a map).
+	for i := 0; i < len(s); i++ {
+		if s[i] != '=' && s[i] != ':' {
+			continue
+		}
+		n := i
+		for n > 0 && isNameChar(s[n-1]) {
+			n--
+		}
+		if n == i || !r.keyDenied(s[n:i]) {
+			continue
+		}
+		v := i + 1
+		if v < len(s) && (s[v] == '"' || s[v] == '\'') {
+			v++
+		}
+		end := v
+		for end < len(s) && isValueChar(s[end]) {
+			end++
+		}
+		if end > v {
+			spans = append(spans, [2]int{v, end})
+		}
+	}
+	for _, m := range r.bearerRE.FindAllStringSubmatchIndex(s, -1) {
+		spans = append(spans, [2]int{m[2], m[3]})
+	}
+	if len(spans) == 0 {
+		return s, 0
+	}
+	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
+	var b strings.Builder
+	last := 0
+	for _, sp := range spans {
+		if sp[0] < last {
+			continue // overlaps one already replaced
+		}
+		b.WriteString(s[last:sp[0]])
+		b.WriteString(redactedText)
+		last = sp[1]
+	}
+	b.WriteString(s[last:])
+	return b.String(), RedactKey
+}
+
+// isNameChar is the alphabet of a pair's name: letters, digits, '_', '.', '-'.
+func isNameChar(c byte) bool {
+	return isAlpha(c) || '0' <= c && c <= '9' || c == '_' || c == '.' || c == '-'
+}
+
+// isValueChar is the alphabet of a pair's value: up to whitespace, a quote,
+// an angle bracket, '&', ';', ',' or a bracket. A value never starts with
+// '[', so an already-redacted "[REDACTED]" is not replaced again.
+func isValueChar(c byte) bool {
+	return !isSpace(c) && strings.IndexByte("\"'<>&;,()[]{}", c) < 0
+}
+
+// containsFold reports whether s contains the lower-case ASCII word in any
+// case.
+func containsFold(s, word string) bool {
+	for i := 0; i+len(word) <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len(word)], word) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSpace(c byte) bool {

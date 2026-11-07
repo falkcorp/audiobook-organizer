@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"strings"
@@ -515,4 +516,161 @@ func TestRedactor_ConcurrentUse(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// Review item 1: credential names beyond the spec's default list. The
+// exported DefaultRedactKeys stays the spec's text; the Redactor also denies
+// ABO's credential headers and any key ending in a credential suffix.
+func TestRedact_CredentialHeadersAndSuffixes(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, k := range []string{
+		"http.request.header.x-api-key", "X-Api-Key", "Proxy-Authorization", "Cf-Access-Jwt-Assertion",
+		"Cf-Access-Client-Secret", "http.request.header.cf-access-jwt-assertion",
+		"http.request.header.proxy-authorization", "csrf_token", "bootstrap_token", "audible.refresh_token",
+		"webhook_secret", "smtp_password", "bearer", "id_token", "signing-privatekey",
+	} {
+		if got := r.String(k, fakeToken); got != "[REDACTED]" {
+			t.Errorf("String(%q) = %q, want [REDACTED]", k, got)
+		}
+		if got := r.Attr(slog.String(k, fakeToken)); got.Value.String() != "[REDACTED]" {
+			t.Errorf("Attr(%q) = %v, want [REDACTED]", k, got)
+		}
+	}
+	for _, k := range []string{"has_password", "hasToken", "tokens_used", "prompt_tokens", "token_count",
+		"cache_key", "title", "author", "url.path", "route"} {
+		if got := r.String(k, "Batman: Hush"); got != "Batman: Hush" {
+			t.Errorf("String(%q) redacted a harmless key: %q", k, got)
+		}
+	}
+	// An exact deny-list entry wins over a harmless suffix.
+	if got := NewRedactor([]string{"has_password"}).String("has_password", "true"); got != "[REDACTED]" {
+		t.Errorf("extra key has_password = %q, want [REDACTED]", got)
+	}
+}
+
+// Review item 2: a URL or path inside a token, after a quote, a bracket, '='
+// or ':', and credential pairs in free text.
+func TestRedact_TextScanForms(t *testing.T) {
+	r := NewRedactor(nil)
+	core := "/api/core/v1/auth/invites/" + fakeInvite
+	for _, in := range []string{
+		`"` + core + `"`,
+		`'` + core + `'`,
+		"`" + core + "`",
+		"<" + core + ">",
+		"(see " + core + ")",
+		"[" + core + "]",
+		"{" + core + "}",
+		"next=" + core,
+		"url:" + core,
+		`redirect to "` + core + `".`,
+		`location="/invite/` + fakeInvite + `"`,
+		"<https://example.test" + core + ">",
+		`Get "https://example.test` + core + `": EOF`,
+	} {
+		for _, k := range []string{"detail", ""} {
+			if got := r.String(k, in); strings.Contains(got, fakeInvite) {
+				t.Errorf("String(%q, %q) = %q still carries the token", k, in, got)
+			}
+		}
+	}
+	// A URL or path inside a query value.
+	for _, in := range []string{
+		"/login?next=" + core,
+		"https://example.test/cb?redirect_uri=https://example.test/x?token=" + fakeToken,
+		"/login?next=/x%3Fy&page=1&return=" + core,
+	} {
+		got := r.String("url", in)
+		assertAbsent(t, "nested "+in, got, fakeInvite, fakeToken)
+	}
+	// Credential pairs and bearer values in free text.
+	for _, in := range []string{
+		"token=" + fakeToken,
+		"login failed: password:" + fakePass,
+		"Authorization: Bearer " + fakeToken,
+		"auth bearer " + fakeToken,
+		"x-api-key=" + fakeAPIKey + ", retrying",
+		"{Name:bruce password:" + fakePass + " Title:Hush}",
+		`client_secret="` + fakePass + `"`,
+	} {
+		got, k := r.StringKinds("detail", in)
+		assertAbsent(t, in, got, fakeToken, fakePass, fakeAPIKey)
+		if k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
+		}
+	}
+	for _, in := range []string{"Batman: Year One", "ratio=1:2", "/api/v1/books/7", "10:47:00", "https://example.test:8443/a"} {
+		if got := r.String("detail", in); got != in {
+			t.Errorf("String(detail, %q) = %q, want unchanged", in, got)
+		}
+	}
+}
+
+type caseFile struct {
+	Name     string
+	Password string
+	URL      string
+	Key      string `json:"api_key"`
+	Skipped  string `json:"-"`
+	notes    string
+}
+
+type batNode struct {
+	Next  *batNode
+	Token string
+	Title string
+}
+
+type stringerURL struct{}
+
+func (stringerURL) String() string { return "GET /invite/" + fakeInvite }
+
+type unexportedSecret struct {
+	Title    string
+	password string
+}
+
+// Review item 3: KindAny containers are walked, bounded, and their printed
+// text is scanned.
+func TestRedact_AnyContainers(t *testing.T) {
+	r := NewRedactor(nil)
+	loop := &batNode{Title: "Hush", Token: fakeToken}
+	loop.Next = loop
+	big := make([]int, maxAnyNodes+10)
+	cases := map[string]any{
+		"map[string]any": map[string]any{"token": fakeToken, "user": "bruce",
+			"nested": map[string]any{"password": fakePass, "link": "/invite/" + fakeInvite}},
+		"map[string]string": map[string]string{"apikey": fakeAPIKey, "user": "bruce"},
+		"http.Header": http.Header{"Authorization": {"Bearer " + fakeToken}, "X-Api-Key": {fakeAPIKey},
+			"Accept": {"*/*"}},
+		"struct": caseFile{Name: "bruce", Password: fakePass, URL: "https://example.test/x?token=" + fakeToken,
+			Key: fakeAPIKey, Skipped: "x", notes: "n"},
+		"pointer to struct":  &caseFile{Name: "bruce", Password: fakePass},
+		"[]string":           []string{"/invite/" + fakeInvite, "bruce"},
+		"[]any":              []any{map[string]any{"secret": fakePass}, "bruce"},
+		"cyclic":             loop,
+		"stringer":           stringerURL{},
+		"unexported field":   unexportedSecret{Title: "Hush", password: fakePass},
+		"too many nodes":     big,
+		"map with int keys":  map[int]string{1: "token=" + fakeToken},
+		"named string value": url.Values{"token": {fakeToken}},
+	}
+	for name, v := range cases {
+		got := r.Attr(slog.Any("v", v))
+		text, js := logBoth(t, r, slog.Any("v", v))
+		for where, out := range map[string]string{"attr": got.Value.String(), "text": text, "json": js} {
+			assertAbsent(t, name+" "+where, out, fakeToken, fakePass, fakeAPIKey, fakeInvite)
+		}
+	}
+	// A value with nothing to redact is passed on as it was.
+	plain := caseFile{Name: "bruce", URL: "https://example.test/books/7"}
+	if got := r.Attr(slog.Any("v", plain)); got.Value.Kind() != slog.KindAny || got.Value.Any() != any(plain) {
+		t.Errorf("harmless struct changed: %v", got)
+	}
+	// Harmless branches of a redacted value keep their original values.
+	got := r.Attr(slog.Any("v", map[string]any{"token": fakeToken, "user": "bruce", "n": 7}))
+	m, ok := got.Value.Any().(map[string]any)
+	if !ok || m["user"] != "bruce" || m["n"] != 7 || m["token"] != "[REDACTED]" {
+		t.Errorf("rebuilt map = %#v", got.Value.Any())
+	}
 }
