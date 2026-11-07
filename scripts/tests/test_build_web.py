@@ -290,7 +290,15 @@ class NoOtherNpmCiSitesTest(unittest.TestCase):
     def sites(self) -> list[str]:
         files = [REPO / "Dockerfile", REPO / "Dockerfile.build-cgo", REPO / "Makefile"]
         files += sorted((REPO / ".github" / "workflows").glob("*.y*ml"))
-        files += sorted((REPO / ".woodpecker").glob("*.y*ml"))
+        # checks-build.yaml still holds its own `npm ci` at this base; the PR that
+        # deletes the duplicate Woodpecker workflows (#4439) removes the file, and
+        # this row must not edit a file that is going away. Once it is gone the
+        # exclusion matches nothing and can be dropped.
+        files += [
+            f
+            for f in sorted((REPO / ".woodpecker").glob("*.y*ml"))
+            if f.name != "checks-build.yaml"
+        ]
         files += [REPO / "scripts" / "ci_remote.py"]
         hits = []
         for f in files:

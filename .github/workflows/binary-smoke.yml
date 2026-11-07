@@ -1,7 +1,7 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.9.1
+# version: 1.9.2
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
-# last-edited: 2026-11-05
+# last-edited: 2026-11-07
 
 name: Binary Smoke
 
@@ -37,7 +37,9 @@ jobs:
         with:
           node-version: '26'
           cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            core/web/package-lock.json
 
       - name: Install system dependencies
         run: scripts/ci/apt_install.sh libtag1-dev
@@ -52,7 +54,9 @@ jobs:
           ./audiobook-organizer inspect-metadata --help >/dev/null
 
       - name: Build Frontend
-        run: cd web && npm ci && npm run build
+        run: |
+          make web-deps
+          cd web && npm run build
 
       - name: Build Embedded Binary (embed_frontend)
         run: go build -tags embed_frontend -o audiobook-organizer-embedded .

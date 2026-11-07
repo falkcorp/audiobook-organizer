@@ -1,5 +1,5 @@
 # file: .github/workflows/security.yml
-# version: 2.9.3
+# version: 2.9.4
 # guid: 7f2a3c1d-4e5f-6g7h-8i9j-0k1l2m3n4o5p
 # last-edited: 2026-11-07
 #
@@ -77,6 +77,8 @@ jobs:
           # scripts/check_toolchain_versions.py fails the build otherwise.
           node-version: '26'
 
+      # The one web-dependency entry point (R1-05). The script directly, not `make
+      # web-deps`: this job has no setup-go, and the Makefile's go-env lines would
+      # fetch the pinned Go toolchain just to install npm packages.
       - name: Install NPM dependencies
-        working-directory: web
-        run: npm ci
+        run: sh scripts/ci/build_web.sh deps

@@ -1,5 +1,5 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.12.3
+# version: 4.12.4
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
 # last-edited: 2026-11-07
 
@@ -49,13 +49,21 @@ jobs:
       draft: ${{ github.event.inputs.create-draft == 'true' }}
       stable: true
       go-enabled: true
-      frontend-enabled: true
+      # No frontend-enabled, and `frontend` in disabled-languages below: a false
+      # (or absent) *-enabled resolves to "auto", so detection would still run
+      # reusable-release's build-frontend job, which runs its own `npm ci` in web/
+      # (no entry point, so it breaks once web/ needs core/web) and uploads a build
+      # whose files create-release strips from the release assets: the binary embeds
+      # web/dist, built by pre-build-script. disabled-languages is the only "never".
       docker-enabled: true
       # Not a Python distributable: pyproject.toml holds only Black's config.
       # Docker stays ON here, unlike prerelease.yml.
-      disabled-languages: 'python'
+      disabled-languages: 'python,frontend'
       system-packages: 'libtag1-dev'
-      pre-build-script: 'cd web && npm ci && npm run build'
+      # The one web-dependency entry point (R1-05), then the plain build, which
+      # stamps the UI build ID itself. Node is the runner image's: gha-release-go
+      # (the step that runs this) installs none, exactly as before.
+      pre-build-script: 'sh scripts/ci/build_web.sh deps && cd web && npm run build'
       # Changelog collection pushes as the CI bot app from this repo's main-only
       # `ci-bot` environment, which holds the app key (github-common #391).
       bot-environment: ci-bot

@@ -53,7 +53,8 @@ jobs:
   # What changed, so the jobs below can skip what cannot be affected.
   #   go=true   any changed path outside web/ and outside the docs globs
   #             (docs/, *.md, changelog.d/, todo.d/, .claude/, agents/, skills/)
-  #   web=true  any changed path under web/ or .github/workflows/
+  #   web=true  any changed path under web/, core/web/, .github/workflows/, or
+  #             scripts/ci/build_web.sh (the one web-dependency entry point)
   # A workflow-file change sets both. Any error reading the diff fails OPEN
   # (both true): a missed skip costs minutes, a wrong skip hides a failure.
   # No Go test reads a file under a docs glob as an input (07-C2 Step 6,
@@ -91,7 +92,7 @@ jobs:
           if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
             go=false; web=false
             while IFS= read -r f; do
-              case "$f" in web/*|.github/workflows/*) web=true ;; esac
+              case "$f" in web/*|core/web/*|scripts/ci/build_web.sh|.github/workflows/*) web=true ;; esac
               case "$f" in
                 # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
                 # must run when only the generated file changed.
@@ -123,7 +124,10 @@ jobs:
     needs: changes
     # Its Go Tests job is off for good (run-go-tests below); its Go Vet & Build
     # and Go Lint jobs have no skip input, so a web-only change still runs
-    # them. Only the frontend half is switchable per change from here.
+    # them. Its frontend half is off (run-frontend below): its install is an
+    # `npm ci` in web/ that cannot call scripts/ci/build_web.sh, so once web/
+    # depends on core/web it would fail. The frontend-lint-build and
+    # frontend-test jobs below run those checks after the one entry point.
     if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
     # Pin bumped 2026-08-12 to pick up falkcorp/github-common#346, which raises
     # the `Go Tests (short, race)` job cap from 20 to 35 minutes. That job runs
@@ -147,10 +151,8 @@ jobs:
     uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@016cd02a4afbc2fdd84d2f08e012eff1573d7ea9 # main 2026-11-07; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       go-version: '1.27.3'
-      node-version: '26'
       system-packages: 'libtag1-dev'
-      frontend-working-dir: 'web'
-      run-frontend: ${{ needs.changes.outputs.web == 'true' }}
+      run-frontend: false
       # go-test-short-shards below runs the same suite in four shards and replaces the built-in Go Tests (short, race) job.
       run-go-tests: false
       go-lint: true
@@ -388,6 +390,87 @@ jobs:
   # run in the sharded short-race suite below. scripts/tests/test_run_gates.py
   # fails if a manifest gate is executed by neither.
 
+  # The frontend half of reusable-ci-minimal.yml (its `run-frontend`), moved here
+  # so the install goes through scripts/ci/build_web.sh like every other build
+  # site (R1-05; platform-core 07 §7.3.2). Same checks as before: lint, build
+  # (whose script runs tsc --noEmit first, so it is also the type check) and the
+  # vitest suite. No setup-go on these runners, so they run the script directly:
+  # the Makefile's go-env lines would otherwise fetch the pinned Go toolchain
+  # just to install npm packages.
+  frontend-lint-build:
+    name: Frontend Lint & Build
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Restore npm cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-26-${{ hashFiles('web/package-lock.json', 'core/web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-26-
+            ${{ runner.os }}-npm-
+
+      - name: Install web dependencies
+        run: sh scripts/ci/build_web.sh deps
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Build
+        working-directory: web
+        run: npm run build
+
+  frontend-test:
+    name: Frontend Unit Tests
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Restore npm cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-26-${{ hashFiles('web/package-lock.json', 'core/web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-26-
+            ${{ runner.os }}-npm-
+
+      - name: Install web dependencies
+        run: sh scripts/ci/build_web.sh deps
+
+      - name: Unit tests
+        working-directory: web
+        run: npm test -- --run
+
   # Non-blocking report of unused frontend files and exports (01-P9). It never
   # fails the run: continue-on-error is set on the job and on the step.
   knip-report:
@@ -411,7 +494,7 @@ jobs:
           node-version: '26'
 
       - name: Install web dependencies
-        run: npm ci --prefix web --no-audit --no-fund
+        run: sh scripts/ci/build_web.sh deps
 
       - name: Knip (production, files and exports)
         continue-on-error: true
