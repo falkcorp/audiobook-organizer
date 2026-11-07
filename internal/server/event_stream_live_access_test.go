@@ -1,7 +1,7 @@
 // file: internal/server/event_stream_live_access_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9c4e7a15-3d82-4b6f-a0e9-5f1b8d2c7a43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-06
 
 // An event stream stays open for hours and is checked per event against what
 // the account holds now, not what it held when the stream opened: a caller whose
@@ -125,35 +125,41 @@ func TestOpsV3Events_RoleLoweredMidStreamStopsTheRuns(t *testing.T) {
 	}
 	count := func(id string) int { return strings.Count(body(), `"id":"`+id+`"`) }
 	waitFor := func(id string, n int) {
-		require.Eventually(t, func() bool { return count(id) >= n }, 5*time.Second, 5*time.Millisecond,
+		require.Eventually(t, func() bool { return count(id) >= n }, 30*time.Second, 5*time.Millisecond,
 			"%s: want %d events, have %d: %s", id, n, count(id), body())
 	}
 
-	// The broker starts on its first client and subscribes to the hub from its
-	// own goroutine, so the heartbeat can arrive before it listens and an
-	// announce can land in that gap. Re-announce until both runs are on the
-	// stream, then drain once more so every repeat has been written before the
-	// counts below are taken as the baseline.
-	require.Eventually(t, func() bool {
-		if count(f.defaultApply) >= 1 && count(f.plainScan) >= 1 {
-			return true
+	// The broker subscribes to the hub before the stream writes its heartbeat
+	// (openStream waited for it), so one announce per run is enough: nothing is
+	// lost in a gap, and nothing is left pending that a repeat would have to
+	// cover.
+	announce(f.defaultApply, f.plainScan)
+	waitFor(f.defaultApply, 1)
+	waitFor(f.plainScan, 1)
+
+	// settle returns once every run event announced before it has been decided
+	// (written or withheld). The broker flushes the runs announced since the last
+	// tick together, in map order, so a run's event can be published after the
+	// plain run's from the same flush, and waiting for one plain event proves
+	// nothing about the default run's. Two plain events in a row do: the second
+	// is announced after the first was written, so the one loop goroutine reads it
+	// only after the flush that published the first has finished pushing, and the
+	// client's queue is first in, first out. Counting the first on its own, the
+	// way this test once did, can take a baseline with the default run's event
+	// still queued and then see that event arrive before the demotion lands.
+	settle := func() {
+		for range 2 {
+			plain := count(f.plainScan)
+			announce(f.plainScan)
+			waitFor(f.plainScan, plain+1)
 		}
-		announce(f.defaultApply, f.plainScan)
-		return false
-	}, 30*time.Second, 50*time.Millisecond, "the runs never arrived: %s", body())
-	plain := count(f.plainScan)
-	announce(f.plainScan)
-	waitFor(f.plainScan, plain+1)
-	repairs, plain := count(f.defaultApply), count(f.plainScan)
+	}
+	settle()
+	repairs := count(f.defaultApply)
 
 	setOpsManagerPermissions(t, f, auth.PermLibraryView, auth.PermSettingsManage)
 	announce(f.defaultApply)
-	announce(f.plainScan)
-	waitFor(f.plainScan, plain+1)
-	// A later flush of the plain run is queued behind everything the first one
-	// published, so seeing it means the default run's second event was decided.
-	announce(f.plainScan)
-	waitFor(f.plainScan, plain+2)
+	settle()
 	require.Equal(t, repairs, count(f.defaultApply), "the Repairs run's event after the demotion was withheld: %s", body())
 
 	cancel()
