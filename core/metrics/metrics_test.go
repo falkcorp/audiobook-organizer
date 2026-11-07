@@ -1,5 +1,5 @@
 // file: core/metrics/metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 21f5d697-6d25-4e0b-be83-f34e89311ae5
 // last-edited: 2026-11-07
 
@@ -432,9 +432,15 @@ func TestModuleNamespace_StableUnderEnablement(t *testing.T) {
 }
 
 func TestTranslationStrategyPinned(t *testing.T) {
-	prev := model.NameValidationScheme //lint:ignore SA1019 the test sets the process-global scheme the exporter would otherwise follow
+	// The test sets the deprecated process-global scheme on purpose: it is
+	// what the exporter would follow if its translation strategy were not
+	// pinned, so flipping it is the only way to prove the pin holds.
+	//lint:ignore SA1019 reads the process-global scheme to restore it
+	prev := model.NameValidationScheme
+	//lint:ignore SA1019 restores the process-global scheme
 	t.Cleanup(func() { model.NameValidationScheme = prev })
 	names := func(scheme model.ValidationScheme) []string {
+		//lint:ignore SA1019 flips the scheme the pin must ignore
 		model.NameValidationScheme = scheme
 		p := newTest(t, Options{AppID: "a", MetricNamespace: "abo"})
 		m := p.MeterProvider().Meter("pin")
