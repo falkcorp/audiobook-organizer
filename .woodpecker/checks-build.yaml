@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.9.2
+# version: 1.10.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # The non-linter gates of `make ci`: vet (test-short's prerequisite),
 # fmt-check, sdkguard, bench-check, pprof-check, and the web tests, each step running the
@@ -11,18 +11,19 @@
 # hosts at once. None of these steps needs the installed linters.
 #
 # Runs on any heavy local-backend agent (`heavy=true`): U1 (Linux amd64, 48
-# cores) or llm1 (macOS arm64); the server picks whichever has a free slot,
-# effectively at random, since both score the same. `image` names the
+# cores), llm1 (macOS arm64), the Mac, or u0-local (U0's sandboxed local
+# agent, heavy since 2026-11-06); the server picks whichever has a free slot. `image` names the
 # shell that runs the commands. The caches are host directories shared with
 # the test workflows; scripts/ci/cache_env.sh picks /tank/ci/cache on U1 and
-# /Users/jdfalk/ci/cache on llm1. Node on U1 is the official v26 tarball under
-# /tank/ci/tools/node (checksum-verified; see docs/ci/woodpecker.md); llm1 uses
+# /Users/jdfalk/ci/cache on llm1 and /srv/ci/cache on u0-local. Node on U1 and
+# u0-local is the official v26 tarball under <root>/tools/node
+# (/tank/ci or /srv/ci; checksum-verified; see docs/ci/woodpecker.md); llm1 uses
 # the node on the agent's PATH (Homebrew). PATH puts the pinned Go toolchain's
 # own bin first so fmt-check runs gofmt 1.27.3, not whatever gofmt the host's
 # own Go ships (Ubuntu's older /usr/bin/gofmt on U1).
 
 labels:
-  # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
+  # Any agent labelled heavy=true: U1, llm1, the Mac or u0-local (see docs/ci/woodpecker.md).
   heavy: "true"
 
 when:
@@ -78,9 +79,9 @@ steps:
     commands:
       # Sets npm_config_cache (the shared npm cache) for this host.
       - . scripts/ci/cache_env.sh || exit 1
-      # U1 pins node to the checksum-verified tarball; other hosts (llm1) use
-      # the node already on the agent's PATH.
-      - if [ -d /tank/ci/tools/node/bin ]; then export PATH="/tank/ci/tools/node/bin:$$PATH"; fi
+      # U1 and u0-local pin node to the checksum-verified tarball (u0's system
+      # node is v22); other hosts (llm1, the Mac) use the node on the agent's PATH.
+      - for d in /tank/ci/tools/node/bin /srv/ci/tools/node/bin; do if [ -d "$$d" ]; then export PATH="$$d:$$PATH"; break; fi; done
       - node --version
       - npm ci --prefix web --no-audit --no-fund
       # vitest defaults to availableParallelism()-1 workers (47 on U1). Beside
