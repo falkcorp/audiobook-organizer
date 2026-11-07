@@ -1,5 +1,5 @@
 // file: core/log/redactor.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 44521f1f-a2ba-4b3c-a385-eb582b10e892
 // last-edited: 2026-11-07
 
@@ -45,8 +45,10 @@ const (
 	maxURLDepth = 2
 	// maxRedactTextBytes bounds the text one StringKinds, URL or text scan
 	// examines. The scans are linear; this keeps the constant small for text
-	// that comes from a request or an upstream body. Text beyond it is not
-	// examined and is replaced with "[REDACTED]" (fail closed).
+	// that comes from a request or an upstream body. Longer text is cut back
+	// to its last separator before the bound (capCut), so no credential is
+	// cut in half; the head is redacted and the rest is replaced with
+	// "[REDACTED]" (fail closed).
 	maxRedactTextBytes = 64 << 10
 	// maxNameBytes bounds how far the pair scan reads back for a name before
 	// a separator. A longer run is judged by its last maxNameBytes bytes, so a
@@ -531,15 +533,15 @@ func logValuerType() reflect.Type { return reflect.TypeFor[slog.LogValuer]() }
 //     as its kind below;
 //   - pointers and interfaces are followed;
 //   - strings and []byte get the text scan;
-//   - map entries (any key type, keyed by its printed form) and struct fields
-//     (exported ones by json name and Go name, unexported and json:"-" ones
-//     by Go name, since the TextHandler prints those too) go through the key
-//     rule (KeyDenied's rule for bools and numbers);
+//   - map entries (any key type, keyed by its printed form) go through the
+//     key rule (KeyDenied's rule for bools and numbers); structs are
+//     walkStruct's;
 //   - slice and array elements are walked;
 //   - a part beyond maxAnyDepth or maxAnyNodes is "[REDACTED:depth]".
 //
-// A changed map or struct becomes a map[string]any and a slice a []any, with
-// unchanged branches kept as they were (an unexported one as its %+v text).
+// A changed map becomes a map[string]any, a slice a []any and a struct what
+// walkStruct returns, with unchanged branches kept as they were. An
+// interface is looked through first, so a typed nil is a nil pointer.
 func (r *Redactor) walk(rv reflect.Value, depth int, budget *int) (any, RedactionKind, bool) {
 	if !rv.IsValid() {
 		return nil, 0, false
@@ -553,6 +555,12 @@ func (r *Redactor) walk(rv reflect.Value, depth int, budget *int) (any, Redactio
 		if rv.IsNil() {
 			return valueOf(rv), 0, false
 		}
+	}
+	if rv.Kind() == reflect.Interface {
+		// Look through first: a typed nil (an error field holding a nil
+		// *T) is then a nil pointer, kept as fmt prints it ("<nil>"),
+		// instead of a method call that panics.
+		return r.walk(rv.Elem(), depth, budget)
 	}
 	if rv.CanInterface() {
 		x := rv.Interface()
@@ -577,7 +585,7 @@ func (r *Redactor) walk(rv reflect.Value, depth int, budget *int) (any, Redactio
 		return redactedText, RedactValuer, true
 	}
 	switch rv.Kind() {
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		return r.walk(rv.Elem(), depth+1, budget)
 	case reflect.String:
 		if s, k := r.scanTokens(rv.String()); k != 0 {
@@ -595,22 +603,7 @@ func (r *Redactor) walk(rv reflect.Value, depth int, budget *int) (any, Redactio
 			return m, kinds, true
 		}
 	case reflect.Struct:
-		t := rv.Type()
-		m := make(map[string]any, t.NumField())
-		var kinds RedactionKind
-		changed := false
-		for i := range t.NumField() {
-			f := t.Field(i)
-			name, alt := f.Name, ""
-			if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); f.IsExported() && tag != "" && tag != "-" {
-				name, alt = tag, f.Name
-			}
-			k, ch := r.walkEntry(m, name, alt, rv.Field(i), depth, budget)
-			kinds, changed = kinds|k, changed || ch
-		}
-		if changed {
-			return m, kinds, true
-		}
+		return r.walkStruct(rv, depth, budget)
 	case reflect.Slice, reflect.Array:
 		if rv.Type().Elem().Kind() == reflect.Uint8 {
 			b := make([]byte, rv.Len())
@@ -698,24 +691,112 @@ func keyName(key reflect.Value) string {
 	return fmt.Sprint(valueOf(key))
 }
 
-// walkEntry sets m[key] to v redacted and returns what it replaced and
-// whether it changed anything. A non-zero value is "[REDACTED]" when key, or
-// alt (a struct field's Go name beside its json name), is denied for its kind
-// (KeyDenied: a suffix-only match spares a bool, and a number under a
-// count-shaped key); a zero value hides nothing; an
-// unchanged value is kept as it was.
+// walkEntry sets m[key] to v redacted (entryValue) and returns what it
+// replaced and whether it changed anything.
 func (r *Redactor) walkEntry(m map[string]any, key, alt string, v reflect.Value, depth int, budget *int) (RedactionKind, bool) {
+	w, k, ch := r.entryValue(key, alt, v, depth, budget)
+	m[key] = w
+	return k, ch
+}
+
+// entryValue is v redacted under key. A non-zero value is "[REDACTED]" when
+// key, or alt (a struct field's Go name beside its json name), is denied for
+// its kind (KeyDenied: a suffix-only match spares a bool, and a number under
+// a count-shaped key); a zero value hides nothing; an unchanged value is
+// returned as it was.
+func (r *Redactor) entryValue(key, alt string, v reflect.Value, depth int, budget *int) (any, RedactionKind, bool) {
 	if (r.deniedReflect(key, v) || alt != "" && r.deniedReflect(alt, v)) && !v.IsZero() {
-		m[key] = redactedText
-		return RedactKey, true
+		return redactedText, RedactKey, true
 	}
 	w, k, ch := r.walk(v, depth+1, budget)
 	if !ch {
 		w = valueOf(v)
 	}
-	m[key] = w
-	return k, ch
+	return w, k, ch
 }
+
+// walkStruct redacts a struct. The two stdlib handlers print different
+// fields: the JSONHandler only the visible ones (exported, not json:"-"),
+// keyed by json name; the TextHandler's %+v every field, hidden ones
+// (unexported, json:"-") included. Every field is walked, by its json name
+// and its Go name (a hidden one by its Go name).
+//
+//   - Nothing changed: the struct is kept as it was.
+//   - Only visible fields changed: a map[string]any of the visible fields,
+//     so no handler prints a hidden field the JSONHandler never printed.
+//   - A hidden field changed: a redactedStruct, which the TextHandler prints
+//     as the struct's %+v with the redacted values in place, and the
+//     JSONHandler as the visible fields only.
+func (r *Redactor) walkStruct(rv reflect.Value, depth int, budget *int) (any, RedactionKind, bool) {
+	t := rv.Type()
+	type fieldOut struct {
+		w      any
+		ch     bool
+		hidden bool
+		name   string
+	}
+	outs := make([]fieldOut, t.NumField())
+	var kinds RedactionKind
+	visibleChanged, hiddenChanged := false, false
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		hidden := !f.IsExported() || tag == "-"
+		name, alt := f.Name, ""
+		if !hidden && tag != "" {
+			name, alt = tag, f.Name
+		}
+		w, k, ch := r.entryValue(name, alt, rv.Field(i), depth, budget)
+		outs[i] = fieldOut{w: w, ch: ch, hidden: hidden, name: name}
+		kinds |= k
+		if ch && hidden {
+			hiddenChanged = true
+		} else if ch {
+			visibleChanged = true
+		}
+	}
+	if !visibleChanged && !hiddenChanged {
+		return valueOf(rv), 0, false
+	}
+	visible := make(map[string]any, len(outs))
+	for _, o := range outs {
+		if !o.hidden {
+			visible[o.name] = o.w
+		}
+	}
+	if !hiddenChanged {
+		return visible, kinds, true
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, o := range outs {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(t.Field(i).Name)
+		b.WriteByte(':')
+		if o.ch {
+			fmt.Fprintf(&b, "%+v", o.w)
+		} else {
+			fmt.Fprintf(&b, "%+v", rv.Field(i))
+		}
+	}
+	b.WriteByte('}')
+	return redactedStruct{text: b.String(), visible: visible}, kinds, true
+}
+
+// redactedStruct stands in for a struct one of whose hidden fields needed
+// redaction (walkStruct). The TextHandler prints %+v, which is String: the
+// struct's own %+v form with the redacted values in place. The JSONHandler
+// prints MarshalJSON: the visible fields only, as encoding/json would have.
+type redactedStruct struct {
+	text    string
+	visible map[string]any
+}
+
+func (s redactedStruct) String() string { return s.text }
+
+func (s redactedStruct) MarshalJSON() ([]byte, error) { return json.Marshal(s.visible) }
 
 // deniedReflect is KeyDenied for a reflected value.
 func (r *Redactor) deniedReflect(key string, v reflect.Value) bool {
@@ -757,11 +838,17 @@ func resolve(v slog.Value) (out slog.Value, ok bool) {
 
 // URL returns raw with userinfo removed, credential query (and fragment)
 // parameter values replaced with "[REDACTED]" and the path rules applied.
-// Text beyond maxRedactTextBytes is replaced with "[REDACTED]".
+// A URL longer than maxRedactTextBytes is cut back to its last query
+// separator or whitespace before the bound (capCut) and the rest replaced
+// with "[REDACTED]".
 func (r *Redactor) URL(raw string) string {
 	if len(raw) > maxRedactTextBytes {
-		head, _ := r.urlKinds(raw[:maxRedactTextBytes], 0)
-		return head + redactedText
+		head, sep, ok := capCut(raw, urlCutSeps)
+		if !ok {
+			return redactedText
+		}
+		out, _ := r.urlKinds(head, 0)
+		return out + sep + redactedText
 	}
 	out, _ := r.urlKinds(raw, 0)
 	return out
@@ -792,7 +879,9 @@ func (r *Redactor) String(key, value string) string {
 //     "GET /invite/<token>", an error's "Get \"https://...?token=...\"",
 //     "token=<t>" and JSON "token":"<t>" pairs and "Bearer <t>".
 //
-// Text beyond maxRedactTextBytes is not examined and is replaced with
+// Text longer than maxRedactTextBytes is cut back to its last separator
+// before the bound (capCut: whitespace, and for a URL key also a query
+// separator); the head is redacted and the rest is replaced with
 // "[REDACTED]" (RedactKey).
 func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 	if r.keyDenied(key) {
@@ -801,11 +890,19 @@ func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 		}
 		return redactedText, RedactKey
 	}
-	if len(value) > maxRedactTextBytes {
-		head, k := r.StringKinds(key, value[:maxRedactTextBytes])
-		return head + redactedText, k | RedactKey
-	}
 	lk := strings.ToLower(key)
+	if len(value) > maxRedactTextBytes {
+		seps := textCutSeps
+		if _, ok := r.urlKeys[lk]; ok {
+			seps = urlCutSeps
+		}
+		head, sep, ok := capCut(value, seps)
+		if !ok {
+			return redactedText, RedactKey
+		}
+		out, k := r.StringKinds(key, head)
+		return out + sep + redactedText, k | RedactKey
+	}
 	if lk == "url.query" {
 		q, hadMark := strings.CutPrefix(value, "?")
 		out, k := r.maskQuery(q, 0)
@@ -1087,16 +1184,43 @@ func (r *Redactor) nestedValue(val string, depth int) (string, RedactionKind) {
 //     redaction is replaced whole.
 //  2. Pairs and auth credentials (scanPairs).
 //
-// Text beyond maxRedactTextBytes is not examined and is replaced with
-// "[REDACTED]".
+// Text longer than maxRedactTextBytes is cut back to its last whitespace
+// before the bound (capCut); the head is scanned and the rest is replaced
+// with "[REDACTED]".
 func (r *Redactor) scanTokens(s string) (string, RedactionKind) {
 	if len(s) > maxRedactTextBytes {
-		head, k := r.scanTokens(s[:maxRedactTextBytes])
-		return head + redactedText, k | RedactKey
+		head, sep, ok := capCut(s, textCutSeps)
+		if !ok {
+			return redactedText, RedactKey
+		}
+		out, k := r.scanTokens(head)
+		return out + sep + redactedText, k | RedactKey
 	}
 	out, kinds := r.scanURLs(s)
 	out, k := r.scanPairs(out)
 	return out, kinds | k
+}
+
+// The separators capCut may cut at: whitespace in text, and also a query
+// separator in a URL.
+const (
+	textCutSeps = " \t\n\r\v\f"
+	urlCutSeps  = textCutSeps + "&;#"
+)
+
+// capCut cuts s, longer than maxRedactTextBytes, back to the last of seps
+// before that bound: head is the text before it and sep the separator,
+// which the caller keeps between the redacted head and the "[REDACTED]" that
+// replaces the rest. A credential that straddles the bound ("https://alice:"
+// | "<t>@host") then lies wholly in the replaced rest, never half in the
+// scanned head. ok is false when there is no separator before the bound:
+// the head is one partial token, and the whole text is replaced.
+func capCut(s, seps string) (head, sep string, ok bool) {
+	j := strings.LastIndexAny(s[:maxRedactTextBytes], seps)
+	if j < 0 {
+		return "", "", false
+	}
+	return s[:j], s[j : j+1], true
 }
 
 func (r *Redactor) scanURLs(s string) (string, RedactionKind) {
@@ -1262,10 +1386,12 @@ func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 //   - otherwise up to whitespace, a quote, or a closer that closes nothing
 //     opened in the value (so "password=ab,<t>" and "ab&<t>" are whole).
 //
-// An unterminated quote or bracket runs to the end of the line. After
-// whitespace, a plain first word that is itself "name:" or "name=..."
-// (looksLikePair) is the next pair, as an empty field in %+v is, and no span
-// is returned.
+// An unterminated quote or bracket runs to the end of the line. One case
+// reads the value as the next field instead, as an empty field in %+v is
+// ("{Token: Name:alice}"): the separator is ':', exactly one space follows,
+// and the plain first word is itself a capitalised Go field and ':'
+// (isFieldStart). Anything else is the value and is replaced
+// ("password= x=<t>", "credentials: alice:<t>", "token: v2:<t>").
 func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 	var none [2]int
 	e := i
@@ -1295,9 +1421,10 @@ func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 	if v < len(s) && s[v] == s[i] {
 		v++
 	}
-	spaced := false
+	// The %+v empty-field shape: ':' and exactly one space.
+	emptyField := s[i] == ':' && v == i+1 && v+1 < len(s) && s[v] == ' ' && !isSpace(s[v+1])
 	for v < len(s) && isSpace(s[v]) {
-		v, spaced = v+1, true
+		v++
 		*steps++
 	}
 	if v >= len(s) || strings.HasPrefix(s[v:], redactedPrefix) {
@@ -1333,7 +1460,7 @@ func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 		end = plainEnd(s, v, steps)
 		// A cookie list is pairs by nature ("theme=dark; sid=<t>"), so the
 		// empty-field reading never applies to it.
-		if spaced && !cookie && looksLikePair(s[v:end]) {
+		if emptyField && !cookie && isFieldStart(s[v:end]) {
 			return none, false
 		}
 		if cookie || strings.HasSuffix(nk, "authorization") {
@@ -1466,11 +1593,28 @@ func (r *Redactor) authAt(s string, i int, steps *int) ([2]int, bool) {
 	if scheme != "bearer" && !credentialShaped(s, c, scheme, ctx, steps) {
 		return none, false
 	}
-	end := lineEnd(s, c, steps)
-	if cl := closerFor(opener); cl != 0 {
-		if j := strings.IndexByte(s[c:end], cl); j >= 0 {
-			end = c + j
+	// One forward read that stops at the closer or the end of the line, and
+	// none when the credential would be empty (s[c] is already the closer),
+	// so a run of "Bearer " candidates costs a constant each. A quoted
+	// credential ends at the matching unescaped quote (closingQuote), so
+	// "Digest username=\"u\", response=\"<t>\"" inside a quoted header is
+	// whole.
+	cl := closerFor(opener)
+	if cl != 0 && s[c] == cl {
+		return none, false
+	}
+	var end int
+	switch {
+	case isQuote(opener):
+		end = closingQuote(s, c, opener, steps)
+	case cl != 0:
+		end = c
+		for end < len(s) && s[end] != cl && s[end] != '\n' && s[end] != '\r' {
+			end++
+			*steps++
 		}
+	default:
+		end = lineEnd(s, c, steps)
 	}
 	if end <= c {
 		return none, false
@@ -1517,7 +1661,9 @@ func (r *Redactor) authContext(s string, i int, steps *int) (opener byte, ok boo
 func credentialShaped(s string, c int, scheme string, ctx bool, steps *int) bool {
 	run, padEnd, plain, ended := token68Run(s, c, steps)
 	switch {
-	case ctx && scheme == "digest":
+	case scheme == "digest":
+		// An auth-param list ("username=\"u\", response=...") or a token68
+		// of at least minToken68Prose is a Digest credential in any context.
 		return authParamAt(s, c, steps) || ended && !plain && run-c >= minToken68Prose
 	case ctx:
 		return ended && !plain && run-c >= minToken68Header
@@ -1536,26 +1682,30 @@ const (
 )
 
 // token68Run reads RFC 7235's token68 at s[c] (ALPHA DIGIT - . _ ~ + /,
-// then '=' padding): run is where the characters end, padEnd where the
-// padding ends, plain whether it is a plain word (no character after the
-// first is other than a lower-case letter), and ended whether it ends at
-// whitespace, ',', ';', a quote, a closer or the end of s.
+// then '=' padding): run is where the characters end (a sentence-ending '.'
+// is not one of them: "sent Basic <t>."), padEnd where the padding ends,
+// plain whether it is a plain word (no character after the first is other
+// than a lower-case letter), and ended whether it ends at whitespace, one of
+// ",;.!:", a quote, a closer or the end of s.
 func token68Run(s string, c int, steps *int) (run, padEnd int, plain, ended bool) {
 	j := c
-	plain = isAlpha(s[c])
 	for j < len(s) && (isAlpha(s[j]) || '0' <= s[j] && s[j] <= '9' || strings.IndexByte("-._~+/", s[j]) >= 0) {
-		if j > c && !('a' <= s[j] && s[j] <= 'z') {
-			plain = false
-		}
 		j++
 		*steps++
 	}
+	for j > c+1 && s[j-1] == '.' {
+		j--
+	}
 	run = j
+	plain = run > c && isAlpha(s[c])
+	for k := c + 1; plain && k < run; k++ {
+		plain = 'a' <= s[k] && s[k] <= 'z'
+	}
 	for j < len(s) && s[j] == '=' {
 		j++
 		*steps++
 	}
-	ended = j == len(s) || isSpace(s[j]) || s[j] == ',' || s[j] == ';' || isQuote(s[j]) || isCloser(s[j])
+	ended = j == len(s) || isSpace(s[j]) || strings.IndexByte(",;.!:", s[j]) >= 0 || isQuote(s[j]) || isCloser(s[j])
 	return run, j, plain, ended && run > c
 }
 
@@ -1587,26 +1737,19 @@ func authParamAt(s string, c int, steps *int) bool {
 	return j > c && j < len(s) && s[j] == '='
 }
 
-// looksLikePair reports whether w starts with a field name and a separator
-// ("URL:https://...", "Title:Hush", "page=2"): a letter or '_', name
-// characters, then ':' or '=' that is not '=' padding ("abc==", "abc=").
-func looksLikePair(w string) bool {
-	if w == "" || !(isAlpha(w[0]) || w[0] == '_') {
+// isFieldStart reports whether w starts with a %+v field: a capital, then
+// letters, digits or '_', then ':' ("Name:alice", "URL:https://...").
+func isFieldStart(w string) bool {
+	if w == "" || w[0] < 'A' || w[0] > 'Z' {
 		return false
 	}
-	i := 1
-	for i < len(w) && isNameChar(w[i]) {
-		i++
-	}
-	if i >= len(w) {
-		return false
-	}
-	switch w[i] {
-	case ':':
-		return !strings.HasPrefix(w[i+1:], "//") // "https://..." is a URL
-
-	case '=':
-		return i+1 < len(w) && w[i+1] != '='
+	for i := 1; i < len(w); i++ {
+		switch c := w[i]; {
+		case c == ':':
+			return true
+		case !isAlpha(c) && !('0' <= c && c <= '9') && c != '_':
+			return false
+		}
 	}
 	return false
 }

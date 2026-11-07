@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -848,12 +848,19 @@ func TestRedact_PairScanIsLinear(t *testing.T) {
 	for _, unit := range []string{
 		"cookie=", "bearer a ", "password: ", "/a?x=1&", `password:"[REDACTED `, "Authorization: Basic Basic ",
 		"password: password: ", `"token":"`, "token=[", "a=1&token=x;",
+		// Verification review M-1: a scheme word right before its own closer.
+		`"Bearer "`, `[Bearer ]`, `'Bearer '`, `"Basic "`, `"Digest "`, `token:\"\"`, "token: a:b ",
 	} {
-		s := strings.Repeat(unit, size/len(unit))
-		steps := 0
-		r.scanPairsN(s, &steps)
-		if steps > 8*len(s) {
-			t.Errorf("scanPairsN(%q x %d): %d steps for %d bytes, want <= %d", unit, size/len(unit), steps, len(s), 8*len(s))
+		// 64 KiB first, so a quadratic shape fails fast instead of running
+		// for minutes at 1 MiB.
+		for _, n := range []int{64 << 10, size} {
+			s := strings.Repeat(unit, n/len(unit))
+			steps := 0
+			r.scanPairsN(s, &steps)
+			if steps > 8*len(s) {
+				t.Errorf("scanPairsN(%q x %d): %d steps for %d bytes, want <= %d", unit, n/len(unit), steps, len(s), 8*len(s))
+				break
+			}
 		}
 	}
 	// Past maxRedactTextBytes the text is not examined: it is replaced.
@@ -1185,5 +1192,96 @@ func TestRedact_PairAndURLEdgeForms(t *testing.T) {
 	// maskQuery keeps empty segments and a trailing separator.
 	if got := r.URL("/a?token=" + fakeToken + ";&page=2&"); got != "/a?token=[REDACTED];&page=2&" {
 		t.Errorf("URL(separators) = %q", got)
+	}
+}
+
+type batUser struct {
+	Name         string
+	Token        string
+	PasswordHash string `json:"-"`
+	ssn          string
+}
+
+type batCaseNote struct {
+	Name     string
+	Note     string `json:"-"`
+	password string
+}
+
+// Verification review B-1: a rebuilt struct never gains hidden fields
+// (unexported, json:"-") in the JSONHandler's output; when a hidden field
+// itself needs redaction, the TextHandler prints the struct's %+v with it
+// redacted.
+func TestRedact_HiddenStructFields(t *testing.T) {
+	r := NewRedactor(nil)
+	text, js := logBoth(t, r, slog.Any("u", batUser{Name: "bruce", Token: fakeToken, PasswordHash: "hash_test_lazarus", ssn: "pii_test_arkham"}))
+	assertAbsent(t, "text", text, fakeToken)
+	assertAbsent(t, "json", js, fakeToken, "hash_test_lazarus", "pii_test_arkham", "PasswordHash", "ssn")
+
+	text, js = logBoth(t, r, slog.Any("c", batCaseNote{Name: "bruce", Note: "note_test_oracle", password: fakePass}))
+	assertAbsent(t, "text", text, fakePass)
+	assertAbsent(t, "json", js, fakePass, "note_test_oracle", "password")
+	if !strings.Contains(text, "Note:note_test_oracle") || !strings.Contains(text, "password:[REDACTED]") {
+		t.Errorf("text form lost the struct's %%+v shape: %s", text)
+	}
+	if !strings.Contains(js, `"c":{"Name":"bruce"}`) {
+		t.Errorf("json form = %s, want the visible fields only", js)
+	}
+}
+
+type nilHolder struct {
+	Err  error
+	Name string
+}
+
+type batErr struct{ msg string }
+
+func (e *batErr) Error() string { return e.msg }
+
+// Verification review M-2, M-3, M-4, N-1, N-2 and N-3.
+func TestRedact_VerificationReviewForms(t *testing.T) {
+	r := NewRedactor(nil)
+	pad := func(tail string, cut int) string {
+		// tail placed so the 64 KiB bound falls cut bytes into it.
+		return strings.Repeat("a", maxRedactTextBytes-cut-2) + " x" + tail
+	}
+	for _, c := range []struct{ name, key, in string }{
+		{"M-2 quoted Digest", "msg", `got header "Digest username=\"bruce\", response=\"` + fakePass + `\""`},
+		{"M-3 Digest in prose", "msg", `retrying with Digest username="bruce", response="` + fakePass + `", cnonce="c"`},
+		{"M-3 Digest in prose, long list", "msg", `retrying with Digest username="u", realm="r", nonce="n", uri="/x", response="` + fakePass + `"`},
+		{"M-4 '=' then a pair", "msg", "password= x=" + fakePass},
+		{"M-4 value with '='", "msg", "password: " + fakePass + "=abc"},
+		{"M-4 value after '='", "msg", "password: abc=" + fakePass},
+		{"M-4 lower-case pair", "msg", "credentials: alice:" + fakePass},
+		{"M-4 versioned", "msg", "token: v2:" + fakePass},
+		{"N-1 full stop", "msg", "sent Basic " + basicBruce + "."},
+		{"N-1 bang", "msg", "sent Basic " + basicBruce + "!"},
+		{"N-1 colon", "msg", "sent Basic " + basicBruce + ": rejected"},
+		{"N-1 unpadded", "msg", "sent Basic " + strings.TrimRight(basicBruce, "=") + "."},
+		{"N-2 userinfo across the cap", "msg", pad(" https://alice:"+fakePass+"@example.test/p", len(" https://alice:pw_te"))},
+		{"N-2 query across the cap", "url", strings.Repeat("a", maxRedactTextBytes-30) + "?a=1&next=https://alice:" + fakePass + "@example.test/"},
+	} {
+		got, k := r.StringKinds(c.key, c.in)
+		assertAbsent(t, c.name, got, fakePass, "pw_te", basicBruce[:12])
+		if k == 0 {
+			t.Errorf("%s: StringKinds reported no kind", c.name)
+		}
+		if strings.Contains(got, "[REDACTED][REDACTED]") {
+			t.Errorf("%s: doubled replacement: ...%s", c.name, got[max(0, len(got)-60):])
+		}
+	}
+	for _, in := range []string{"{Token: Name:alfred}", "{Password: URL:https://example.test/x}", "Basic Economics.", "A Basic Guide!"} {
+		assertUnchanged(t, r, "msg", in)
+	}
+	// N-3: a typed-nil error nested in a struct prints as fmt prints it.
+	var nilErr *batErr
+	text, js := logBoth(t, r, slog.Any("h", nilHolder{Err: nilErr, Name: "joker"}))
+	for where, out := range map[string]string{"text": text, "json": js} {
+		if strings.Contains(out, "REDACTED") {
+			t.Errorf("%s: typed-nil error redacted: %s", where, out)
+		}
+	}
+	if !strings.Contains(text, "Err:<nil>") {
+		t.Errorf("text = %s, want Err:<nil>", text)
 	}
 }
