@@ -1,7 +1,7 @@
 # file: scripts/tests/test_short_test_shards.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: e4a7c1b9-58d2-4f36-a0c3-2d9b6f8e1a74
-# last-edited: 2026-10-09
+# last-edited: 2026-11-06
 """Tests for scripts/ci/short_test_shards.py: plan completeness, determinism, merge.
 
 The shard plan is what decides whether a test gates a PR at all: a name that
@@ -227,6 +227,204 @@ class CompletenessTest(unittest.TestCase):
                 buf.getvalue().strip(),
                 f"OK: {total} tests across 4 shards, 0 duplicates, 0 missing",
             )
+
+
+CORE_MOD = "example.com/core"
+
+
+def _core_pkg(key: str, has_tests: bool = True) -> sts.Package:
+    # Core packages carry the module and a `core/`-prefixed key, so a weights
+    # entry for core can never collide with a root package of the same path.
+    return sts.Package(f"{CORE_MOD}/{key}", f"core/{key}", has_tests, module="core")
+
+
+CORE_PKGS = [_core_pkg("auth"), _core_pkg("storage/keys"), _core_pkg("buildid", has_tests=False)]
+BOTH = PKGS + CORE_PKGS
+
+
+def both_plan(count: int = 4) -> tuple[list[list[sts.Unit]], dict[str, list[str]]]:
+    units, listed = sts.build_units(BOTH, WEIGHTS, TIMINGS, ["-short", "-race"], stub_lister)
+    return sts.assign(units, count), listed
+
+
+class CoreShardTest(unittest.TestCase):
+    """R1-03: root packages fill N shards, every core package lands in the one core shard."""
+
+    def test_core_packages_are_assigned_to_exactly_one_core_shard(self) -> None:
+        bins, listed = both_plan()
+        self.assertEqual(len(bins), 5)  # four root shards plus the core shard
+        core_bin = bins[4]
+        self.assertEqual(sorted(u.pkg.key for u in core_bin), sorted(p.key for p in CORE_PKGS))
+        self.assertTrue(all(u.pkg.module == "core" for u in core_bin))
+        # Never in a root shard, and each exactly once (verify checks the count).
+        self.assertFalse(any(u.pkg.module == "core" for b in bins[:4] for u in b))
+        self.assertEqual(sts.verify(bins, BOTH, listed), [])
+
+    def test_a_core_package_in_a_root_shard_fails(self) -> None:
+        bins, listed = both_plan()
+        moved = bins[4][0]
+        broken = [list(b) for b in bins]
+        broken[4] = broken[4][1:]
+        broken[0].append(moved)
+        errors = sts.verify(broken, BOTH, listed)
+        self.assertTrue(
+            any(f"{moved.pkg.key}: core package in root shard 1/4" in e for e in errors)
+        )
+
+    def test_a_root_package_in_the_core_shard_fails(self) -> None:
+        bins, listed = both_plan()
+        moved = bins[0][0]
+        broken = [list(b) for b in bins]
+        broken[0] = broken[0][1:]
+        broken[4].append(moved)
+        errors = sts.verify(broken, BOTH, listed)
+        self.assertTrue(
+            any(f"{moved.pkg.key}: root package in the core shard" in e for e in errors)
+        )
+
+    def test_a_dropped_core_package_fails(self) -> None:
+        bins, listed = both_plan()
+        broken = [[u for u in b if u.pkg.key != "core/auth"] for b in bins]
+        self.assertIn("core/auth: not assigned to any shard", sts.verify(broken, BOTH, listed))
+
+    def test_an_empty_core_shard_fails(self) -> None:
+        # The module is present (a core package is listed) yet nothing was assigned to it.
+        bins, listed = both_plan()
+        errors = sts.verify(bins[:4] + [[]], BOTH, listed)
+        self.assertIn("core shard has no units", errors)
+
+    def test_a_root_only_plan_has_no_core_shard(self) -> None:
+        bins, _ = plan()
+        self.assertEqual(len(bins), 4)
+
+    def test_core_shard_spec(self) -> None:
+        self.assertEqual(sts._parse_shard("core/4"), (5, 4))
+        for spec in ("core", "core/0", "core/x", "1/core"):
+            with self.assertRaises(SystemExit):
+                sts._parse_shard(spec)
+
+    def test_core_calls_run_in_the_core_module_without_a_coverage_profile(self) -> None:
+        bins, _ = both_plan()
+        calls = sts.plan_calls(bins[4], ["-short", "-race", "-covermode=atomic", "-timeout", "25m"])
+        self.assertTrue(calls)
+        for c in calls:
+            self.assertEqual(c.module, "core")
+            self.assertFalse(any(a.startswith(("-cover", "-coverprofile")) for a in c.go_args))
+            self.assertIn("-race", c.go_args)
+            self.assertIn("25m", c.go_args)
+        # Root units keep their coverage flags.
+        root_calls = sts.plan_calls(bins[0], ["-short", "-covermode=atomic"])
+        self.assertTrue(
+            all(c.module == "." and "-covermode=atomic" in c.go_args for c in root_calls)
+        )
+
+    def test_core_shard_run_invokes_go_in_core_and_writes_no_profile(self) -> None:
+        bins, _ = both_plan()
+        seen: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            seen.append(cmd)
+            return mock.Mock(returncode=0, stdout="ok\n", stderr="")
+
+        with contextlib.ExitStack() as stack:
+            d = stack.enter_context(tempfile.TemporaryDirectory())
+            stack.enter_context(mock.patch.object(sts.subprocess, "run", fake_run))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            out = os.path.join(d, "c.out")
+            rc = sts.run_shard(bins[4], ["-short", "-race", "-covermode=atomic"], out)
+            self.assertFalse(os.path.exists(out))  # core has no coverage floor yet
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(seen), 1)  # every whole core package in one go test call
+        self.assertEqual(seen[0][:4], ["go", "-C", "core", "test"])
+        self.assertFalse(any(a.startswith("-cover") for a in seen[0]))
+        self.assertIn(f"{CORE_MOD}/auth", seen[0])
+
+    def test_core_packages_are_listed_from_the_core_directory(self) -> None:
+        # `go test -list` of a core package from the root fails on the root's
+        # go.sum, so the default lister runs once per module, in its directory.
+        cwds: list[tuple[str, list[str]]] = []
+
+        def fake_list(paths: list[str], go_args: list[str]) -> dict[str, list[str]]:
+            cwds.append((os.path.basename(os.getcwd()), sorted(paths)))
+            return {p: [] for p in paths}
+
+        here = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            core = os.path.join(d, "corehome")
+            os.mkdir(core)
+            os.chdir(d)
+            try:
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(mock.patch.object(sts.gts, "list_tests_many", fake_list))
+                    stack.enter_context(mock.patch.object(sts, "CORE_DIR", "corehome"))
+                    wrapped = sts.module_lister(sts.gts.list_tests_many, BOTH)
+                    wrapped([p.path for p in BOTH], [])
+                    self.assertEqual(os.getcwd(), os.path.realpath(d))
+            finally:
+                os.chdir(here)
+        self.assertEqual(len(cwds), 2)
+        self.assertEqual(cwds[0][0], os.path.basename(d))
+        self.assertEqual(cwds[1], ("corehome", sorted(p.path for p in CORE_PKGS)))
+        # A stub lister is called once, untouched.
+        self.assertIs(sts.module_lister(stub_lister, BOTH), stub_lister)
+
+    def test_core_shard_check_covers_core_tests(self) -> None:
+        names = dict(NAMES)
+        names[f"{CORE_MOD}/auth"] = ["TestAuth1", "TestAuth2"]
+        names[f"{CORE_MOD}/storage/keys"] = ["TestKeys1"]
+
+        def lister(paths: list[str], go_args: list[str]) -> dict[str, list[str]]:
+            return {p: sorted(names.get(p, [])) for p in paths}
+
+        units, listed = sts.build_units(BOTH, WEIGHTS, TIMINGS, [], lister)
+        bins = sts.assign(units, 4)
+        total = sum(len(v) for v in names.values())
+        self.assertEqual(sts.full_check(bins, BOTH, listed, [], lister), (total, 0, 0))
+
+
+class StaleWeightsTest(unittest.TestCase):
+    """A weight for a package in neither module's `go list ./...` is an error (R1-03)."""
+
+    def test_unknown_key_is_reported(self) -> None:
+        self.assertEqual(sts.stale_weights({"gone/pkg": 200}, BOTH), ["gone/pkg"])
+
+    def test_known_root_and_core_keys_pass(self) -> None:
+        self.assertEqual(sts.stale_weights({"big": 1, "core/auth": 1}, BOTH), [])
+
+    def test_a_core_package_needs_the_core_prefix(self) -> None:
+        # "auth" alone names no package: core keys are namespaced.
+        self.assertEqual(sts.stale_weights({"auth": 1}, BOTH), ["auth"])
+
+    def test_main_fails_on_a_stale_weight_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            w = os.path.join(d, "w.json")
+            with open(w, "w", encoding="utf-8") as fh:
+                json.dump({**WEIGHTS, "internal/moved/away": 300}, fh)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = sts.main(
+                    ["--check", "--weights", w, "--", "-short"],
+                    lister=stub_lister,
+                    loader=lambda: PKGS,
+                )
+            self.assertEqual(rc, 1)
+            self.assertIn("internal/moved/away", buf.getvalue())
+            self.assertIn("not in go list ./...", buf.getvalue())
+
+    def test_main_passes_with_core_packages_and_no_stale_weight(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            w = os.path.join(d, "w.json")
+            with open(w, "w", encoding="utf-8") as fh:
+                json.dump({**WEIGHTS, "core/auth": 5}, fh)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = sts.main(
+                    ["--check", "--weights", w, "--", "-short"],
+                    lister=stub_lister,
+                    loader=lambda: BOTH,
+                )
+            self.assertEqual(rc, 0)
+            self.assertIn("across 4 shards and the core shard", buf.getvalue())
 
 
 class RunShardTest(unittest.TestCase):

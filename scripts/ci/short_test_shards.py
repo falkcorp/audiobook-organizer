@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.2.1
+# version: 1.3.0
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
 # last-edited: 2026-11-06
 """Run the whole short Go test suite as one of N shards, then merge coverage.
@@ -31,6 +31,17 @@ matrix):
     (go_test_shards.list_tests exits non-zero), and a split group whose
     pattern matched nothing fails it too.
 
+Modules (R1-03, 09 §9.4 R1's CI classification). `go list ./...` from the
+root never reaches the nested core/ module, so core's packages are listed with
+`go -C core list ./...` and keyed `core/<path>`: a weights entry for core can
+never collide with a root package. The root packages fill the N numbered
+shards; every core package goes to the one extra core shard (`--shard core/N`),
+which runs `go -C core test` and writes no coverage profile, because core has
+no coverage floor yet (R1-23 adds it) and the root floor must keep comparing the
+same four-profile total. A weights entry that names no package of either module
+fails the plan ("stale weight"): the entry would otherwise sit unread, and the
+balance it was written for would silently stop applying.
+
 Weights (short_test_weights.json, package -> seconds; JSON carries no header,
 so its provenance is recorded here). The values for internal/server (414 s),
 internal/metafetch (240 s) and internal/database (157 s) are the Mac `-short`
@@ -50,6 +61,7 @@ A stale weight costs balance, never coverage.
 Usage:
   short_test_shards.py --shard K/N --out FILE [--jobs J] [--weights FILE]
       [--timings FILE] -- -short -race -covermode=atomic -timeout 25m
+  short_test_shards.py --shard core/N --out FILE -- -short -race -covermode=atomic -timeout 25m
   short_test_shards.py --shard K/N --plan -- -short -race
   short_test_shards.py [--shard K/N] --check -- -short -race
   short_test_shards.py --merge OUT IN [IN ...]
@@ -88,6 +100,9 @@ _DEFAULT_SHARDS = 4
 # no such cap, so a local run cannot catch an oversized -run pattern. The
 # largest today is ~76 KB (all of internal/plugins/maintenance in one group).
 _MAX_PATTERN = 120_000
+# The nested Go modules besides the root, as (module directory, key prefix).
+# Matches the root Makefile's GO_MODULE_DIRS; the root is always listed first.
+CORE_DIR = "core"
 
 # Import paths -> their `go test -list` names, in one go invocation.
 Lister = Callable[[list[str], list[str]], dict[str, list[str]]]
@@ -98,6 +113,7 @@ class Package:
     path: str  # import path, as passed to go test
     key: str  # module-relative key used by the weights and timings files
     has_tests: bool
+    module: str = "."  # "." (root) or CORE_DIR; core keys carry a "core/" prefix
 
 
 @dataclass(frozen=True)
@@ -112,24 +128,41 @@ class Unit:
         return self.pkg.key if self.group == 0 else f"{self.pkg.key}#{self.group}"
 
 
-def load_packages() -> list[Package]:
-    """Every package `go test ./...` would run, in `go list` order."""
+def _load_module(directory: str) -> list[Package]:
+    """Every package `go test ./...` would run in one module, in `go list` order."""
     fmt = "{{.ImportPath}} {{len .TestGoFiles}} {{len .XTestGoFiles}}"
-    mod = subprocess.run(["go", "list", "-m"], capture_output=True, text=True)
-    res = subprocess.run(["go", "list", "-f", fmt, "./..."], capture_output=True, text=True)
+    base = ["go"] if directory == "." else ["go", "-C", directory]
+    mod = subprocess.run([*base, "list", "-m"], capture_output=True, text=True)
+    res = subprocess.run([*base, "list", "-f", fmt, "./..."], capture_output=True, text=True)
     for r in (mod, res):
         if r.returncode != 0:
             sys.stderr.write(r.stdout + r.stderr)
-            raise SystemExit(f"::error::go list failed (exit {r.returncode})")
+            raise SystemExit(f"::error::go list failed in {directory} (exit {r.returncode})")
     module = mod.stdout.strip()
+    prefix = "" if directory == "." else directory + "/"
     pkgs = []
     for line in res.stdout.splitlines():
         path, tests, xtests = line.split()
-        key = "." if path == module else path.removeprefix(module + "/")
-        pkgs.append(Package(path, key, int(tests) + int(xtests) > 0))
+        rel = "" if path == module else path.removeprefix(module + "/")
+        key = (prefix + rel) if rel else (directory if directory != "." else ".")
+        pkgs.append(Package(path, key, int(tests) + int(xtests) > 0, directory))
     if not pkgs:
-        raise SystemExit("::error::go list ./... returned no packages")
+        raise SystemExit(f"::error::go list ./... returned no packages in {directory}")
     return pkgs
+
+
+def load_packages() -> list[Package]:
+    """Every package of every module (root, then core when it exists)."""
+    pkgs = _load_module(".")
+    if os.path.isfile(os.path.join(CORE_DIR, "go.mod")):
+        pkgs += _load_module(CORE_DIR)
+    return pkgs
+
+
+def stale_weights(weights: dict[str, float], pkgs: list[Package]) -> list[str]:
+    """Weight keys that name no package of any module, sorted."""
+    known = {p.key for p in pkgs}
+    return sorted(k for k in weights if k not in known)
 
 
 def package_weight(
@@ -203,19 +236,42 @@ def build_units(
 
 
 def assign(units: list[Unit], count: int) -> list[list[Unit]]:
-    """Longest-processing-time-first into `count` bins; deterministic."""
+    """Longest-processing-time-first into `count` bins; deterministic.
+
+    Root units fill the `count` numbered bins. Core units are not balanced: they
+    all go to one extra bin after them (the core shard), present only when the
+    plan has core units. A root-only plan is exactly `count` bins.
+    """
     bins: list[list[Unit]] = [[] for _ in range(count)]
     loads = [0.0] * count
-    for u in sorted(units, key=lambda u: (-u.weight, u.label)):
+    root = [u for u in units if u.pkg.module == "."]
+    for u in sorted(root, key=lambda u: (-u.weight, u.label)):
         b = min(range(count), key=lambda k: (loads[k], k))
         bins[b].append(u)
         loads[b] += u.weight
+    core = [u for u in units if u.pkg.module != "."]
+    if core:
+        bins.append(sorted(core, key=lambda u: (-u.weight, u.label)))
     return bins
 
 
 def verify(bins: list[list[Unit]], pkgs: list[Package], listed: dict[str, list[str]]) -> list[str]:
     """Problems with the plan: empty shards, packages or split names not assigned exactly once."""
-    errors = [f"shard {i}/{len(bins)} has no units" for i, b in enumerate(bins, start=1) if not b]
+    has_core = any(p.module != "." for p in pkgs)
+    root_count = len(bins) - 1 if has_core else len(bins)
+    errors = []
+    for i, b in enumerate(bins, start=1):
+        if not b:
+            errors.append(
+                "core shard has no units"
+                if i > root_count
+                else f"shard {i}/{root_count} has no units"
+            )
+        for u in b:
+            if i > root_count and u.pkg.module == ".":
+                errors.append(f"{u.pkg.key}: root package in the core shard")
+            elif i <= root_count and u.pkg.module != ".":
+                errors.append(f"{u.pkg.key}: core package in root shard {i}/{root_count}")
     units = [u for b in bins for u in b]
     whole = Counter(u.pkg.path for u in units if u.group == 0)
     split_names: dict[str, list[str]] = {}
@@ -292,9 +348,11 @@ def _load_json(path: str, required: bool) -> dict:
 
 
 def _print_plan(bins: list[list[Unit]], index: int) -> None:
+    root_count = len(bins) - 1 if any(u.pkg.module != "." for b in bins for u in b) else len(bins)
     for i, b in enumerate(bins, start=1):
         mark = " <- this shard" if i == index else ""
-        print(f"shard {i}/{len(bins)}: est. {sum(u.weight for u in b):.0f}s, {len(b)} units{mark}")
+        name = f"shard {i}/{root_count}" if i <= root_count else f"core shard (of {root_count})"
+        print(f"{name}: est. {sum(u.weight for u in b):.0f}s, {len(b)} units{mark}")
         for u in sorted(b, key=lambda u: (-u.weight, u.label)):
             what = f"{len(u.names)} tests" if u.group else "whole package"
             if u.weight > _DEFAULT_WEIGHT:
@@ -310,6 +368,55 @@ def run_pattern(names: tuple[str, ...]) -> str:
     return "^(" + "|".join(names) + ")$"
 
 
+@dataclass(frozen=True)
+class Call:
+    label: str
+    module: str  # "." or CORE_DIR: where `go test` runs
+    go_args: tuple[str, ...]  # flags for this call (no coverage flags for core)
+    args: tuple[str, ...]  # -run pattern and import paths
+    is_split: bool
+
+
+# Flags that turn on coverage. A core call drops them: core has no coverage
+# floor yet, so a profile would only cost time, and `go test -coverprofile`
+# cannot span two modules anyway. `-covermode` and `-coverpkg` take a value, as
+# a second argument or after `=`.
+_COVER_VALUE_FLAGS = ("-covermode", "-coverpkg", "-coverprofile")
+
+
+def _without_coverage(go_args: list[str]) -> list[str]:
+    out: list[str] = []
+    skip = False
+    for a in go_args:
+        if skip:
+            skip = False
+            continue
+        name = a.split("=", 1)[0]
+        if name in _COVER_VALUE_FLAGS or name == "-cover":
+            skip = "=" not in a and name in _COVER_VALUE_FLAGS
+            continue
+        out.append(a)
+    return out
+
+
+def plan_calls(units: list[Unit], go_args: list[str]) -> list[Call]:
+    """The `go test` calls of one shard: per module, one for all whole packages
+    and one per split group."""
+    calls: list[Call] = []
+    for module in dict.fromkeys(u.pkg.module for u in units):
+        mine = [u for u in units if u.pkg.module == module]
+        args = tuple(go_args) if module == "." else tuple(_without_coverage(go_args))
+        whole = [u.pkg.path for u in mine if u.group == 0]
+        if whole:
+            label = f"{len(whole)} whole packages" + ("" if module == "." else f" of {module}")
+            calls.append(Call(label, module, args, tuple(whole), False))
+        for u in sorted((u for u in mine if u.group), key=lambda u: -u.weight):
+            calls.append(
+                Call(u.label, module, args, ("-run", run_pattern(u.names), u.pkg.path), True)
+            )
+    return calls
+
+
 def run_shard(units: list[Unit], go_args: list[str], out: str, jobs: int = 0) -> int:
     """Run a shard's go test calls; jobs <= 0 runs every call at once.
 
@@ -317,30 +424,30 @@ def run_shard(units: list[Unit], go_args: list[str], out: str, jobs: int = 0) ->
     own -timeout 25m, and a call queued behind another for a free slot could
     start late enough that the job's 35-minute cap kills it before Go's own
     timeout prints the goroutine dump. go_test_shards.py defaults the same way.
+
+    Root calls write a coverage profile each and merge into `out`; core calls
+    run `go -C core test` and write none, so a core-only shard writes no `out`.
     """
-    whole = [u.pkg.path for u in units if u.group == 0]
-    calls: list[tuple[str, list[str], bool]] = []
-    if whole:
-        calls.append((f"{len(whole)} whole packages", whole, False))
-    for u in sorted((u for u in units if u.group), key=lambda u: -u.weight):
-        calls.append((u.label, ["-run", run_pattern(u.names), u.pkg.path], True))
+    calls = plan_calls(units, go_args)
     workers = jobs if jobs > 0 else len(calls)
 
     tmp = tempfile.mkdtemp(prefix="short-shard-")
 
-    def run(i: int) -> tuple[str, int, float, str, bool, str]:
-        label, args, is_split = calls[i]
-        prof = os.path.join(tmp, f"{i}.out")
+    def run(i: int) -> tuple[str, int, float, str, bool, str | None]:
+        call = calls[i]
+        base = ["go"] if call.module == "." else ["go", "-C", call.module]
+        prof = os.path.join(tmp, f"{i}.out") if call.module == "." else None
+        cover = [f"-coverprofile={prof}"] if prof else []
         start = time.monotonic()
         res = subprocess.run(
-            ["go", "test", *go_args, f"-coverprofile={prof}", *args], capture_output=True, text=True
+            [*base, "test", *call.go_args, *cover, *call.args], capture_output=True, text=True
         )
         return (
-            label,
+            call.label,
             res.returncode,
             time.monotonic() - start,
             res.stdout + res.stderr,
-            is_split,
+            call.is_split,
             prof,
         )
 
@@ -351,7 +458,8 @@ def run_shard(units: list[Unit], go_args: list[str], out: str, jobs: int = 0) ->
                 [ex.submit(run, i) for i in range(len(calls))]
             ):
                 label, rc, secs, output, is_split, prof = fut.result()
-                profiles.append(prof)
+                if prof:
+                    profiles.append(prof)
                 # A split group whose names matched nothing means -list saw a
                 # different test set than the run compiled: those tests would
                 # silently not run, so that is a failure.
@@ -369,7 +477,10 @@ def run_shard(units: list[Unit], go_args: list[str], out: str, jobs: int = 0) ->
                     for ln in output.splitlines():
                         if ln.startswith(("ok", "---", "FAIL")):
                             print("    " + ln, flush=True)
-        gts.merge_profiles(sorted(profiles), out)
+        if profiles:
+            gts.merge_profiles(sorted(profiles), out)
+        else:
+            print("no coverage profile written (core has no coverage floor yet)", flush=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return 1 if failed else 0
@@ -387,10 +498,46 @@ def merge(out: str, inputs: list[str]) -> int:
 
 
 def _parse_shard(spec: str) -> tuple[int, int]:
-    m = re.fullmatch(r"(\d+)/(\d+)", spec or "")
-    if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
-        raise SystemExit(f"short_test_shards: bad --shard {spec!r}; want K/N with 1 <= K <= N")
+    """`K/N` is root shard K of N; `core/N` is the core shard after the N root shards."""
+    m = re.fullmatch(r"(\d+|core)/(\d+)", spec or "")
+    if m and m.group(1) == "core" and int(m.group(2)) >= 1:
+        return int(m.group(2)) + 1, int(m.group(2))
+    if not m or m.group(1) == "core" or not 1 <= int(m.group(1)) <= int(m.group(2)):
+        raise SystemExit(
+            f"short_test_shards: bad --shard {spec!r}; want K/N with 1 <= K <= N, or core/N"
+        )
     return int(m.group(1)), int(m.group(2))
+
+
+def module_lister(lister: Lister, pkgs: list[Package]) -> Lister:
+    """Run `lister` for each module from that module's own directory.
+
+    `go test -list` of a core package from the root fails ("missing go.sum
+    entry": the root's go.sum holds only what the root imports), so core's
+    packages are listed with core as the working directory. A lister that is
+    not gts.list_tests_many (a test stub) takes no working directory and is
+    called once, as before.
+    """
+    core_paths = {p.path for p in pkgs if p.module != "."}
+    if not core_paths or lister is not gts.list_tests_many:
+        return lister
+
+    def run(paths: list[str], go_args: list[str]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        root = [p for p in paths if p not in core_paths]
+        core = [p for p in paths if p in core_paths]
+        if root:
+            out.update(lister(root, go_args))
+        if core:
+            here = os.getcwd()
+            os.chdir(CORE_DIR)
+            try:
+                out.update(lister(core, go_args))
+            finally:
+                os.chdir(here)
+        return out
+
+    return run
 
 
 def main(
@@ -446,9 +593,17 @@ def main(
     weights = _load_json(a.weights, required=True)
     timings = _load_json(a.timings, required=False)
     pkgs = loader()
+    lister = module_lister(lister, pkgs)
+    # A weight for a package no module lists is never read; say so, because the
+    # balance it was written for silently stops applying (a package was moved
+    # or renamed without its entry).
+    errors = [
+        f"{k}: weight entry in {os.path.basename(a.weights)} but not in go list ./... of any module"
+        for k in stale_weights(weights, pkgs)
+    ]
     units, listed = build_units(pkgs, weights, timings, go_args, lister)
     bins = assign(units, count)
-    errors = verify(bins, pkgs, listed)
+    errors += verify(bins, pkgs, listed)
     for e in errors:
         print(f"::error::{e}", flush=True)
     if errors:
@@ -459,7 +614,8 @@ def main(
     if a.check:
         total, dup, missing = full_check(bins, pkgs, listed, go_args, lister)
         print(
-            f"{'OK' if not dup and not missing else 'FAIL'}: {total} tests across {count} shards, {dup} duplicates, {missing} missing",
+            f"{'OK' if not dup and not missing else 'FAIL'}: {total} tests across {count} shards"
+            f"{' and the core shard' if len(bins) > count else ''}, {dup} duplicates, {missing} missing",
             flush=True,
         )
         if dup or missing:
@@ -467,11 +623,11 @@ def main(
     if a.plan or a.check:
         return 0
 
+    if index > len(bins):
+        raise SystemExit(f"::error::--shard {a.shard}: the plan has no core shard (no core module)")
     mine = bins[index - 1]
-    print(
-        f"shard {index}/{count}: {len(mine)} units, est. {sum(u.weight for u in mine):.0f}s",
-        flush=True,
-    )
+    name = f"shard {index}/{count}" if index <= count else f"core shard (of {count})"
+    print(f"{name}: {len(mine)} units, est. {sum(u.weight for u in mine):.0f}s", flush=True)
     return run_shard(mine, go_args, a.out, a.jobs)
 
 
