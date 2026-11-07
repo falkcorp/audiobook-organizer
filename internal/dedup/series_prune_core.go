@@ -1,7 +1,7 @@
 // file: internal/dedup/series_prune_core.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 92abb0d6-3922-4a56-a82d-50c26ed23424
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package dedup
 
@@ -107,8 +107,13 @@ func SeriesGroupKeyOf(s database.Series) SeriesGroupKey {
 	return SeriesGroupKey{Name: util.NormalizeString(s.Name), AuthorID: aid}
 }
 
-// DuplicateSeriesGroup is two or more series sharing a group key, in the
-// order the series list returned them.
+// DuplicateSeriesGroup is two or more series sharing a group key, ordered by
+// ID. The order is the input's only by accident of the store: GetAllSeries
+// sorts by lower-cased name with an unstable sort and no tie-break, so series
+// whose names differ only in case come back in a different order from the
+// memdb read than from the Pebble read (and the read path can change between
+// a plan and its re-plan, while the memdb warms up). Members feed the repair
+// fingerprint and the row title, so they are ordered here, not trusted.
 type DuplicateSeriesGroup struct {
 	Key     SeriesGroupKey
 	Members []database.Series
@@ -137,6 +142,7 @@ func GroupDuplicateSeries(all []database.Series) (groups []DuplicateSeriesGroup,
 	}
 	for _, key := range order {
 		if members := byKey[key]; len(members) >= 2 {
+			sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
 			groups = append(groups, DuplicateSeriesGroup{Key: key, Members: members})
 		}
 	}
