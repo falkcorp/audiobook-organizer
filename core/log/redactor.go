@@ -1,5 +1,5 @@
 // file: core/log/redactor.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 44521f1f-a2ba-4b3c-a385-eb582b10e892
 // last-edited: 2026-11-07
 
@@ -1337,13 +1337,22 @@ func (r *Redactor) scanPairs(s string) (string, RedactionKind) {
 //     and "Digest" only in header context (authAt).
 func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 	var spans [][2]int
+	// braces counts the '{' the pass has read and not seen closed: a pair
+	// inside one may be a %+v struct field (pairAt's empty-field reading).
+	// Counted here, in the forward pass, so the check costs nothing per
+	// candidate.
+	braces := 0
 	for i := 0; i < len(s); i++ {
 		*steps++
 		var sp [2]int
 		ok := false
 		switch c := s[i]; {
+		case c == '{':
+			braces++
+		case c == '}':
+			braces = max(braces-1, 0)
 		case c == '=' || c == ':':
-			sp, ok = r.pairAt(s, i, steps)
+			sp, ok = r.pairAt(s, i, braces > 0, steps)
 		case (c|0x20 == 'b' || c|0x20 == 'd' || c|0x20 == 'n') && (i == 0 || !isWordChar(s[i-1])):
 			sp, ok = r.authAt(s, i, steps)
 		}
@@ -1388,11 +1397,13 @@ func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 //
 // An unterminated quote or bracket runs to the end of the line. One case
 // reads the value as the next field instead, as an empty field in %+v is
-// ("{Token: Name:alice}"): the separator is ':', exactly one space follows,
-// and the plain first word is itself a capitalised Go field and ':'
-// (isFieldStart). Anything else is the value and is replaced
-// ("password= x=<t>", "credentials: alice:<t>", "token: v2:<t>").
-func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
+// ("{Token: Name:alice}"), and only when all of these hold: the pair is
+// inside an open '{' (inBrace), the name is a capitalised Go field name
+// written right before the ':', exactly one space follows, and the plain
+// first word is itself a capitalised Go field and ':' (isFieldStart).
+// Anything else is the value and is replaced ("password= x=<t>",
+// "credentials: Admin:<t>", "token: V2:<t>").
+func (r *Redactor) pairAt(s string, i int, inBrace bool, steps *int) ([2]int, bool) {
 	var none [2]int
 	e := i
 	for e > 0 && (s[e-1] == ' ' || s[e-1] == '\t') {
@@ -1422,7 +1433,8 @@ func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 		v++
 	}
 	// The %+v empty-field shape: ':' and exactly one space.
-	emptyField := s[i] == ':' && v == i+1 && v+1 < len(s) && s[v] == ' ' && !isSpace(s[v+1])
+	emptyField := inBrace && s[i] == ':' && e == i && isGoField(s[n:e]) &&
+		v == i+1 && v+1 < len(s) && s[v] == ' ' && !isSpace(s[v+1])
 	for v < len(s) && isSpace(s[v]) {
 		v++
 		*steps++
@@ -1735,6 +1747,12 @@ func authParamAt(s string, c int, steps *int) bool {
 		*steps++
 	}
 	return j > c && j < len(s) && s[j] == '='
+}
+
+// isGoField reports whether name is an exported Go field name: a capital,
+// then letters, digits or '_'.
+func isGoField(name string) bool {
+	return isFieldStart(name + ":")
 }
 
 // isFieldStart reports whether w starts with a %+v field: a capital, then

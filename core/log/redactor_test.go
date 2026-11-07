@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -850,6 +850,9 @@ func TestRedact_PairScanIsLinear(t *testing.T) {
 		"password: password: ", `"token":"`, "token=[", "a=1&token=x;",
 		// Verification review M-1: a scheme word right before its own closer.
 		`"Bearer "`, `[Bearer ]`, `'Bearer '`, `"Basic "`, `"Digest "`, `token:\"\"`, "token: a:b ",
+		// The empty-field reading inside an open brace, which never rescans
+		// back for the '{'.
+		"{Token: Name:", "{Token: Name:x ", "{{{{Password: URL:x}",
 	} {
 		// 64 KiB first, so a quadratic shape fails fast instead of running
 		// for minutes at 1 MiB.
@@ -1254,6 +1257,12 @@ func TestRedact_VerificationReviewForms(t *testing.T) {
 		{"M-4 value after '='", "msg", "password: abc=" + fakePass},
 		{"M-4 lower-case pair", "msg", "credentials: alice:" + fakePass},
 		{"M-4 versioned", "msg", "token: v2:" + fakePass},
+		// Security review of the M-4 rule: a capitalised secret outside a
+		// %+v struct, or under a key that is not a Go field.
+		{"M-4 capitalised user", "msg", "credentials: Admin:" + fakePass},
+		{"M-4 capitalised version", "msg", "token: V2:" + fakePass},
+		{"M-4 inside braces, lower-case key", "msg", "{token: V2:" + fakePass + "}"},
+		{"M-4 Go key outside braces", "msg", "Token: V2:" + fakePass},
 		{"N-1 full stop", "msg", "sent Basic " + basicBruce + "."},
 		{"N-1 bang", "msg", "sent Basic " + basicBruce + "!"},
 		{"N-1 colon", "msg", "sent Basic " + basicBruce + ": rejected"},
@@ -1270,7 +1279,8 @@ func TestRedact_VerificationReviewForms(t *testing.T) {
 			t.Errorf("%s: doubled replacement: ...%s", c.name, got[max(0, len(got)-60):])
 		}
 	}
-	for _, in := range []string{"{Token: Name:alfred}", "{Password: URL:https://example.test/x}", "Basic Economics.", "A Basic Guide!"} {
+	for _, in := range []string{"{Token: Name:alfred}", "{Password: URL:x}", "{Password: URL:https://example.test/x}",
+		"{Name:bruce Token: Title:Hush}", "Basic Economics.", "A Basic Guide!"} {
 		assertUnchanged(t, r, "msg", in)
 	}
 	// N-3: a typed-nil error nested in a struct prints as fmt prints it.
