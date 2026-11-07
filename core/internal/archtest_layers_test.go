@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -168,13 +168,11 @@ func countPackageDirs(t *testing.T, root string) int {
 	return len(dirs)
 }
 
-// TestCoreLayering is 03 R4's guard. Its in-module control is staged (03
-// §3.5.1 item 2): at R1's first core PR core has no in-module import edge, so
-// the control is the engine's own synthetic-graph self-test
-// (archtest.TestLayeringEngineSelfTest) and this test asserts only that the
-// loader returned at least the packages core holds. The PR that moves the
-// first leaves names a real edge here; once the composition root exists the
-// control is app -> kernel.
+// TestCoreLayering is 03 R4's guard. Its in-module control (03 §3.5.1 item 2)
+// is health -> log, the first real in-core edge, created by R1-09 when the
+// flight recorder moved into core/health and started sanitizing its log lines
+// through core/log. A PR that removes that import names the replacement edge
+// here; once the composition root exists the control is app -> kernel.
 func TestCoreLayering(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -195,6 +193,7 @@ func TestCoreLayering(t *testing.T) {
 		DeclaredMayBeAbsent: true,
 		Named:               coreLayerOf,
 		Family:              coreFamily,
+		Control:             archtest.Edge{"health", "log"},
 		ImportFloor:         0,
 		TestSupport:         coreTestSupport,
 		FloorRatio:          1,

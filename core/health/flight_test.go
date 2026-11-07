@@ -1,9 +1,9 @@
-// file: internal/diag/flight/flight_test.go
-// version: 1.1.0
+// file: core/health/flight_test.go
+// version: 1.2.0
 // guid: f26518cf-c820-4b1a-a14b-c616781751e9
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
-package flight
+package health
 
 import (
 	"bytes"
@@ -11,14 +11,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/trace"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/mediacore/coretest"
 )
 
 // Only one flight recorder may be active per process, so no test here runs in
@@ -99,7 +103,7 @@ func snap(r *Recorder, reason string) {
 func TestSnapshotWritesOpenableTrace(t *testing.T) {
 	r, _ := startRecorder(t, Config{})
 	// Give the recorder something to hold.
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		_ = make([]byte, 1024)
 	}
 	r.Snapshot("test-openable")
@@ -109,7 +113,7 @@ func TestSnapshotWritesOpenableTrace(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("want 1 trace file, got %v", files)
 	}
-	if !filePattern.MatchString(files[0]) {
+	if !r.fileRe.MatchString(files[0]) {
 		t.Fatalf("file name %q does not match the snapshot pattern", files[0])
 	}
 	path := filepath.Join(r.dir, files[0])
@@ -174,7 +178,7 @@ func TestSnapshotRotatesToMaxFiles(t *testing.T) {
 	}
 
 	var first string
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		snap(r, "rotate")
 		if i == 0 {
 			first = traceFiles(t, r.dir)[0]
@@ -323,7 +327,7 @@ func TestSnapshotBackoffNotQuietWhileRequestsContinue(t *testing.T) {
 	snap(r, "flap") // dropped, but the reason is still being requested
 	clk.Advance(time.Minute)
 	snap(r, "flap") // second snapshot; the gap is now 10m
-	for i := 0; i < 19; i++ {
+	for range 19 {
 		clk.Advance(30 * time.Second)
 		snap(r, "flap") // a tick every 30s for 9m30s: all inside the gap
 	}
@@ -351,19 +355,14 @@ func TestFirstSnapshotPerReasonIsPinned(t *testing.T) {
 	clk.Advance(3 * time.Hour)
 	snap(r, "gamma") // over the pin cap of 2: an ordinary snapshot
 	gamma := strings.TrimSuffix(traceFiles(t, r.dir)[2], traceSuffix)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		clk.Advance(3 * time.Hour)
 		snap(r, "alpha")
 	}
 
 	files := traceFiles(t, r.dir)
 	has := func(name string) bool {
-		for _, f := range files {
-			if f == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(files, name)
 	}
 	if !has(alpha) {
 		t.Fatalf("pinned first alpha snapshot %s was rotated away: %v", alpha, files)
@@ -462,7 +461,7 @@ func TestDroppedRequestsLogRateLimited(t *testing.T) {
 	count := func() int { mu.Lock(); defer mu.Unlock(); return len(lines) }
 
 	snap(r, "noisy")
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		r.Snapshot("noisy") // rate limited, 10 requests in a burst
 	}
 	if got := count(); got != 1 {
@@ -518,7 +517,7 @@ func TestConcurrentSnapshotsDoNotBlock(t *testing.T) {
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Go(func() { r.Snapshot("burst") })
 	}
 	wg.Wait()
@@ -687,4 +686,48 @@ func TestOpenRefusesSymlinkOutOfDir(t *testing.T) {
 	if list, _ := r.List(); len(list) != 0 {
 		t.Fatalf("List shows a symlink as a snapshot: %v", list)
 	}
+}
+
+func TestRecorderLogsThroughInjectedLogger(t *testing.T) {
+	capture := coretest.NewLogCapture(t)
+	r, _ := startRecorder(t, Config{Logger: capture.Logger().With("subsystem", "flight-recorder")})
+	r.Stop()
+
+	msgs := capture.Messages()
+	for _, want := range []string{"flight recorder started", "flight recorder stopped"} {
+		if !slices.ContainsFunc(msgs, func(m string) bool { return strings.HasPrefix(m, want) }) {
+			t.Fatalf("no %q line in the injected logger's records: %v", want, msgs)
+		}
+	}
+	for _, rec := range capture.Records() {
+		var sub string
+		rec.Attrs(func(a slog.Attr) bool {
+			if a.Key == "subsystem" {
+				sub = a.Value.String()
+			}
+			return true
+		})
+		if sub != "flight-recorder" {
+			t.Fatalf("record %q lost the logger's subsystem attribute (got %q)", rec.Message, sub)
+		}
+	}
+}
+
+// A line built from request-controlled text must not forge a second record: the
+// recorder escapes newlines before it writes.
+func TestRecorderLogLinesAreSanitized(t *testing.T) {
+	capture := coretest.NewLogCapture(t)
+	r := New(Config{Logger: capture.Logger()})
+	r.logf(slog.LevelWarn, "snapshot %s failed", "x\nlevel=INFO msg=forged")
+
+	msgs := capture.Messages()
+	if len(msgs) != 1 || strings.ContainsAny(msgs[0], "\r\n") {
+		t.Fatalf("want one record with no raw newline, got %q", msgs)
+	}
+}
+
+func TestNilLoggerDiscardsLines(t *testing.T) {
+	r := New(Config{})
+	r.logf(slog.LevelInfo, "nobody listens to %s", "the joker")
+	r.dropf("snapshot %s dropped", "joker")
 }
