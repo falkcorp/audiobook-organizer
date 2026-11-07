@@ -1,7 +1,7 @@
 // file: web/src/test/setup.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-10-10
+// last-edited: 2026-11-06
 
 // The /vitest entry registers the matchers on Vitest's expect and augments
 // Vitest's Assertion type; the bare import only augments the jest globals,
@@ -86,6 +86,15 @@ Object.defineProperty(global, 'localStorage', {
 // since store code (useOperationsStore's openSSE) branches on
 // `es.readyState === EventSource.CLOSED` to distinguish a transient,
 // auto-reconnecting drop from a terminal one.
+//
+// It also OPENS, as a live connection does: onopen fires in a microtask after
+// construction (the caller assigns its handlers synchronously right after
+// `new EventSource`). Without it eventSourceManager stayed "connecting" until
+// its 8 s connect timeout, then reported an error, and Library toasted
+// "Connection lost. Reconnecting..." in the middle of any test that ran past
+// 8 s on a loaded CI agent -- replacing the toast the test was asserting on
+// (Library.combineToast "closes the dialog on the 202", 11.4 s, 2026-11-06).
+// A microtask, not a timer, so tests on fake timers open too.
 class MockEventSource {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -94,10 +103,14 @@ class MockEventSource {
   url: string;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
+  onopen: ((event: Event) => void) | null = null;
   readyState = MockEventSource.OPEN;
 
   constructor(url: string) {
     this.url = url;
+    queueMicrotask(() => {
+      if (this.readyState !== MockEventSource.CLOSED) this.onopen?.(new Event('open'));
+    });
   }
 
   addEventListener() {}
