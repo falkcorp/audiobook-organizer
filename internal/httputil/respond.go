@@ -1,5 +1,5 @@
 // file: internal/httputil/respond.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-11-07
 
@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	logging "github.com/falkcorp/mediacore/log"
 )
 
@@ -110,10 +111,10 @@ func RespondWithServiceUnavailable(c *gin.Context, message string) {
 // a generic message to the client.
 func InternalError(c *gin.Context, msg string, err error) {
 	// Error text routinely wraps user-controlled strings (file names, tag
-	// values). The slog handlers quote control characters, so it cannot forge
-	// log records (CA12; core log's Sanitize was deleted for that reason,
-	// 05-logging §3).
-	slog.Error(msg, "err", err)
+	// values) — escape CR/LF so it cannot forge log records (CA12). The
+	// books-side barrier, until R1-15 routes this through the core pipeline,
+	// whose handlers quote control characters (05-logging §3).
+	slog.Error(msg, "err", logger.SanitizeLogErr(err))
 	RespondWithInternalError(c, msg)
 }
 
@@ -151,12 +152,12 @@ func RespondWithList(c *gin.Context, items any, count int, limit int, offset int
 
 func logErrorWithContext(c *gin.Context, statusCode int, message string) {
 	method := c.Request.Method
-	// Path and message derive from the request; the slog handlers quote
-	// control characters, so a crafted URL cannot forge log records (CA12).
-	// The path is also redacted: an invite token is a bearer secret that lives
-	// in the path, and a lookup of a used or expired token answers with an
-	// error that lands here.
-	path := logging.RedactInvitePath(c.Request.URL.Path)
+	// Path and message derive from the request; escape CR/LF so a crafted
+	// URL cannot forge log records (CA12). The path is also redacted: an
+	// invite token is a bearer secret that lives in the path, and a lookup of
+	// a used or expired token answers with an error that lands here.
+	path := logger.SanitizeLogValue(logging.RedactInvitePath(c.Request.URL.Path))
+	message = logger.SanitizeLogValue(message)
 	clientIP := c.ClientIP()
 	if statusCode >= 500 {
 		slog.Error("http request", "method", method, "path", path, "status", statusCode, "message", message, "clientIP", clientIP)

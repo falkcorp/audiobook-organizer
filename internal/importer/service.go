@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.21.6
+// version: 1.21.7
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-11-07
 
@@ -343,7 +343,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		prepared, why := personname.PrepareAuthorNameForCreation(normalizedArtist)
 		if dedup.IsDirtyAuthorName(normalizedArtist) || why != "" {
 			slog.Warn("importer: artist tag rejected as author name",
-				"artist", meta.Artist, "path", req.FilePath, "reason", string(why))
+				"artist", logger.SanitizeLogValue(meta.Artist), "path", logger.SanitizeLogValue(req.FilePath), "reason", string(why))
 		} else {
 			// Looked up with the shared helper (authorcredit.Lookup), which
 			// never creates: a credit naming several existing authors links

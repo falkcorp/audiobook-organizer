@@ -1,5 +1,5 @@
 // file: internal/logger/ctx_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f985b834-583b-49a5-95a2-df71a0e16724
 // last-edited: 2026-11-07
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -121,5 +122,14 @@ func TestSanitizing_EscapesForRawHandlers(t *testing.T) {
 	}
 	if Sanitizing(nil) != nil {
 		t.Error("Sanitizing(nil) != nil")
+	}
+}
+
+func TestSanitizeLogErr(t *testing.T) {
+	if got := SanitizeLogErr(nil); got != "" {
+		t.Errorf("nil error = %q, want empty", got)
+	}
+	if got, want := SanitizeLogErr(errors.New("open /lib/a\nINFO forged\r\x1b")), `open /lib/a\nINFO forged\r\x1b`; got != want {
+		t.Errorf("SanitizeLogErr = %q, want %q", got, want)
 	}
 }

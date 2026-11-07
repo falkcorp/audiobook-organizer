@@ -1,5 +1,5 @@
 // file: internal/metafetch/file_pipeline.go
-// version: 2.2.3
+// version: 2.2.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-11-07
 
@@ -31,6 +31,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
@@ -121,14 +122,14 @@ func recordRenameCollisionFailure(store database.UserPreferenceStore, bookID str
 		OccupantModUnix: f.OccupantModUnix,
 		Reason:          f.Reason,
 	})
-	// Paths and the reason string are user-controlled (tags, filesystem). This
-	// call reaches log/slog directly; the slog handlers quote control
-	// characters, so they cannot forge a record (05-logging §3).
+	// Paths and the reason string are user-controlled (tags, filesystem), and
+	// this call reaches log/slog directly rather than through a logger that
+	// applies the barrier itself — see logger.SanitizeLogValue.
 	slog.Warn("apply rename: recording a durable collision failure — this book is skipped until the blocking file changes or goes away",
-		"book_id", bookID,
-		"target_path", f.TargetPath,
-		"occupant_path", f.OccupantPath,
-		"reason", f.Reason,
+		"book_id", logger.SanitizeLogValue(bookID),
+		"target_path", logger.SanitizeLogValue(f.TargetPath),
+		"occupant_path", logger.SanitizeLogValue(f.OccupantPath),
+		"reason", logger.SanitizeLogValue(f.Reason),
 		"unresolved_total", len(cerr.Failures),
 		"resolved_total", len(result.Resolutions))
 }

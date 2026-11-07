@@ -1,5 +1,5 @@
 // file: internal/logger/ctx.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 941538ef-bccb-4899-ab37-a24fe681513d
 // last-edited: 2026-11-07
 
@@ -145,4 +145,16 @@ func (h sanitizingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h sanitizingHandler) WithGroup(name string) slog.Handler {
 	return sanitizingHandler{next: h.next.WithGroup(name)}
+}
+
+// SanitizeLogErr renders err for logging through SanitizeLogValue's barrier
+// (CR, LF and other control characters escaped), or "" for a nil error. It
+// replaces core log's deleted SanitizeErr for books-side call sites that log
+// error text straight to log/slog: error text routinely wraps user-controlled
+// strings (file names, tag values).
+func SanitizeLogErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return SanitizeLogValue(err.Error())
 }
