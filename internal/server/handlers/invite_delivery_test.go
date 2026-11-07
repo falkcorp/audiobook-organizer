@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 package handlers_test
 
@@ -183,11 +183,11 @@ func TestCreateInvite_EmailLoginStepOmittedWithoutPolicySync(t *testing.T) {
 	}
 }
 
-// Guests are browser-only for now: no phone-app setup steps, in the email or
-// anywhere else, until per-guest tokens ship.
+// An invite whose accept will not mint a phone-app key carries no phone-app
+// setup steps: they would send the guest to an app Cloudflare turns away.
 func assertBrowserOnlyEmail(t *testing.T, part string) {
 	t.Helper()
-	for _, banned := range []string{"AudioBooth", "Servers", "Tap "} {
+	for _, banned := range []string{"AudioBooth", "Lissen", "Servers", "Tap "} {
 		if strings.Contains(part, banned) {
 			t.Fatalf("invitation email still carries phone-app setup (%q): %s", banned, part)
 		}
@@ -811,8 +811,10 @@ func TestPublicInvite_EmailLoginMatchesWhatAcceptWillGrant(t *testing.T) {
 }
 
 // With per-guest tokens on, an invite from an admin tells the guest the page
-// will show a one-time phone-app key; the email never carries the key itself
-// (it does not exist yet), and an invite that will not get one keeps the old line.
+// will show a one-time phone-app key and where to put it in AudioBooth (iPhone)
+// and Lissen (Android); the email never carries the key or the header names
+// (the key does not exist yet; the page shows each name next to its value), and
+// an invite that will not get one keeps the old line and no app steps.
 func TestCreateInvite_PhoneAppKeyPromiseOnlyWhenAcceptWillMintOne(t *testing.T) {
 	f := newInviteFixture(t)
 	f.tokens = true
@@ -828,7 +830,19 @@ func TestCreateInvite_PhoneAppKeyPromiseOnlyWhenAcceptWillMintOne(t *testing.T) 
 		if !strings.Contains(part, "shown only once") || strings.Contains(part, "will be added to your account soon") {
 			t.Fatalf("promise missing or old line kept: %s", part)
 		}
-		assertNoGuestHeaderInstructions(t, "invitation email", part)
+		for _, want := range []string{
+			"AudioBooth", "Lissen", "org.grakovne.lissen", "Custom Headers",
+			"official Audiobookshelf Android app cannot connect", "Server address: ", testBase,
+		} {
+			if !strings.Contains(part, want) {
+				t.Fatalf("phone-app steps missing %q: %s", want, part)
+			}
+		}
+		for _, banned := range []string{"CF-Access-Client", "guest_headers"} {
+			if strings.Contains(part, banned) {
+				t.Fatalf("invitation email names a header (%q); the page shows names next to values: %s", banned, part)
+			}
+		}
 	}
 
 	f2 := newInviteFixture(t)
@@ -839,7 +853,12 @@ func TestCreateInvite_PhoneAppKeyPromiseOnlyWhenAcceptWillMintOne(t *testing.T) 
 	}); w.Code != http.StatusCreated {
 		t.Fatalf("status %d", w.Code)
 	}
-	if got := f2.rec.Sent()[0].Text; strings.Contains(got, "shown only once") || !strings.Contains(got, "will be added to your account soon") {
+	m2 := f2.rec.Sent()[0]
+	if got := m2.Text; strings.Contains(got, "shown only once") || !strings.Contains(got, "will be added to your account soon") {
 		t.Fatalf("a non-admin invite promised a key: %s", got)
+	}
+	for _, part := range []string{m2.Text, m2.HTML} {
+		assertBrowserOnlyEmail(t, part)
+		assertNoGuestHeaderInstructions(t, "invitation email", part)
 	}
 }
