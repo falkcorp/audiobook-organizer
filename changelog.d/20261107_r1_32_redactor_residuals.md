@@ -23,3 +23,13 @@
   read as an empty `%+v` field, so `<t>` leaked. Only a `{` that `%+v`
   writes (an identifier and `:` right after it) now turns that reading on,
   and each `}` closes only its own brace.
+- **Nested URL userinfo split by the outer query.** A URL in a query value
+  whose password holds `;`, `&` or `#`
+  (`?next=https://bruce:pa;<t>@host/`) came back unchanged, the whole
+  secret included: the outer query was split on `;`/`&`, or its fragment cut
+  at `#`, before the nested URL was read, so the nested userinfo never
+  reached its `@`. Query splitting (`paramEnd`, used by `maskQuery` and the
+  new `fragStart`) now reads a nested URL's userinfo as one unit, so the
+  nested URL keeps its `@` and its userinfo is removed. Only the userinfo is
+  read whole; a parameter after a nested host
+  (`next=https://host&token=<t>`) is still split off and masked.

@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -1367,6 +1367,50 @@ func TestRedact_ReverificationResiduals(t *testing.T) {
 		}
 		if got := r.String("url", in); got != "[REDACTED]" {
 			t.Errorf("String(url, cut in userinfo) = %q", got[:min(len(got), 120)])
+		}
+	}
+}
+
+// A URL nested in a query value whose password holds a query separator
+// (';', '&') or a '#': the outer query was split, or its fragment cut, at
+// that separator before the nested URL was read, so the nested userinfo
+// never reached its '@' and came back unchanged.
+func TestRedact_NestedURLUserinfoSeparators(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, sep := range []string{";", "&", "#", "/x;"} {
+		nested := "https://h.example/?next=https://bruce:pa" + sep + fakePass + "@h2.example/a&page=2"
+		for _, c := range []struct{ key, in string }{
+			{"url", nested},
+			{"msg", "redirecting to " + nested + " now"},
+		} {
+			got, k := r.StringKinds(c.key, c.in)
+			assertAbsent(t, c.key+" "+c.in, got, fakePass, "bruce:pa", "bruce")
+			if k&RedactURL == 0 {
+				t.Errorf("StringKinds(%q, %q) kinds = %v, want url", c.key, c.in, k)
+			}
+			if !strings.Contains(got, "?next=https://h2.example/a&page=2") {
+				t.Errorf("StringKinds(%q, %q) = %q, want the nested host and the next parameter kept", c.key, c.in, got)
+			}
+		}
+	}
+	for _, in := range []string{
+		"https://h.example/?next=https://h2.example/a;b",
+		"https://h.example/?next=//h2.example/a&b=c;d#e",
+		"https://h.example/?next=https://h2.example:8443/a&page=2",
+	} {
+		assertUnchanged(t, r, "url", in)
+		assertUnchanged(t, r, "msg", "see "+in)
+	}
+	// Only a nested userinfo is read whole: a nested URL without one still
+	// ends at the next separator, so a credential parameter after it is
+	// still its own parameter.
+	for _, c := range []struct{ in, want string }{
+		{"https://h.example/?next=https://h2.example&token=" + fakeToken, "https://h.example/?next=https://h2.example&token=[REDACTED]"},
+		{"https://h.example/?next=https://h2.example/x#f&token=" + fakeToken, "https://h.example/?next=https://h2.example/x#f&token=[REDACTED]"},
+		{"https://h.example/?next=https://bruce:pa;" + fakePass + "@h2.example&token=" + fakeToken, "https://h.example/?next=https://h2.example&token=[REDACTED]"},
+	} {
+		if got := r.URL(c.in); got != c.want {
+			t.Errorf("URL(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
