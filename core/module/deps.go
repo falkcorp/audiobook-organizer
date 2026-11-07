@@ -1,5 +1,5 @@
 // file: core/module/deps.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
 // last-edited: 2026-11-07
 
@@ -28,6 +28,14 @@ type Deps struct {
 	// without NOTIFY_SOCKET (05-health §5H.3.4). Until R1-16 moves sdnotify
 	// into core it is a no-op everywhere.
 	ExtendStart func(step string)
+
+	// RequestRestart is kernel.Lifecycle.RequestRestart as a plain func (06
+	// §6.5.2 "Restart request", OPS8-12): the app stops in the normal order
+	// within core.shutdown.budget and exits core.lifecycle.restart_exit_code
+	// (75), so the service manager starts it again. The first reason wins;
+	// later calls do nothing. Call it after staging work the next boot
+	// applies (a restore, a reset), never to recover from an error.
+	RequestRestart func(reason string)
 }
 
 // ErrStopped is returned by any handle used after the app stopped.

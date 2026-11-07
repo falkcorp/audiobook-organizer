@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-07
 
@@ -179,10 +179,6 @@ func Describe(ctx context.Context, c Config) (Description, error) {
 // Handler is the root handler P8 built.
 func (k *Kernel) Handler() http.Handler { return k.handler }
 
-// Lifecycle is the supervisor's restart path, which the kernel binds into
-// every caller that needs the process restarted (06 §6.5.2).
-func (k *Kernel) Lifecycle() *Lifecycle { return k.lifecycle }
-
 // Modules reports every module compiled into the app, in ID order.
 func (k *Kernel) Modules() []ModuleState {
 	out := make([]ModuleState, 0, len(k.entries))
@@ -314,10 +310,16 @@ func (k *Kernel) register(ctx context.Context) error {
 			continue
 		}
 		r := module.NewRegistrar(module.RegistrarConfig{
-			Context:       regCtx,
-			Deps:          module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart()},
+			Context: regCtx,
+			Deps: module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(),
+				RequestRestart: k.lifecycle.RequestRestart},
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
+			// Err is read once, below: a call after Close (from a goroutine
+			// Register started, against 06 §6.4.1) would otherwise vanish.
+			AfterClose: func(p module.Problem) {
+				k.log.Error("kernel: registrar call after Register returned; ignored", "module", p.Module, "problem", p.Error())
+			},
 		})
 		err = callRegister(e.mod, r)
 		e.rec = r.Close()
@@ -355,6 +357,19 @@ func (k *Kernel) consume() error {
 	var probs []module.Problem
 	// The router records each refusal for Build as well; P7 fails on the
 	// first report, so Build never repeats one.
+	//
+	// A disabled module's names and claims stay reserved (06 §6.5.1 P1;
+	// 05-http-api §4.9): its /api/<id>/ is claimed like an enabled module's
+	// (ModuleGroup claimed those at P6), and core's /api/core/ was claimed at
+	// P5, so a legacy prefix over either collides now, not on the day the
+	// module is enabled. They are claimed before any legacy prefix, so the
+	// collision is the prefix owner's.
+	for _, e := range k.entries {
+		if !e.enabled {
+			id := string(e.man.ID)
+			probs = append(probs, problemsFrom(e.man.ID, k.router.Claim(id, "/api/"+id+"/"))...)
+		}
+	}
 	for _, e := range k.entries {
 		for _, p := range e.man.LegacyPrefixes {
 			probs = append(probs, problemsFrom(e.man.ID, k.router.Claim(string(e.man.ID), p))...)
