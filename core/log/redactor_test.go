@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -8,7 +8,9 @@ package log
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -536,8 +538,8 @@ func TestRedact_CredentialHeadersAndSuffixes(t *testing.T) {
 			t.Errorf("Attr(%q) = %v, want [REDACTED]", k, got)
 		}
 	}
-	for _, k := range []string{"has_password", "hasToken", "tokens_used", "prompt_tokens", "token_count",
-		"cache_key", "title", "author", "url.path", "route"} {
+	for _, k := range []string{"has_password", "hasToken", "tokens_used", "token_count",
+		"cache_key", "title", "author", "url.path", "route", "response", "nonce", "cnonce", "http.response"} {
 		if got := r.String(k, "Batman: Hush"); got != "Batman: Hush" {
 			t.Errorf("String(%q) redacted a harmless key: %q", k, got)
 		}
@@ -754,7 +756,8 @@ func TestRedact_AuthSchemesAndPadding(t *testing.T) {
 	r := NewRedactor(nil)
 	for _, in := range []string{
 		"Basic " + fakeToken,
-		"auth with Digest " + fakeToken,
+		`Digest username="bruce", response="` + fakeToken + `"`,
+		`WWW-Authenticate: Digest realm="gotham", nonce="` + fakeToken + `"`,
 		"Negotiate " + fakeToken,
 		"BEARER " + fakeToken,
 		"token: " + fakeToken + "==",
@@ -773,14 +776,389 @@ func TestRedact_AuthSchemesAndPadding(t *testing.T) {
 	if got := r.String("detail", `header "Bearer `+fakeToken+`" rejected`); got != `header "Bearer [REDACTED]" rejected` {
 		t.Errorf("quoted bearer = %q", got)
 	}
-	// Digest's credential parameters are denied keys too.
+	// Digest's credential parameters are redacted inside a Digest credential
+	// only: as attribute keys they are ordinary words (review M8).
 	for _, k := range []string{"response", "nonce", "cnonce"} {
-		if got := r.String(k, fakeToken); got != "[REDACTED]" {
-			t.Errorf("String(%q) = %q, want [REDACTED]", k, got)
+		if got := r.String(k, "200 OK"); got != "200 OK" {
+			t.Errorf("String(%q) = %q, want unchanged", k, got)
 		}
 	}
 	// An empty field in %+v output is still read as the next pair.
 	if got := r.String("detail", "{Password: Title:Hush}"); got != "{Password: Title:Hush}" {
 		t.Errorf("empty %%+v field = %q", got)
+	}
+}
+
+// assertUnchanged fails when StringKinds changes in or reports a kind.
+func assertUnchanged(t *testing.T, r *Redactor, key, in string) {
+	t.Helper()
+	if got, k := r.StringKinds(key, in); got != in || k != 0 {
+		t.Errorf("StringKinds(%q, %q) = %q (%v), want unchanged", key, in, got, k)
+	}
+}
+
+// Independent review B1: JSON and quoted values in strings, []byte, errors
+// and json.RawMessage; a quoted value ends at its matching quote, not at the
+// first space.
+func TestRedact_JSONAndQuotedValues(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, in := range []string{
+		`{"access_token":"` + fakeToken + `","token_type":"bearer"}`,
+		`{"password": "` + fakePass + `"}`,
+		`upstream said: {"api_key":"` + fakeAPIKey + `"}`,
+		`password="correct horse ` + fakePass + `"`,
+		`password='correct horse ` + fakePass + `'`,
+		`body="{\"refresh_token\":\"` + fakeRefresh + `\"}"`,
+		`{"password" : "a \"quoted\" ` + fakePass + `"}`,
+	} {
+		got, k := r.StringKinds("msg", in)
+		assertAbsent(t, in, got, fakeToken, fakePass, fakeAPIKey, fakeRefresh)
+		if k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
+		}
+	}
+	// The value ends at its closing quote: what follows stays.
+	if got := r.String("msg", `{"access_token":"`+fakeToken+`","token_type":"bearer"}`); got != `{"access_token":"[REDACTED]","token_type":"bearer"}` {
+		t.Errorf("JSON body = %q", got)
+	}
+	if got := r.String("msg", `password="correct horse `+fakePass+`" user=bruce`); got != `password="[REDACTED]" user=bruce` {
+		t.Errorf("quoted value = %q", got)
+	}
+	for name, v := range map[string]any{
+		"json.RawMessage":    json.RawMessage(`{"access_token":"` + fakeToken + `"}`),
+		"RawMessage in map":  map[string]any{"body": json.RawMessage(`{"password":"` + fakePass + `"}`)},
+		"[]byte":             []byte(`{"api_key":"` + fakeAPIKey + `"}`),
+		"wrapped JSON error": fmt.Errorf("exchange: %s", `{"refresh_token":"`+fakeRefresh+`"}`),
+		"joined errors":      errors.Join(errors.New("a"), errors.New("password="+fakePass)),
+	} {
+		text, js := logBoth(t, r, slog.Any("v", v))
+		for where, out := range map[string]string{"text": text, "json": js} {
+			assertAbsent(t, name+" "+where, out, fakeToken, fakePass, fakeAPIKey, fakeRefresh)
+		}
+	}
+}
+
+// Independent review M1: the pair scan is one linear pass. Each input is a
+// unit repeated to 1 MiB; the step count (every byte any loop reads) must
+// stay within a small multiple of the length, where the old scan read to
+// the end of the line once per occurrence.
+func TestRedact_PairScanIsLinear(t *testing.T) {
+	r := NewRedactor(nil)
+	const size = 1 << 20
+	for _, unit := range []string{
+		"cookie=", "bearer a ", "password: ", "/a?x=1&", `password:"[REDACTED `, "Authorization: Basic Basic ",
+		"password: password: ", `"token":"`, "token=[", "a=1&token=x;",
+	} {
+		s := strings.Repeat(unit, size/len(unit))
+		steps := 0
+		r.scanPairsN(s, &steps)
+		if steps > 8*len(s) {
+			t.Errorf("scanPairsN(%q x %d): %d steps for %d bytes, want <= %d", unit, size/len(unit), steps, len(s), 8*len(s))
+		}
+	}
+	// Past maxRedactTextBytes the text is not examined: it is replaced.
+	big := "title=Hush " + strings.Repeat("cookie=", size/7)
+	for _, key := range []string{"msg", "url", "url.query"} {
+		got, k := r.StringKinds(key, big)
+		if !strings.HasSuffix(got, "[REDACTED]") || len(got) > maxRedactTextBytes+len("[REDACTED]") || k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q, 1 MiB) = %d bytes (%v), want at most %d ending in [REDACTED]", key, len(got), k, maxRedactTextBytes+len("[REDACTED]"))
+		}
+	}
+	if got := r.URL("/a?x=" + strings.Repeat("y", size)); len(got) > maxRedactTextBytes+len("[REDACTED]") {
+		t.Errorf("URL(1 MiB) = %d bytes", len(got))
+	}
+}
+
+// Independent review M3: Basic, Digest and Negotiate redact only in header
+// context and with a credential-shaped value; Bearer fires anywhere.
+func TestRedact_AuthSchemeContext(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, c := range []struct{ key, in string }{
+		{"title", "Basic Economics: A Citizen's Guide"},
+		{"title", "How to Negotiate Anything"},
+		{"op", "digest rollup for 2026-10-01"},
+		{"status", "failed to compute digest of /lib/a.m4b"},
+		{"msg", "basic auth failed for bruce"},
+		{"title", "Negotiate Anything"},
+		{"msg", `response="200 OK"`},
+		{"msg", "Response:{Code:200 Body:ok}"},
+	} {
+		assertUnchanged(t, r, c.key, c.in)
+	}
+	for _, in := range []string{
+		"Basic " + fakeToken,
+		"Negotiate YIIGhgYJKoZIhvcSAQICAQBuggZ1MIIGcaADAgEF",
+		`"Basic ` + fakeToken + `"`,
+		"WWW-Authenticate: Negotiate " + fakeToken,
+		"http.request.header.authorization=Basic " + fakeToken,
+		`Digest username="bruce", response="` + fakeToken + `"`,
+		"proxy-authenticate: Digest realm=\"gotham\", nonce=\"" + fakeToken + "\"",
+		"the bearer " + fakeToken,
+		"auth Bearer " + fakeToken,
+	} {
+		got, k := r.StringKinds("msg", in)
+		assertAbsent(t, in, got, fakeToken, "YIIGhgYJ")
+		if k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
+		}
+	}
+	// The scheme word stays.
+	if got := r.String("msg", "Basic "+fakeToken); got != "Basic [REDACTED]" {
+		t.Errorf("Basic credential = %q", got)
+	}
+}
+
+// Independent review M4: the %v of an http.Header, url.Values or
+// map[string][]string, and a bracketed or braced value.
+func TestRedact_BracketedValues(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, in := range []string{
+		"map[token:[" + fakeToken + "]]",
+		"headers=map[Authorization:[Bearer " + fakeToken + "] X-Api-Key:[" + fakeAPIKey + "]]",
+		fmt.Sprint(http.Header{"X-Api-Key": {fakeAPIKey}, "Accept": {"*/*"}}),
+		fmt.Sprint(url.Values{"token": {fakeToken, "second " + fakeToken}}),
+		fmt.Sprintf("%v", map[string][]string{"password": {"correct horse " + fakePass}}),
+		"token={" + fakeToken + "}",
+		"token=(" + fakeToken + ")",
+	} {
+		got, k := r.StringKinds("msg", in)
+		assertAbsent(t, in, got, fakeToken, fakeAPIKey, fakePass)
+		if k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
+		}
+	}
+	if got := r.String("msg", "map[Accept:[*/*] token:["+fakeToken+"]]"); got != "map[Accept:[*/*] token:[REDACTED]]" {
+		t.Errorf("header map = %q", got)
+	}
+	// Only the literal [REDACTED prefix is skipped, so a second pass changes
+	// nothing.
+	for _, in := range []string{"map[token:[REDACTED]]", "token=[REDACTED:panic]", `{"password":"[REDACTED]"}`, "Bearer [REDACTED]"} {
+		assertUnchanged(t, r, "msg", in)
+	}
+}
+
+type batVault struct{ combination string }
+
+func (batVault) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }
+
+type caveConfig struct {
+	Owner string
+	Vault batVault
+}
+
+type caveHidden struct {
+	Owner string
+	vault batVault
+}
+
+type groupValuer struct{}
+
+func (groupValuer) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("user", "bruce"), slog.String("password", fakePass))
+}
+
+// Independent review M5: a LogValuer nested in a struct, map or slice is
+// resolved (the handlers print its fields otherwise); one in an unexported
+// field cannot be called and fails closed.
+func TestRedact_NestedLogValuer(t *testing.T) {
+	r := NewRedactor(nil)
+	for name, v := range map[string]any{
+		"exported field":   caveConfig{Owner: "bruce", Vault: batVault{combination: fakePass}},
+		"unexported field": caveHidden{Owner: "bruce", vault: batVault{combination: fakePass}},
+		"map value":        map[string]any{"vault": batVault{combination: fakePass}},
+		"slice element":    []any{batVault{combination: fakePass}},
+		"group valuer":     map[string]any{"login": groupValuer{}},
+		"panicking valuer": map[string]any{"v": panickyValuer{}},
+	} {
+		text, js := logBoth(t, r, slog.Any("v", v))
+		for where, out := range map[string]string{"text": text, "json": js} {
+			assertAbsent(t, name+" "+where, out, fakePass)
+		}
+	}
+	got := r.Attr(slog.Any("v", caveConfig{Owner: "bruce", Vault: batVault{combination: fakePass}}))
+	if m, ok := got.Value.Any().(map[string]any); !ok || m["Vault"] != "[REDACTED]" || m["Owner"] != "bruce" {
+		t.Errorf("nested LogValuer = %#v", got.Value.Any())
+	}
+}
+
+// leakyText prints a harmless String but a credential through MarshalText
+// and MarshalJSON, which the TextHandler and JSONHandler prefer.
+type leakyText struct{ v string }
+
+func (leakyText) String() string                 { return "benign" }
+func (l leakyText) MarshalText() ([]byte, error) { return []byte("token=" + l.v), nil }
+func (l leakyText) MarshalJSON() ([]byte, error) { return []byte(`{"token":"` + l.v + `"}`), nil }
+
+type leakyAppender struct{ v string }
+
+func (l leakyAppender) AppendText(b []byte) ([]byte, error) {
+	return append(b, "password="+l.v...), nil
+}
+
+// leakyJSONError prints a harmless Error but a credential through
+// MarshalJSON, which the JSONHandler prefers over Error.
+type leakyJSONError struct{ v string }
+
+func (leakyJSONError) Error() string { return "upstream refused" }
+func (l leakyJSONError) MarshalJSON() ([]byte, error) {
+	return []byte(`{"api_key":"` + l.v + `"}`), nil
+}
+
+type failingText struct{ v string }
+
+func (f failingText) MarshalText() ([]byte, error) {
+	return nil, errors.New("cannot marshal secret=" + f.v)
+}
+
+// Independent review M6: every text a handler can print is scanned
+// (AppendText, MarshalText, MarshalJSON, Error, String, and a marshal
+// error's text).
+func TestRedact_EveryPrintedText(t *testing.T) {
+	r := NewRedactor(nil)
+	for name, v := range map[string]any{
+		"MarshalText and MarshalJSON": leakyText{v: fakeToken},
+		"AppendText":                  leakyAppender{v: fakePass},
+		"MarshalJSON over Error":      leakyJSONError{v: fakeAPIKey},
+		"marshal error":               failingText{v: fakePass},
+		"nested in a map":             map[string]any{"x": leakyText{v: fakeToken}},
+	} {
+		text, js := logBoth(t, r, slog.Any("v", v))
+		got := r.Attr(slog.Any("v", v))
+		for where, out := range map[string]string{"attr": got.Value.String(), "text": text, "json": js} {
+			assertAbsent(t, name+" "+where, out, fakeToken, fakePass, fakeAPIKey)
+		}
+	}
+}
+
+// Independent review M7: plurals and further credential names.
+func TestRedact_PluralAndNamedCredentialKeys(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, k := range []string{"cookies", "tokens", "secrets", "passwords", "secret_key", "aws_secret_access_key",
+		"AccessKey", "passphrase", "jwt", "id_jwt"} {
+		if got := r.String(k, fakeToken); got != "[REDACTED]" {
+			t.Errorf("String(%q) = %q, want [REDACTED]", k, got)
+		}
+		if got := r.String("msg", k+"="+fakeToken); strings.Contains(got, fakeToken) {
+			t.Errorf("text %s= = %q", k, got)
+		}
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://example.test/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Cookie", "abo_session="+fakeToken+"; theme=dark")
+	text, js := logBoth(t, r, slog.Any("cookies", req.Cookies()), slog.Any("secrets", []string{fakePass}))
+	for where, out := range map[string]string{"text": text, "json": js} {
+		assertAbsent(t, where, out, fakeToken, fakePass)
+	}
+}
+
+type settingRow struct {
+	Key      string
+	IsSecret bool
+	Response int
+	Token    string
+}
+
+// Independent review M8: a credential suffix alone never redacts a bool or
+// a number (presence flags and counts); an exact deny-list key still does.
+func TestRedact_ScalarsUnderSuffixKeys(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, a := range []slog.Attr{
+		slog.Bool("cf_cookie", true), slog.Bool("cf_authorization", false), slog.Bool("cf_client_secret", true),
+		slog.Bool("query_token", false), slog.Bool("is_secret", true), slog.Int("prompt_tokens", 12),
+		slog.Int("cf_cookie_len", 40), slog.Float64("max_tokens", 2048), slog.Int("response", 200),
+		slog.Uint64("completion_tokens", 7), slog.Duration("token_ttl", 0),
+	} {
+		if got, k := r.attr(a); !got.Equal(a) || k != 0 {
+			t.Errorf("attr(%v) = %v (%v), want unchanged", a, got, k)
+		}
+	}
+	for _, a := range []slog.Attr{slog.Bool("password", true), slog.Int("token", 5), slog.Int("session_id", 9),
+		slog.String("is_secret", "false"), slog.Any("cf_cookie", []string{"x"})} {
+		if got := r.Attr(a); got.Value.String() != "[REDACTED]" {
+			t.Errorf("Attr(%v) = %v, want [REDACTED]", a, got)
+		}
+	}
+	got := r.Attr(slog.Any("row", settingRow{Key: "smtp", IsSecret: true, Response: 200, Token: fakeToken}))
+	m, ok := got.Value.Any().(map[string]any)
+	if !ok || m["IsSecret"] != true || m["Response"] != 200 || m["Token"] != "[REDACTED]" {
+		t.Errorf("settings row = %#v", got.Value.Any())
+	}
+}
+
+// Independent review M9: a double-encoded nested URL is decoded up to
+// maxDecodeRounds times, and a value that still decodes after the last round
+// fails closed.
+func TestRedact_MultiplyEncodedNestedURL(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, in := range []string{
+		"https://example.test/p?next=%252Finvite%252F" + fakeInvite,
+		"https://example.test/p?next=https%253A%252F%252Fbruce%253A" + fakePass + "%2540example.test",
+		"/p?next=%25252Finvite%25252F" + fakeInvite,
+	} {
+		got := r.URL(in)
+		assertAbsent(t, in, got, fakeInvite, fakePass)
+		if !strings.HasSuffix(got, "next=[REDACTED]") {
+			t.Errorf("URL(%q) = %q, want next=[REDACTED]", in, got)
+		}
+	}
+	// Four layers: still decodable after three rounds, so it fails closed
+	// whatever it hides (nestedValue, or the invite rule's whole-rest pass
+	// first, which fails closed on the same depth).
+	if got := r.URL("/p?next=%2525252Fbooks%2525252F7"); strings.Contains(got, "books") || !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("URL(four layers) = %q", got)
+	}
+	if got, _ := r.nestedValue("%2525252Fbooks%2525252F7", 0); got != "[REDACTED]" {
+		t.Errorf("nestedValue(four layers) = %q", got)
+	}
+	// One harmless layer is kept.
+	if got := r.URL("/p?next=%2Fbooks%2F7&page=2"); got != "/p?next=%2Fbooks%2F7&page=2" {
+		t.Errorf("URL(harmless encoded next) = %q", got)
+	}
+}
+
+// Independent review MINORs and the probe's URL rows: spaces around '=', a
+// newline after ':', tails after ',' and '&', the text scan of url.query, a
+// password holding an unencoded '/' or '#' in userinfo, and an encoded
+// invite path in free text.
+func TestRedact_PairAndURLEdgeForms(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, c := range []struct{ key, in string }{
+		{"msg", "password = " + fakePass},
+		{"msg", "password :" + fakePass},
+		{"msg", "password:\n  " + fakePass},
+		{"msg", "password=ab," + fakePass},
+		{"msg", "password=ab&" + fakePass},
+		{"msg", "password=ab;" + fakePass},
+		{"url.query", "q=Bearer " + fakePass},
+		{"url", "https://bruce:pa/" + fakePass + "@example.test/x"},
+		{"url", "https://bruce:pa#" + fakePass + "@example.test/x"},
+		{"msg", "see https://bruce:pa?" + fakePass + "@example.test/x"},
+		{"msg", "%2Finvite%2F" + fakePass},
+		{"msg", "open %252Fapi%252Fcore%252Fv1%252Fauth%252Finvites%252F" + fakePass + ": not found"},
+	} {
+		got, k := r.StringKinds(c.key, c.in)
+		assertAbsent(t, c.key+" "+c.in, got, fakePass)
+		if k == 0 {
+			t.Errorf("StringKinds(%q, %q) reported no kind", c.key, c.in)
+		}
+	}
+	if got := r.URL("https://bruce:pa/" + fakePass + "@example.test/x?page=2"); got != "https://example.test/x?page=2" {
+		t.Errorf("userinfo with '/' = %q", got)
+	}
+	for _, c := range []struct{ key, in string }{
+		{"url", "https://example.test:8443/a/b@c"},
+		{"msg", "a == b"},
+		{"msg", "progress 50% of /library/a.m4b"},
+		{"msg", "%2Flibrary%2FBatman%2FHush.m4b"},
+		{"url.query", "page=2&sort=title"},
+		{"url", "/a?x=1&&y=2;;z"},
+	} {
+		assertUnchanged(t, r, c.key, c.in)
+	}
+	// maskQuery keeps empty segments and a trailing separator.
+	if got := r.URL("/a?token=" + fakeToken + ";&page=2&"); got != "/a?token=[REDACTED];&page=2&" {
+		t.Errorf("URL(separators) = %q", got)
 	}
 }
