@@ -1,5 +1,5 @@
 // file: internal/logger/ctx.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 941538ef-bccb-4899-ab37-a24fe681513d
 // last-edited: 2026-11-07
 
@@ -19,7 +19,12 @@ import (
 // Error and Debug (05-logging §11 item 2): args are slog's alternating
 // key/value pairs (or slog.Attr values), and the attributes ctx carries
 // (corelog.WithAttrs, e.g. the operation attributes internal/server sets) are
-// appended after them.
+// written before them, as HEAD's helpers wrote the operation attributes.
+// That order matters until internal/activity's line parser matches keys
+// exactly: extractSlogAttr takes the first " opID=" anywhere in the line, so
+// a record value holding that text, written ahead of the real attribute,
+// would misattribute the activity row (todo.d fragment
+// 2026-11-07-activity-slog-attr-exact-key.md).
 //
 // They log through slog.Default(), the books logger path logToStdout uses,
 // and keep the sanitizing barrier the deleted helpers had: the message and
@@ -29,9 +34,10 @@ import (
 //
 // Until R1-15's app.InstallProcessDefaults points slog.Default() at the App
 // pipeline, the default handler does not read corelog.AttrsFrom, so these
-// helpers append the context's attributes themselves. Once it does, the
-// pipeline appends them as well and this append must go (R1-15 / R1-18), or
-// each attribute appears twice.
+// helpers add the context's attributes themselves. Once it does, the
+// pipeline appends them as well and this must go (R1-15 / R1-18), or each
+// attribute appears twice; the pipeline writes them after the record's own,
+// which is why the activity parser fix has to land first.
 func InfoCtx(ctx context.Context, msg string, args ...any) {
 	logCtx(slog.Default(), ctx, slog.LevelInfo, msg, args)
 }
@@ -67,13 +73,13 @@ func logCtx(l *slog.Logger, ctx context.Context, level slog.Level, msg string, a
 	in := slog.NewRecord(time.Now(), level, msg, pcs[0])
 	in.Add(args...)
 	out := slog.NewRecord(in.Time, level, sanitizeLogLine(msg), in.PC)
+	for _, a := range corelog.AttrsFrom(ctx) {
+		out.AddAttrs(sanitizeAttr(a))
+	}
 	in.Attrs(func(a slog.Attr) bool {
 		out.AddAttrs(sanitizeAttr(a))
 		return true
 	})
-	for _, a := range corelog.AttrsFrom(ctx) {
-		out.AddAttrs(sanitizeAttr(a))
-	}
 	// slog.Logger discards a handler error too: logging never fails its caller.
 	_ = l.Handler().Handle(ctx, out)
 }
@@ -96,4 +102,47 @@ func sanitizeAttr(a slog.Attr) slog.Attr {
 		return slog.Attr{Key: a.Key, Value: slog.GroupValue(out...)}
 	}
 	return slog.Attr{Key: a.Key, Value: v}
+}
+
+// Sanitizing returns a logger over l's handler that passes the message and
+// every string value (resolved, groups included) through sanitizeLogLine
+// before l's handler sees them. It is for a books-side *slog.Logger handed to
+// code that builds messages from outside text and relies on the handler to
+// quote them (core/health's flight recorder): until R1-15 points
+// slog.Default() at the core pipeline, the default handler may be slog's
+// built-in one, which writes the message unquoted (for example when
+// setupFileLogging fails and nothing replaced it). A nil l yields nil.
+func Sanitizing(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return nil
+	}
+	return slog.New(sanitizingHandler{next: l.Handler()})
+}
+
+// sanitizingHandler is Sanitizing's handler.
+type sanitizingHandler struct{ next slog.Handler }
+
+func (h sanitizingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.next.Enabled(ctx, level)
+}
+
+func (h sanitizingHandler) Handle(ctx context.Context, r slog.Record) error {
+	out := slog.NewRecord(r.Time, r.Level, sanitizeLogLine(r.Message), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		out.AddAttrs(sanitizeAttr(a))
+		return true
+	})
+	return h.next.Handle(ctx, out)
+}
+
+func (h sanitizingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	clean := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		clean[i] = sanitizeAttr(a)
+	}
+	return sanitizingHandler{next: h.next.WithAttrs(clean)}
+}
+
+func (h sanitizingHandler) WithGroup(name string) slog.Handler {
+	return sanitizingHandler{next: h.next.WithGroup(name)}
 }
