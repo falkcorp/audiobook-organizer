@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.76.2
+// version: 1.76.3
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -691,7 +691,7 @@ func (s *Server) DedupTriageExactPending(ctx context.Context, apply bool) (*main
 		if apply && maintenanceplugin.IsPurgeable(cls) && !reviewOnly {
 			derr := s.embeddingStore.ReclassifyCandidate(c.ID, "pending", "dismissed")
 			if errors.Is(derr, database.ErrManualCandidateProtected) || errors.Is(derr, database.ErrCandidateStatusChanged) {
-				logging.Info(ctx, "dedup triage: left a row changed since the list", "candidate_id", c.ID, "reason", derr)
+				logger.InfoCtx(ctx, "dedup triage: left a row changed since the list", "candidate_id", c.ID, "reason", derr)
 			} else if derr != nil {
 				dismissErrs++
 				if firstDismissErr == nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -12,9 +12,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // RecompactActivityDigestsDefID is the def id of the admin-triggered digest
@@ -74,7 +74,7 @@ func (p *Plugin) recompactActivityDigestsDef() sdk.OperationDef {
 
 func (p *Plugin) runRecompactActivityDigests(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	startMsg := "Re-deriving legacy daily-digest items"
-	logging.Info(ctx, startMsg)
+	logger.InfoCtx(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 	_ = reporter.UpdateProgress(0, 0, startMsg)
 
@@ -91,7 +91,7 @@ func (p *Plugin) runRecompactActivityDigests(ctx context.Context, _ json.RawMess
 	} else {
 		_ = reporter.Log(slog.LevelInfo, doneMsg)
 	}
-	logging.Info(ctx, doneMsg)
+	logger.InfoCtx(ctx, doneMsg)
 	_ = reporter.UpdateProgress(result.Touched+result.Skipped, result.Touched+result.Skipped, doneMsg)
 
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {

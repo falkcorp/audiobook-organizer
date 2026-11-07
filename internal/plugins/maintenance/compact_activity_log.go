@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // CompactActivityLogDefID is the def id of the user-triggered activity-log
@@ -134,7 +134,7 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 // cutoff; everything after that is this function, so a fix to the liveness or
 // result shape cannot land on one and miss the other.
 func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMsg, opName string, reporter sdk.Reporter) error {
-	logging.Info(ctx, startMsg)
+	logger.InfoCtx(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 	// First liveness stamp BEFORE the store is called: with nothing to do
 	// there are no chunk events, and the watchdog's never_reported strike must
@@ -163,7 +163,7 @@ func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMs
 	} else {
 		_ = reporter.Log(slog.LevelInfo, totalMsg)
 	}
-	logging.Info(ctx, totalMsg)
+	logger.InfoCtx(ctx, totalMsg)
 	_ = reporter.UpdateProgress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
 
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {

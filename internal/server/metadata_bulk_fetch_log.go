@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c6c22a1e-80d9-4499-b80a-4a4d4112fa4d
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 //
 // Per-book outcome lines and count wording for the bulk metadata fetch
 // (runBulkMetadataFetchAll / runBulkMetadataFetchForBookIDs) op log.
@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // bulkFetchCounts renders the bulk fetch's running outcome counts. "found"
@@ -55,7 +54,7 @@ func (k *noMatchSkips) suffix() string {
 // log records the count through internal/logging when any book was skipped.
 func (k *noMatchSkips) log(ctx context.Context, label string) {
 	if k.n > 0 {
-		logging.Info(ctx, label+": skipped books marked no-match", "no_match_skipped", k.n)
+		logger.InfoCtx(ctx, label+": skipped books marked no-match", "no_match_skipped", k.n)
 	}
 }
 

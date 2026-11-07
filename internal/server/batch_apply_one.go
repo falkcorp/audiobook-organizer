@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.43.3
+// version: 1.43.4
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package server
 
@@ -18,11 +18,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // cachedApplyService is the narrow slice of *metafetch.Service that applying one
@@ -906,7 +906,7 @@ func gateRuntime(books bookReader, book *database.Book) database.BookRuntime {
 func gateFilesAndRuntime(books bookReader, book *database.Book) ([]database.BookFile, database.BookRuntime) {
 	files, err := books.GetBookFiles(book.ID)
 	if err != nil {
-		logging.Warn(context.Background(), "apply gate: book files unreadable; runtime treated as unknown",
+		logger.WarnCtx(context.Background(), "apply gate: book files unreadable; runtime treated as unknown",
 			"book_id", book.ID, "err", err)
 		// A nil reader is LoadBookRuntime's "rows not read" answer.
 		rt, _ := database.LoadBookRuntime(nil, book)

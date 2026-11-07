@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.21.5
+// version: 1.21.6
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package importer
 
@@ -29,7 +29,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // Store is the slice of the database this service uses: seven methods it calls
@@ -344,7 +343,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		prepared, why := personname.PrepareAuthorNameForCreation(normalizedArtist)
 		if dedup.IsDirtyAuthorName(normalizedArtist) || why != "" {
 			slog.Warn("importer: artist tag rejected as author name",
-				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath), "reason", string(why))
+				"artist", meta.Artist, "path", req.FilePath, "reason", string(why))
 		} else {
 			// Looked up with the shared helper (authorcredit.Lookup), which
 			// never creates: a credit naming several existing authors links

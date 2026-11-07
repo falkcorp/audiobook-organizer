@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package operations
 
@@ -15,7 +15,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
-	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -97,7 +96,7 @@ func (h *Handler) PauseOperations(c *gin.Context) {
 
 	// The hold is in effect regardless; the error is the marker write only.
 	if err := registry.PauseOperations(reason, by); err != nil {
-		pauseLog.Warn("operations pause: hold is active but the marker could not be persisted; a restart would resume: %v", logging.SanitizeErr(err))
+		pauseLog.Warn("operations pause: hold is active but the marker could not be persisted; a restart would resume: %v", err)
 	}
 	httputil.RespondWithOK(c, h.pauseStatePayload(c))
 }
@@ -105,7 +104,7 @@ func (h *Handler) PauseOperations(c *gin.Context) {
 // ResumeOperations releases the hold.
 func (h *Handler) ResumeOperations(c *gin.Context) {
 	if err := registry.ResumeOperations(); err != nil {
-		pauseLog.Warn("operations resume: hold released but the marker could not be cleared: %v", logging.SanitizeErr(err))
+		pauseLog.Warn("operations resume: hold released but the marker could not be cleared: %v", err)
 	}
 	httputil.RespondWithOK(c, h.pauseStatePayload(c))
 }
@@ -138,7 +137,7 @@ func (h *Handler) pauseStatePayload(c *gin.Context) pauseResponse {
 			// known. But say why both lists are empty, or a store failure reads
 			// exactly like "nothing running", the state this endpoint wrongly
 			// reported for six weeks when it read the dead v1 keyspace.
-			pauseLog.Warn("operations pause: running-op list unavailable: %v", logging.SanitizeErr(err))
+			pauseLog.Warn("operations pause: running-op list unavailable: %v", err)
 		}
 		for _, op := range h.repairsAccess.For(c).ReadableOps(ops) {
 			if isTerminalOpStatus(op.Status) {

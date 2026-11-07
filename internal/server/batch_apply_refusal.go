@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b23c08d-8533-4d97-9ea7-f107b4c18796
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 //
 // A memory of the structural refusals metadata.batch-apply-cached has already
 // made, so a later run does not re-offer a book whose refusal cannot change.
@@ -24,8 +24,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // applyRefusalKeyPrefix is the key family of the per-book refusal records:
@@ -236,7 +236,7 @@ func (l *applyRefusalLedger) Lookup(id string) (applyRefusalRecord, bool) {
 	raw, err := l.kv.GetRaw(applyRefusalKey(id))
 	if err != nil || len(raw) == 0 {
 		if err != nil {
-			logging.Warn(context.Background(), "apply refusal record unreadable; evaluating the book normally", "book_id", id, "err", err)
+			logger.WarnCtx(context.Background(), "apply refusal record unreadable; evaluating the book normally", "book_id", id, "err", err)
 		}
 		return applyRefusalRecord{}, false
 	}
@@ -306,7 +306,7 @@ func (l *applyRefusalLedger) Settle(id string, out applyOutcome, had bool, pin *
 			err = l.kv.SetRaw(applyRefusalKey(id), raw)
 		}
 		if err != nil {
-			logging.Warn(context.Background(), "apply refusal record not written; the book will be evaluated again next run", "book_id", id, "err", err)
+			logger.WarnCtx(context.Background(), "apply refusal record not written; the book will be evaluated again next run", "book_id", id, "err", err)
 		}
 	case out.Reason == applySkipGateBlocked && out.Gate != nil:
 		l.drop(id, had)
@@ -318,6 +318,6 @@ func (l *applyRefusalLedger) drop(id string, had bool) {
 		return
 	}
 	if err := l.kv.DeleteRaw(applyRefusalKey(id)); err != nil {
-		logging.Warn(context.Background(), "stale apply refusal record not deleted", "book_id", id, "err", err)
+		logger.WarnCtx(context.Background(), "stale apply refusal record not deleted", "book_id", id, "err", err)
 	}
 }

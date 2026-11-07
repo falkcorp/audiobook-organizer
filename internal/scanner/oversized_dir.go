@@ -1,7 +1,7 @@
 // file: internal/scanner/oversized_dir.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f7c8efaa-7942-41b9-b42d-5a5bb1e2d51f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package scanner
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"path/filepath"
 
-	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // subGroupOversizedAlbum handles an album group holding more than
@@ -42,7 +42,7 @@ import (
 // come out of one folder, and normalizing each one's FilePath to that folder
 // would give them all the same path.
 func subGroupOversizedAlbum(ctx context.Context, files []string) []Book {
-	logging.Warn(ctx, "scanner refusing album group as one book: too many files; sub-grouping by filename stem",
+	logger.WarnCtx(ctx, "scanner refusing album group as one book: too many files; sub-grouping by filename stem",
 		"dir", filepath.Dir(files[0]),
 		"count", len(files),
 		"limit", maxDirectoryBookFiles,

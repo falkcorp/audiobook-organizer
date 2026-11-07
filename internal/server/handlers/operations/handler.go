@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.27.2
+// version: 1.27.3
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -50,7 +50,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -728,7 +727,7 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 		return
 	case err != nil && result != nil:
 		slog.Error("operation revert partially failed", "operation", logger.SanitizeLogValue(id),
-			"summary", result.Summary(), "err", logging.SanitizeErr(err))
+			"summary", result.Summary(), "err", err)
 		httputil.RespondWithError(c, http.StatusInternalServerError,
 			"failed to revert operation: "+result.Summary(), "REVERT_PARTIAL_FAILURE")
 		return

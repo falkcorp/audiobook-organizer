@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.5.2
+// version: 2.5.3
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -44,7 +44,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // UpgradeFetcher is the part of *metafetch.Service the upgrade uses: the
@@ -435,7 +434,7 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	// the runtime unknown — missing evidence — rather than a false mismatch.
 	rt, rtErr := database.LoadBookRuntime(s.DB, book)
 	if rtErr != nil {
-		logging.Warn(ctx, "upgrade: book files unreadable; runtime treated as unknown", "id", bookID, "err", rtErr)
+		logger.WarnCtx(ctx, "upgrade: book files unreadable; runtime treated as unknown", "id", bookID, "err", rtErr)
 	}
 
 	// The gate judges each candidate's author against the book's LIVE

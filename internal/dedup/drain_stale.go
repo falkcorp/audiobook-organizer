@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -46,8 +46,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // drainStaleBatchSize is the page size used when streaming pending exact
@@ -226,12 +226,12 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	var cursor int64
 	if checkpoint {
 		if cp, cperr := operations.LoadCheckpoint(de.bookStore, opID); cperr != nil {
-			logging.Warn(ctx, "drain-stale: checkpoint load failed (starting from the beginning)", "op_id", opID, "error", cperr)
+			logger.WarnCtx(ctx, "drain-stale: checkpoint load failed (starting from the beginning)", "op_id", opID, "error", cperr)
 		} else if cp != nil && cp.Phase == drainStaleCheckpointPhase {
 			cursor = int64(cp.PhaseIndex)
-			logging.Info(ctx, "drain-stale: resuming from checkpoint", "op_id", opID, "after_candidate_id", cursor)
+			logger.InfoCtx(ctx, "drain-stale: resuming from checkpoint", "op_id", opID, "after_candidate_id", cursor)
 		} else if cp != nil {
-			logging.Warn(ctx, "drain-stale: ignoring checkpoint from another phase (starting from the beginning)",
+			logger.WarnCtx(ctx, "drain-stale: ignoring checkpoint from another phase (starting from the beginning)",
 				"op_id", opID, "phase", cp.Phase, "phase_index", cp.PhaseIndex)
 		}
 	}
@@ -322,7 +322,7 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			// PhaseIndex carries the keyset cursor (last scanned candidate
 			// ID), not a row count; drainStaleCheckpointPhase marks that.
 			if serr := operations.SaveCheckpoint(de.bookStore, opID, "dedup:drain-stale", drainStaleCheckpointPhase, int(cursor), totalPendingExact); serr != nil {
-				logging.Warn(ctx, "drain-stale: checkpoint save failed", "op_id", opID, "after_candidate_id", cursor, "error", serr)
+				logger.WarnCtx(ctx, "drain-stale: checkpoint save failed", "op_id", opID, "after_candidate_id", cursor, "error", serr)
 			}
 		}
 		// The denominator is the count taken at the start; a scanner can add
@@ -366,9 +366,9 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 			case uerr == nil:
 			case errors.Is(uerr, database.ErrManualCandidateProtected), errors.Is(uerr, database.ErrCandidateStatusChanged):
 				result.SkippedAtWrite++
-				logging.Info(ctx, "drain-stale: left a row changed since the scan", "candidate_id", id, "reason", uerr)
+				logger.InfoCtx(ctx, "drain-stale: left a row changed since the scan", "candidate_id", id, "reason", uerr)
 			default:
-				logging.Error(ctx, "drain-stale: reclassify failed", "candidate_id", id, "error", uerr)
+				logger.ErrorCtx(ctx, "drain-stale: reclassify failed", "candidate_id", id, "error", uerr)
 			}
 			if done := i + 1; done%drainStaleMarkProgressEvery == 0 || done == len(toMark) {
 				report(done, len(toMark), markMsg(done))
@@ -379,11 +379,11 @@ func (de *Engine) DrainStaleCandidates(ctx context.Context, opID string, apply b
 	// Clean completion — drop the checkpoint so the next run starts fresh.
 	if checkpoint {
 		if cerr := operations.ClearState(de.bookStore, opID); cerr != nil {
-			logging.Warn(ctx, "drain-stale: clear checkpoint failed", "op_id", opID, "error", cerr)
+			logger.WarnCtx(ctx, "drain-stale: clear checkpoint failed", "op_id", opID, "error", cerr)
 		}
 	}
 
-	logging.Info(ctx, "drain-stale: complete",
+	logger.InfoCtx(ctx, "drain-stale: complete",
 		"inspected", result.Inspected,
 		"would_purge", result.WouldPurge,
 		"kept", result.Kept,
@@ -478,7 +478,7 @@ func (de *Engine) prefetchDrainBooks(ctx context.Context, page []database.DedupC
 				switch {
 				case err != nil:
 					nameErr[i] = true
-					logging.Warn(gctx, "drain-stale: author read failed; author treated as unresolved", "author_id", aid, "error", err)
+					logger.WarnCtx(gctx, "drain-stale: author read failed; author treated as unresolved", "author_id", aid, "error", err)
 				case a != nil:
 					names[i] = a.Name
 				}
@@ -524,7 +524,7 @@ func (de *Engine) fetchDrainBook(ctx context.Context, id string) drainBookMeta {
 	var m drainBookMeta
 	b, err := de.bookStore.GetBookByID(id)
 	if err != nil {
-		logging.Warn(ctx, "drain-stale: book read failed; pairs with this book are kept", "book_id", id, "error", err)
+		logger.WarnCtx(ctx, "drain-stale: book read failed; pairs with this book are kept", "book_id", id, "error", err)
 		m.readErr = true
 		return m
 	}
@@ -551,7 +551,7 @@ func (de *Engine) fetchDrainBook(ctx context.Context, id string) drainBookMeta {
 		// Without the file rows the content-evidence check cannot see the
 		// file hashes, so a placeholder-title pair that shares a file could
 		// be drained on a read error. Keep instead.
-		logging.Warn(ctx, "drain-stale: book files read failed; pairs with this book are kept", "book_id", id, "error", ferr)
+		logger.WarnCtx(ctx, "drain-stale: book files read failed; pairs with this book are kept", "book_id", id, "error", ferr)
 		m.readErr = true
 	}
 	m.runtime, m.fileRows, m.filesOK = runtimeFromFiles(b, files, ferr)

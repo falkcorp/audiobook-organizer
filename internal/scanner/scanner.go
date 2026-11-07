@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.6
+// version: 1.135.7
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package scanner
 
@@ -44,7 +44,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // saveBook is the per-book persistence hook used by ProcessBooksParallel.
@@ -1334,7 +1333,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 		before := len(books)
 		books = coalesceShatteredSiblings(ctx, books)
 		if len(books) != before {
-			logging.Info(ctx, "scanner shattered-sibling coalesce", "books_before", before, "books_after", len(books))
+			logger.InfoCtx(ctx, "scanner shattered-sibling coalesce", "books_before", before, "books_after", len(books))
 		}
 	}
 
@@ -3227,7 +3226,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 			// size is not made correct by the evidence being better. Fall
 			// through to the album pass below, where the same ceiling splits
 			// it, rather than returning one book here.
-			logging.Warn(ctx, "scanner refusing multi-file group: too many files for one book",
+			logger.WarnCtx(ctx, "scanner refusing multi-file group: too many files for one book",
 				"dir", filepath.Dir(sorted[0].Path),
 				"count", len(sorted),
 				"limit", maxDirectoryBookFiles,
@@ -3237,7 +3236,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 			for i, s := range sorted {
 				segs[i] = s.Path
 			}
-			logging.Info(ctx, "scanner multi-file group detected",
+			logger.InfoCtx(ctx, "scanner multi-file group detected",
 				"dir", filepath.Dir(segs[0]),
 				"count", len(segs),
 				"first", filepath.Base(segs[0]),
@@ -3342,7 +3341,7 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 				break
 			}
 			if len(files) > maxDirectoryBookFiles {
-				logging.Warn(ctx, "scanner refusing directory-book verdict: too many files in one flat directory",
+				logger.WarnCtx(ctx, "scanner refusing directory-book verdict: too many files in one flat directory",
 					"dir", filepath.Dir(files[0]),
 					"count", len(files),
 					"limit", maxDirectoryBookFiles,
@@ -4510,12 +4509,12 @@ func resolveSeriesID(seriesName, authorName string, authorID *int) (*int, int, e
 	c := metadata.StripSeriesContamination(trimmed, "")
 	switch {
 	case c.Flag:
-		logging.Info(context.Background(),
+		logger.InfoCtx(context.Background(),
 			"scanner: left a series name alone for review",
 			"series", trimmed, "reason", string(c.FlagReason),
 			"candidate_series", c.CandidateName, "candidate_position", c.CandidatePosition)
 	case c.Name != "" && c.Changed(trimmed):
-		logging.Info(context.Background(),
+		logger.InfoCtx(context.Background(),
 			"scanner: moved the book position out of the series name",
 			"rule", c.Rule, "series_before", trimmed, "series_after", c.Name,
 			"position", c.Position, "discarded_position", c.DiscardedPosition)
@@ -4528,7 +4527,7 @@ func resolveSeriesID(seriesName, authorName string, authorID *int) (*int, int, e
 	}
 
 	if personname.NamesCredit(trimmed, authorName) {
-		logging.Info(context.Background(),
+		logger.InfoCtx(context.Background(),
 			"scanner: refused a series named after the book's author",
 			"series", trimmed, "author", authorName)
 		return nil, 0, nil

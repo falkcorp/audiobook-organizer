@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.59.1
+// version: 5.59.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package metafetch
 
@@ -30,7 +30,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // forwardedStores is what metafetch hands its store to rather than calls
@@ -1103,7 +1102,7 @@ func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _
 	// Trigger dedup check after metadata apply
 	if mfs.dedupEngine != nil && config.AppConfig.Dedup.OnImportViaScheduler && mfs.opEnqueuer != nil {
 		if err := dedup.EnqueueCheckBook(context.Background(), mfs.opEnqueuer, id); err != nil {
-			logging.Warn(context.Background(), "dedup re-check enqueue failed after metadata apply", "id", id, "error", err)
+			logger.WarnCtx(context.Background(), "dedup re-check enqueue failed after metadata apply", "id", id, "error", err)
 		}
 	} else if mfs.dedupEngine != nil {
 		go func() {

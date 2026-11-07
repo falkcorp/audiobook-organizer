@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // ActivityFilterIndexBackfillDefID builds the Pebble activity store's
@@ -220,7 +220,7 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 	if resumeFrom > 0 {
 		startMsg += fmt.Sprintf(" (resuming at window %d)", resumeFrom+1)
 	}
-	logging.Info(ctx, startMsg)
+	logger.InfoCtx(ctx, startMsg)
 	_ = reporter.Log(slog.LevelInfo, startMsg)
 
 	windows := make([]int, params.PlanWindows)
@@ -278,7 +278,7 @@ func (p *Plugin) runActivityFilterIndexBackfill(ctx context.Context, raw json.Ra
 	} else {
 		_ = reporter.Log(slog.LevelInfo, doneMsg)
 	}
-	logging.Info(ctx, doneMsg)
+	logger.InfoCtx(ctx, doneMsg)
 
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil && runErr == nil {
 		return fmt.Errorf("activity-filter-index-backfill: persist result: %w", setErr)

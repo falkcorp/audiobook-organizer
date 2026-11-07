@@ -1,7 +1,7 @@
 // file: internal/metafetch/book_runtime.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: ebab5e13-aa16-4d7d-84e0-773a72bc717e
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // bookRuntimeSec is the local runtime every candidate-scoring path compares a
@@ -75,7 +75,7 @@ func (mfs *Service) bookRuntime(book *database.Book) localRuntime {
 	}
 	rt, err := database.LoadBookRuntime(files, book)
 	if err != nil {
-		logging.Warn(context.Background(), "metafetch: book files unreadable; runtime treated as unknown",
+		logger.WarnCtx(context.Background(), "metafetch: book files unreadable; runtime treated as unknown",
 			"book_id", book.ID, "err", err)
 	}
 	return localRuntimeOf(rt)

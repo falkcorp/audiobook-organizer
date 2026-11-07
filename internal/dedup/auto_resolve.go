@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package dedup
 
@@ -18,8 +18,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // autoResolveSampleCapDefault bounds the per-run sample list in the dry-run
@@ -198,7 +198,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		// human may have pinned or decided this pair since. Re-check the row
 		// as it stands now (automated_guard.go).
 		if why, refused := RecheckAutomatedMerge(de.embedStore, c.ID, "pending", bookA, bookB); refused {
-			logging.Info(ctx, "dedup auto-resolve skipped a pair at merge time",
+			logger.InfoCtx(ctx, "dedup auto-resolve skipped a pair at merge time",
 				"candidate", c.ID, "reason", why)
 			continue
 		}
@@ -206,12 +206,12 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		winnerID, mergeErr := de.autoMergeCertain(c)
 		if errors.Is(mergeErr, merge.ErrITunesProtected) {
 			res.RefusedITunes++
-			logging.Warn(ctx, "dedup auto-resolve refused: a book has a file under the active iTunes library",
+			logger.WarnCtx(ctx, "dedup auto-resolve refused: a book has a file under the active iTunes library",
 				"candidate", c.ID, "a", c.EntityAID, "b", c.EntityBID, "err", mergeErr)
 			continue
 		}
 		if mergeErr != nil {
-			logging.Error(ctx, "dedup auto-resolve merge failed",
+			logger.ErrorCtx(ctx, "dedup auto-resolve merge failed",
 				"candidate", c.ID, "a", c.EntityAID, "b", c.EntityBID, "err", mergeErr)
 			continue
 		}
@@ -223,7 +223,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		}
 	}
 
-	logging.Info(ctx, "dedup auto-resolve pass complete",
+	logger.InfoCtx(ctx, "dedup auto-resolve pass complete",
 		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
 		"merged", res.Merged, "skipped_cap", res.SkippedCap)
 	return res, nil
