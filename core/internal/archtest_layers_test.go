@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-07
 
@@ -173,13 +173,12 @@ func countPackageDirs(t *testing.T, root string) int {
 	return len(dirs)
 }
 
-// TestCoreLayering is 03 R4's guard. Its in-module control (03 §3.5.1 item 2)
-// is metrics -> log: the metrics Provider's span exporter redacts through
-// log.Redactor (R1-32, 05-metrics §3). The first control, health -> log
-// (R1-09: the flight recorder sanitised its lines through core/log), went
-// away when R1-36 deleted log.Sanitize and the handler took over escaping. A
-// PR that removes metrics -> log names the replacement edge here; once the
-// composition root exists the control is app -> kernel.
+// TestCoreLayering is 03 R4's guard. Its in-module control (03 §3.5.1 item 2,
+// third step; MOD3-8) is app -> kernel: the composition root's import of the
+// boot machinery, which exists for as long as core boots through app.New
+// (R1-13). The earlier controls were health -> log (R1-09, gone when R1-36
+// deleted log.Sanitize) and metrics -> log (the span exporter's
+// log.Redactor, R1-32), which still exists but is no longer the control.
 func TestCoreLayering(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -200,7 +199,7 @@ func TestCoreLayering(t *testing.T) {
 		DeclaredMayBeAbsent: true,
 		Named:               coreLayerOf,
 		Family:              coreFamily,
-		Control:             archtest.Edge{"metrics", "log"},
+		Control:             archtest.Edge{"app", "kernel"},
 		ImportFloor:         0,
 		TestSupport:         coreTestSupport,
 		FloorRatio:          1,
