@@ -1,7 +1,7 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 
 # The `extraction-gates` required check (09 §9.2.1; R1-02). Parallel jobs, each
 # with `timeout-minutes` <= 30 (09 §9.2.10), and one terminal job named
@@ -10,9 +10,12 @@
 #   check-commits-build   every commit of a PR that renames a file into core/
 #                         builds in both modules, and each moved file is a
 #                         detected rename of >= 90 % similarity (MOD9-5)
-# Later rows add jobs here: R1-10 the dashboard-reference test with promtool,
-# R1-23 TestBootCrashMatrix_ABO, F2-14 and F2-15 the cutover suite. Each one
-# must be listed in the terminal job's `needs`.
+#   dashboard-reference   every series deploy/'s dashboards and Prometheus
+#                         rules name is served (TestDeployReferencedSeriesServed),
+#                         and promtool checks and unit-tests the rules
+#                         (TestPromRules_Promtool), never skipped (R1-10)
+# Later rows add jobs here: R1-23 TestBootCrashMatrix_ABO, F2-14 and F2-15 the
+# cutover suite. Each one must be listed in the terminal job's `needs`.
 #
 # Trigger: every PR to main that touches a non-doc file, decided by the same
 # `changes` classifier as ci.yml (a skipped job reports success through its
@@ -150,12 +153,80 @@ jobs:
           esac
           python3 scripts/ci/check_commits_build.py --base "$base"
 
+  # 05-metrics §12 / 09 §9.2.1: a metric rename or removal must fail before it
+  # blanks a dashboard panel or silences an alert. promtool is a pinned
+  # Prometheus release (the 3.5 LTS line), checksum-verified; the rules test
+  # skips without it, so the job fails if it skipped.
+  dashboard-reference:
+    name: dashboard-reference
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROMETHEUS_VERSION: 3.5.0
+      # sha256 of prometheus-3.5.0.linux-amd64.tar.gz, from the release's
+      # sha256sums.txt.
+      PROMETHEUS_SHA256: e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Install promtool (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/promtool"
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/promtool" --strip-components=1 \
+            "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          echo "${RUNNER_TEMP}/promtool" >> "$GITHUB_PATH"
+
+      - name: promtool version
+        run: promtool --version
+
+      - name: Every referenced series is served
+        run: go test ./internal/telemetrypolicy/ -run 'TestDeployReferencedSeriesServed' -count=1 -v
+
+      - name: promtool check rules and test rules (must not skip)
+        run: |
+          set -euo pipefail
+          out="$(go test ./internal/opsmetrics/ -run TestPromRules_Promtool -count=1 -v 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          if grep -q -- '--- SKIP: TestPromRules_Promtool' <<<"$out"; then
+            echo "::error::TestPromRules_Promtool skipped: promtool is not on PATH"
+            exit 1
+          fi
+          grep -q -- '--- PASS: TestPromRules_Promtool' <<<"$out"
+
   # The one stable required-check name. `always()` so it reports even when a
   # gate job failed or was skipped by its job-level `if:`: a skipped job is
   # success, a failed or cancelled one fails this job.
   extraction-gates:
     name: extraction-gates
-    needs: [changes, check-commits-build]
+    needs: [changes, check-commits-build, dashboard-reference]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
