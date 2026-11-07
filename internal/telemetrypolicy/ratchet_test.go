@@ -59,15 +59,19 @@ func localImportName(f *ast.File, path string) string {
 	return ""
 }
 
-// countFileFamilies counts the declared families in one parsed file.
-func countFileFamilies(f *ast.File) int {
+// countFileFamilies counts the declared families in one parsed file; rel is
+// its slash-separated path from the module root.
+func countFileFamilies(rel string, f *ast.File) int {
 	prom := localImportName(f, promImportPath)
 	promauto := localImportName(f, promautoImportPath)
+	bridgeFile := rel == bridgeHelper.file
 	n := 0
 	ast.Inspect(f, func(node ast.Node) bool {
-		// The one sanctioned NewDesc lives inside the helper; its callers are
-		// counted instead.
-		if fd, ok := node.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == pebbleDescHelper {
+		// The sanctioned NewDescs live inside the helpers; their callers are
+		// counted instead (a bridgeDesc call with a literal name counts, so
+		// it fails the ratchet; with a gathered name it declares nothing).
+		if fd, ok := node.(*ast.FuncDecl); ok && fd.Recv == nil &&
+			(fd.Name.Name == pebbleDescHelper || (bridgeFile && fd.Name.Name == bridgeHelper.fn)) {
 			return false
 		}
 		call, ok := node.(*ast.CallExpr)
@@ -76,7 +80,7 @@ func countFileFamilies(f *ast.File) int {
 		}
 		switch fn := call.Fun.(type) {
 		case *ast.Ident:
-			if fn.Name == pebbleDescHelper && len(call.Args) > 0 {
+			if (fn.Name == pebbleDescHelper || (bridgeFile && fn.Name == bridgeHelper.fn)) && len(call.Args) > 0 {
 				if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 					n++
 				}
@@ -139,8 +143,8 @@ func countClientGolangFamiliesScanned(root string) (int, map[string]int, int, er
 				return fmt.Errorf("parse %s: %w", path, perr)
 			}
 			scanned++
-			if c := countFileFamilies(f); c > 0 {
-				rel, _ := filepath.Rel(root, path)
+			rel, _ := filepath.Rel(root, path)
+			if c := countFileFamilies(filepath.ToSlash(rel), f); c > 0 {
 				per[filepath.ToSlash(rel)] = c
 				total += c
 			}
@@ -249,6 +253,19 @@ var d = newPebbleDesc("x")
 var e = prometheus.NewDesc("y", "", nil, nil)
 func f(n string) any { return newPebbleDesc(n) } // non-literal: not counted
 `)
+	// The bridge helper: its body is skipped in its one file, a call with a
+	// gathered (non-literal) name declares nothing, a literal call counts.
+	writeFixture(t, root, "internal/telemetry/telemetry.go", `package telemetry
+import "github.com/prometheus/client_golang/prometheus"
+func bridgeDesc(name, help string) *prometheus.Desc { return prometheus.NewDesc(name, help, nil, nil) }
+func bridged(n string) any { return bridgeDesc(n, "") }
+var lit = bridgeDesc("batman_total", "")
+`)
+	// The same function name anywhere else is not exempt.
+	writeFixture(t, root, "internal/x/x.go", `package x
+import "github.com/prometheus/client_golang/prometheus"
+func bridgeDesc(name string) *prometheus.Desc { return prometheus.NewDesc(name, "", nil, nil) }
+`)
 	// Ignored: test file, testdata dir, file without the import.
 	writeFixture(t, root, "internal/a/a_test.go", `package a
 import "github.com/prometheus/client_golang/prometheus"
@@ -273,11 +290,12 @@ func TestRatchetCounter_FixtureTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a.go 1, b.go 2, c.go: literal helper call 1 + stray NewDesc 1.
-	if got != 5 {
-		t.Fatalf("fixture count = %d, want 5 (per file: %v)", got, per)
+	// a.go 1, b.go 2, c.go: literal helper call 1 + stray NewDesc 1,
+	// telemetry.go: the literal bridgeDesc call 1, x.go: the unexempt NewDesc 1.
+	if got != 7 {
+		t.Fatalf("fixture count = %d, want 7 (per file: %v)", got, per)
 	}
-	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2}
+	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2, "internal/telemetry/telemetry.go": 1, "internal/x/x.go": 1}
 	for f, n := range want {
 		if per[f] != n {
 			t.Errorf("%s: got %d, want %d", f, per[f], n)

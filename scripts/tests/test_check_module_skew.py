@@ -1,11 +1,12 @@
 # file: scripts/tests/test_check_module_skew.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: e83babbf-1aa1-41f1-a19f-c43cf2c891fa
-# last-edited: 2026-11-05
+# last-edited: 2026-11-07
 """Tests for scripts/ci/check_module_skew.py (03 §3.2 item 6; 12 SC4(c)).
 
 Each case builds a temp tree (core/go.sum present or not) and feeds the
-check a fake ``go list -m all`` per module directory, so no test runs go.
+check a fake ``go list -m all`` per module directory and a fake set of the
+modules supplying core's packages, so no test runs go.
 """
 
 from __future__ import annotations
@@ -29,12 +30,16 @@ _spec.loader.exec_module(cms)
 CORE_LIST = """github.com/falkcorp/mediacore
 github.com/cockroachdb/pebble/v2 v2.1.7
 golang.org/x/sync v0.18.0
+github.com/davecgh/go-spew v1.1.1
 """
+# go-spew is in core's module graph (CORE_LIST) but supplies no package.
+CORE_SUPPLYING = {"github.com/falkcorp/mediacore", "github.com/cockroachdb/pebble/v2", "golang.org/x/sync"}
 ROOT_LIST = """github.com/falkcorp/audiobook-organizer
 github.com/cockroachdb/pebble/v2 v2.1.7
 github.com/falkcorp/mediacore v0.0.0-00010101000000-000000000000 => ./core
 golang.org/x/sync v0.18.0
 github.com/gin-gonic/gin v1.12.0
+github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 """
 
 
@@ -45,6 +50,7 @@ class ModuleSkewTest(unittest.TestCase):
         (self.root / "core").mkdir()
         (self.root / "core" / "go.sum").write_text("")
         self.lists = {self.root / "core": CORE_LIST, self.root: ROOT_LIST}
+        self.supplying = set(CORE_SUPPLYING)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -52,39 +58,55 @@ class ModuleSkewTest(unittest.TestCase):
     def lister(self, d: pathlib.Path) -> dict[str, str]:
         return cms.parse_list_m(self.lists[d])
 
+    def supplier(self, d: pathlib.Path) -> set[str]:
+        self.assertEqual(d, self.root / "core")
+        return self.supplying
+
     def test_no_skew_passes(self) -> None:
-        self.assertEqual(cms.check(self.root, [], self.lister), [])
+        self.assertEqual(cms.check(self.root, [], self.lister, self.supplier), [])
 
     def test_skewed_module_fails_naming_it(self) -> None:
         self.lists[self.root] = ROOT_LIST.replace(
             "golang.org/x/sync v0.18.0", "golang.org/x/sync v0.19.0"
         )
-        errors = cms.check(self.root, [], self.lister)
+        errors = cms.check(self.root, [], self.lister, self.supplier)
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("golang.org/x/sync", errors[0])
         self.assertIn("v0.18.0", errors[0])
         self.assertIn("v0.19.0", errors[0])
 
+    def test_skewed_module_supplying_no_package_is_ignored(self) -> None:
+        # go-spew resolves to v1.1.1 in core and a pseudo-version in the root,
+        # but no core package comes from it: core CI cannot run it.
+        self.assertEqual(cms.check(self.root, [], self.lister, self.supplier), [])
+
+    def test_skewed_module_supplying_a_package_fails(self) -> None:
+        self.supplying.add("github.com/davecgh/go-spew")
+        errors = cms.check(self.root, [], self.lister, self.supplier)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("github.com/davecgh/go-spew", errors[0])
+        self.assertIn("v1.1.1", errors[0])
+
     def test_module_missing_from_root_fails(self) -> None:
         self.lists[self.root] = ROOT_LIST.replace("golang.org/x/sync v0.18.0\n", "")
-        errors = cms.check(self.root, [], self.lister)
+        errors = cms.check(self.root, [], self.lister, self.supplier)
         self.assertTrue(
             any("golang.org/x/sync" in e and "not the root's" in e for e in errors), errors
         )
 
     def test_missing_core_go_sum_fails(self) -> None:
         (self.root / "core" / "go.sum").unlink()
-        errors = cms.check(self.root, [], self.lister)
+        errors = cms.check(self.root, [], self.lister, self.supplier)
         self.assertTrue(any("core/go.sum is missing" in e for e in errors), errors)
 
     def test_violated_pin_fails(self) -> None:
         pin = cms.parse_pin("github.com/cockroachdb/pebble/v2@v2.1.8")
-        errors = cms.check(self.root, [pin], self.lister)
+        errors = cms.check(self.root, [pin], self.lister, self.supplier)
         self.assertTrue(
             any("--pin github.com/cockroachdb/pebble/v2@v2.1.8" in e for e in errors), errors
         )
         held = cms.parse_pin("github.com/cockroachdb/pebble/v2@v2.1.7")
-        self.assertEqual(cms.check(self.root, [held], self.lister), [])
+        self.assertEqual(cms.check(self.root, [held], self.lister, self.supplier), [])
 
     def test_staticcheck_tools_modules_compared_once_core_has_one(self) -> None:
         sc_core = self.root / "core" / "tools" / "staticcheck"
@@ -94,7 +116,7 @@ class ModuleSkewTest(unittest.TestCase):
         (sc_core / "go.mod").write_text("module x\n")
         self.lists[sc_core] = "x\nhonnef.co/go/tools v0.7.0\n"
         self.lists[sc_root] = "y\nhonnef.co/go/tools v0.7.1\n"
-        errors = cms.check(self.root, [], self.lister)
+        errors = cms.check(self.root, [], self.lister, self.supplier)
         self.assertTrue(
             any("staticcheck tools skew" in e and "honnef.co/go/tools" in e for e in errors), errors
         )

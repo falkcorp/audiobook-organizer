@@ -48,6 +48,15 @@ var descHelpers = map[string]struct {
 	"newPebbleDesc": {prefix: "audiobook_organizer_", nameArg: 0, typeArg: 2},
 }
 
+// bridgeHelper is the registry bridge's one prometheus.NewDesc wrapper
+// (internal/telemetry/telemetry.go bridgeDesc). It declares no family: its
+// name is always one the core Provider already serves, read back from a
+// gather. Both static guards (TestDeclaredFamiliesInGolden and the
+// client_golang ratchet) skip its body, in that one file only, and refuse a
+// call to it with a literal name. R1-15 removes the bridge, and this entry
+// with it.
+var bridgeHelper = struct{ file, fn string }{file: "internal/telemetry/telemetry.go", fn: "bridgeDesc"}
+
 type declared struct {
 	name, typ, pos string
 }
@@ -173,9 +182,15 @@ func scanFile(fset *token.FileSet, f *ast.File) (families, instruments []declare
 		return fmt.Sprintf("%s:%d", rel, p.Line)
 	}
 
+	fileRel := ""
+	if rel, err := filepath.Rel(repoRoot, fset.Position(f.Package).Filename); err == nil {
+		fileRel = filepath.ToSlash(rel)
+	}
+	bridgeFile := fileRel == bridgeHelper.file
 	for _, decl := range f.Decls {
 		fn, _ := decl.(*ast.FuncDecl)
 		_, inHelper := descHelpers[funcName(fn)]
+		inHelper = inHelper || (bridgeFile && fn != nil && fn.Recv == nil && funcName(fn) == bridgeHelper.fn)
 		ast.Inspect(decl, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -185,6 +200,11 @@ func scanFile(fset *token.FileSet, f *ast.File) (families, instruments []declare
 			case *ast.Ident:
 				if h, ok := descHelpers[fun.Name]; ok {
 					families, problems = appendHelper(families, problems, call, h.prefix, h.nameArg, h.typeArg, pos(call))
+				}
+				if bridgeFile && fun.Name == bridgeHelper.fn && len(call.Args) > 0 {
+					if _, lit := stringLit(call.Args[0]); lit {
+						problems = append(problems, fmt.Sprintf("%s: %s with a literal name declares a family; the bridge only re-exposes families the core Provider serves", pos(call), bridgeHelper.fn))
+					}
 				}
 			case *ast.SelectorExpr:
 				sel := fun.Sel.Name

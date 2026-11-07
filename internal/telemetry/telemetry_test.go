@@ -1,7 +1,7 @@
 // file: internal/telemetry/telemetry_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
@@ -118,22 +118,6 @@ func TestInitOTEL_UnusableEndpointIsNotFatal(t *testing.T) {
 	}
 }
 
-func TestTraceEndpointOption_Forms(t *testing.T) {
-	ok := []string{"127.0.0.1:4317", "localhost:4317", "[::1]:4317", "tempo:4317",
-		"http://127.0.0.1:4317", "https://collector.example:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
-	for _, ep := range ok {
-		if _, err := traceEndpointOption(ep); err != nil {
-			t.Errorf("traceEndpointOption(%q) = %v, want accepted", ep, err)
-		}
-	}
-	bad := []string{"", "127.0.0.1", "http://127.0.0.1", "http://:4317", "ftp://host:21", "invalid://endpoint", "dns:///", ":4317"}
-	for _, ep := range bad {
-		if _, err := traceEndpointOption(ep); err == nil {
-			t.Errorf("traceEndpointOption(%q) accepted, want an error", ep)
-		}
-	}
-}
-
 // traceSink is a plaintext OTLP/gRPC collector that counts the spans it gets.
 type traceSink struct {
 	coltracepb.UnimplementedTraceServiceServer
@@ -151,7 +135,9 @@ func (s *traceSink) Export(_ context.Context, req *coltracepb.ExportTraceService
 
 // TestInitTracing_SpansReachAPlaintextCollector proves both endpoint forms
 // against a real gRPC listener, the way Tempo listens on :4317: the URL form
-// needs nothing else, the bare form needs the SDK's insecure switch.
+// needs nothing else, the bare form needs the SDK's insecure switch. The span
+// is started on the GLOBAL tracer provider, which is what initTracing
+// installs; core's own form tests are core/metrics/otlp_test.go.
 func TestInitTracing_SpansReachAPlaintextCollector(t *testing.T) {
 	prev := otel.GetTracerProvider()
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
@@ -184,13 +170,13 @@ func TestInitTracing_SpansReachAPlaintextCollector(t *testing.T) {
 			if err != nil {
 				t.Fatalf("initTracing(%q): %v", tc.endpoint, err)
 			}
-			_, span := tp.Tracer("test").Start(ctx, "op")
-			span.End()
-			if err := tp.ForceFlush(ctx); err != nil {
-				t.Fatalf("flush to %q: %v", tc.endpoint, err)
+			if d := tp.Degraded(); len(d) != 0 {
+				t.Fatalf("Degraded = %v", d)
 			}
-			if err := tp.Shutdown(ctx); err != nil {
-				t.Fatalf("shutdown: %v", err)
+			_, span := otel.GetTracerProvider().Tracer("test").Start(ctx, "op")
+			span.End()
+			if err := tp.Shutdown(ctx); err != nil { // flushes the batcher
+				t.Fatalf("shutdown (flush) to %q: %v", tc.endpoint, err)
 			}
 			if got := sink.spans.Load() - before; got != 1 {
 				t.Fatalf("collector received %d spans from %q, want 1", got, tc.endpoint)
@@ -204,9 +190,9 @@ func TestInitTracing_SpansReachAPlaintextCollector(t *testing.T) {
 // shutdown is deferred. It must be non-nil and safe to call; until
 // 2026-10-10 it was nil alongside the error.
 func TestInitOTEL_MetricsErrorStillReturnsShutdown(t *testing.T) {
-	origProvider, origOTLP, origErr := meterProvider, meterOTLP, meterErr
+	origProvider, origErr := metricsProvider, meterErr
 	t.Cleanup(func() {
-		meterProvider, meterOTLP, meterErr = origProvider, origOTLP, origErr
+		metricsProvider, meterErr = origProvider, origErr
 		meterOnce = sync.Once{}
 		if origProvider != nil || origErr != nil {
 			meterOnce.Do(func() {}) // keep the one-time registration consumed
@@ -215,7 +201,7 @@ func TestInitOTEL_MetricsErrorStillReturnsShutdown(t *testing.T) {
 	boom := errors.New("prometheus exporter failed")
 	meterOnce = sync.Once{}
 	meterOnce.Do(func() {})
-	meterProvider, meterOTLP, meterErr = nil, otlpStatus{}, boom
+	metricsProvider, meterErr = nil, boom
 
 	shutdown, err := InitOTEL(context.Background(), &Config{ServiceName: "test", MetricsEnabled: true})
 	if !errors.Is(err, boom) {

@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
-// last-edited: 2026-10-28
+// last-edited: 2026-11-07
 
 // Package opsmetrics holds the OTel instruments for operation runs (spec 11
 // §3.5 and §3.7). One meter, telemetry.Meter("operations"); every instrument
@@ -221,6 +221,7 @@ func New(mp metric.MeterProvider) *Recorder {
 		metric.WithDescription("Operation runs by def_id and outcome (started, completed, failed, canceled, timed_out, dropped)."))
 	r.duration, _ = m.Float64Histogram("audiobook_organizer.ops.run.duration",
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()["audiobook_organizer.ops.run.duration"]...),
 		metric.WithDescription("Wall-clock duration of a finished operation run attempt, by def_id and outcome."))
 	r.items, _ = m.Int64Counter("audiobook_organizer.ops.items",
 		metric.WithUnit("{item}"),
@@ -242,6 +243,7 @@ func New(mp metric.MeterProvider) *Recorder {
 		metric.WithDescription("Uncancellable calls (file stats on a stuck mount, tag parses) abandoned after their time bound whose goroutine has not returned yet, by source. Each holds an OS thread until the mount answers; a value that stays above zero is a dead mount."))
 	r.schedLag, _ = m.Float64Histogram("audiobook_organizer.ops.schedule_lag",
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()["audiobook_organizer.ops.schedule_lag"]...),
 		metric.WithDescription("Seconds between a scheduled run's due time and the moment the scheduler enqueued it, by def_id."))
 	r.schedMiss, _ = m.Int64Counter("audiobook_organizer.ops.schedule_missed",
 		metric.WithUnit("{run}"),

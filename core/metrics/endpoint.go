@@ -1,9 +1,9 @@
-// file: internal/telemetry/endpoint.go
-// version: 2.1.2
+// file: core/metrics/endpoint.go
+// version: 2.2.0
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
 // last-edited: 2026-11-07
 
-package telemetry
+package metrics
 
 import (
 	"fmt"
@@ -12,10 +12,11 @@ import (
 	"strings"
 )
 
-// Config keys the endpoint parser names in its (fixed) error text.
+// The endpoints the parser names in its (fixed) error text: the signal, not
+// an app's config key (core holds no app key names, 03 rule R1).
 const (
-	keyTraceEndpoint   = "otel_exporter_otlp_endpoint"
-	keyMetricsEndpoint = "otel_metrics_otlp_endpoint"
+	keyTraceEndpoint   = "the OTLP tracing endpoint"
+	keyMetricsEndpoint = "the OTLP metrics endpoint"
 )
 
 // otlpTarget is a validated OTLP/gRPC endpoint, independent of which OTLP
@@ -96,8 +97,9 @@ func validHost(host string) bool {
 	return true
 }
 
-// parseOTLPEndpoint validates endpoint strictly and rebuilds it. key is the
-// config key it came from and is the only context in any error.
+// parseOTLPEndpoint validates endpoint strictly and rebuilds it. key names
+// the endpoint (keyTraceEndpoint or keyMetricsEndpoint) and is the only
+// context in any error.
 //
 // Accepted (after trimming surrounding whitespace; the scheme is
 // case-insensitive):
@@ -121,7 +123,7 @@ func validHost(host string) bool {
 // nothing but scheme, host and port, and the SDK ignores path, query and
 // userinfo for gRPC anyway.
 func parseOTLPEndpoint(key, endpoint string) (otlpTarget, error) {
-	refuse := fmt.Errorf("%s is not a valid OTLP/gRPC endpoint (expected host:port, http(s)://host:port or dns:///host:port)", key)
+	refuse := fmt.Errorf("metrics: %s is not a valid OTLP/gRPC endpoint (expected host:port, http(s)://host:port or dns:///host:port)", key)
 
 	ep := strings.TrimSpace(endpoint)
 	scheme, rest := "", ep

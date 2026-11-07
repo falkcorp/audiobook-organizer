@@ -1,9 +1,9 @@
-// file: internal/telemetry/endpoint_test.go
-// version: 1.1.0
+// file: core/metrics/endpoint_test.go
+// version: 1.1.1
 // guid: 0b8d3f6e-7a41-4c29-8e5d-91f2a6c4b370
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
-package telemetry
+package metrics
 
 import "testing"
 

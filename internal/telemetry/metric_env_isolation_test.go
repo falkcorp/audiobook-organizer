@@ -1,214 +1,30 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
+// The OTLP environment-isolation tests moved to core/metrics/otlp_test.go
+// with the exporter wiring they test (R1-10). What stays is ABO's: the
+// process-wide error handler, its redaction backstop, the start-up summary
+// and the shutdown fan-out.
+
 import (
+	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
-	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
-	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
+
+	"github.com/falkcorp/mediacore/metrics"
 )
-
-// headerSink records the incoming gRPC metadata of every Export next to the
-// request.
-type headerSink struct {
-	metricSink
-	mu2  sync.Mutex
-	meta []metadata.MD
-}
-
-func (s *headerSink) Export(ctx context.Context, req *colmetricpb.ExportMetricsServiceRequest) (*colmetricpb.ExportMetricsServiceResponse, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	s.mu2.Lock()
-	s.meta = append(s.meta, md)
-	s.mu2.Unlock()
-	return s.metricSink.Export(ctx, req)
-}
-
-func (s *headerSink) metas() []metadata.MD {
-	s.mu2.Lock()
-	defer s.mu2.Unlock()
-	return append([]metadata.MD(nil), s.meta...)
-}
-
-func startHeaderSink(t *testing.T) (*headerSink, string) {
-	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink := &headerSink{}
-	srv := grpc.NewServer()
-	colmetricpb.RegisterMetricsServiceServer(srv, sink)
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	return sink, lis.Addr().String()
-}
-
-// pushOnce builds a provider for cfg, bumps a counter and shuts down, which
-// flushes the periodic reader exactly once.
-func pushOnce(t *testing.T, cfg *Config) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	mp, status, err := newMeterProvider(ctx, cfg, privateProm())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !status.Enabled {
-		t.Fatalf("status = %+v, want the OTLP reader on", status)
-	}
-	c, err := mp.Meter("env-isolation").Int64Counter("env_isolation_things")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Add(ctx, 7)
-	hist, err := mp.Meter("env-isolation").Float64Histogram("env_isolation_latency")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hist.Record(ctx, 0.25)
-	_ = mp.Shutdown(ctx) // the flush error (TLS mismatch) is the point of one test
-}
-
-// setHostileTraceEnv is the environment of a deployment that ships traces to a
-// TLS collector with a bearer token and asks for delta metrics: none of it may
-// reach the metric push.
-func setHostileTraceEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://trace-collector.example.invalid:4317")
-	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer trace-secret")
-	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "authorization=Bearer metrics-secret")
-	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta")
-	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION", "base2_exponential_bucket_histogram")
-}
-
-// A bare host:port with insecure=false is TLS. The generic
-// OTEL_EXPORTER_OTLP_INSECURE=true / http:// endpoint must not downgrade it:
-// against a plaintext collector nothing may be exported.
-func TestOTLPMetrics_EnvCannotDowngradeTLS(t *testing.T) {
-	setHostileTraceEnv(t)
-	sink, addr := startHeaderSink(t)
-
-	pushOnce(t, LoadConfig("test", "", WithMetricsOTLP(addr, time.Minute, false)))
-
-	if n := len(sink.snapshot()); n != 0 {
-		t.Fatalf("collector received %d plaintext exports from a TLS-configured endpoint; the generic OTLP environment downgraded the transport", n)
-	}
-}
-
-// With plaintext configured, the trace collector's headers must not be sent
-// and temporality stays cumulative (D66).
-func TestOTLPMetrics_EnvCannotLeakHeadersOrFlipTemporality(t *testing.T) {
-	checkPlaintextPush(t, false)
-}
-
-// OTEL_EXPORTER_OTLP_CERTIFICATE installs credentials, which the exporter
-// prefers over its insecure flag: explicit plaintext must still win.
-func TestOTLPMetrics_EnvCertificateCannotOverrideInsecure(t *testing.T) {
-	checkPlaintextPush(t, true)
-}
-
-func checkPlaintextPush(t *testing.T, withCertEnv bool) {
-	for name, endpoint := range map[string]func(addr string) (string, bool){
-		"http-url":      func(a string) (string, bool) { return "http://" + a, false },
-		"bare-insecure": func(a string) (string, bool) { return a, true },
-		"dns-insecure":  func(a string) (string, bool) { return "dns:///" + a, true },
-	} {
-		t.Run(name, func(t *testing.T) {
-			setHostileTraceEnv(t)
-			if withCertEnv {
-				t.Setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", writeSelfSignedPEM(t))
-			}
-			sink, addr := startHeaderSink(t)
-			ep, insecure := endpoint(addr)
-
-			pushOnce(t, LoadConfig("test", "", WithMetricsOTLP(ep, time.Minute, insecure)))
-
-			reqs := sink.snapshot()
-			if len(reqs) == 0 {
-				t.Fatal("plaintext collector got no export: the certificate environment overrode the explicit plaintext transport")
-			}
-			for _, md := range sink.metas() {
-				if v := md.Get("authorization"); len(v) != 0 {
-					t.Errorf("authorization header %q reached the metric collector", v)
-				}
-			}
-			var seen, histSeen bool
-			for _, req := range reqs {
-				for _, rm := range req.GetResourceMetrics() {
-					for _, sm := range rm.GetScopeMetrics() {
-						for _, m := range sm.GetMetrics() {
-							if m.GetName() == "env_isolation_latency" {
-								histSeen = true
-								if m.GetExponentialHistogram() != nil || m.GetHistogram() == nil {
-									t.Errorf("histogram exported as %T, want the explicit-bucket default (OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION must be ignored)", m.GetData())
-								}
-								continue
-							}
-							if m.GetName() != "env_isolation_things" {
-								continue
-							}
-							seen = true
-							if got := m.GetSum().GetAggregationTemporality(); got != metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE {
-								t.Errorf("temporality = %v, want CUMULATIVE (OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta must be ignored)", got)
-							}
-						}
-					}
-				}
-			}
-			if !seen || !histSeen {
-				t.Errorf("collector missed an instrument: counter=%v histogram=%v", seen, histSeen)
-			}
-		})
-	}
-}
-
-func writeSelfSignedPEM(t *testing.T) string {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "example.invalid"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
 
 func TestRateLimitedErrorHandler(t *testing.T) {
 	type line struct {
@@ -272,30 +88,29 @@ func TestRateLimitedErrorHandler_ClassTableIsBounded(t *testing.T) {
 }
 
 func TestInitSummary_BothHalvesOffKeepsBothMessages(t *testing.T) {
-	cfg := LoadConfig("test", "https://u:secret@tempo.example.invalid:4317")
-	level, msg, attrs := initSummary(cfg, cfg.MetricsEnabled, false, errors.New("trace boom https://u:secret@tempo.example.invalid:4317"),
-		otlpStatus{Err: errors.New("endpoint \"nohostport\" is neither a URL nor host:port")})
+	level, msg, attrs := initSummary(true, false, false, true, true)
 	if level != slog.LevelError {
 		t.Errorf("level = %v, want error", level)
 	}
 	if !strings.Contains(msg, "tracing OFF") || !strings.Contains(msg, "OTLP metric push OFF") {
 		t.Errorf("msg = %q, want both clauses", msg)
 	}
-	flat := strings.Join(func() (out []string) {
-		for _, a := range attrs {
-			if s, ok := a.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return
-	}(), " ")
-	for _, want := range []string{"tracing_error", "otlp_metrics_error"} {
-		if !strings.Contains(flat, want) {
-			t.Errorf("attrs lack %s: %s", want, flat)
-		}
+	got := map[string]any{}
+	for i := 0; i+1 < len(attrs); i += 2 {
+		got[attrs[i].(string)] = attrs[i+1]
 	}
-	if strings.Contains(flat, "secret") {
-		t.Errorf("userinfo not redacted: %s", flat)
+	// The reason is core's degraded token, never error text: the configured
+	// endpoint (and any userinfo in it) cannot reach this line.
+	if got["tracing_error"] != metrics.DegradedTracingDisabled || got["otlp_metrics_error"] != metrics.DegradedOTLPDisabled {
+		t.Errorf("attrs = %v, want the degraded tokens", got)
+	}
+	if got["metrics"] != true || got["tracing"] != false || got["otlp_metrics"] != false {
+		t.Errorf("attrs = %v", got)
+	}
+
+	level, msg, _ = initSummary(true, true, true, false, false)
+	if level != slog.LevelInfo || msg != "OpenTelemetry initialized" {
+		t.Errorf("all on: level %v msg %q", level, msg)
 	}
 }
 
@@ -327,8 +142,9 @@ func TestRedactUserinfo(t *testing.T) {
 	}
 }
 
-// A dial/export failure for an endpoint with userinfo must never put the
-// secret in what reaches the log func (the process-wide error handler).
+// An endpoint with userinfo must never put the secret in what reaches the
+// log: neither core's own lines (Options.Logger, which the façade routes
+// through emit to the process logger) nor the process-wide error handler.
 func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
 	var mu sync.Mutex
 	var logged []string
@@ -337,34 +153,40 @@ func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
 		defer mu.Unlock()
 		logged = append(logged, msg)
 		for _, a := range attrs {
-			if s, ok := a.(string); ok {
-				logged = append(logged, s)
-			}
+			logged = append(logged, fmt.Sprint(a))
 		}
 	})
 	prev := otel.GetErrorHandler()
 	otel.SetErrorHandler(h)
 	t.Cleanup(func() { otel.SetErrorHandler(prev) })
 
+	var buf syncBuffer
+	prevLog := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prevLog) })
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cfg := LoadConfig("test", "", WithMetricsOTLP("dns:///user:secret@192.0.2.1:4317", time.Minute, true))
-	mp, status, err := newMeterProvider(ctx, cfg, privateProm())
+	cfg := LoadConfig("test", "https://user:secret@192.0.2.1:4317", WithMetricsOTLP("dns:///user:secret@192.0.2.1:4317", time.Minute, true))
+	o := metricsOptions(cfg)
+	o.OTLP = &metrics.OTLPMetrics{Endpoint: cfg.MetricsOTLPEndpoint, Insecure: cfg.MetricsOTLPInsecure, Interval: cfg.MetricsOTLPInterval}
+	o.Tracing = &metrics.OTLPTracing{Endpoint: cfg.ExporterEndpoint}
+	p, err := metrics.New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Err != nil && strings.Contains(status.Err.Error(), "secret") {
-		t.Fatalf("status error leaks userinfo: %v", status.Err)
+	if d := p.Degraded(); len(d) != 2 {
+		t.Errorf("Degraded = %v, want both OTLP halves refused", d)
 	}
-	c, _ := mp.Meter("dial").Int64Counter("dial_things")
-	c.Add(ctx, 1)
-	sdErr := mp.Shutdown(ctx) // the flush to an unroutable address fails
-	if sdErr != nil && strings.Contains(sdErr.Error(), "secret") {
-		t.Errorf("shutdown error leaks userinfo: %v", sdErr)
-	}
-	// Feed the shutdown error through the real handler path as well.
+	sdErr := p.Shutdown(ctx)
 	if sdErr != nil {
-		otel.Handle(sdErr)
+		if strings.Contains(sdErr.Error(), "secret") {
+			t.Errorf("shutdown error leaks userinfo: %v", sdErr)
+		}
+		otel.Handle(sdErr) // through the real handler path as well
+	}
+	if out := buf.String(); strings.Contains(out, "secret") || !strings.Contains(out, "not a valid OTLP/gRPC endpoint") {
+		t.Errorf("core's lines through emit = %q, want the fixed refusal and no userinfo", out)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -373,6 +195,24 @@ func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
 			t.Errorf("log output leaks userinfo: %q", l)
 		}
 	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the concurrent writes of a logger.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func TestRunShutdowns_EachGetsItsShare(t *testing.T) {

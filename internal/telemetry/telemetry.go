@@ -1,7 +1,7 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.12.0
+// version: 3.0.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
@@ -10,31 +10,47 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/sdk/metric"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"google.golang.org/grpc/credentials"
-	grpcinsecure "google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/falkcorp/mediacore/metrics"
+)
+
+// The provider construction, the OTLP endpoint validator, the exporter wiring
+// and the resource are core's (mediacore/metrics, 05-metrics §13 item 1). This
+// file is ABO's façade over it until the composition root (R1-15) replaces it
+// with app.InstallProcessDefaults and the App's private registry: it builds
+// core Providers from ABO's Config and keeps the PROCESS-GLOBAL installs core
+// may not make (03 R5): otel.SetMeterProvider, otel.SetTracerProvider, the
+// error handler and SDK logger (errorhandler.go, sdklog.go) and the bridge of
+// the Provider's registry onto the default registry that /metrics serves.
+
+// Identity values ABO hands core.
+const (
+	appID           = "abo"
+	metricNamespace = "audiobook_organizer"
 )
 
 // InitOTEL initializes OpenTelemetry in two independent halves and returns one
 // shutdown function covering whatever was started.
 //
-//   - Metrics (cfg.MetricsEnabled): an OTel meter provider backed by the
-//     Prometheus exporter, which registers with the process-wide Prometheus
-//     registry that /metrics already serves. This needs no endpoint and runs in
-//     every deployment, so OTel-instrumented meters (otelgin, anything using
-//     otel.Meter) land on the same scrape as internal/metrics.
-//   - Tracing (cfg.TracingEnabled, i.e. an OTLP endpoint is set): an OTLP/gRPC
-//     span exporter and tracer provider. Off in prod until a collector exists;
+//   - Metrics (cfg.MetricsEnabled): a core Provider with the Prometheus
+//     exporter, its registry bridged onto the process-wide Prometheus registry
+//     that /metrics serves, and its MeterProvider installed as the OTel
+//     global, so OTel-instrumented meters (otelgin, telemetry.Meter) land on
+//     the same scrape as internal/metrics. This needs no endpoint and runs in
+//     every deployment.
+//   - Tracing (cfg.TracingEnabled, i.e. an OTLP endpoint is set): a second
+//     core Provider carrying only the OTLP tracer, installed as the global
+//     TracerProvider. Off in prod until a collector exists;
 //     deploy/grafana/TRACING-RUNBOOK.md is how to stand one up.
 //
 // Until 2026-10-03 both halves were gated on the trace endpoint, so an empty
@@ -51,45 +67,45 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	var shutdowns []func(context.Context) error
 
 	// Tracing is started first and is never fatal. A wrong endpoint, or an
-	// exporter that cannot be built, costs the traces and nothing else: it is
-	// logged at error level and the server starts with tracing off. Until
-	// 2026-10-03 the error was returned, cmd/root.go made it fatal, and
-	// setting OTEL_EXPORTER_OTLP_ENDPOINT=127.0.0.1:4317 in prod (the form
-	// this package's own comment promised to accept) put the server in a
-	// crash loop for 75 seconds.
-	tracing := false
-	var tracingErr error
+	// exporter that cannot be built, costs the traces and nothing else: core
+	// logs why at error level, raises tracing_disabled, and the server starts
+	// with tracing off. Until 2026-10-03 the error was returned, cmd/root.go
+	// made it fatal, and setting OTEL_EXPORTER_OTLP_ENDPOINT=127.0.0.1:4317 in
+	// prod put the server in a crash loop for 75 seconds.
+	tracing, tracingOff := false, false
 	if cfg.TracingEnabled {
 		tp, err := initTracing(ctx, cfg)
-		if err != nil {
-			tracingErr = err
-		} else {
+		switch {
+		case err != nil:
+			tracingOff = true
+		case slices.Contains(tp.Degraded(), metrics.DegradedTracingDisabled):
+			tracingOff = true
+			shutdowns = append(shutdowns, tp.Shutdown)
+		default:
 			tracing = true
 			shutdowns = append(shutdowns, tp.Shutdown)
 		}
 	}
 
 	// The OTLP metric push is an optional copy of the Prometheus instruments
-	// and, like tracing, is never fatal: initMetrics reports it through
-	// otlpStatus, not through the error, which is reserved for the Prometheus
-	// reader itself.
+	// and, like tracing, is never fatal: core reports it as
+	// metrics_otlp_disabled, not as an error, which is reserved for the
+	// Prometheus reader itself.
 	//
 	// A Prometheus-reader failure is returned, but WITH a usable shutdown for
 	// whatever did start (a running tracer). cmd runs this as the Degraded
 	// startup step "InitOTEL" (internal/startup.Table): the server keeps
-	// serving with metrics off and /health reports "metrics_disabled". Until
-	// 2026-10-10 the error came back with a nil shutdown, which dropped the
-	// tracer's shutdown and left the caller a nil func to defer.
-	var otlp otlpStatus
+	// serving with metrics off and /health reports "metrics_disabled".
 	var metricsErr error
-	metrics := false
+	metricsOn, otlpOn, otlpOff := false, false, false
 	if cfg.MetricsEnabled {
-		shutdownMetrics, status, err := initMetrics(ctx, cfg)
+		p, shutdownMetrics, err := initMetrics(ctx, cfg)
 		if err != nil {
 			metricsErr = fmt.Errorf("initialize OpenTelemetry metrics: %w", err)
 		} else {
-			metrics = true
-			otlp = status
+			metricsOn = true
+			otlpOff = slices.Contains(p.Degraded(), metrics.DegradedOTLPDisabled)
+			otlpOn = cfg.MetricsOTLPEndpoint != "" && !otlpOff
 			shutdowns = append(shutdowns, shutdownMetrics)
 		}
 	}
@@ -97,8 +113,8 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	// A metrics failure is logged by the caller (the startup step runner),
 	// which owns the decision to continue; the summary line only reports
 	// metrics=false.
-	level, msg, attrs := initSummary(cfg, metrics, tracing, tracingErr, otlp)
-	if otlp.Enabled {
+	level, msg, attrs := initSummary(metricsOn, tracing, otlpOn, tracingOff, otlpOff)
+	if otlpOn {
 		installExportErrorHandler()
 	}
 	emit(ctx, level, msg, attrs...)
@@ -129,211 +145,39 @@ func runShutdowns(ctx context.Context, fns []func(context.Context) error) error 
 	return errors.Join(errs...)
 }
 
-// traceEndpointOption turns the configured trace endpoint into the exporter
-// option that reaches it. The accepted forms, and the fixed error for
-// everything else, are parseOTLPEndpoint's: host:port, http(s)://host:port and
-// dns:///host:port. A refused endpoint turns tracing OFF with one error-level
-// log line; it never stops the server. What is passed to the exporter is the
-// canonical string rebuilt from the validated parts, which is also what is
-// logged.
-func traceEndpointOption(endpoint string) ([]otlptracegrpc.Option, error) {
-	t, err := parseOTLPEndpoint(keyTraceEndpoint, endpoint)
-	if err != nil {
-		return nil, err
-	}
-	return traceOptions(t), nil
-}
-
-// traceOptions builds the exporter options for a validated trace endpoint.
-// Options are applied in order, after the environment, so a later one wins.
-//
-//   - http://: plaintext, pinned with insecure credentials as well as
-//     WithInsecure, because credentials installed by
-//     OTEL_EXPORTER_OTLP_[TRACES_]CERTIFICATE / CLIENT_CERTIFICATE beat the
-//     insecure flag and would otherwise turn it into TLS.
-//   - https://: TLS. WithEndpointURL sets Insecure=false (an
-//     OTEL_EXPORTER_OTLP_INSECURE=true cannot downgrade it) and sets NO
-//     credentials, so a CA or client certificate from the environment is
-//     still honoured, as it was before this package pinned anything. The
-//     WithEndpoint after it replaces the dial target with the explicit
-//     dns:///host:port (WithEndpointURL alone would dial the bare host:port).
-//   - bare host:port and dns:///: no transport stated, so the SDK's
-//     environment decides (OTEL_EXPORTER_OTLP_[TRACES_]INSECURE, see
-//     TRACING-RUNBOOK.md).
-//
-// The metric exporter differs on purpose: it ignores the certificate
-// environment (see metricEndpointOption).
-func traceOptions(t otlpTarget) []otlptracegrpc.Option {
-	switch {
-	case strings.HasPrefix(t.URL, "http://"):
-		return []otlptracegrpc.Option{
-			otlptracegrpc.WithEndpoint(t.GRPCTarget()),
-			otlptracegrpc.WithInsecure(),
-			otlptracegrpc.WithTLSCredentials(grpcinsecure.NewCredentials()),
-		}
-	case strings.HasPrefix(t.URL, "https://"):
-		return []otlptracegrpc.Option{
-			otlptracegrpc.WithEndpointURL(t.URL),
-			otlptracegrpc.WithEndpoint(t.GRPCTarget()),
-		}
-	}
-	return []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(t.GRPCTarget())}
-}
-
 // initSummary builds the one start-up log line for the whole init (this
 // package is allowed one direct slog call, in emit: internal/logger's
 // ratchet). Each half that could not be started adds its own clause to the
-// message, so a start with both OFF says both. Endpoints are logged in their
-// canonical form only (otlpTarget.Display); error text from third parties is
-// passed through redactEndpointSecrets as a backstop.
-func initSummary(cfg *Config, metrics, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
-	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", metrics, "tracing", tracing, "endpoint", displayEndpoint(keyTraceEndpoint, cfg.ExporterEndpoint),
-		"otlp_metrics", otlp.Enabled}
-	if cfg.MetricsOTLPEndpoint != "" {
-		attrs = append(attrs, "otlp_metrics_endpoint", displayEndpoint(keyMetricsEndpoint, cfg.MetricsOTLPEndpoint))
-	}
+// message, so a start with both OFF says both. The reasons, and the
+// canonical endpoints, are core's own lines (Options.Logger, logged through
+// emit too); configured endpoint strings are never logged here.
+func initSummary(metricsOn, tracing, otlp, tracingOff, otlpOff bool) (slog.Level, string, []any) {
+	level, msg := slog.LevelInfo, "OpenTelemetry initialized"
+	attrs := []any{"metrics", metricsOn, "tracing", tracing, "otlp_metrics", otlp}
 	var off []string
-	if tracingErr != nil {
+	if tracingOff {
 		off = append(off, "tracing OFF: the trace exporter could not be started")
-		attrs = append(attrs, "tracing_error", redactEndpointSecrets(tracingErr.Error()))
+		attrs = append(attrs, "tracing_error", metrics.DegradedTracingDisabled)
 	}
-	if otlp.Err != nil {
+	if otlpOff {
 		off = append(off, "the OTLP metric push OFF: /metrics is unaffected")
-		attrs = append(attrs, "otlp_metrics_error", redactEndpointSecrets(otlp.Err.Error()))
+		attrs = append(attrs, "otlp_metrics_error", metrics.DegradedOTLPDisabled)
 	}
 	if len(off) > 0 {
 		level, msg = slog.LevelError, "OpenTelemetry initialized with "+strings.Join(off, "; ")
 	}
-	if otlp.IntervalNote != "" {
-		attrs = append(attrs, "otlp_metrics_interval_note", otlp.IntervalNote)
-	}
 	return level, msg, attrs
-}
-
-// displayEndpoint is the loggable form of a configured endpoint: the parsed
-// target's Display(), never the configured string. An endpoint that does not
-// parse is reported as "(invalid)" rather than echoed.
-func displayEndpoint(key, endpoint string) string {
-	if strings.TrimSpace(endpoint) == "" {
-		return ""
-	}
-	t, err := parseOTLPEndpoint(key, endpoint)
-	if err != nil {
-		return "(invalid)"
-	}
-	return t.Display()
-}
-
-// metricPlaintext is the one rule for whether the metric push uses plaintext
-// gRPC:
-//
-//   - an http:// URL is plaintext and an https:// URL is TLS (the URL decides;
-//     the insecure switch is not consulted);
-//   - a bare host:port or a dns:/// target is TLS unless insecure
-//     (otel_metrics_otlp_insecure) is true.
-func metricPlaintext(t otlpTarget, insecure bool) bool {
-	if t.URL != "" {
-		return !strings.EqualFold(t.URL[:strings.Index(t.URL, "://")], "https")
-	}
-	return insecure
-}
-
-// metricEndpointOption is traceEndpointOption for the metric exporter: the
-// endpoint plus an EXPLICIT transport, in every branch.
-//
-// otlpmetricgrpc reads the generic OTEL_EXPORTER_OTLP_* environment (the trace
-// exporter's own variables) before it applies options, so an unset transport
-// would inherit it: OTEL_EXPORTER_OTLP_ENDPOINT=http://... downgrades a TLS
-// metric endpoint to plaintext, and OTEL_EXPORTER_OTLP_CERTIFICATE or
-// *_CLIENT_CERTIFICATE install credentials that beat even WithInsecure (the
-// exporter prefers credentials over its insecure flag). Options win over the
-// environment, and credentials win over the insecure flag, so the transport is
-// pinned with credentials, not with WithInsecure alone:
-//
-//   - plaintext (see metricPlaintext): insecure credentials. No environment
-//     variable can turn this back into TLS.
-//   - otherwise: TLS with the system root CAs. OTEL_EXPORTER_OTLP_CERTIFICATE
-//     and the client-certificate variables are therefore NOT honoured for
-//     metrics; use SSL_CERT_FILE / SSL_CERT_DIR for a private CA.
-//
-// Headers, temporality and histogram aggregation are pinned in newOTLPReader,
-// which lists what is pinned and what still follows the environment.
-func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
-	opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(t.GRPCTarget())}
-	if metricPlaintext(t, insecure) {
-		return append(opts, otlpmetricgrpc.WithInsecure(),
-			otlpmetricgrpc.WithTLSCredentials(grpcinsecure.NewCredentials()))
-	}
-	return append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(nil)))
-}
-
-// initTracing builds the gRPC span exporter for the configured endpoint and
-// installs the tracer provider globally.
-func initTracing(ctx context.Context, cfg *Config) (*sdktrace.TracerProvider, error) {
-	opt, err := traceEndpointOption(cfg.ExporterEndpoint)
-	if err != nil {
-		return nil, err
-	}
-	exporter, err := otlptracegrpc.New(ctx, opt...)
-	if err != nil {
-		return nil, err
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(NewResource(cfg.ServiceName)),
-	)
-	otel.SetTracerProvider(tp)
-	return tp, nil
-}
-
-// The Prometheus exporter registers a collector with the default Prometheus
-// registry, and a second registration of the same collector is an error. The
-// process-wide meter provider is therefore built once and reused by any later
-// InitOTEL call (tests call it more than once; the server calls it once).
-// newMeterProvider itself has no such state, so tests build private providers.
-var (
-	meterOnce     sync.Once
-	meterProvider *metric.MeterProvider
-	meterOTLP     otlpStatus
-	meterErr      error
-
-	// meterShutdownOnce makes the returned shutdown idempotent for the same
-	// reason: two InitOTEL callers share one provider, so the second Shutdown
-	// must not report the reader as already shut down.
-	meterShutdownOnce sync.Once
-	meterShutdownErr  error
-)
-
-const (
-	defaultMetricsInterval = 60 * time.Second
-	minMetricsInterval     = 5 * time.Second
-	maxMetricsInterval     = time.Hour
-)
-
-// otlpStatus reports what newMeterProvider did about the optional OTLP reader.
-type otlpStatus struct {
-	// Enabled: an OTLP periodic reader was installed.
-	Enabled bool
-	// Err: a non-fatal configuration or dial problem; the OTLP copy is off.
-	Err error
-	// Readers: total readers on the provider (1 = Prometheus alone).
-	Readers int
-	// IntervalNote: set when the configured interval was unset, invalid or
-	// clamped.
-	IntervalNote string
 }
 
 // ParseMetricsInterval parses an OTEL_METRIC_EXPORT_INTERVAL value. The OTel
 // standard for that variable is a bare integer count of MILLISECONDS ("60000"),
 // and the SDK reads it too, so that form is accepted; a Go duration ("30s",
 // "2m") is accepted as well. Empty, unparsable or non-positive input gives 0,
-// which newMeterProvider treats as "use the 60s default".
+// which core treats as "use the 60s default".
 func ParseMetricsInterval(s string) time.Duration {
 	s = strings.TrimSpace(s)
 	if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
-		const ceiling = 24 * time.Hour // keeps the multiplication from overflowing; clamped later
+		const ceiling = 24 * time.Hour // keeps the multiplication from overflowing; core clamps later
 		if ms <= 0 {
 			return 0
 		}
@@ -349,118 +193,194 @@ func ParseMetricsInterval(s string) time.Duration {
 	return d
 }
 
-// clampInterval returns the effective push interval and a note when it
-// differs from what was asked for.
-func clampInterval(d time.Duration) (time.Duration, string) {
-	switch {
-	case d <= 0:
-		return defaultMetricsInterval, "interval unset or invalid, using " + defaultMetricsInterval.String()
-	case d < minMetricsInterval:
-		return minMetricsInterval, "interval " + d.String() + " below minimum, using " + minMetricsInterval.String()
-	case d > maxMetricsInterval:
-		return maxMetricsInterval, "interval " + d.String() + " above maximum, using " + maxMetricsInterval.String()
-	}
-	return d, ""
-}
-
-// newMeterProvider builds a meter provider. Reader 1 is always the Prometheus
-// exporter (promOpts lets tests give it a private registerer). Reader 2, an
-// OTLP/gRPC periodic reader with cumulative temporality, exists only when
-// cfg.MetricsOTLPEndpoint is set. That key is the only input: the trace
-// endpoint (cfg.ExporterEndpoint) is deliberately never consulted.
-//
-// The OTLP reader is never fatal. A bad endpoint or an exporter that cannot be
-// built is reported in otlpStatus.Err and the provider carries the Prometheus
-// reader alone, with a nil error. Only the Prometheus reader failing returns
-// an error. The gRPC dial is non-blocking, so an unreachable collector costs
-// nothing at start-up.
-func newMeterProvider(ctx context.Context, cfg *Config, promOpts ...prometheus.Option) (*metric.MeterProvider, otlpStatus, error) {
-	exporter, err := prometheus.New(append([]prometheus.Option{prometheus.WithoutScopeInfo()}, promOpts...)...)
-	if err != nil {
-		return nil, otlpStatus{}, err
-	}
-	opts := append([]metric.Option{
-		metric.WithReader(exporter),
-		metric.WithResource(NewResourceWithEnvironment(cfg.ServiceName, cfg.Environment)),
-	}, Views()...)
-	status := otlpStatus{Readers: 1}
-
-	if cfg.MetricsOTLPEndpoint != "" {
-		reader, note, err := newOTLPReader(ctx, cfg)
-		status.IntervalNote = note
-		if err != nil {
-			status.Err = err
-		} else {
-			opts = append(opts, metric.WithReader(reader))
-			status.Enabled = true
-			status.Readers = 2
-		}
-	}
-	return metric.NewMeterProvider(opts...), status, nil
-}
-
-func newOTLPReader(ctx context.Context, cfg *Config) (metric.Reader, string, error) {
-	target, err := parseOTLPEndpoint(keyMetricsEndpoint, cfg.MetricsOTLPEndpoint)
-	if err != nil {
-		return nil, "", err
-	}
-	interval, note := clampInterval(cfg.MetricsOTLPInterval)
-	// The generic OTEL_EXPORTER_OTLP_* environment is read by the exporter
-	// before these options, so what must not follow it is pinned here.
-	// PINNED (the environment cannot change it):
-	//   - transport and TLS material: see metricEndpointOption.
-	//   - headers: emptied, so the trace collector's credentials
-	//     (OTEL_EXPORTER_OTLP_HEADERS) are never sent to the metric host.
-	//     OTEL_EXPORTER_OTLP_METRICS_HEADERS is neutralised too: metric
-	//     headers are not supported yet.
-	//   - temporality: cumulative (owner decision D66), whatever
-	//     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE says.
-	//   - histogram aggregation: the SDK default, so
-	//     OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION cannot switch
-	//     views-less histograms to exponential.
-	// STILL FOLLOWS THE ENVIRONMENT (benign, left alone on purpose):
-	//   - OTEL_EXPORTER_OTLP_[METRICS_]COMPRESSION and _TIMEOUT: payload
-	//     encoding and the per-request deadline; neither moves data to another
-	//     place or changes what is sent.
-	//   - OTEL_METRIC_EXPORT_TIMEOUT (read by the SDK's periodic reader).
-	opts := append(metricEndpointOption(target, cfg.MetricsOTLPInsecure),
-		otlpmetricgrpc.WithHeaders(map[string]string{}),
-		otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector),
-		otlpmetricgrpc.WithAggregationSelector(metric.DefaultAggregationSelector))
-	exp, err := otlpmetricgrpc.New(ctx, opts...)
-	if err != nil {
-		return nil, note, err
-	}
-	return metric.NewPeriodicReader(exp, metric.WithInterval(interval)), note, nil
-}
-
 // emit is this package's single direct slog call (internal/logger ratchet):
-// InitOTEL's summary line and the export-error handler both go through it.
+// InitOTEL's summary line, core's Provider lines (emitHandler) and the
+// export-error handler all go through it.
 func emit(ctx context.Context, level slog.Level, msg string, attrs ...any) {
 	slog.Log(ctx, level, msg, attrs...)
 }
 
-// initMetrics builds (once) the process-wide meter provider, installs it
-// globally and returns its idempotent shutdown and the OTLP status.
+// emitHandler is the slog.Handler behind the Logger handed to core: every
+// record goes out through emit, so core's lines reach the process logger
+// without a second direct slog call here.
+type emitHandler struct{ attrs []slog.Attr }
+
+func (h emitHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h emitHandler) Handle(ctx context.Context, r slog.Record) error {
+	args := make([]any, 0, len(h.attrs)+r.NumAttrs())
+	for _, a := range h.attrs {
+		args = append(args, a)
+	}
+	r.Attrs(func(a slog.Attr) bool { args = append(args, a); return true })
+	emit(ctx, r.Level, r.Message, args...)
+	return nil
+}
+
+func (h emitHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	return emitHandler{attrs: append(slices.Clone(h.attrs), as...)}
+}
+
+func (h emitHandler) WithGroup(string) slog.Handler { return h }
+
+// metricsOptions is the core Options for cfg: ABO's identity (app ID, service
+// name, the audiobook_organizer namespace, its one module), the build version
+// and this process's instance ID. The halves are filled by the callers.
+func metricsOptions(cfg *Config) metrics.Options {
+	return metrics.Options{
+		AppID:           appID,
+		ServiceName:     cfg.ServiceName,
+		MetricNamespace: metricNamespace,
+		Modules:         []string{"books"},
+		ServiceVersion:  Version(),
+		InstanceID:      instanceID,
+		Environment:     cfg.Environment,
+		Logger:          slog.New(emitHandler{}),
+	}
+}
+
+// initTracing builds a core Provider that carries only the OTLP tracer for the
+// configured endpoint and, when the tracer came up, installs its
+// TracerProvider globally. The ratio sampler is not set: 1.0 is the SDK
+// default sampler HEAD has always used.
+func initTracing(ctx context.Context, cfg *Config) (*metrics.Provider, error) {
+	o := metricsOptions(cfg)
+	o.Tracing = &metrics.OTLPTracing{Endpoint: cfg.ExporterEndpoint}
+	p, err := metrics.New(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(p.Degraded(), metrics.DegradedTracingDisabled) {
+		otel.SetTracerProvider(p.TracerProvider())
+	}
+	return p, nil
+}
+
+// metricsProviderOptions is the Options of the metrics half: the Prometheus
+// exporter always, and the OTLP push only when its own endpoint is set. The
+// trace endpoint never feeds the metric push.
+func metricsProviderOptions(cfg *Config) metrics.Options {
+	o := metricsOptions(cfg)
+	o.Prometheus = true
+	if cfg.MetricsOTLPEndpoint != "" {
+		o.OTLP = &metrics.OTLPMetrics{
+			Endpoint: cfg.MetricsOTLPEndpoint,
+			Insecure: cfg.MetricsOTLPInsecure,
+			Interval: cfg.MetricsOTLPInterval,
+		}
+	}
+	return o
+}
+
+// The bridge registers with the default Prometheus registry, and a second
+// registration is an error. The process-wide metrics Provider is therefore
+// built once and reused by any later InitOTEL call (tests call it more than
+// once; the server calls it once).
+var (
+	meterOnce       sync.Once
+	metricsProvider *metrics.Provider
+	meterErr        error
+
+	// meterShutdownOnce makes the returned shutdown idempotent for the same
+	// reason: two InitOTEL callers share one Provider.
+	meterShutdownOnce sync.Once
+	meterShutdownErr  error
+)
+
+// initMetrics builds (once) the process-wide metrics Provider, bridges its
+// registry onto the default registry, installs its MeterProvider globally and
+// returns the Provider and its idempotent shutdown.
 //
-//   - WithoutScopeInfo: no otel_scope_name / otel_scope_version labels, so an
-//     OTel family exports the same label set as the client_golang family it
-//     replaces (spec 11 §3.3). target_info stays on.
+//   - core builds the Prometheus exporter without scope labels (no
+//     otel_scope_name / otel_scope_version, so an OTel family exports the
+//     same label set as the client_golang family it replaces; target_info
+//     stays on) and with the translation strategy pinned.
 //   - The resource carries service.name/version/instance.id and
 //     deployment.environment onto target_info.
-//   - Views() declares every histogram's buckets (views.go).
+//   - views.go's bucket table reaches each ABO histogram as creation advice
+//     at its call site (metric.WithExplicitBucketBoundaries from
+//     HistogramBuckets): a core Provider takes no app views (05-metrics §3).
 //
-// The first caller's cfg wins: the provider is built once per process.
-func initMetrics(ctx context.Context, cfg *Config) (func(context.Context) error, otlpStatus, error) {
+// The first caller's cfg wins: the Provider is built once per process.
+func initMetrics(ctx context.Context, cfg *Config) (*metrics.Provider, func(context.Context) error, error) {
 	meterOnce.Do(func() {
-		meterProvider, meterOTLP, meterErr = newMeterProvider(ctx, cfg)
+		p, err := metrics.New(ctx, metricsProviderOptions(cfg))
+		if err != nil {
+			meterErr = err
+			return
+		}
+		if err := prometheus.DefaultRegisterer.Register(&registryBridge{g: p.Gatherer()}); err != nil {
+			_ = p.Shutdown(ctx)
+			meterErr = fmt.Errorf("bridge the metrics registry onto the default registry: %w", err)
+			return
+		}
+		metricsProvider = p
 	})
 	if meterErr != nil {
-		return nil, otlpStatus{}, meterErr
+		return nil, nil, meterErr
 	}
-	otel.SetMeterProvider(meterProvider)
-	return func(ctx context.Context) error {
-		meterShutdownOnce.Do(func() { meterShutdownErr = meterProvider.Shutdown(ctx) })
+	otel.SetMeterProvider(metricsProvider.MeterProvider())
+	p := metricsProvider
+	return p, func(ctx context.Context) error {
+		meterShutdownOnce.Do(func() { meterShutdownErr = p.Shutdown(ctx) })
 		return meterShutdownErr
-	}, meterOTLP, nil
+	}, nil
+}
+
+// bridgeSkipPrefixes are the families the default registry already serves
+// itself (its own Go and process collectors, promhttp.Handler's
+// promhttp_metric_handler_*): bridging the Provider's copies would put two
+// samples of one series on /metrics.
+var bridgeSkipPrefixes = []string{"go_", "process_", "promhttp_"}
+
+// registryBridge re-exposes a core Provider's private registry on the default
+// registry, which /metrics (promhttp.Handler()), the cache stats handler and
+// the cache snapshotter read until R1-15 makes the App's registry the served
+// one. It is an unchecked collector (Describe sends nothing), because OTel
+// families appear as instruments are created, after registration. Each
+// sample is copied unchanged, so names, labels, buckets and help text are
+// byte-identical to what the exporter produced.
+type registryBridge struct{ g prometheus.Gatherer }
+
+func (b *registryBridge) Describe(chan<- *prometheus.Desc) {}
+
+func (b *registryBridge) Collect(ch chan<- prometheus.Metric) {
+	mfs, err := b.g.Gather()
+	if err != nil {
+		// What gathered is still served, as promhttp.ContinueOnError would;
+		// the error goes to the OTel error handler, where the exporter's own
+		// collection errors went when it sat on the default registry.
+		otel.Handle(fmt.Errorf("gather the core metrics registry: %w", err))
+	}
+	for _, mf := range mfs {
+		if slices.ContainsFunc(bridgeSkipPrefixes, func(p string) bool { return strings.HasPrefix(mf.GetName(), p) }) {
+			continue
+		}
+		desc := bridgeDesc(mf.GetName(), mf.GetHelp())
+		for _, m := range mf.GetMetric() {
+			ch <- bridgedMetric{desc: desc, m: m}
+		}
+	}
+}
+
+// bridgeDesc is the bridge's one prometheus.NewDesc. It declares no family:
+// its name is always a family the Provider already serves, read back from a
+// gather, so the static family guards (TestDeclaredFamiliesInGolden and the
+// client_golang ratchet in internal/telemetrypolicy) skip its body and refuse
+// a call with a literal name. It goes with the bridge in R1-15.
+func bridgeDesc(name, help string) *prometheus.Desc {
+	return prometheus.NewDesc(name, help, nil, nil)
+}
+
+// bridgedMetric is one gathered sample, written back verbatim.
+type bridgedMetric struct {
+	desc *prometheus.Desc
+	m    *dto.Metric
+}
+
+func (m bridgedMetric) Desc() *prometheus.Desc { return m.desc }
+
+func (m bridgedMetric) Write(out *dto.Metric) error {
+	proto.Merge(out, m.m)
+	return nil
 }

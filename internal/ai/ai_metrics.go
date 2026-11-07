@@ -1,7 +1,7 @@
 // file: internal/ai/ai_metrics.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 877e9607-e859-4bdc-99e7-21514913381b
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package ai
 
@@ -390,6 +390,7 @@ func newAIInstruments(m metric.Meter) *aiInstruments {
 	errs = append(errs, err)
 	ins.duration, err = m.Float64Histogram("ai.request.duration",
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()["ai.request.duration"]...),
 		metric.WithDescription("Wall time of one HTTP attempt, by provider, model and task, excluding the SDK's retry backoff."))
 	errs = append(errs, err)
 	ins.tokens, err = m.Int64Counter("ai.tokens",

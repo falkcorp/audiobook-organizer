@@ -46,7 +46,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
@@ -1066,16 +1065,16 @@ func viewKeyFor(family string, views map[string][]float64) (string, bool) {
 }
 
 // TestEveryHistogramHasAView: every histogram family in the golden has an
-// entry in the views table, and for the OTel ones the view is what the SDK
-// actually applies to an instrument of that name (a ManualReader provider
-// built with telemetry.Views(), not the global one).
+// entry in the views table, and every OTel one is on the seeded scrape with
+// exactly that entry's bounds. Since R1-10 the table reaches the OTel
+// histograms as creation advice at each call site
+// (metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()[...])), not
+// as provider views, so the served scrape is the only place the applied
+// bounds can be read; otelgin's three http_server_* histograms carry the same
+// bounds as their own advice.
 func TestEveryHistogramHasAView(t *testing.T) {
 	views := telemetry.HistogramBuckets()
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
-	m := provider.Meter("contract")
-
-	want := map[string][]float64{}
+	fams := scrape(t)
 	for _, r := range mustGolden(t) {
 		if r.typ != "histogram" {
 			continue
@@ -1088,29 +1087,17 @@ func TestEveryHistogramHasAView(t *testing.T) {
 		if r.source == sourceClientGolang {
 			continue
 		}
-		h, err := m.Float64Histogram(key)
-		if err != nil {
-			t.Fatalf("create %s: %v", key, err)
+		f, ok := fams[r.name]
+		if !ok {
+			t.Errorf("OTel histogram %s is not on the seeded scrape: its applied bounds cannot be checked", r.name)
+			continue
 		}
-		h.Record(context.Background(), 1)
-		want[key] = views[key]
-	}
-
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	got := map[string][]float64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, md := range sm.Metrics {
-			if h, ok := md.Data.(metricdata.Histogram[float64]); ok && len(h.DataPoints) > 0 {
-				got[md.Name] = h.DataPoints[0].Bounds
-			}
+		var want []string
+		for _, b := range views[key] {
+			want = append(want, strconv.FormatFloat(b, 'g', -1, 64))
 		}
-	}
-	for key, w := range want {
-		if !slices.Equal(got[key], w) {
-			t.Errorf("histogram %s: SDK applied bounds %v, views table says %v", key, got[key], w)
+		if got := leText(f); !slices.Equal(got, want) {
+			t.Errorf("histogram %s: served le [%s], views table %q says [%s]", r.name, strings.Join(got, ","), key, strings.Join(want, ","))
 		}
 	}
 }
