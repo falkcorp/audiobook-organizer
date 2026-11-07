@@ -713,7 +713,10 @@
    "core/examples/hello/",
    "core/openapi/core.json",
    "core/app/noglobals_test.go",
-   "core/internal/archtest_layers_test.go"
+   "core/internal/archtest_layers_test.go",
+   "core/rbac/namespaces.go",
+   "core/rbac/namespaces_test.go",
+   "core/log/otheruser.go"
   ],
   "spec": "06 §6.4.10 R1 row, §6.5.1, §6.5.2, §6.11.1, §6.12 (hello); 03 §3.3 (app, module, kernel); 05-http-api §3, §4.8; 04 §8.1 R1",
   "notes": "Tier: the boot-phase machinery every later writer hangs off; lifecycle and stop order are normative. Core only: no ABO file changes. The kernel supervisor takes a readiness notifier interface; R1-16 plugs sdnotify in. hello's greeting route is rbac.Public in Manifest.PublicRoutes until core auth exists. Creates the shared wiring files every later row names: core/kernel/boot.go (the boot phases and the services build order), core/kernel/kernel.go (per-module Registrar and Deps construction, collision checks, core route mounts), core/module/manifest.go, registrar.go and deps.go, and core/app/options.go. From R2 on a dark row adds only its own files; its stage's wiring row (F2-16) or flip adds the boot calls, members and mounts, so each file has one owner per wave. TestSpecGoBlocksCompile compiles a snapshot of the spec's Go blocks under core/ testdata, not the spec files themselves, so a spec-only edit cannot break core-ci. 04 keys: R1 create mediacore/module; R1 create mediacore/kernel; R1 create mediacore/app; R1 create mediacore/httpapi; R1 create mediacore/internal/openapi; R1 create mediacore/examples/hello; R1 create core/openapi/core.json. Owns gate tests: TestNoGlobals; TestKernelFamiliesGathered."
