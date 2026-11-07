@@ -1,7 +1,7 @@
 # file: .golangci.yml
-# version: 1.5.2
+# version: 1.6.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
-# last-edited: 2026-10-11
+# last-edited: 2026-11-07
 
 # Wave 0 of the silent-failure sweep.
 # See docs/audits/2026-08-11-silent-failure-error-discards.md
@@ -142,6 +142,14 @@ linters:
         # ---------------------------------------------------------------
         - os.Remove
         - os.RemoveAll
+        # ---------------------------------------------------------------
+        # Not a discard at all: a type test. In `_, ok := errors.AsType[T](err)`
+        # the blank is the matched value and ok carries the answer. `go fix`
+        # rewrites errors.As to exactly this form, so without the exemption the
+        # modernizer and errcheck contradict each other (hit in core's
+        # fix-check on 2026-11-07; core's ratchet config exempts it too).
+        # ---------------------------------------------------------------
+        - errors.AsType
 
   exclusions:
     generated: lax
