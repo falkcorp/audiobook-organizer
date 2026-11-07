@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-07
 
@@ -92,6 +92,17 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		}
 		for _, dir := range slices.Sorted(maps.Keys(waiting)) {
 			t.Logf("core/%s waits: %s", dir, waiting[dir])
+		}
+		// The waiting set is pinned, so the skip below cannot hide a block
+		// that waits for a new reason (a typo in an import, a package the
+		// spec renamed). A row that lands config, storage or tasks shrinks
+		// it here, in the same PR.
+		wantWaiting := map[string]string{
+			"examples/hello":           "no Go file yet in core/config, core/storage, core/tasks",
+			"examples/hello/cmd/hello": "imports core/examples/hello, which waits too",
+		}
+		if !maps.Equal(waiting, wantWaiting) {
+			t.Fatalf("06's hello blocks wait for %v, want %v", waiting, wantWaiting)
 		}
 		if len(build) == 0 {
 			t.Skipf("no package of 06's hello blocks compiles at this release: each waits for a core package (logged above)")

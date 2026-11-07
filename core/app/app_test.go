@@ -1,5 +1,5 @@
 // file: core/app/app_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2ddf8646-623f-4ba4-ac43-11b166c05e15
 // last-edited: 2026-11-07
 
@@ -28,6 +28,10 @@ func helloOptions() app.Options {
 // no state directory or log file was created) and writes nothing to stdout or
 // stderr, and two calls return the same documents. The vfs.NewMem storage
 // and the derived-index half arrive with storage.
+//
+// It swaps the process's os.Stdout and os.Stderr for pipes, so it must never
+// call t.Parallel: a parallel test's output would land in the pipes and fail
+// it, or be lost.
 func TestDescribeInMemoryNoIO(t *testing.T) {
 	t.Chdir(t.TempDir())
 	stdout, stderr := os.Stdout, os.Stderr
