@@ -1,16 +1,17 @@
 // file: internal/server/flight_recorder.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c64f779e-5ec5-46b3-8883-8d6f1b56bec9
 // last-edited: 2026-11-07
 
 package server
 
 import (
-	"log/slog"
+	"context"
 	"path/filepath"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	diagflight "github.com/falkcorp/mediacore/health"
 )
 
@@ -29,7 +30,7 @@ func newFlightRecorder() *diagflight.Recorder {
 	if config.AppConfig.DatabasePath != "" {
 		dir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "traces")
 	}
-	return diagflight.New(diagflight.Config{Dir: dir, Logger: slog.Default().With("subsystem", "flight-recorder")})
+	return diagflight.New(diagflight.Config{Dir: dir, Logger: logger.FromContext(context.Background()).With("subsystem", "flight-recorder")})
 }
 
 // startFlightRecorder starts recording. Failure is logged and ignored: tracing
