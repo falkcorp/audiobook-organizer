@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package database
 
@@ -49,7 +49,7 @@ func (p *PebbleStore) GetAllAuthors() ([]Author, error) {
 		authors = append(authors, author)
 	}
 
-	sortByLowerName(authors, func(a Author) string { return a.Name })
+	sortByLowerName(authors, func(a Author) string { return a.Name }, func(a Author) int { return a.ID })
 	return authors, nil
 }
 

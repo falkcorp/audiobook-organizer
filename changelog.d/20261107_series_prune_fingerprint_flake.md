@@ -1,3 +1,3 @@
 ### Fixed
 
-- The series-prune repair no longer sees a plan and its re-plan disagree for series whose names differ only in case. Duplicate-group members are now ordered by ID, so the fingerprint no longer depends on which read path (memdb or Pebble) answered, and a preview is no longer refused as "changed since preview" for nothing.
+- Listings of series, authors and import paths now come back in the same order whether the in-memory index or the on-disk store answers. Names that differ only in case used to swap places between the two, which made the series-prune repair refuse a preview as "changed since preview" for no reason. Ties are now broken by ID, and duplicate-group members are ordered by ID as well.

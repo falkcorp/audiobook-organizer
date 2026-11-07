@@ -1,11 +1,13 @@
 // file: internal/database/listing_ordering.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2e9c14-7a63-4f08-9d5b-8e1c6a30f472
-// last-edited: 2026-10-06
+// last-edited: 2026-11-07
 
 package database
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -22,15 +24,26 @@ import (
 // two from drifting apart again. Asserting membership (require.ElementsMatch)
 // cannot catch this class; the conformance tests assert the SEQUENCE.
 
-// sortByLowerName orders any listing by a case-insensitive name projection.
-// Used for authors, series and import paths, all three of which MemStore
-// returns sorted by name.
-func sortByLowerName[T any](items []T, name func(T) string) {
+// sortByLowerName orders any listing by a case-insensitive name projection,
+// ties broken by ID. Used for authors, series and import paths, all three of
+// which MemStore returns sorted by name.
+//
+// The ID tie-break is what makes the order total. Without it, two rows whose
+// names differ only in case ("Torchwood" / "torchwood") compared equal, and
+// sort.Slice is not stable, so memdb (fed in ID order) and Pebble (fed in
+// "series:N" key order) returned the pair in different orders — the very drift
+// this file exists to prevent. The series-prune fixer fingerprints duplicate
+// groups in listing order, so a warmup finishing between its plan and re-plan
+// changed the fingerprint and refused the apply as "changed since preview".
+func sortByLowerName[T any](items []T, name func(T) string, id func(T) int) {
 	if len(items) < 2 {
 		return
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return strings.ToLower(name(items[i])) < strings.ToLower(name(items[j]))
+	slices.SortFunc(items, func(a, b T) int {
+		if c := strings.Compare(strings.ToLower(name(a)), strings.ToLower(name(b))); c != 0 {
+			return c
+		}
+		return cmp.Compare(id(a), id(b))
 	})
 }
 
