@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.6.0
+# version: 1.7.0
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -40,15 +40,14 @@
 #   core-layering                      core only
 # Not rows here (no baseline, no command this manifest can run; each is a whole CI
 # job or workflow, classified once):
-#   per module   codeql.yml (go build in every module), Woodpecker checks-build and
-#                checks-lint (core's pprof-check, errcheck ratchet and mocks-check),
+#   per module   codeql.yml (go build in every module), core-ci.yml (core's pprof-check,
+#                errcheck ratchet and mocks-check, via `make -C core ci`),
 #                nightly.yml (core-nightly job: core's non-short tests), ratchet-lower.yml
 #                (both modules' baselines)
 #   root         memory-leak-scan.yml (web/src; core/web does not exist yet), fixture-tests,
-#                Woodpecker test-database, test-fixtures-{1,2,3}, test-server-scanner,
-#                test-native-taglib (no core package carries the tag)
-#   root + core  go-test-short-shards and Woodpecker test-rest: the root's packages in
-#                the numbered shards plus one core shard (scripts/ci/short_test_shards.py)
+#                Woodpecker test-native-taglib (no core package carries the tag)
+#   root + core  go-test-short-shards: the root's packages in the numbered shards plus
+#                one core shard (scripts/ci/short_test_shards.py)
 # Blank lines and lines starting with # are ignored.
 errcheck	bash scripts/check-errcheck-ratchet.sh	.errcheck-baseline	ratchet	bash scripts/check-errcheck-ratchet.sh --measure	own-job
 interface-width	bash scripts/check-interface-width.sh	.interface-width-baseline	ratchet	bash scripts/check-interface-width.sh --measure	own-job

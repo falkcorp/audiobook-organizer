@@ -1,23 +1,21 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.8.2
+# version: 3.0.0
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 #
-# The linter gates of `make ci`: staticcheck, the errcheck ratchet, the
-# deadcode ratchet and mocks-check, each as its own step so one failure does
-# not hide the others. deadcode-ratchet depends_on both staticcheck and
-# errcheck-ratchet so its whole-program pass (peak ~5.2 GB) never overlaps
-# those two memory-heavy linters on the shared U0 host.
-# Each step runs the same make target `make ci` runs. The other gates (vet,
-# fmt-check, sdkguard, bench-check, web tests) are in checks-build.yaml on U1;
-# the two were one `checks` workflow on U0 until 2026-09-29 and are split so
-# they run on both hosts at once.
+# staticcheck, the one gate of `make ci` that GitHub Actions does not run on
+# pull requests (it is in nightly.yml only), so it is the only linter here.
+# Everything else this file used to run has a GitHub twin that gates the PR:
+# the errcheck and deadcode ratchets and mocks-check are ci.yml jobs, and core's
+# errcheck ratchet and mocks-check run inside core-ci.yml's `make -C core ci`.
+# The other Woodpecker workflows (the sharded test suites, the fixture shards
+# and checks-build) were removed on 2026-11-07 for the same reason (owner
+# decision: the repo is public, GitHub minutes are free, and the duplicates
+# only loaded our servers). See docs/ci/woodpecker.md.
 #
 # These stay on the prod host's docker agent (2 workflows at a time,
-# 8 CPU / 16 GiB per step container) because they share the installed
-# linters. Tool versions: tools/staticcheck/go.mod, tools/mockery/go.mod,
-# tools/deadcode/go.mod and the
-# golangci-lint pin below (same as ci.yml).
+# 8 CPU / 16 GiB per step container) because it shares the installed
+# linter. Tool version: tools/staticcheck/go.mod.
 #
 # Caches: /ci-cache is a host directory the U0 agent mounts into every step
 # container (WOODPECKER_BACKEND_DOCKER_VOLUMES; see docs/ci/woodpecker.md), an
@@ -70,9 +68,6 @@ steps:
       # the installed binary is already current, so only a version bump
       # rewrites a file in GOBIN.
       - go -C tools/staticcheck install tool   # staticcheck v0.8.1 on x/tools v0.51.0; see tools/staticcheck/go.mod
-      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0   # matches ci.yml; v2.13.1 cannot read go1.27.2 export data
-      - go -C tools/mockery install tool   # mockery v3.8.0 on x/tools v0.51.0; see tools/mockery/go.mod
-      - go -C tools/deadcode install tool   # deadcode from x/tools v0.51.0; see tools/deadcode/go.mod
 
   - name: staticcheck
     image: *go_image
@@ -82,44 +77,13 @@ steps:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory staticcheck
 
-  - name: errcheck-ratchet
-    image: *go_image
-    environment: *go_env
-    depends_on: [tools]
-    commands:
-      - export PATH="$$GOBIN:$$PATH"
-      - make --no-print-directory lint-errcheck-ratchet
-      - make --no-print-directory -C core errcheck-ratchet
-
-  - name: deadcode-ratchet
-    # Chained after BOTH memory-heavy linters: it peaks ~5.2 GB, and on U0 the
-    # step containers of one workflow otherwise run side by side.
-    image: *go_image
-    environment: *go_env
-    depends_on: [staticcheck, errcheck-ratchet]
-    commands:
-      - export PATH="$$GOBIN:$$PATH"
-      - export DEADCODE_BIN="$$GOBIN/deadcode"
-      - make --no-print-directory lint-deadcode-ratchet
-
-  - name: mocks-check
-    # After the linters, not beside them: mockery rewrites the committed mock
-    # files, and a linter parsing one mid-write reports a spurious error.
-    image: *go_image
-    environment: *go_env
-    depends_on: [staticcheck, errcheck-ratchet, deadcode-ratchet]
-    commands:
-      - export PATH="$$GOBIN:$$PATH"
-      - make --no-print-directory mocks-check
-      - make --no-print-directory -C core mocks-check
-
   - name: cache-trim
     # Keeps the shared build cache under its budget, least recently used
     # first. The dataset behind /ci-cache also has a hard ZFS quota; this step
     # keeps the cache well below it so builds never fail on a full cache.
     image: *go_image
     environment: *go_env
-    depends_on: [staticcheck, errcheck-ratchet, deadcode-ratchet, mocks-check]
+    depends_on: [staticcheck]
     when:
       - status: [success, failure]
     commands:

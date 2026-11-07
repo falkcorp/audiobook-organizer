@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.18.1 -->
+<!-- version: 2.0.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-11-06 -->
+<!-- last-edited: 2026-11-07 -->
 
 # Woodpecker CI: install runbook
 
@@ -22,84 +22,52 @@ Placeholders used throughout (never commit the real values; this repo is public)
 
 ## Pipeline layout
 
-**Triggers.** Every workflow runs on `pull_request` and on `manual` runs
-(owner 2026-10-15). Between 2026-10-02 and 2026-10-15 they were manual-only,
-because parallel pipelines loaded U1 and U0 together; the owner reversed that
-so a PR gets CI without a LAN session queueing it. There is no global
-one-at-a-time cap: each agent runs as many workflows as its own capacity
-setting allows. The repo's `allow_pr` setting on the Woodpecker server must
+**Woodpecker runs only what GitHub Actions cannot (owner decision 2026-11-07).**
+Until then it duplicated almost every job GitHub already runs on each pull
+request: the short race suite split three ways, the fixture shards, vet, the
+repo guards and the ratchets. The repo is public, so GitHub minutes are free,
+while every duplicate loaded our own servers and made noise on them. Two
+workflows are left on pull requests:
+
+| workflow | agent label | runs | why it is not on GitHub |
+|---|---|---|---|
+| `checks-lint` | `host=u0` | `staticcheck` (one step, plus a cache-trim step) | staticcheck is not part of any GitHub PR workflow (`nightly.yml` runs it, no PR job does) |
+| `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | needs a TagLib built on the host and a host with ffmpeg, ffprobe and fpcalc |
+
+**The PR gate is GitHub's.** The merge-blocking test checks are ci.yml's
+`go-test-short-shards` (Go Tests (short, race), shards 1/4 to 4/4 and core/4)
+and `Fixture Tests (no -short, race)` 1/3 to 3/3. Woodpecker's removed
+workflows and their GitHub twins:
+
+| removed workflow | GitHub twin |
+|---|---|
+| `test-rest`, `test-database`, `test-server-scanner` (the `make ci` short race suite split three ways) | ci.yml `go-test-short-shards`, which covers every package from `go list ./...` |
+| `test-fixtures-1`, `-2`, `-3` (`make test-fixtures FIXTURE_SHARD=N/3`) | ci.yml `Fixture Tests (no -short, race)` 1/3 to 3/3, the same make target and the same `scripts/ci/fixture_weights.json` |
+| `checks-build`: vet, vet-integration | ci.yml `Go Vet & Build` and `vet-integration` |
+| `checks-build`: fmt-check, sdkguard, ops-check, types-check, bench-check | ci.yml `Repo Guards` |
+| `checks-build`: pprof-check | ci.yml `Repo Guards` (the step was added on 2026-11-07, because nothing on GitHub ran it); core's `pprof-check` runs in `core-ci.yml`'s `make -C core ci` |
+| `checks-build`: web tests | `frontend-ci.yml` |
+| `checks-lint`: errcheck ratchet, deadcode ratchet, mocks-check | ci.yml `errcheck-ratchet`, deadcode ratchet and `mocks-check`; core's errcheck ratchet and mocks-check run in `core-ci.yml` |
+
+`make ci-woodpecker` therefore no longer runs the whole of `make ci`. It
+starts the two workflows above and waits for them; use `make ci` locally, or
+rely on the GitHub checks, for the rest.
+
+**Triggers.** Both workflows run on `pull_request` and on `manual` runs
+(owner 2026-10-15). The repo's `allow_pr` setting on the Woodpecker server must
 be on for `pull_request` events to start anything. A push to a branch with no
 PR starts nothing; use `make ci-woodpecker` for that. `test-native-taglib`
-runs on any `taglib=true` agent, U1 or u0-local (2026-10-17), so it no longer
-waits in the queue while U1 is busy or restarting between its day and night slot counts. `make ci-woodpecker` follows the
-pull_request pipeline the push starts instead of queueing a second, manual
-one for the same commit.
+runs on any `taglib=true` agent, U1 or u0-local (2026-10-17), so it does not
+wait in the queue while U1 is busy or restarting between its day and night slot
+counts. `make ci-woodpecker` follows the pull_request pipeline the push starts
+instead of queueing a second, manual one for the same commit.
 
-| workflow | agent label | runs | measured time |
-|---|---|---|---|
-| `test-database` | `heavy=true` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
-| `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
-| `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `test-fixtures-1`, `-2`, `-3` | `heavy=true` | three parallel workflows, one `make test-fixtures FIXTURE_SHARD=N/3 FIXTURE_TIMEOUT=25m` each (owner decision D59, 2026-10-27; contexts `ci/woodpecker/pr/test-fixtures-1` etc.): every package whose tests skip under `-short`, run without `-short`; no coverage line. Split because one run of every package was contended on llm1/mac (temp-file I/O and CPU), and the three sequential shards of 2026-10-18 summed to about 3400-3500 s on llm1, over their shared 55 min budget, so the last shard (`internal/server`) timed out. Each workflow has its own 60 min pipeline timeout and the full 25m `-timeout` per `go test` process: a package too heavy for one process (`internal/server`, `internal/plugins/maintenance`, `internal/audiobooks`, `internal/scanner`) is split by test name into several `go test -run` processes that land in different shards, run at most `FIXTURE_JOBS` (default: CPU count) test binaries at once. Shard weights are measured, not guessed: each run prints `::timing::<unit>=<seconds>` lines, and `scripts/ci/fixture_shard_weights.py --sample <the three shard logs> ...` rewrites `scripts/ci/fixture_weights.json` from a few green pipelines (see `docs/decisions/2026-10-30-fixture-shard-weights.md`) | not yet measured as parallel workflows. Single run: 22-34 min on llm1/mac, about 11 min on U1; sequential shards about 3400-3500 s on llm1 |
-| `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
-| `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
-| `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
-| `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
-
-Placement follows three rules. First, packages whose tests decode audio
-(server, scanner and the decode set in `test-rest`) never run on the prod
-host, which must not decode; its Docker image has no ffmpeg. Second, the test
-workflows start together, so the wall time is roughly the slowest of them.
-Third, the seven heavy workflows (`test-database`, `test-server-scanner`,
-`test-rest`, `test-fixtures-1`, `-2`, `-3`, `checks-build`) are labelled `heavy=true`, not
-`host=u1`, so either local-backend agent can take them: U1 and llm1 both carry
-that label (owner decision 2026-10-11, so CI keeps working when U1 is paused or
-busy). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
-cores were the slowest (538 s for `test-server-scanner` with 4 shards each), so
-expect llm1 runs to be slower and to compete with Whisper transcription.
-
-U1 and llm1 score the same for a `heavy=true` workflow (an exact `heavy` match
-plus the `repo` and `org-id` wildcards), so the server gives each heavy
-workflow to whichever of them has a free slot, effectively at random. llm1 can
-therefore take a heavy workflow while U1 is online and idle. To force a host,
-pause the other agent.
-
-*Option, not done:* to prefer U1, relabel llm1's agent `host=llm1,heavy=*`
-(`WOODPECKER_AGENT_LABELS`; this needs the llm1 LaunchDaemon plist edited with
-sudo and the agent restarted). The `*` scores lower than U1's exact `heavy`
-match, so llm1 would take only overflow when U1 has no free slot, or
-everything while U1 is paused. No workflow changes, and llm1 still cannot get
-`checks-lint` (`host: u0`).
-
-`checks-lint` stays on `host=u0`; `u0` has no `heavy` label, so heavy work can
-never be routed to the prod host. An ssh-based prototype
-(`scripts/ci_remote.py`) measured an earlier layout at **753 s** for a full run on 2026-09-26; a local
-`make ci` of the same commit on the loaded Mac took **2099 s**.
-
-### Sharding
-
-`go test` runs packages in parallel but a package's tests in one process, one
-after another unless a test calls `t.Parallel()`, so a workflow takes as long
-as its slowest package. `scripts/ci/go_test_shards.py` lists a package's
-top-level tests, deals them into N shards balanced by the recorded durations
-in `scripts/ci/go_test_timings.json`, runs each shard as its own
-`go test -run '^(...)$'` process, and merges the shards' coverage profiles
-block by block so the CI-COVERAGE sum is unchanged. Separate processes keep
-the tests' shared globals as isolated as before.
-
-Measured on U1 (`-short -race -covermode=atomic`), one process vs. sharded:
-
-| package | one process | sharded |
-|---|---|---|
-| `internal/database` | 265 s | 46 s (8 shards) |
-| `internal/server/handlers/abs` | 253 s | 54 s (6 shards) |
-
-Refresh the timings file when the shard estimates printed at the start of a
-run drift far from the measured shard times: run the package with
-`go test -json` and keep each top-level test's `Elapsed`.
+`checks-lint` stays on `host=u0`; `u0` has no `heavy` label. No workflow
+carries `heavy=true` any more, so the `heavy=true` labels on U1, llm1 and the
+Mac are idle until a heavy workflow is added again.
 
 Every workflow clones with `lfs: false`, because GitHub's LFS budget is
-exhausted and no test reads LFS content. Every image is pinned by digest.
+exhausted and no check reads LFS content. Every image is pinned by digest.
 
 ## 1. Server on U0
 
@@ -334,9 +302,8 @@ golangci-lint caches (under `XDG_CACHE_HOME`) there.
 
 ### llm1: local backend (takes `heavy=true` workflows)
 
-No workflow targets `host=llm1` by name, but it carries `heavy=true`, so it
-runs the seven heavy workflows whenever it has a free slot, whether or not U1 is
-busy or paused; see Pipeline layout (which also covers preferring U1). Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
+No workflow targets `host=llm1` by name, and since 2026-11-07 none carries
+`heavy=true` (see Pipeline layout), so it has no pipeline work to take. Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
 python3, golangci-lint, make) must be on the agent's PATH. Its cache root is
 `/Users/jdfalk/ci/cache/{gomod,go-build,npm}`. This agent runs steps directly
 on macOS (`WOODPECKER_BACKEND=local`). The decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
@@ -364,9 +331,8 @@ pipelines would run as root.
 
 ### U1: local backend on Linux
 
-U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
-`test-server-scanner`, `test-fixtures-1`/`-2`/`-3`, `checks-build` and, shared with
-u0-local, `test-native-taglib`) with the local
+U1 runs `test-native-taglib` (shared with u0-local; the `heavy=true` workflows
+it used to run were removed on 2026-11-07) with the local
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies
 the C compiler `-race` needs, and `golang-go` is only a bootstrap:
@@ -396,11 +362,12 @@ u0-local) carry, because the `#cgo LDFLAGS` in
   HOME cache, the disk-filling mode.
 - **Node (web tests):** the official `node-v26.10.0-linux-x64` tarball, checked
   against the release's `SHASUMS256.txt`, unpacked in `/tank/ci/tools` with a
-  `/tank/ci/tools/node` symlink that `checks-build` puts on PATH when the
-  directory exists (llm1 uses the node on its PATH). To upgrade,
+  `/tank/ci/tools/node` symlink that `checks-build` put on PATH when the
+  directory exists (llm1 uses the node on its PATH). No current workflow
+  needs node; kept for a future heavy workflow. To upgrade,
   unpack the new version beside it and repoint the symlink.
-- **gofmt:** `/usr/bin/gofmt` is Ubuntu's older Go; `checks-build` puts the
-  pinned toolchain's `$(go env GOROOT)/bin` first so `fmt-check` matches.
+- **gofmt:** `/usr/bin/gofmt` is Ubuntu's older Go; the removed `checks-build`
+  put the pinned toolchain's `$(go env GOROOT)/bin` first so `fmt-check` matched.
 - **Step workspaces:** `/tank/ci/woodpecker/work`.
 - **Service:** `/etc/systemd/system/woodpecker-agent.service`, with the agent
   secret in the root-only `/etc/woodpecker-agent.env` (mode 600). Logs:
