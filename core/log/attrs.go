@@ -1,5 +1,5 @@
 // file: core/log/attrs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d09f3270-bc43-4dc3-a6d8-45a9bbf9a57e
 // last-edited: 2026-11-07
 
@@ -32,10 +32,7 @@ func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	if len(attrs) == 0 {
 		return ctx
 	}
-	prev := ctxAttrs(ctx)
-	merged := make([]slog.Attr, 0, len(prev)+len(attrs))
-	merged = append(merged, prev...)
-	merged = append(merged, attrs...)
+	merged := append(slices.Clone(ctxAttrs(ctx)), attrs...)
 	return context.WithValue(ctx, ctxAttrsKey{}, merged)
 }
 

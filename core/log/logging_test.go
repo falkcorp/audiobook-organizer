@@ -1,5 +1,5 @@
 // file: core/log/logging_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1061a80-9d8b-4729-b19f-80870f03b30f
 // last-edited: 2026-11-07
 
@@ -840,4 +840,94 @@ func stripTime(s string) string {
 		}
 	}
 	return s
+}
+
+// Every tap gets its own Attrs slice: a tap that reorders its record's attrs
+// in place (on its own goroutine) neither races with nor shows through to
+// another tap (independent review of #4445, MAJOR 1; run with -race).
+func TestTap_EachTapOwnsItsAttrs(t *testing.T) {
+	l := newTestLogging(t, io.Discard, FormatText, LevelInfo, nil)
+	l.Tap("reorders", LevelInfo, 64, func(_ context.Context, r Record) {
+		slices.Reverse(r.Attrs)
+		for i := range r.Attrs {
+			r.Attrs[i] = slog.String("clobbered", "two-face")
+		}
+	})
+	var rec tapRecorder
+	l.Tap("reads", LevelInfo, 64, rec.fn)
+	for range 50 {
+		l.Root().Info("harvey", "a", 1, "b", 2, "c", 3)
+	}
+	closeDrained(t, l)
+	recs := rec.records()
+	if len(recs) != 50 {
+		t.Fatalf("second tap got %d records, want 50", len(recs))
+	}
+	for _, r := range recs {
+		var keys []string
+		for _, a := range r.Attrs {
+			keys = append(keys, a.Key)
+		}
+		if !slices.Equal(keys, []string{"a", "b", "c"}) {
+			t.Fatalf("second tap saw the first tap's edits: %v", keys)
+		}
+	}
+}
+
+// Drops that no later record announces (a panic in fn, or a full queue right
+// before Close) get a final summary when Close drains the tap, so every drop
+// is announced by exactly one summary (review of #4445, MINOR 3).
+func TestTap_EveryDropSummarized(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newTestLogging(t, io.Discard, FormatText, LevelInfo, nil)
+		release := make(chan struct{})
+		var rec tapRecorder
+		l.Tap("gotham", LevelInfo, 1, func(ctx context.Context, r Record) {
+			if r.Message == "panics" {
+				panic("killer croc")
+			}
+			if r.Message == "stalls" {
+				<-release
+			}
+			rec.fn(ctx, r)
+		})
+		l.Root().Info("panics")
+		synctest.Wait()
+		l.Root().Info("stalls") // in fn
+		synctest.Wait()
+		l.Root().Info("queued")  // fills the queue of 1, ahead of the panic's summary
+		l.Root().Info("dropped") // queue full
+		close(release)
+		closeDrained(t, l)
+
+		drops := l.Counters().Dropped["gotham"]
+		var reported uint64
+		for _, r := range rec.records() {
+			if strings.HasSuffix(r.Message, " dropped") {
+				v, _ := attrString(r.Attrs, "dropped")
+				var n uint64
+				if _, err := fmt.Sscan(v, &n); err != nil {
+					t.Fatal(err)
+				}
+				reported += n
+			}
+		}
+		if drops == 0 || reported != drops {
+			t.Errorf("summaries report %d drops, counter says %d", reported, drops)
+		}
+	})
+}
+
+func TestTap_PrimaryNameRefused(t *testing.T) {
+	l := newTestLogging(t, io.Discard, FormatText, LevelInfo, nil)
+	var stderr bytes.Buffer
+	l.stderr = &stderr
+	called := false
+	stop := l.Tap("primary", LevelInfo, 4, func(context.Context, Record) { called = true })
+	l.Root().Info("alfred")
+	stop()
+	closeDrained(t, l)
+	if called || !strings.Contains(stderr.String(), "primary") {
+		t.Errorf("tap named primary was accepted (called=%v, stderr=%q)", called, stderr.String())
+	}
 }
