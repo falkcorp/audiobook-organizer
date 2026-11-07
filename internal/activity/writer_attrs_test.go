@@ -1,7 +1,7 @@
 // file: internal/activity/writer_attrs_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b7d4e91-6c05-4a83-91ff-0d5e7a3c8b46
-// last-edited: 2026-10-09
+// last-edited: 2026-11-07
 
 package activity
 
@@ -167,4 +167,87 @@ func TestWriter_PersistsRenderedSummary(t *testing.T) {
 		"the persisted summary must name the path, not trail off after 'to'")
 	assert.Equal(t, "/lib/Asimov/cover.jpg", entries[0].Details["path"],
 		"attrs must also survive as structured details")
+}
+
+// op_id and component must come from an exact key match on the parsed attrs.
+// A substring search takes " opID=" from anywhere in the line, so a message or
+// an earlier value holding that text (a folder or file name) attributes the
+// row to the wrong operation or component.
+func TestParseLogLineFull_OpIDAndComponentMatchKeysExactly(t *testing.T) {
+	const head = `time=2026-11-07T01:00:00.000-05:00 level=INFO `
+	tests := []struct {
+		name          string
+		line          string
+		wantOpID      string
+		wantComponent string
+	}{
+		{
+			name:     "forged opID inside msg, real attr after",
+			line:     head + `msg="moved x opID=forged" opID=op-real`,
+			wantOpID: "op-real",
+		},
+		{
+			name:          "earlier attr value holds forged component",
+			line:          head + `msg="scan" path="/lib/Gotham component=forged/Batman.mp3" component=scanner`,
+			wantComponent: "scanner",
+		},
+		{
+			name:     "earlier attr value holds forged opID",
+			line:     head + `msg="scan" path="x opID=forged" op_id=op-real`,
+			wantOpID: "op-real",
+		},
+		{
+			name:     "escaped quotes in a quoted value",
+			line:     head + `msg="said \"hi opID=forged\" to Alfred" opID=op-real`,
+			wantOpID: "op-real",
+		},
+		{
+			name:          "escaped quotes then real component",
+			line:          head + `msg="m" title="The \"Joker\" component=forged" component=gotham`,
+			wantComponent: "gotham",
+		},
+		{
+			name: "keys missing",
+			line: head + `msg="Batman begins" n=3`,
+		},
+		{
+			name: "key only inside msg",
+			line: head + `msg="moved x opID=forged component=forged"`,
+		},
+		{
+			name: "key only inside an unrelated value",
+			line: head + `msg="m" path="x opID=forged component=forged"`,
+		},
+		{
+			name:     "key prefix is not the key",
+			line:     head + `msg="m" xopID=nope notop_id=nope op_id=op-1`,
+			wantOpID: "op-1",
+		},
+		{
+			name:          "alternate spellings",
+			line:          head + `msg="m" operation_id=op-2 subsystem=batcave`,
+			wantOpID:      "op-2",
+			wantComponent: "batcave",
+		},
+		{
+			name:          "pkg spelling and quoted value",
+			line:          head + `msg="m" opID="op 3" pkg=wayne`,
+			wantOpID:      "op 3",
+			wantComponent: "wayne",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := ParseLogLineFull(tt.line)
+			assert.Equal(t, tt.wantOpID, p.OpID)
+			assert.Equal(t, tt.wantComponent, p.Component)
+		})
+	}
+}
+
+func TestFirstAttrValue_NeverReadsMsg(t *testing.T) {
+	attrs := []LogAttr{{"msg", "opID=forged"}, {"opID", "op-real"}}
+	assert.Equal(t, "op-real", firstAttrValue(attrs, "opID"))
+	assert.Equal(t, "", firstAttrValue(attrs, "msg"), "msg is never an op_id/component source")
+	assert.Equal(t, "", firstAttrValue(nil, "opID"))
 }

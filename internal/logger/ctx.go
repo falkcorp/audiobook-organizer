@@ -1,5 +1,5 @@
 // file: internal/logger/ctx.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 941538ef-bccb-4899-ab37-a24fe681513d
 // last-edited: 2026-11-07
 
@@ -20,11 +20,8 @@ import (
 // key/value pairs (or slog.Attr values), and the attributes ctx carries
 // (corelog.WithAttrs, e.g. the operation attributes internal/server sets) are
 // written before them, as HEAD's helpers wrote the operation attributes.
-// That order matters until internal/activity's line parser matches keys
-// exactly: extractSlogAttr takes the first " opID=" anywhere in the line, so
-// a record value holding that text, written ahead of the real attribute,
-// would misattribute the activity row (todo.d fragment
-// 2026-11-07-activity-slog-attr-exact-key.md).
+// internal/activity's line parser matches attribute keys exactly, so the
+// order no longer decides which op_id or component an activity row gets.
 //
 // They log through slog.Default(), the books logger path logToStdout uses,
 // and keep the sanitizing barrier the deleted helpers had: the message and
@@ -36,8 +33,7 @@ import (
 // pipeline, the default handler does not read corelog.AttrsFrom, so these
 // helpers add the context's attributes themselves. Once it does, the
 // pipeline appends them as well and this must go (R1-15 / R1-18), or each
-// attribute appears twice; the pipeline writes them after the record's own,
-// which is why the activity parser fix has to land first.
+// attribute appears twice.
 func InfoCtx(ctx context.Context, msg string, args ...any) {
 	logCtx(slog.Default(), ctx, slog.LevelInfo, msg, args)
 }
