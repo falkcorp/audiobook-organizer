@@ -1,5 +1,5 @@
 // file: core/log/redactor_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bd738719-8f12-4c45-b718-d225f6302c0e
 // last-edited: 2026-11-07
 
@@ -869,8 +869,11 @@ func TestRedact_PairScanIsLinear(t *testing.T) {
 	}
 }
 
-// Independent review M3: Basic, Digest and Negotiate redact only in header
-// context and with a credential-shaped value; Bearer fires anywhere.
+// basicBruce is a Basic credential: base64 of "bruce:" and the fake password.
+const basicBruce = "YnJ1Y2U6cHdfdGVzdF9hbGZyZWRfMDAw"
+
+// Independent review M3: Basic, Digest and Negotiate need a credential-shaped
+// value, stricter outside header context; Bearer fires anywhere.
 func TestRedact_AuthSchemeContext(t *testing.T) {
 	r := NewRedactor(nil)
 	for _, c := range []struct{ key, in string }{
@@ -882,6 +885,9 @@ func TestRedact_AuthSchemeContext(t *testing.T) {
 		{"title", "Negotiate Anything"},
 		{"msg", `response="200 OK"`},
 		{"msg", "Response:{Code:200 Body:ok}"},
+		{"msg", "negotiate a deal with the Penguin"},
+		{"msg", "we negotiate terms before the heist"},
+		{"msg", "a basic setup"},
 	} {
 		assertUnchanged(t, r, c.key, c.in)
 	}
@@ -895,9 +901,16 @@ func TestRedact_AuthSchemeContext(t *testing.T) {
 		"proxy-authenticate: Digest realm=\"gotham\", nonce=\"" + fakeToken + "\"",
 		"the bearer " + fakeToken,
 		"auth Bearer " + fakeToken,
+		// Security review: outside header context, Basic redacts a value that
+		// base64-decodes to user:password, and Negotiate and Digest a token68
+		// of at least 20 characters.
+		"sent Basic " + basicBruce,
+		"upstream rejected Basic " + basicBruce + ", retrying",
+		"server sent Negotiate YIIGhgYJKoZIhvcSAQICAQBuggZ1MIIGcaADAgEF",
+		"got Digest " + fakeToken + fakeToken,
 	} {
 		got, k := r.StringKinds("msg", in)
-		assertAbsent(t, in, got, fakeToken, "YIIGhgYJ")
+		assertAbsent(t, in, got, fakeToken, "YIIGhgYJ", basicBruce)
 		if k&RedactKey == 0 {
 			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
 		}
@@ -1054,10 +1067,12 @@ func TestRedact_PluralAndNamedCredentialKeys(t *testing.T) {
 }
 
 type settingRow struct {
-	Key      string
-	IsSecret bool
-	Response int
-	Token    string
+	Key         string
+	IsSecret    bool
+	Response    int
+	Token       string
+	PinPassword int
+	MaxTokens   int
 }
 
 // Independent review M8: a credential suffix alone never redacts a bool or
@@ -1074,15 +1089,21 @@ func TestRedact_ScalarsUnderSuffixKeys(t *testing.T) {
 			t.Errorf("attr(%v) = %v (%v), want unchanged", a, got, k)
 		}
 	}
+	// Security review: a number under a suffix match that is not count-shaped
+	// may be a numeric credential.
 	for _, a := range []slog.Attr{slog.Bool("password", true), slog.Int("token", 5), slog.Int("session_id", 9),
-		slog.String("is_secret", "false"), slog.Any("cf_cookie", []string{"x"})} {
+		slog.String("is_secret", "false"), slog.Any("cf_cookie", []string{"x"}), slog.Int("pin_password", 1234),
+		slog.Int("user_secret", 9876), slog.Float64("api_token", 3), slog.Uint64("session_token", 5),
+		slog.Any("vault_passwd", 4321)} {
 		if got := r.Attr(a); got.Value.String() != "[REDACTED]" {
 			t.Errorf("Attr(%v) = %v, want [REDACTED]", a, got)
 		}
 	}
-	got := r.Attr(slog.Any("row", settingRow{Key: "smtp", IsSecret: true, Response: 200, Token: fakeToken}))
+	got := r.Attr(slog.Any("row", settingRow{Key: "smtp", IsSecret: true, Response: 200, Token: fakeToken,
+		PinPassword: 1234, MaxTokens: 2048}))
 	m, ok := got.Value.Any().(map[string]any)
-	if !ok || m["IsSecret"] != true || m["Response"] != 200 || m["Token"] != "[REDACTED]" {
+	if !ok || m["IsSecret"] != true || m["Response"] != 200 || m["Token"] != "[REDACTED]" ||
+		m["PinPassword"] != "[REDACTED]" || m["MaxTokens"] != 2048 {
 		t.Errorf("settings row = %#v", got.Value.Any())
 	}
 }
@@ -1131,6 +1152,10 @@ func TestRedact_PairAndURLEdgeForms(t *testing.T) {
 		{"msg", "password=ab," + fakePass},
 		{"msg", "password=ab&" + fakePass},
 		{"msg", "password=ab;" + fakePass},
+		// Security review: a doubled separator after a denied name.
+		{"msg", "password==" + fakePass},
+		{"msg", "password::" + fakePass},
+		{"msg", "token == " + fakePass},
 		{"url.query", "q=Bearer " + fakePass},
 		{"url", "https://bruce:pa/" + fakePass + "@example.test/x"},
 		{"url", "https://bruce:pa#" + fakePass + "@example.test/x"},
