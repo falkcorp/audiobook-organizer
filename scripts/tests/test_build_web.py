@@ -202,8 +202,7 @@ class BuildWebScriptTest(unittest.TestCase):
         t = self.tree(core_web=False)
         npm = t.bin / "npm"
         npm.write_text(
-            "#!/bin/sh\n"
-            'printf "%s\\n" "${npm_config_ignore_scripts-<unset>}" >> "$NPM_STUB_LOG"\n'
+            '#!/bin/sh\nprintf "%s\\n" "${npm_config_ignore_scripts-<unset>}" >> "$NPM_STUB_LOG"\n'
         )
         self.assertEqual(t.run("deps", env={"npm_config_ignore_scripts": "true"}).returncode, 0)
         self.assertEqual(t.log.read_text().split(), ["true"])
@@ -221,13 +220,19 @@ class BuildWebScriptTest(unittest.TestCase):
             with self.subTest(shell=shell):
                 res = subprocess.run([exe, "-n", str(SCRIPT)], capture_output=True, text=True)
                 self.assertEqual(res.returncode, 0, res.stderr)
-        code = [
-            ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
-        ]
-        for pat in (r"\[\[", r"\bfunction\b", r"\blocal\b", r"<<<", r"\$\(\(", r"\bsource\b", r"==", r"\bpushd\b", r"\barray\b"):
-            self.assertFalse(
-                any(re.search(pat, ln) for ln in code), f"bash-only construct {pat!r}"
-            )
+        code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        for pat in (
+            r"\[\[",
+            r"\bfunction\b",
+            r"\blocal\b",
+            r"<<<",
+            r"\$\(\(",
+            r"\bsource\b",
+            r"==",
+            r"\bpushd\b",
+            r"\barray\b",
+        ):
+            self.assertFalse(any(re.search(pat, ln) for ln in code), f"bash-only construct {pat!r}")
         # 07 §7.3.2: "a POSIX sh script under 20 lines".
         self.assertLess(len(code), 20)
 
