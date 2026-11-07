@@ -1,5 +1,5 @@
 // file: core/metrics/provider.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a82f67cc-87d5-45c3-a73b-811125fbe1cd
 // last-edited: 2026-11-07
 
@@ -9,9 +9,10 @@
 // and the naming scopes components and modules create their instruments in.
 //
 // Everything is injected (03 R5): nothing here names
-// prometheus.DefaultRegisterer or DefaultGatherer or calls otel.Set* or
-// otel.Get*. Core only returns providers; an app that wants the OTel globals
-// to point at them installs them itself (app.InstallProcessDefaults, R1-15).
+// prometheus.DefaultRegisterer or DefaultGatherer or calls the otel package's
+// global setters or getters. Core only returns providers; an app that wants
+// the OTel globals to point at them installs them itself
+// (app.InstallProcessDefaults, R1-15).
 package metrics
 
 import (
