@@ -1,10 +1,10 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.12.0
-// last-edited: 2026-11-05
+// version: 1.12.1
+// last-edited: 2026-11-07
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { applyOwnedParams } from '../hooks/useUrlState';
 import { AIJobsPanel } from '../components/AIJobsPanel';
 import { CacheStatsPanel } from '../components/CacheStatsPanel';

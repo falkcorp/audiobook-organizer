@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.aiScans.test.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 91d5a7c3-2e68-4f10-b3a4-86c0f5e7d219
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * The AI scans sub-view inside the workspace: how it is reached, the two lane
@@ -15,7 +15,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { serveReviewList } from '../../test/reviewServer';

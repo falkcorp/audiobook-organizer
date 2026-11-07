@@ -1,10 +1,10 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: e5f6a7b8-c9d0-1234-efab-345678901234
-// last-edited: 2026-09-26
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,

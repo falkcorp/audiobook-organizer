@@ -1,11 +1,11 @@
 // file: web/src/App.test.tsx
-// version: 1.0.12
+// version: 1.0.13
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import App from './App';
 import { appTheme } from './theme';

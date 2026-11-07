@@ -1,7 +1,7 @@
 // file: web/src/pages/Users.urlState.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c8e2d17-90b3-4a46-8f2e-1d7b63a04c95
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * Users deep link: `?footprint=<userId>` opens that user's sign-ins-and-data
@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router';
 import Users from './Users';
 
 const envelope = (data: unknown) =>

@@ -1,11 +1,11 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { applyOwnedParams, useUrlEnumParam } from '../hooks/useUrlState';
-import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { Link as RouterLink, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 /**
  * Library "Purge Deleted": the purge is a background operation. Clicking
@@ -12,7 +12,7 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

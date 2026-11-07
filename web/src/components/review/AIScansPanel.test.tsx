@@ -1,7 +1,7 @@
 // file: web/src/components/review/AIScansPanel.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: c4e18d73-9f02-4b6a-a5d1-7e30b82f6c19
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 /**
  * The AI scans sub-view as a reviewer meets it: the authors hook, the scan hook
@@ -19,7 +19,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { AIScan, AIScanResult } from '../../services/api';

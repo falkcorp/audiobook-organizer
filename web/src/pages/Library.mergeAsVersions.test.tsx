@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.mergeAsVersions.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8b2e61-0a73-4f95-b1c6-9e3f7a5d2c08
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 /**
  * Library "Merge as Versions": the dialog states which copy is kept, trashed
@@ -14,7 +14,7 @@
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

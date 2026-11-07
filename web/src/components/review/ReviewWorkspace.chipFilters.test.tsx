@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.18.0
+// version: 1.18.1
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -14,7 +14,7 @@
 // come up short.
 
 import { act, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';

@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.combineToast.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: b7c3d543-d1c8-4e7a-8782-7a65d6d29167
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 /**
  * The Library "Combine into One Book" flow. The combine is a background
@@ -15,7 +15,7 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

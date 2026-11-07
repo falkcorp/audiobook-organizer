@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.urlState.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d41f7a3-26c9-4b05-9e1a-d3b70c58f6e2
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * The Activity page's deep links: the URL seeds the feed's filters, page and open
@@ -15,7 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router';
 import ActivityLog from './ActivityLog';
 import { fetchActivitySources } from '../services/activityApi';
 import { groupOperations } from '../stores/operationGrouping';

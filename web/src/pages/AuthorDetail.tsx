@@ -1,10 +1,10 @@
 // file: web/src/pages/AuthorDetail.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98408901-8ba3-414c-9436-84b79b34ceaf
-// last-edited: 2026-09-02
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import {
   Alert,
   Box,

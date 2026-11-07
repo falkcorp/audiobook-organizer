@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.authors.test.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b6d94c3-f7a2-4e18-9d05-62c8e1a7b350
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * The Authors & series lane inside the workspace: how it is reached, what the
@@ -14,7 +14,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { serveReviewList } from '../../test/reviewServer';

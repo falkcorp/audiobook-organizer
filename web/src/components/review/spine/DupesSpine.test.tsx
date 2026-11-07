@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.test.tsx
-// version: 2.4.1
+// version: 2.4.2
 // guid: 2b6d9e40-51c8-4a37-8f92-c704a1d5e836
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 //
 // Covers the signal chips on a dupes row, plus (Task 8) the dual-path display
 // wired into BookSide.
@@ -25,7 +25,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { DupesSpine, isITunesBook, type DupesSpineContext } from './DupesSpine';
 import { appTheme } from '../../../theme';
 import * as api from '../../../services/api';

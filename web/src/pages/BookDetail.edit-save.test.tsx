@@ -1,11 +1,11 @@
 // file: web/src/pages/BookDetail.edit-save.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1363ab6-cc3e-4440-bbae-cdb5b60a4672
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

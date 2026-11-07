@@ -1,9 +1,9 @@
 // file: web/src/components/layout/Sidebar.tsx
-// version: 1.24.0
+// version: 1.24.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 import { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router';
 import {
   Badge,
   Box,

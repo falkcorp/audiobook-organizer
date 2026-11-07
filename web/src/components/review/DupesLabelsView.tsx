@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesLabelsView.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4e1c83-6d27-4b05-b3f8-2c7d0e5a6914
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 //
 // The Duplicates lane's Labels and Suspicious sub-views: the Gold Labels page
 // (pages/DedupLabels.tsx) rendered inside the lane. Rendering only -- every
@@ -36,7 +36,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { LabelToggle } from './compare/LabelToggle';
 import { EvidencePanel } from './evidence/EvidencePanel';
 import { dedupEvidence } from './evidence/adapters';

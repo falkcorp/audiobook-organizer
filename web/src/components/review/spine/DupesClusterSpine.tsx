@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesClusterSpine.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e1b9d37-0c52-4a84-b7f6-4d8a2c0e9153
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 //
 // The duplicate lane's Clusters view: one card per connected component of the
 // loaded page's pairs.
@@ -17,7 +17,7 @@
 // books it concerns.
 
 import { useMemo, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Box,
   Button,

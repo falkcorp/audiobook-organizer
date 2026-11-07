@@ -1,12 +1,12 @@
 // file: web/src/pages/AcceptInvite.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3c9e5a17-8b42-4d6f-a1e0-7f2b8d4c9e53
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { AcceptInvite } from './AcceptInvite';
 

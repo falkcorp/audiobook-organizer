@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.identMissing.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5933b47b-1eb7-4447-9cd1-6f441bc5d00e
-// last-edited: 2026-11-03
+// last-edited: 2026-11-07
 
 /**
  * Typing `ident:missing` in the Library search bar sends the ident field
@@ -15,7 +15,7 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

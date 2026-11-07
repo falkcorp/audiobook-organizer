@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.terminal.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f2a8d16-9c47-4b03-8e15-6d2b7a4f01c9
-// last-edited: 2026-09-08
+// last-edited: 2026-11-07
 
 // The indicator must classify an op by isTerminal, not by a hardcoded
 // ['completed','failed','canceled'] list.
@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 

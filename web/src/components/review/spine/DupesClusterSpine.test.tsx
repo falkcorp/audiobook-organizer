@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesClusterSpine.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f9c2e68-4b17-4d53-a8e0-7c1d5b3a9e24
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 //
 // The Clusters view of the Duplicates lane: cards, primary choice, the three
 // cluster verbs, the other-pages line, what the counts open, and the card
@@ -11,7 +11,7 @@
 import { useState } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import type { Book, Config, DedupCandidate } from '../../../services/api';

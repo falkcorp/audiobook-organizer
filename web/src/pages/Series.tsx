@@ -1,7 +1,7 @@
 // file: web/src/pages/Series.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
@@ -54,7 +54,7 @@ import MergeTypeIcon from '@mui/icons-material/MergeType';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HistoryIcon from '@mui/icons-material/History';
 import UndoIcon from '@mui/icons-material/Undo';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   useConfigurableTable,
   ResizableHeaderCell,

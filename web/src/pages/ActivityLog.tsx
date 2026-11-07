@@ -1,11 +1,11 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.42.0
+// version: 2.42.1
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   AlertTitle,

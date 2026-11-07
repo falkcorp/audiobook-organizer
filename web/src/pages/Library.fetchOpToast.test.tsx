@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.fetchOpToast.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c2f4e71-3a5d-4b8e-b0c6-7d1e2f3a4b5c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 /**
  * Regression tests for the effect that watches a pending metadata-fetch op.
@@ -19,7 +19,7 @@
  */
 
 import { render, screen, waitFor, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

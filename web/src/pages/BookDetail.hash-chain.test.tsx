@@ -1,10 +1,10 @@
 // file: web/src/pages/BookDetail.hash-chain.test.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b2d9f7e-1c3a-4e5b-8a6d-9f0e1c2d3b4a
-// last-edited: 2026-08-19
+// last-edited: 2026-11-07
 
 import { render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

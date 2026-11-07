@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.searchProviders.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f8c2a1d-9e5f-4a2b-8c1e-6d7f9a2b5c3e
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // The Search providers… command in the Metadata menu must send an explicit
 // selection for unmatched books, never an empty request body. This test guards
@@ -9,7 +9,7 @@
 // "book_ids or selection is required".
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';

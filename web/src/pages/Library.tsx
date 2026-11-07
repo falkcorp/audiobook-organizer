@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.tsx
-// version: 1.113.0
+// version: 1.113.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Box,
   Button,

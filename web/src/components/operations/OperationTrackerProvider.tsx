@@ -1,7 +1,7 @@
 // file: web/src/components/operations/OperationTrackerProvider.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a9c2e7d-1b53-4f80-9d6e-3c7a0b5f8e12
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import {
   createContext,
@@ -14,7 +14,7 @@ import {
   type JSX,
   type ReactNode,
 } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import * as api from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
 import { isAbortError } from '../../utils/apiFetch';

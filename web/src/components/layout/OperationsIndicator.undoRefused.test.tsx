@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.undoRefused.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1b9e43-27a8-4c05-b3f6-8a0e5d7c2f19
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 // The Undo button of a finished organize run asks the server what an undo would
 // do before it offers one. The server refuses that, with a 403, to a caller who
@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 import { getUndoPreflight } from '../../services/versionApi';

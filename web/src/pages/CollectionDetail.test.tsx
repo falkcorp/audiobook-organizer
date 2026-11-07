@@ -1,11 +1,11 @@
 // file: web/src/pages/CollectionDetail.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5a9e1afd-e004-4591-8fe6-2cf5dcb3eef4
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 
 vi.mock('../services/collectionApi', async (orig) => ({

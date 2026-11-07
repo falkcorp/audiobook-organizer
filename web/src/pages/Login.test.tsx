@@ -1,7 +1,7 @@
 // file: web/src/pages/Login.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 // Guards Login.tsx's redirectTo against an attacker-controlled
 // location.state.from. Before this, an already-authenticated visit whose
@@ -11,7 +11,7 @@
 // safeReturn.test.ts for the sanitizeReturn allow-list this now runs through.
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@mui/material';
 import { appTheme } from '../theme';
@@ -45,8 +45,8 @@ function authenticated() {
 // with it" — MemoryRouter would otherwise 404 on an unregistered path and
 // hide the very bug this test exists to catch.
 const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>();
   return {
     ...actual,
     useNavigate: () => mockNavigate,

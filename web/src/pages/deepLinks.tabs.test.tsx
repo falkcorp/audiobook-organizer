@@ -1,12 +1,12 @@
 // file: web/src/pages/deepLinks.tabs.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91c3e5a8-0b6d-4f27-8a49-2d7e1f5c3b60
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 
 vi.mock('../services/playlistApi', () => ({

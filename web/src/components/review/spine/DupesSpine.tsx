@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -26,7 +26,7 @@
 // by the spine, and memo()-wrapped row renderers.
 
 import { memo, useMemo, useRef, type MouseEvent } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Box,
   Button,

@@ -1,12 +1,12 @@
 // file: web/src/App.deeplinks.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: d2b84e61-3a07-4c5f-9e18-7f0a5c3b1d26
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import App from './App';
 import { appTheme } from './theme';

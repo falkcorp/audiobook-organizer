@@ -1,9 +1,10 @@
 // file: web/src/components/layout/TopBar.tsx
-// version: 1.8.0
+// version: 1.8.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
+// last-edited: 2026-11-07
 
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import {
   AppBar,
   Box,

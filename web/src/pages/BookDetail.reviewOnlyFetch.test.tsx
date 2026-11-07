@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.reviewOnlyFetch.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1d68542-e1fb-404d-b8c6-ffdec08c4ab1
-// last-edited: 2026-10-06
+// last-edited: 2026-11-07
 
 // Fetch Metadata whose only match is a review-only source (Open Library,
 // Google Books) answers 200 with review_only: the page shows the server's
@@ -10,7 +10,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import * as api from '../services/api';
 import { BookDetail } from './BookDetail';

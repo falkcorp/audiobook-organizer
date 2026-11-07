@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.bulkFetch.test.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5b7b0d6f-5c2b-4d57-9b6c-8dbb7a9e9e2c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

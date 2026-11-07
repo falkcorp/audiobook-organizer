@@ -1,12 +1,12 @@
 // file: web/src/pages/AuthorDetail.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c1f7a55-6d3e-4b90-9a44-0f5b8c6d1e73
-// last-edited: 2026-09-02
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 import AuthorDetail from './AuthorDetail';
 

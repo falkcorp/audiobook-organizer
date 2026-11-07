@@ -1,14 +1,14 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.29.1
+// version: 1.29.2
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { Book, OperationV2, RepairFixer, RepairOpRef, RepairRow, RepairRowsFilter } from '../../services/api';

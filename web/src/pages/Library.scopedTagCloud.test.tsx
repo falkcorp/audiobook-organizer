@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.scopedTagCloud.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0d7b4f2a-8c3e-4a19-b6d5-2e9f1c7a3b84
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';

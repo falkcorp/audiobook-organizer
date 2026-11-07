@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesLabelsView.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6d1e8b35-4a92-4c07-9f58-3b7a0c2e6d81
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 //
 // The Labels / Suspicious rendering, driven through the real hook against a
 // stubbed fetch. Ported from pages/__tests__/DedupLabels.test.tsx (abbreviated
@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { ThemeProvider } from '@mui/material/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

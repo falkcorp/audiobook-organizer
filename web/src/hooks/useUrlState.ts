@@ -1,7 +1,7 @@
 // file: web/src/hooks/useUrlState.ts
-// version: 2.3.0
+// version: 2.3.1
 // guid: 3f6c1a52-7d94-4e08-b5a1-9c20e8d4f713
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 //
 // Deep links: keep the address bar equal to what is on screen.
 //
@@ -119,7 +119,7 @@ import {
   useLocation,
   useSearchParams,
   type Navigator,
-} from 'react-router-dom';
+} from 'react-router';
 
 type NavigationValue = ContextType<typeof UNSAFE_NavigationContext>;
 

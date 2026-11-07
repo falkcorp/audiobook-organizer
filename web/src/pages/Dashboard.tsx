@@ -1,10 +1,10 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.17.0
+// version: 1.17.1
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-10-08
+// last-edited: 2026-11-07
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { AnnouncementBanner } from '../components/AnnouncementBanner';
 import {
   Box,

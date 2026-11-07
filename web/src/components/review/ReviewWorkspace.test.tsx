@@ -1,10 +1,10 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.27.1
+// version: 1.27.2
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';

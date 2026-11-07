@@ -1,10 +1,10 @@
 // file: web/src/pages/Setup.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f8a9b4c-1d2e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Box,
   Button,

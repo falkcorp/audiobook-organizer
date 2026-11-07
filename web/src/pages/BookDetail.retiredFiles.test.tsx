@@ -1,11 +1,11 @@
 // file: web/src/pages/BookDetail.retiredFiles.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7a3c58-d412-4f69-91e5-3a8c6d20f7b4
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

@@ -1,12 +1,12 @@
 // file: web/src/components/bookdetail/BookDetailInfoTab.authorlink.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6b0c4a12-9f7d-4e35-8c61-2a0d9e4f7b58
-// last-edited: 2026-09-26
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Routes, Route, useParams } from 'react-router-dom';
+import { Routes, Route, useParams } from 'react-router';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BookDetailInfoTab } from './BookDetailInfoTab';
 

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 //
 // Select-page, "Select all N matching" across pages, and shift-range selection
 // on the dedup review lane (owner request 2026-10-06), through the lane hook
@@ -11,7 +11,7 @@
 
 import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { DupesPanel } from '../DupesPanel';

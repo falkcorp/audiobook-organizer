@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.seriesChip.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: c84a2f6e-1b3d-4e97-8a50-6f2d9b1c7e03
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';

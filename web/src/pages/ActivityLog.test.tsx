@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.17.0
+// version: 1.17.1
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -21,7 +21,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import ActivityLog from './ActivityLog';
 import { COMPACT_DAYS_ERROR } from '../components/activity/compactDays';
 import { fetchActivitySources, compactActivityLog } from '../services/activityApi';

@@ -1,10 +1,10 @@
 // file: web/src/hooks/useUnsavedChangesBlocker.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: e3f4a5b6-c7d8-9e0f-1a2b-3c4d5e6f7a8b
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useEffect, useCallback, useRef, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router';
 
 /** Whether `url` (as passed to history.pushState/replaceState) is on `pathname`. */
 function isSamePath(url: string, pathname: string): boolean {

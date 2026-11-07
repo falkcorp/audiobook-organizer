@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.seriesIdLink.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8dabbf78-942b-49cc-a8a6-224e6697a42f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';

@@ -1,10 +1,10 @@
 // file: web/src/components/FlushOnNavigate.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2a8e91-6c37-4b04-a1f8-3e7c90b2d645
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useContext, useEffect, useMemo, type ReactNode } from 'react';
-import { UNSAFE_NavigationContext } from 'react-router-dom';
+import { UNSAFE_NavigationContext } from 'react-router';
 import { flushOnNavigate, flushPendingWrites } from '../hooks/useUrlState';
 
 /**

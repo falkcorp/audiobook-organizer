@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.tagTermQueries.test.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: ba4d9425-349f-45d9-94a5-c8b56faf4856
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
