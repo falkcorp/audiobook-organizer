@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.36.2
+// version: 1.37.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 package server
 
@@ -161,6 +161,10 @@ type absCollisionDetailRoute struct {
 var absCollisionDetailRoutes = []absCollisionDetailRoute{
 	{Method: http.MethodGet, Pattern: "/api/playlists/:id"},
 	{Method: http.MethodGet, Pattern: "/api/authors/:id"},
+	// Author portrait (an honest 404; handlers/abs/lissen_endpoints.go). /api/v1/authors
+	// is live, so this is claimed by exact shape like the narrator image below.
+	{Method: http.MethodGet, Pattern: "/api/authors/:id/image"},
+	{Method: http.MethodHead, Pattern: "/api/authors/:id/image"},
 	{Method: http.MethodGet, Pattern: "/api/series/:id"},
 
 	// Collections, added 2026-08-16 with the ABS surface in handlers/abs/collections.go.
@@ -775,15 +779,19 @@ func absRouteList() []string {
 		"POST /api/collections/:id/batch/remove",
 		"GET /api/libraries/:libraryId/authors",
 		"GET /api/authors/:id",
+		"GET /api/authors/:id/image",
+		"HEAD /api/authors/:id/image",
 		"GET /api/series/:id",
 		"GET /api/libraries/:libraryId/narrators",
 		"GET /api/narrators/:id/image",
 		"HEAD /api/narrators/:id/image",
 		"POST /api/emails/send-ebook-to-device",
 		"GET /api/libraries/:libraryId/filterdata",
+		"GET /api/libraries/:libraryId/stats",
 		"GET /api/libraries/:libraryId/search",
 		"GET /api/libraries/:libraryId/recent-episodes",
 		"GET /api/items/:id",
+		"POST /api/items/batch/get",
 		"GET /api/items/:id/cover (no credentials required)",
 		// Phase 5b — playback, direct play only.
 		"POST /api/items/:id/play",
