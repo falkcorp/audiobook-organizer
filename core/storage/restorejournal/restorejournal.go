@@ -1,0 +1,227 @@
+// file: core/storage/restorejournal/restorejournal.go
+// version: 1.0.0
+// guid: 6c954a92-88a0-4242-b599-92db9a12cae7
+// last-edited: 2026-11-07
+
+// Package restorejournal holds the kinds, record types and intent of the one
+// journaled directory swap (05-backup's staged restore, revert and checkpoint
+// restore; the offline restore, 05-storage §5S.3.12; the factory reset,
+// §5S.3.15): an L0 leaf that imports nothing from core.
+//
+// The declarations are 05-storage §5S.3.15's Go block, Intent to Record.
+// core/internal/restoreswap (R1-21) applies an intent; storage's open reads
+// the journal. Every writer of the one intent slot calls CreateIntent, so
+// the slot has one create.
+package restorejournal
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// ErrSwapPending: the one intent slot is taken or a swap is in flight;
+// storage re-exports it as storage.ErrSwapPending.
+var ErrSwapPending = errors.New("storage: a restore or factory reset is already staged or in flight")
+
+// Intent is restore/pending.json for every kind, the one shared type of its
+// writers — core's restoreswap and, until R2's backup flip (F8), ABO's
+// internal/backup — and of P0a's one rejection rule (COR9-13). Fields a kind
+// does not use are empty.
+type Intent struct {
+	ID            string    `json:"id"`
+	Kind          Kind      `json:"kind"`
+	Reset         ResetKind `json:"reset,omitempty"`
+	DBPath        string    `json:"db_path"`         // absolute
+	Targets       []Target  `json:"targets"`         // absolute from/to
+	StagedByBuild string    `json:"staged_by_build"` // the binary ID
+	ExpiresAt     time.Time `json:"expires_at"`
+	RequestedBy   string    `json:"requested_by"`
+	RequestedAt   time.Time `json:"requested_at"`
+	// Restore kinds (05-backup §5B.3.4 step 8).
+	ArchiveID      string `json:"archive_id,omitempty"`
+	Staging        string `json:"staging,omitempty"`
+	InstallID      string `json:"install_id,omitempty"`
+	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
+	// KindRewrite (§5S.3.13 "M8"): the step ID of the M8 that staged it, so
+	// each M8 reads only its own journals.
+	StepID string `json:"step_id,omitempty"`
+	// KindReset (05-storage §5S.3.15).
+	DeleteLibraryFiles bool     `json:"delete_library_files,omitempty"`
+	Delete             []string `json:"delete,omitempty"`
+	HookArgs           []byte   `json:"hook_args,omitempty"`  // opaque app bytes; the kernel never parses them
+	HookPaths          []string `json:"hook_paths,omitempty"` // ResetPlan.Paths (R10-6)
+}
+
+// Target is one absolute from/to pair of an intent.
+type Target struct{ From, To string }
+
+// The slot's file names under <stateDir>/restore/.
+const (
+	restoreDir   = "restore"
+	pendingName  = "pending.json"
+	inflightName = "inflight.json"
+)
+
+// CreateIntent writes in into <stateDir>/restore/pending.json atomically:
+// temp file + fsync, link(2) (EEXIST → ErrSwapPending, the temp removed),
+// remove the temp, directory fsync. It also returns ErrSwapPending while any
+// restore/<id>/inflight.json exists. Every writer calls it, so the slot has
+// one create.
+//
+// link(2) is the exclusion between writers, across processes, with no mutex
+// (05-storage §5S.3.15 "Stage"): two creates race on one name and exactly one
+// wins. The in-flight probe runs before it, as the spec's refusal "while a
+// swap of any kind is in flight".
+func CreateIntent(stateDir string, in Intent) error {
+	if stateDir == "" || !filepath.IsAbs(stateDir) {
+		return fmt.Errorf("restorejournal: state directory %q is not an absolute path", stateDir)
+	}
+	dir := filepath.Join(stateDir, restoreDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("restorejournal: create %s: %w", dir, err)
+	}
+	if busy, err := inflight(dir); err != nil {
+		return err
+	} else if busy {
+		return ErrSwapPending
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("restorejournal: encode intent: %w", err)
+	}
+	tmp, err := writeTemp(dir, b)
+	if err != nil {
+		return err
+	}
+	pending := filepath.Join(dir, pendingName)
+	linkErr := os.Link(tmp, pending)
+	rmErr := os.Remove(tmp)
+	switch {
+	case errors.Is(linkErr, os.ErrExist):
+		return errors.Join(ErrSwapPending, tempLeft(tmp, rmErr))
+	case linkErr != nil:
+		return errors.Join(fmt.Errorf("restorejournal: link %s: %w", pending, linkErr), tempLeft(tmp, rmErr))
+	}
+	// The intent is linked and durable once the directory is synced. A temp
+	// name that would not go away is a stray dot-file beside it, not a failed
+	// create, so it does not turn a created intent into an error the caller
+	// would retry.
+	return syncDir(dir)
+}
+
+// tempLeft reports a temp intent file the create could not remove, nil when
+// it was removed.
+func tempLeft(tmp string, rmErr error) error {
+	if rmErr == nil || errors.Is(rmErr, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("restorejournal: remove temp intent %s: %w", filepath.Base(tmp), rmErr)
+}
+
+// inflight reports whether any restore/<id>/inflight.json exists.
+func inflight(dir string) (bool, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*", inflightName))
+	if err != nil {
+		return false, fmt.Errorf("restorejournal: probe %s: %w", dir, err)
+	}
+	return len(matches) > 0, nil
+}
+
+// writeTemp writes b to a new temp file in dir, fsynced and closed, mode 0600.
+func writeTemp(dir string, b []byte) (string, error) {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("restorejournal: temp name: %w", err)
+	}
+	name := filepath.Join(dir, "."+pendingName+".tmp-"+hex.EncodeToString(suffix[:]))
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("restorejournal: create temp intent: %w", err)
+	}
+	_, werr := f.Write(b)
+	serr := f.Sync()
+	cerr := f.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		_ = os.Remove(name)
+		return "", fmt.Errorf("restorejournal: write temp intent: %w", err)
+	}
+	return name, nil
+}
+
+// syncDir fsyncs dir so a create, link or remove in it is durable.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("restorejournal: open %s: %w", dir, err)
+	}
+	serr := d.Sync()
+	cerr := d.Close()
+	if err := errors.Join(serr, cerr); err != nil {
+		return fmt.Errorf("restorejournal: fsync %s: %w", dir, err)
+	}
+	return nil
+}
+
+// Kind is the swap's kind, the intent's "kind" field and the "staged"
+// record's Note. 05-backup's journal.RestoreKind is the hooks' view of the
+// first three; a reset runs no restore hook.
+type Kind string
+
+const (
+	KindArchive    Kind = "archive"
+	KindRevert     Kind = "revert"
+	KindCheckpoint Kind = "checkpoint"
+	KindReset      Kind = "reset"
+	// KindRewrite is M8's swap of the store's fresh copy for its old
+	// directory (§5S.3.13): it keeps the store generation, and its set-aside
+	// old directory is deleted at once, never kept as previous/.
+	KindRewrite Kind = "rewrite"
+)
+
+// ResetKind is a KindReset swap's reset kind, the intent's "reset" field
+// (COR8-1).
+type ResetKind string
+
+const (
+	ResetStore   ResetKind = "store"   // store and settings, no file effect
+	ResetFactory ResetKind = "factory" // also aux DBs and the reset hook
+)
+
+// Record is one line of restore/<id>/journal.json, for every kind. Restore
+// steps are 05-backup §5B.3.4's (and "applied_offline", §5S.3.12); KindReset
+// steps are "staged", "set_aside_started", "moved", "set_aside", "applied",
+// "hook_done", "rejected". In every kind restore/<id>/inflight.json is
+// created by renaming pending.json before the first live item is renamed
+// (R9-7).
+type Record struct {
+	At    time.Time
+	Step  string
+	Seq   uint64 // restore "staged": the outgoing store's journal head seq (DATA2-25)
+	Actor string
+	Note  string
+	// From and To (KindReset "moved" only): the target and its set-aside
+	// destination, so resume, move-back and manual undo know where it went.
+	From, To string
+	// Failed ("hook_done" only): the entries the reset hook could not remove
+	// (COR8-4).
+	Failed []string
+	// InstallID ("set_aside_started" only): the old install's ID, for manual
+	// undo, also after a crash mid-set-aside (DATA9-15).
+	InstallID string
+	// HooksOwed (restore "marker_written" and "applied_offline"): a build
+	// without P4d steps 2-3 (R1) applied this restore with no hooks, or an
+	// offline restore of a checkpoint whose record has hooks_owed (the
+	// escape from a failed journal included, DATA-7); the next journaling
+	// boot runs them with the source's boundary (05-backup §5B.3.6).
+	HooksOwed bool
+	// StepID (KindRewrite "staged" only): the staging M8's step ID, copied
+	// from the intent, so M8 finds its own journals after inflight.json is
+	// gone (§5S.3.13 "M8").
+	StepID string
+}
