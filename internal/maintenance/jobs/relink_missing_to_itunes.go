@@ -20,7 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/mediacore/library"
 )
 
 func init() { maintenance.Register(&relinkMissingToITunesJob{}) }
@@ -119,7 +119,7 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 			unresolved++
 		case 1:
 			newFP := filepath.Clean(matches[0])
-			if !util.WithinRoot(newFP, iTunesRoot) {
+			if !library.WithinRoot(newFP, iTunesRoot) {
 				slog.Warn("relink-missing-to-itunes match outside iTunesRoot, skipping", "match", newFP)
 				unresolved++
 				break
@@ -139,7 +139,7 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 			best := rmt_disambiguate(matches, authorName, book.Title)
 			if best != "" {
 				best = filepath.Clean(best)
-				if !util.WithinRoot(best, iTunesRoot) {
+				if !library.WithinRoot(best, iTunesRoot) {
 					slog.Warn("relink-missing-to-itunes best match outside iTunesRoot, skipping", "match", best)
 					unresolved++
 					break

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // OperationConfig configures safe file operation behavior
@@ -57,7 +57,7 @@ func NewFileOperation(originalPath, targetPath string, config OperationConfig) (
 	backupDir := config.BackupDir
 	if !filepath.IsAbs(backupDir) {
 		// Make it absolute relative to the target directory
-		sp, err := safepath.Join(filepath.Dir(targetPath), backupDir)
+		sp, err := library.Join(filepath.Dir(targetPath), backupDir)
 		if err != nil {
 			return nil, fmt.Errorf("invalid backup directory: %w", err)
 		}
@@ -70,7 +70,7 @@ func NewFileOperation(originalPath, targetPath string, config OperationConfig) (
 	// Generate backup path with timestamp
 	timestamp := time.Now().Format("20060102_150405")
 	backupName := fmt.Sprintf("%s.%s.backup", filepath.Base(targetPath), timestamp)
-	spBackupPath, err := safepath.Join(backupDir, backupName)
+	spBackupPath, err := library.Join(backupDir, backupName)
 	if err != nil {
 		return nil, fmt.Errorf("invalid backup path: %w", err)
 	}
@@ -137,9 +137,9 @@ func (op *FileOperation) Execute() error {
 		//
 		// CodeQL go/path-injection: this alert is NOT dismissed, and the
 		// containment argument that first accompanied it was wrong. The
-		// backupPath is built by safepath.Join(filepath.Dir(targetPath), ...),
+		// backupPath is built by library.Join(filepath.Dir(targetPath), ...),
 		// so its containment ROOT is derived from the tainted value itself;
-		// safepath.Join is a lexical prefix check against whatever root it is
+		// library.Join is a lexical prefix check against whatever root it is
 		// handed and therefore proves nothing about targetPath. What actually
 		// constrains the callers today is upstream — fileops.ValidateUserPath
 		// (internal/fileops/service.go) and the IsAllowedPath gate on the one
@@ -183,7 +183,7 @@ func (op *FileOperation) Execute() error {
 			// "we refused to do it", not "there is a known-bad file on disk".
 			//
 			// CodeQL go/path-injection: not dismissed. See the identical note
-			// on the step-2 rollback above — the safepath.Join containment is
+			// on the step-2 rollback above — the library.Join containment is
 			// rooted at filepath.Dir(targetPath), i.e. at the taint, so it does
 			// not cut the flow CodeQL flagged. The real constraints are
 			// upstream and do not resolve symlinks.
@@ -247,7 +247,7 @@ func (op *FileOperation) cleanupOldBackups() error {
 	baseName := filepath.Base(op.targetPath)
 
 	// Find all backups for this file
-	patternSP, err := safepath.Join(backupDir, fmt.Sprintf("%s.*.backup", baseName))
+	patternSP, err := library.Join(backupDir, fmt.Sprintf("%s.*.backup", baseName))
 	if err != nil {
 		return err
 	}

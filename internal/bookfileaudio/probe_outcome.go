@@ -15,10 +15,10 @@ import (
 	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // FailureKind classifies why a duration probe produced no duration.
@@ -97,7 +97,7 @@ func ClassifyProbeError(err error) (kind FailureKind, lastError string) {
 		return FailureAbsent, tidyProbeError(err)
 	case errors.Is(err, mediainfo.ErrUnsupportedFormat):
 		return FailureUnsupported, tidyProbeError(err)
-	case errors.Is(err, ErrProbeTimeout), errors.Is(err, boundedcall.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, ErrProbeTimeout), errors.Is(err, library.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return FailureTimeout, database.DurationProbeTimeoutPrefix + tidyProbeError(err)
 	}
 	return FailureFile, tidyProbeError(err)

@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"github.com/dhowden/tag"
+	"github.com/falkcorp/mediacore/library"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 // MediaInfo holds technical audio file information
@@ -104,7 +104,7 @@ func realDurationSec(filePath string) (int, error) {
 // go/path-injection barrier); any other path keeps err as it was. Every book_file
 // path is stored absolute and clean, so this costs no classification.
 func withStatCause(filePath string, err error) error {
-	clean, perr := pathvalidation.CleanAbsolutePath(filePath)
+	clean, perr := library.CleanAbsolutePath(filePath)
 	if perr != nil {
 		return err
 	}

@@ -15,7 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // ErrPathNotAllowed is returned by BrowseDirectory when the requested path
@@ -142,7 +142,7 @@ func (fs *FilesystemService) BrowseDirectory(_ context.Context, path string) (*B
 
 	items := []FileInfo{}
 	for _, entry := range entries {
-		sp, err := safepath.Join(absPath, entry.Name())
+		sp, err := library.Join(absPath, entry.Name())
 		if err != nil {
 			// Skip entries that resolve outside the allowed path
 			continue
@@ -155,7 +155,7 @@ func (fs *FilesystemService) BrowseDirectory(_ context.Context, path string) (*B
 
 		excluded := false
 		if entry.IsDir() {
-			spExcl, err := safepath.Join(fullPath, ".jabexclude")
+			spExcl, err := library.Join(fullPath, ".jabexclude")
 			if err == nil {
 				if _, err := os.Stat(spExcl.String()); err == nil {
 					excluded = true
@@ -224,7 +224,7 @@ func (fs *FilesystemService) CreateExclusion(_ context.Context, path string) err
 		return fmt.Errorf("path must be a directory")
 	}
 
-	sp, err := safepath.Join(absPath, ".jabexclude")
+	sp, err := library.Join(absPath, ".jabexclude")
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
@@ -250,7 +250,7 @@ func (fs *FilesystemService) RemoveExclusion(_ context.Context, path string) err
 		return ErrPathNotAllowed
 	}
 
-	sp, err := safepath.Join(absPath, ".jabexclude")
+	sp, err := library.Join(absPath, ".jabexclude")
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}

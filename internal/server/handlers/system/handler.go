@@ -47,10 +47,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -591,7 +591,7 @@ func (h *Handler) FactoryReset(c *gin.Context) {
 	// Clear library folder contents (organized audiobooks)
 	if config.AppConfig.RootDir != "" {
 		libraryDir := config.AppConfig.RootDir
-		if pathvalidation.IsDangerousRoot(libraryDir) {
+		if library.IsDangerousRoot(libraryDir) {
 			slog.Error("Factory reset refused: RootDir is a protected system directory", "rootDir", libraryDir)
 			httputil.RespondWithBadRequest(c, "factory reset refused: library RootDir is a protected system directory")
 			return
@@ -865,17 +865,17 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
-	safeFilename := pathvalidation.SanitizeFilename(req.BackupFilename)
+	safeFilename := library.SanitizeFilename(req.BackupFilename)
 
 	// Use current database path as target if not specified
 	var targetPath string
 	if req.TargetPath != "" {
-		cleanTarget, err := pathvalidation.CleanAbsolutePath(req.TargetPath)
+		cleanTarget, err := library.CleanAbsolutePath(req.TargetPath)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid target_path: "+err.Error())
 			return
 		}
-		if pathvalidation.IsDangerousRoot(cleanTarget) {
+		if library.IsDangerousRoot(cleanTarget) {
 			httputil.RespondWithBadRequest(c, "restore target is a protected system directory")
 			return
 		}
@@ -942,7 +942,7 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 
 	backupConfig := backup.DefaultBackupConfig()
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
-	filename = pathvalidation.SanitizeFilename(filename)
+	filename = library.SanitizeFilename(filename)
 
 	// DeleteBackupIn (not DeleteBackup): same reasoning as RestoreBackupIn
 	// above -- filename is only ever used as a directory-listing lookup key.

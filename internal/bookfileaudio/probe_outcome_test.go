@@ -17,10 +17,10 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // recLog is a LevelLogger that keeps what it was asked to log.
@@ -78,7 +78,7 @@ func TestClassifyProbeError(t *testing.T) {
 		{"zero seconds", errors.New("probe returned 0s"), FailureFile, "probe returned 0s", true},
 		{"unparseable output", errors.New("ffprobe duration parse /x: invalid syntax"), FailureFile, "ffprobe duration parse", true},
 		{"bookfileaudio timeout", ErrProbeTimeout, FailureTimeout, database.DurationProbeTimeoutPrefix, true},
-		{"bounded call timeout", fmt.Errorf("extract: %w", boundedcall.ErrTimeout), FailureTimeout, database.DurationProbeTimeoutPrefix, true},
+		{"bounded call timeout", fmt.Errorf("extract: %w", library.ErrTimeout), FailureTimeout, database.DurationProbeTimeoutPrefix, true},
 		{"ffprobe context deadline", fmt.Errorf("ffprobe /x: %w: %w", context.DeadlineExceeded, exitErr), FailureTimeout, database.DurationProbeTimeoutPrefix, true},
 		{"nil", nil, FailureFile, "probe failed", true},
 	}

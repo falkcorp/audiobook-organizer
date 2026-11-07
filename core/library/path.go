@@ -3,7 +3,7 @@
 // guid: 7a3b2c1d-4e5f-6789-abcd-ef0123456789
 // last-edited: 2026-05-01
 
-package util
+package library
 
 import (
 	"fmt"

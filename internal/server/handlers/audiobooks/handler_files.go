@@ -30,7 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -770,7 +770,7 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 
 	if req.SegmentID != "" && req.NewPath != "" {
 		// Individual mode: update one file (SegmentID maps to file ID)
-		cleanNewPath, err := pathvalidation.CleanAbsolutePath(req.NewPath)
+		cleanNewPath, err := library.CleanAbsolutePath(req.NewPath)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid new_path: "+err.Error())
 			return
@@ -796,7 +796,7 @@ func (h *Handler) RelocateBookFiles(c *gin.Context) {
 		}
 	} else if req.FolderPath != "" {
 		// Folder mode: scan folder and match files by name
-		cleanFolderPath, err := pathvalidation.CleanAbsolutePath(req.FolderPath)
+		cleanFolderPath, err := library.CleanAbsolutePath(req.FolderPath)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid folder_path: "+err.Error())
 			return

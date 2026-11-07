@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // Getting the ledger OUT of the database it lives in.
@@ -199,7 +199,7 @@ func (p *Plugin) exportFileProvenance(ctx context.Context, rawParams json.RawMes
 	// Absolute, cleaned, no traversal. Declared as a path-injection barrier in
 	// .github/codeql/models/path-sanitizers.model.yml, which is this repo's
 	// convention for a validated path rather than an inline suppression.
-	outPath, err := pathvalidation.CleanAbsolutePath(params.Path)
+	outPath, err := library.CleanAbsolutePath(params.Path)
 	if err != nil {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path: %w", err)
 	}

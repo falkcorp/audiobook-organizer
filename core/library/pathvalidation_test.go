@@ -3,7 +3,7 @@
 // guid: 7b3d9f1e-2a6c-4f8d-8e0b-5c4a3b2d1e0f
 // last-edited: 2026-10-18
 
-package pathvalidation_test
+package library_test
 
 import (
 	"errors"
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	pathvalidation "github.com/falkcorp/mediacore/library"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

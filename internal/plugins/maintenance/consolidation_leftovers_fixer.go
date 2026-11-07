@@ -25,11 +25,11 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
-	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // leftoverFixerID is the Repairs-lane id of the consolidation-leftovers fixer.
@@ -996,7 +996,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	if err := libroot.Mounted(f.p.deps.RootDir()); err != nil {
+	if err := library.Mounted(f.p.deps.RootDir()); err != nil {
 		return nil, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	books, rowsOf, err := f.buildIndex(store)
@@ -1087,7 +1087,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	if err := libroot.Mounted(f.p.deps.RootDir()); err != nil {
+	if err := library.Mounted(f.p.deps.RootDir()); err != nil {
 		return repairs.Row{}, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	idx, err := f.sizeIndex(store)

@@ -2,7 +2,7 @@
 // version: 1.0.1
 // guid: 8a7b6c5d-4e3f-2a1b-9c0d-123456789abc
 // last-edited: 2026-10-18
-package safepath
+package library
 
 import (
 	"path/filepath"

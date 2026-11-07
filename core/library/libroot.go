@@ -9,7 +9,7 @@
 // imports only the standard library and the permission constants in
 // internal/util (a layer-0 leaf), so the maintenance plugin and the legacy
 // maintenance jobs share one copy instead of each keeping their own.
-package libroot
+package library
 
 import (
 	"errors"
@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Mounted refuses to proceed when the library root is unset, unreadable or
@@ -108,7 +107,7 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // ensureReportsDir prepares the default report directory, {root}/.reports. That
 // directory is inside the library share, which other users may be able to write,
 // so before anything is written to it, it must be what this process made: it is
-// created (util.DirMode) when absent, and when it exists it must be a real
+// created (DirMode) when absent, and when it exists it must be a real
 // directory (not a symlink somebody planted to redirect the reports) owned by the
 // user this process runs as. Lstat is used so a symlink is seen as a symlink.
 //
@@ -116,7 +115,7 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // has world write, and only world write, removed, and onTightened is told. Group
 // bits, the setgid and sticky bits, and any POSIX ACL are left exactly as they
 // are: on a POSIX-ACL filesystem the group bits ARE the ACL mask (see
-// util.DirMode), so clearing group write would silently strip the write access of
+// DirMode), so clearing group write would silently strip the write access of
 // every named user and group the operator granted, and the setgid bit keeps new
 // files in the share's group. The directory is refused only when it is not ours,
 // is not a directory, or the chmod fails. There is a small window between this
@@ -125,7 +124,7 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode)) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		if merr := os.Mkdir(dir, util.DirMode); merr != nil && !errors.Is(merr, fs.ErrExist) {
+		if merr := os.Mkdir(dir, DirMode); merr != nil && !errors.Is(merr, fs.ErrExist) {
 			return merr
 		}
 		info, err = os.Lstat(dir)
@@ -167,7 +166,7 @@ var chmodDir = os.Chmod
 // later write will land.
 func EnsureDirWritable(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, util.DirMode); err != nil {
+	if err := os.MkdirAll(dir, DirMode); err != nil {
 		return err
 	}
 	return probeWritable(dir)

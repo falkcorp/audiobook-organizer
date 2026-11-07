@@ -71,10 +71,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -1490,7 +1490,7 @@ func (h *Handler) AudiobookFacets(c *gin.Context) {
 
 // ServeAudiobookCover handles GET /audiobooks/:id/cover.
 func (h *Handler) ServeAudiobookCover(c *gin.Context) {
-	id := pathvalidation.SanitizeFilename(c.Param("id"))
+	id := library.SanitizeFilename(c.Param("id"))
 	if id == "" {
 		httputil.RespondWithBadRequest(c, "invalid book id")
 		return

@@ -27,7 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1386,7 +1386,7 @@ func TestBackfillFileHashes_ReportSymlinkIsNotFollowed(t *testing.T) {
 }
 
 // The job creates the reports directory and the report with the repo's standard
-// modes (util.DirMode and util.FileMode: group write kept so a POSIX ACL's mask
+// modes (library.DirMode and library.FileMode: group write kept so a POSIX ACL's mask
 // keeps working), whatever the umask, and never world-writable.
 func TestBackfillFileHashes_CreatesTheReportWithTheStandardModes(t *testing.T) {
 	old := syscall.Umask(0)
@@ -1398,10 +1398,10 @@ func TestBackfillFileHashes_CreatesTheReportWithTheStandardModes(t *testing.T) {
 
 	dir, err := os.Stat(filepath.Dir(report))
 	require.NoError(t, err)
-	assert.Equal(t, util.DirMode, dir.Mode().Perm())
+	assert.Equal(t, library.DirMode, dir.Mode().Perm())
 	file, err := os.Stat(report)
 	require.NoError(t, err)
-	assert.Equal(t, util.FileMode, file.Mode().Perm())
+	assert.Equal(t, library.FileMode, file.Mode().Perm())
 }
 
 // The chunk journal is in the operation's state in the database. A failed

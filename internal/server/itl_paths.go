@@ -13,7 +13,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // configuredITLPath returns the configured ITL path cleaned and validated, or
@@ -25,7 +25,7 @@ func configuredITLPath() (string, error) {
 	if rawPath == "" {
 		return "", nil
 	}
-	itlPath, err := pathvalidation.CleanAbsolutePath(rawPath)
+	itlPath, err := library.CleanAbsolutePath(rawPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid iTunes library ITL path in config: %w", err)
 	}

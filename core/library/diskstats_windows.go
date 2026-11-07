@@ -5,7 +5,7 @@
 
 //go:build windows
 
-package diskstats
+package library
 
 import (
 	"fmt"

@@ -25,7 +25,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
@@ -35,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // retiredVersionsFixerID is the Repairs-lane id of the retired-versions
@@ -211,7 +211,7 @@ var errRetiredApplyDisabled = errors.New("retired-versions: apply is disabled; s
 const retiredMergedHops = 10
 
 // retiredStatMaxAbandoned caps how many of ONE run's timed-out file stats may
-// still be hung. A stat that times out is abandoned, not stopped (boundedcall.Call):
+// still be hung. A stat that times out is abandoned, not stopped (library.Call):
 // its goroutine, and the OS thread blocked in the syscall, lasts until the
 // mount answers. Past this many at once the mount is dead and continuing would
 // only stack threads (48 workers on a dead share would pass the runtime's 10k
@@ -1281,7 +1281,7 @@ func (r *retiredRun) countAbsent(ctx context.Context, files []database.BookFileC
 			continue
 		}
 		stat := r.stat
-		got, cerr := boundedcall.Call(ctx, r.bound, func() (retiredStat, error) {
+		got, cerr := library.Call(ctx, r.bound, func() (retiredStat, error) {
 			_, serr := stat(p)
 			switch {
 			case serr == nil:

@@ -8,21 +8,21 @@ package maintenance
 import (
 	"io/fs"
 
-	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // resolveReportPath returns where an op writes its report -- the caller's
 // explicit path when one was given, otherwise {RootDir}/.reports/<fileName> --
 // and proves that path's directory exists and is writable before returning it.
 // The logic lives in internal/libroot, shared with the legacy maintenance jobs;
-// see libroot.ReportPathNotify for why it fails rather than guessing, and why ops call
+// see library.ReportPathNotify for why it fails rather than guessing, and why ops call
 // it BEFORE doing any work. A default report directory that was world-writable
 // has that bit removed by the helper (and nothing else changed) and is logged here.
 func (p *Plugin) resolveReportPath(explicit, fileName string) (string, error) {
-	return libroot.ReportPathNotify(p.deps.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
+	return library.ReportPathNotify(p.deps.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
 		logger.New("maintenance").Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/library"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 
@@ -30,7 +31,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -733,7 +733,7 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
 		itunesMedia := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		// Walk up to find the iTunes Media/Audiobooks folder
-		if sp, err := safepath.Join(itunesMedia, "iTunes Media", "Audiobooks"); err == nil {
+		if sp, err := library.Join(itunesMedia, "iTunes Media", "Audiobooks"); err == nil {
 			audiobooks := sp.String()
 			if _, err := os.Stat(audiobooks); err == nil {
 				dirs = append(dirs, audiobooks)

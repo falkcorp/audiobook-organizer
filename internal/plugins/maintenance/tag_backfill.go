@@ -38,13 +38,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // tagBackfillWriteBatchSize is the row count at which pending rows are flushed
@@ -102,7 +102,7 @@ var tagReadTimeout = 60 * time.Second
 
 // tagReadMaxAbandoned caps how many of ONE run's timed-out tag reads may still
 // be running. A read that times out is abandoned, not stopped (see
-// boundedcall.Call): its goroutine finishes whenever the parser or the kernel lets
+// library.Call): its goroutine finishes whenever the parser or the kernel lets
 // go, or leaks for the life of the process. Past this many at once, something
 // systemic is wrong (a dead mount, a parser bug hit by a whole class of files)
 // and continuing would only pile up goroutines, so the run fails loudly instead.
@@ -421,7 +421,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			// waits on every worker (run_items.go wg.Wait), so the op would never
 			// return at all.
 			path, stat := f.FilePath, tagStat
-			meta, merr := boundedcall.Call(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
+			meta, merr := library.Call(ctx, tagReadTimeout, func() (metadata.Metadata, error) {
 				if _, statErr := stat(path); statErr != nil {
 					return metadata.Metadata{}, fmt.Errorf("%w: %v", errTagFileMissing, statErr)
 				}
@@ -433,7 +433,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				continue
 			}
 			if merr != nil {
-				timedOut := errors.Is(merr, boundedcall.ErrTimeout)
+				timedOut := errors.Is(merr, library.ErrTimeout)
 				if !timedOut && ctx.Err() != nil {
 					// Canceled mid-read: same as the cancel check above.
 					countBook()

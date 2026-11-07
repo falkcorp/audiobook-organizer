@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // ReportsPruneDefID is the def the reports_prune scheduler task enqueues.
@@ -229,7 +229,7 @@ func pruneReportsDir(ctx context.Context, root string, o reportsPruneOpts) (Repo
 		return res, fmt.Errorf("reports-prune: root_dir %q is not an absolute path; refusing", root)
 	}
 	root = filepath.Clean(root)
-	dir := filepath.Join(root, libroot.ReportDirName)
+	dir := filepath.Join(root, library.ReportDirName)
 	res.Dir = dir
 	if filepath.Dir(dir) != root {
 		return res, fmt.Errorf("reports-prune: %s is not directly under the library root; refusing", dir)
