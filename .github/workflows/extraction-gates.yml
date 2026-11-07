@@ -1,5 +1,5 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
 # last-edited: 2026-11-07
 
@@ -208,7 +208,18 @@ jobs:
         run: promtool --version
 
       - name: Every referenced series is served
-        run: go test ./internal/telemetrypolicy/ -run 'TestDeployReferencedSeriesServed' -count=1 -v
+        # A renamed test would make -run match nothing and exit 0, so require
+        # each test's PASS line, as the promtool step does.
+        run: |
+          set -euo pipefail
+          out="$(go test ./internal/telemetrypolicy/ -run '^(TestDeployReferencedSeriesServed|TestSeriesNames_Extractor)$' -count=1 -v 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          for test in TestDeployReferencedSeriesServed TestSeriesNames_Extractor; do
+            if ! grep -q -- "--- PASS: $test" <<<"$out"; then
+              echo "::error::$test did not run and pass (renamed or removed?)"
+              exit 1
+            fi
+          done
 
       - name: promtool check rules and test rules (must not skip)
         run: |
