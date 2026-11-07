@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-07
 
@@ -37,6 +37,7 @@ type Router struct {
 	spaOpt SPAOptions // stage 8 reads BasicExemptAssets (R1-17)
 	public map[string]map[string]bool
 	errs   []error
+	built  bool // set by Build: a registration after it could never be served
 
 	// stage is a test seam standing in for the perimeter stages between
 	// stage 2 and the mux (R1-17's chain takes its place); observe receives
@@ -163,7 +164,28 @@ func NewRouter(opts Options, deps Deps) *Router {
 
 func (r *Router) record(err error) { r.errs = append(r.errs, err) }
 
-func (r *Router) add(e *routeEntry) { r.routes = append(r.routes, e) }
+// errBuilt is a registration after Build: it is refused and logged, because
+// the handler Build returned can never serve it.
+var errBuilt = errors.New("httpapi: registration after Router.Build")
+
+// late reports, and logs at ERROR, a registration made after Build.
+func (r *Router) late(what string) error {
+	if !r.built {
+		return nil
+	}
+	err := fmt.Errorf("%w: %s ignored", errBuilt, what)
+	if r.deps.Log != nil {
+		r.deps.Log.Error("httpapi: registration after Router.Build ignored", "registration", what)
+	}
+	return err
+}
+
+func (r *Router) add(e *routeEntry) {
+	if r.late("route "+describe(e.info)) != nil {
+		return
+	}
+	r.routes = append(r.routes, e)
+}
 
 // ModuleGroup returns the group of module moduleID at /api/<id>/v1 and claims
 // /api/<id>/ for it. Every call for one ID returns the same group.
@@ -174,7 +196,11 @@ func (r *Router) ModuleGroup(moduleID string) *Group {
 	root := "/api/" + moduleID
 	g := &Group{router: r, owner: moduleID, root: root, base: root + "/v1"}
 	r.groups[moduleID] = g
-	if err := r.Claim(moduleID, root+"/"); err != nil {
+	if err := r.late("group " + root); err != nil {
+		g.err = err
+		return g
+	}
+	if err := r.claim(moduleID, root+"/"); err != nil {
 		r.record(err)
 	}
 	return g
@@ -190,7 +216,11 @@ func (r *Router) CoreGroup() *Group {
 	root := base[:strings.LastIndexByte(base, '/')]
 	g := &Group{router: r, owner: "core", root: root, base: base}
 	r.groups["core"] = g
-	if err := r.Claim("core", root+"/"); err != nil {
+	if err := r.late("group " + root); err != nil {
+		g.err = err
+		return g
+	}
+	if err := r.claim("core", root+"/"); err != nil {
 		r.record(err)
 	}
 	return g
@@ -202,6 +232,9 @@ func (r *Router) CoreGroup() *Group {
 // (ErrPublicNotAllowed). Core's own Public routes are a reviewed golden
 // instead (TestPublicRoutesGolden) and need no entry.
 func (r *Router) AllowPublic(owner string, names ...string) {
+	if r.late("AllowPublic "+owner) != nil {
+		return
+	}
 	set := r.public[owner]
 	if set == nil {
 		set = map[string]bool{}
@@ -244,9 +277,15 @@ func splitPattern(p string) (method, path string) {
 // the legacy error shape. Manifest routes are R1-14's: a mount whose Routes
 // yields any entry is refused (ErrLegacyManifest) until then, fail-closed.
 func (r *Router) MountLegacy(m LegacyMount) error {
+	if err := r.late("MountLegacy " + m.Owner); err != nil {
+		return err
+	}
 	var errs []error
 	if m.Owner == "" || m.Handler == nil {
 		errs = append(errs, fmt.Errorf("%w: legacy mount needs an Owner and a Handler", ErrLegacyManifest))
+	}
+	if m.Auth != LegacyAuthCore && m.Auth != LegacyAuthGin {
+		errs = append(errs, fmt.Errorf("%w: %s: legacy mount Auth %d is neither LegacyAuthCore nor LegacyAuthGin", ErrLegacyManifest, m.Owner, m.Auth))
 	}
 	if m.Routes != nil {
 		for lr := range m.Routes {
@@ -274,6 +313,9 @@ func (r *Router) MountLegacy(m LegacyMount) error {
 // authorization and is recorded as RouteInfo{Kind: SPA, Perm: rbac.Public,
 // RateClass: RateExempt}.
 func (r *Router) SPA(h http.Handler, o SPAOptions) error {
+	if err := r.late("SPA"); err != nil {
+		return err
+	}
 	if h == nil {
 		err := fmt.Errorf("%w: SPA handler is nil", ErrSchema)
 		r.record(err)
@@ -311,22 +353,32 @@ func (r *Router) rootOwner() (http.Handler, string) {
 // Claim records a subtree ("/api/v1/", trailing slash) or exact path
 // ("/ping") that owner occupies (05-http-api §4.9). Two owners whose claims
 // overlap are ErrPrefixCollision, returned here and again by Build; one rule,
-// no claim kinds and no yielding (SIMP-22).
+// no claim kinds and no yielding (SIMP-22). A claim must be a clean literal
+// path below "/": no ".", ".." or empty segment and no wildcard, because the
+// overlap test compares claims as strings.
 func (r *Router) Claim(owner, prefix string) error {
-	if owner == "" || !strings.HasPrefix(prefix, "/") || prefix == "/" {
-		err := fmt.Errorf("%w: %s: claim %q is not a path below /", ErrPrefixCollision, owner, prefix)
-		r.record(err)
+	if err := r.late("Claim " + prefix); err != nil {
 		return err
 	}
-	c := claim{owner: owner, prefix: prefix}
+	err := r.claim(owner, prefix)
+	if err != nil {
+		r.record(err)
+	}
+	return err
+}
+
+// claim is Claim without the recording.
+func (r *Router) claim(owner, prefix string) error {
+	if owner == "" || !strings.HasPrefix(prefix, "/") || prefix == "/" || strings.Contains(prefix, "{") ||
+		cleanUnder(prefix, "/") != nil {
+		return fmt.Errorf("%w: %s: claim %q is not a clean literal path below /", ErrPrefixCollision, owner, prefix)
+	}
 	for _, o := range r.claims {
 		if o.owner != owner && claimsOverlap(o.prefix, prefix) {
-			err := fmt.Errorf("%w: %q (%s) and %q (%s)", ErrPrefixCollision, o.prefix, o.owner, prefix, owner)
-			r.record(err)
-			return err
+			return fmt.Errorf("%w: %q (%s) and %q (%s)", ErrPrefixCollision, o.prefix, o.owner, prefix, owner)
 		}
 	}
-	r.claims = append(r.claims, c)
+	r.claims = append(r.claims, claim{owner: owner, prefix: prefix})
 	return nil
 }
 
@@ -444,6 +496,7 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 // of every problem. Build registers inside recover(), so a ServeMux conflict
 // is ErrPatternConflict, never a panic (§4.8).
 func (r *Router) Build() (http.Handler, error) {
+	r.built = true
 	errs := slices.Clone(r.errs)
 	errs = append(errs, r.checkClaims()...)
 	mux := http.NewServeMux()

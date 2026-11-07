@@ -1,5 +1,5 @@
 // file: core/httpapi/route_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: cb942937-3f29-482d-8361-0af61a978c2c
 // last-edited: 2026-11-07
 
@@ -375,4 +375,57 @@ func serve(h http.Handler, method, target, body string) *httptest.ResponseRecord
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// TestHandle_TrailingSlashRefused is the review's M2: ServeMux serves a
+// pattern ending in "/" as a subtree and 307s the slashless path to it;
+// native patterns are exact (05-http-api §4.8), "/{$}" is the one form.
+func TestHandle_TrailingSlashRefused(t *testing.T) {
+	for _, p := range []string{"/gadgets/", "/"} {
+		r, g := newRouter(t, "listGadgets")
+		Handle(g, Route{Method: http.MethodGet, Path: p, Name: "listGadgets", Perm: rbac.Public}, noop)
+		if _, err := r.Build(); !errors.Is(err, ErrSchema) || !strings.Contains(err.Error(), "subtree") {
+			t.Errorf("path %q: Build = %v, want ErrSchema naming the subtree", p, err)
+		}
+	}
+	r, g := newRouter(t, "listGadgets")
+	Handle(g, Route{Method: http.MethodGet, Path: "/gadgets/{$}", Name: "listGadgets", Perm: rbac.Public}, noop)
+	h := mustBuild(t, r)
+	if rec := serve(h, http.MethodGet, "/api/batcave/v1/gadgets/", ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /gadgets/ = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	// "/{$}" is exact: nothing below it reaches the route.
+	if rec := serve(h, http.MethodGet, "/api/batcave/v1/gadgets/batarang", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET below a /{$} route = %d, want 404", rec.Code)
+	}
+}
+
+// TestHandle_RateClassChecked is the review's m3: RateExempt is for the infra
+// probes and the SPA handler only, and an unknown class is refused.
+func TestHandle_RateClassChecked(t *testing.T) {
+	for _, rc := range []RateClass{RateExempt, RateExempt + 1} {
+		r, g := newRouter(t, "getGadget")
+		Handle(g, Route{Method: http.MethodGet, Path: "/gadgets/{id}", Name: "getGadget", Perm: rbac.Public, RateClass: rc}, getGadget)
+		if _, err := r.Build(); !errors.Is(err, ErrSchema) {
+			t.Errorf("RateClass %d: Build = %v, want ErrSchema", rc, err)
+		}
+	}
+	for _, rc := range []RateClass{RateDefault, RateAuth, RateExpensive} {
+		r, g := newRouter(t, "getGadget")
+		Handle(g, Route{Method: http.MethodGet, Path: "/gadgets/{id}", Name: "getGadget", Perm: rbac.Public, RateClass: rc}, getGadget)
+		mustBuild(t, r)
+	}
+}
+
+// TestHandle_PointerCreatedRefused is the review's m6: Resp = *Created[T]
+// is refused at registration, never a reflection panic.
+func TestHandle_PointerCreatedRefused(t *testing.T) {
+	r, g := newRouter(t, "createGadget")
+	Handle(g, Route{Method: http.MethodPost, Path: "/gadgets", Name: "createGadget", Perm: rbac.Public},
+		func(_ context.Context, in *In[createGadgetReq]) (*Created[Gadget], error) {
+			return &Created[Gadget]{Body: in.Req.Body}, nil
+		})
+	if _, err := r.Build(); !errors.Is(err, ErrSchema) || !strings.Contains(err.Error(), "by value") {
+		t.Fatalf("Build = %v, want ErrSchema asking for Created by value", err)
+	}
 }

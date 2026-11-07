@@ -1,5 +1,5 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
 // last-edited: 2026-11-07
 
@@ -171,7 +171,7 @@ func TestValidation_ProblemKinds(t *testing.T) {
 			return nil
 		})}, nil},
 		{module.ProblemRouteOutsidePrefix, nil, []module.Module{mod("batcave", func(r *module.Registrar) error {
-			r.MountLegacy(httpapi.LegacyMount{Handler: stand, TopSegments: []string{"arkham"}})
+			r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore, TopSegments: []string{"arkham"}})
 			return nil
 		})}, nil},
 		{module.ProblemLegacyPrefixCollision, nil, []module.Module{
@@ -180,11 +180,11 @@ func TestValidation_ProblemKinds(t *testing.T) {
 		}, httpapi.ErrPrefixCollision},
 		{module.ProblemSPAOwner, nil, []module.Module{
 			mod("batcave", func(r *module.Registrar) error {
-				r.MountLegacy(httpapi.LegacyMount{Handler: stand, ServesSPA: true})
+				r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore, ServesSPA: true})
 				return nil
 			}),
 			mod("arkham", func(r *module.Registrar) error {
-				r.MountLegacy(httpapi.LegacyMount{Handler: stand, ServesSPA: true})
+				r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore, ServesSPA: true})
 				return nil
 			}),
 		}, nil},
@@ -201,7 +201,7 @@ func TestValidation_ProblemKinds(t *testing.T) {
 			return nil
 		})}, nil},
 		{module.ProblemSPASegmentCollision, nil, []module.Module{mod("batcave", func(r *module.Registrar) error {
-			r.MountLegacy(httpapi.LegacyMount{Handler: stand, TopSegments: []string{"settings"}})
+			r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore, TopSegments: []string{"settings"}})
 			return nil
 		}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/settings/"} })}, nil},
 	}
@@ -313,7 +313,7 @@ func TestReservedIDsIncludeLegacyTopSegments(t *testing.T) {
 	}
 	// P7 re-checks IDs against every mount's TopSegments and SPAShared.
 	_, err = New(t.Context(), testConfig(t, mod("robin", nil), mod("arkham", func(r *module.Registrar) error {
-		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), SPAShared: []string{"robin"}})
+		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, SPAShared: []string{"robin"}})
 		return nil
 	})))
 	if !hasKind(err, module.ProblemReservedID) || !hasKind(err, module.ProblemRouteOutsidePrefix) {
@@ -325,7 +325,7 @@ func TestReservedSegmentsDisjointFromNonSPA(t *testing.T) {
 	// A SPAShared shell segment boots: GET /login is the shell page, POST
 	// /login the mount's. The request half needs R1-14's manifest routes.
 	mustNew(t, testConfig(t, mod("batcave", func(r *module.Registrar) error {
-		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), TopSegments: []string{"login"}, SPAShared: []string{"login"}})
+		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, TopSegments: []string{"login"}, SPAShared: []string{"login"}})
 		return nil
 	}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/login"} })))
 	// The failing half is the table row ProblemSPASegmentCollision above.
@@ -334,7 +334,7 @@ func TestReservedSegmentsDisjointFromNonSPA(t *testing.T) {
 func TestSPAOwner(t *testing.T) {
 	spa := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("X-Owner", "batcave") })
 	k := mustNew(t, testConfig(t, mod("batcave", func(r *module.Registrar) error {
-		r.MountLegacy(httpapi.LegacyMount{Handler: spa, ServesSPA: true})
+		r.MountLegacy(httpapi.LegacyMount{Handler: spa, Auth: httpapi.LegacyAuthCore, ServesSPA: true})
 		return nil
 	})))
 	rec := httptest.NewRecorder()
