@@ -1,9 +1,12 @@
-// file: internal/telemetry/ratchet_test.go
-// version: 1.0.0
+// file: internal/telemetrypolicy/ratchet_test.go
+// version: 1.1.0
 // guid: 2b8e6f10-3c4d-4a7e-9f15-a0b1c2d3e4f5
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
-package telemetry
+package telemetrypolicy
+
+// Moved from internal/telemetry with R1-10: it walks the ABO tree, so it lives
+// with the other repo-walking policy tests (04 §2.4, MOD-6).
 
 import (
 	"fmt"
@@ -150,7 +153,7 @@ func countClientGolangFamiliesScanned(root string) (int, map[string]int, int, er
 	return total, per, scanned, nil
 }
 
-func repoRoot(t *testing.T) string {
+func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -195,7 +198,7 @@ func ratchetRose(count, baseline int) bool { return count > baseline }
 
 func TestClientGolangConstructorRatchet(t *testing.T) {
 	baseline := readRatchetBaseline(t)
-	count, per, err := countClientGolangFamilies(repoRoot(t))
+	count, per, err := countClientGolangFamilies(moduleRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,10 +213,10 @@ func TestClientGolangConstructorRatchet(t *testing.T) {
 		for _, f := range files {
 			fmt.Fprintf(&sb, "\n  %s: %d", f, per[f])
 		}
-		t.Fatalf("client_golang families rose to %d, above the baseline %d. A new client_golang family is not allowed; use telemetry.Meter(...) (internal/telemetry/meter.go) and add the family to internal/telemetry/contract/testdata/series.golden. Files with families:%s", count, baseline, sb.String())
+		t.Fatalf("client_golang families rose to %d, above the baseline %d. A new client_golang family is not allowed; use telemetry.Meter(...) (internal/telemetry/meter.go) and add the family to internal/telemetrypolicy/testdata/series.golden. Files with families:%s", count, baseline, sb.String())
 	}
 	if count < baseline {
-		t.Logf("count fell to %d: lower internal/telemetry/testdata/client_golang_baseline.txt to %d in this PR", count, count)
+		t.Logf("count fell to %d: lower internal/telemetrypolicy/testdata/client_golang_baseline.txt to %d in this PR", count, count)
 	}
 }
 
@@ -308,7 +311,7 @@ var z = prometheus.NewCounter(prometheus.CounterOpts{Name: "z_total"})
 }
 
 func TestRatchet_ScansRealTree(t *testing.T) {
-	_, per, scanned, err := countClientGolangFamiliesScanned(repoRoot(t))
+	_, per, scanned, err := countClientGolangFamiliesScanned(moduleRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}

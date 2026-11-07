@@ -1,9 +1,9 @@
-// file: internal/telemetry/contract/series_contract_test.go
-// version: 1.4.3
+// file: internal/telemetrypolicy/series_contract_test.go
+// version: 1.5.0
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
-// Package contract pins the /metrics series-name contract: the name, type and
+// Package telemetrypolicy (internal/telemetry/contract until R1-10) pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
 // testdata/series.golden.
 //
@@ -16,7 +16,7 @@
 // PR, plus a row in seedingTable below so the family is guaranteed to appear in
 // the scrape (an unused client_golang Vec, an OTel instrument with no data
 // point and the Pebble collector without a source all export nothing).
-package contract
+package telemetrypolicy
 
 import (
 	"context"
@@ -752,7 +752,7 @@ func TestAIFamiliesOnScrape(t *testing.T) {
 // _bucket, _sum or _count samples), so a rename that forgets the dashboard
 // fails here instead of leaving a panel empty.
 func TestAIDashboardUsesGoldenNames(t *testing.T) {
-	raw, err := os.ReadFile("../../../deploy/grafana/dashboards/audiobook-organizer-ai.json")
+	raw, err := os.ReadFile("../../deploy/grafana/dashboards/audiobook-organizer-ai.json")
 	if err != nil {
 		t.Fatal(err)
 	}
