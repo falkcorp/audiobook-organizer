@@ -1,7 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.6.0
+# version: 1.7.0
 # guid: dep-review-cfg-2025-12-07
-# last-edited: 2026-10-18
+# last-edited: 2026-11-06
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -105,6 +105,15 @@ allow-dependencies-licenses:
   #                                transitively; not a direct dependency.
   - pkg:npm/caniuse-lite
   - pkg:npm/lru-cache
+  # minimatch 11 (Dependabot alert 66: 10.x is in the globparts-amplification
+  # DoS range) moved to BlueOak-1.0.0, the same OSI-approved permissive license
+  # as lru-cache above, and pulls in its helper @isaacs/nonrecursive-glob-match
+  # under the same license. Both are dev-only (the eslint / typescript-eslint
+  # toolchain) and never ship in the built UI. Same per-package reasoning.
+  - pkg:npm/minimatch
+  # Both purl spellings of the scoped name (the spec encodes "@" as %40).
+  - pkg:npm/%40isaacs/nonrecursive-glob-match
+  - pkg:npm/@isaacs/nonrecursive-glob-match
 
 # Deny specific packages
 # deny-packages:
