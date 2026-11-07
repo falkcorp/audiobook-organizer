@@ -1,0 +1,90 @@
+// file: core/app/options.go
+// version: 1.0.0
+// guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
+// last-edited: 2026-11-07
+
+package app
+
+import (
+	"log/slog"
+	"time"
+
+	"github.com/falkcorp/mediacore/module"
+)
+
+// Options configure one process (06 §6.4.5). Zero values are valid defaults
+// unless noted. These are the R1 fields that need no storage (06 §6.4.10); a
+// field whose package lands later (UI, UIOptions, Authenticators, Auth,
+// RetiredConfigNames, ConfigEnvBindings, Adapters, Updater, InterimBackends)
+// arrives with it.
+type Options struct {
+	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
+	// MetricNamespace is the namespace of every series the App emits: core's
+	// own, <MetricNamespace>_<subsystem>_<what>, and the modules',
+	// <MetricNamespace>_<what> while the app ships one module and
+	// <MetricNamespace>_<ID>_<what> with two or more ([a-z][a-z0-9_]*;
+	// default "mediacore"). ABO passes "audiobook_organizer".
+	MetricNamespace string
+	// ServiceName is the OTel resource's service.name, and the fixed
+	// server.address of the HTTP instruments core's stage 2 records (never the
+	// request's Host header). The kernel passes this one value as
+	// metrics.Options.ServiceName and as httpapi.Options.ServerName. Default
+	// AppID; ABO passes "audiobook-organizer".
+	ServiceName string
+	// ReservedAPINamespaces are the second segments under /api that the app's
+	// unprefixed surfaces occupy (ABO: the ABS unversioned /api/<seg> names);
+	// the kernel adds them to the reserved IDs in P1 so no module can take
+	// them (03 §3.6). Unprefixed top-level segments come from
+	// Manifest.LegacyPrefixes instead (FE2-11).
+	ReservedAPINamespaces []string
+	DisplayName           string // e.g. "Audiobook Organizer"
+	Version               string // the app's release version (the resource's service.version)
+
+	// EnvPrefix is the prefix of every env name (05-config §1.3,
+	// [A-Z][A-Z0-9]{1,15}); default strings.ToUpper(AppID) (ABO: "ABO").
+	EnvPrefix string
+	// StateDir is the compiled default of core.paths.state_dir, a pre-boot
+	// key resolved once per process by ResolveStateDir (05-config §1.7). At
+	// R1's skeleton no phase reads the state directory (P0a and storage land
+	// later); an app that touches state files before or outside New calls
+	// ResolveStateDir.
+	StateDir string
+	// ConfigFile is optional; layered under env/flags/DB overrides
+	// (05-config). Read once config lands (F3).
+	ConfigFile string
+	// Args/Env feed the flag and env layers; nil means
+	// os.Args[1:]/os.Environ(). At R1's skeleton only ResolveStateDir reads
+	// Env; the flag layer arrives with config (F3).
+	Args []string
+	Env  []string
+
+	// R1Values delivers ABO's stored listener and perimeter values to the
+	// kernel in release R1, when core config has no DB layer (05-config
+	// §1.12.1 owns the type and the rule). The kernel calls it once per boot
+	// at 06 §6.5.2 start step (7), after the module start hooks of step (2)
+	// and before the first listener opens. nil = every key at core's default
+	// (hello). Release R1 only: F3's PR deletes the field and the type.
+	R1Values func() R1Values
+
+	// LegacyAuthGinUntil names the one module whose LegacyMount may use
+	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
+	// and deletes the field. "" = no module may (SEC2-17).
+	LegacyAuthGinUntil module.ID
+
+	// Logger overrides the default slog handler construction (tests); nil =
+	// from config (05-logging §4).
+	Logger *slog.Logger
+}
+
+// R1Values is the release-R1-only value Options.R1Values returns (05-config
+// §1.12.1). Deleted in F3.
+type R1Values struct {
+	Listen                       string        // HEAD's --host and --port → core.http.listen
+	TLSCertFile, TLSKeyFile      string        // HEAD's --tls-cert, --tls-key
+	PeerAllowlist                []string      // ALLOWED_PEER_CIDRS → core.http.peer_allowlist
+	TrustedProxies               []string      // TUNNEL_CONNECTOR_ADDRS → core.http.trusted_proxies
+	RateLimitEnabled             bool          // enable_rate_limit → core.http.rate_limit.enabled
+	RateLimitPerMinute           int           // api_rate_limit_per_minute → core.http.rate_limit.per_minute
+	JSONMaxBytes, UploadMaxBytes int64         // json_body_limit_mb, upload_body_limit_mb (MiB → bytes)
+	ShutdownBudget               time.Duration // ABO_CORE_SHUTDOWN_BUDGET; 0 = core's default (05-health §5H.4)
+}
