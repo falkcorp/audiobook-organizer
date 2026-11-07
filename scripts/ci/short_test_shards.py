@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
-# last-edited: 2026-10-09
+# last-edited: 2026-11-06
 """Run the whole short Go test suite as one of N shards, then merge coverage.
 
 `make test-short` runs `go test ./... -short -race` as one process tree, so
@@ -36,10 +36,10 @@ so its provenance is recorded here). The values for internal/server (414 s),
 internal/metafetch (240 s) and internal/database (157 s) are the Mac `-short`
 numbers from appendix A.7 of
 docs/proposals/2026-10-holistic/07-design-decisions-and-modularity.md.
-internal/plugins/maintenance is 343 s, its package elapsed time under
-`go test -short -race -json` on the Mac on 2026-10-09 (the measurement that
-produced its go_test_timings.json key; A.7's 578 s predates #3781, which made
-its fragment-fixer tests parallel). internal/scanner (A.7 timed out without a
+internal/plugins/maintenance is 186 s, its package elapsed time under
+`go test -short -race` on the Mac on 2026-11-06, on a host at load average 50
+(it was 702 s there before its tests moved to in-memory stores, and its
+go_test_timings.json key predates that move). internal/scanner (A.7 timed out without a
 number) and internal/server/handlers/abs (not in A.7) use the sum of their
 go_test_timings.json entries, 292 s and 239 s. A package with tests that is in
 neither file weighs _DEFAULT_WEIGHT (as in fixture_test_packages.py); a package

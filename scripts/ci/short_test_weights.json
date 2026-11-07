@@ -1,7 +1,7 @@
 {
   "internal/database": 351,
   "internal/metafetch": 73,
-  "internal/plugins/maintenance": 602,
+  "internal/plugins/maintenance": 186,
   "internal/scanner": 288,
   "internal/server": 397,
   "internal/server/handlers/abs": 322
