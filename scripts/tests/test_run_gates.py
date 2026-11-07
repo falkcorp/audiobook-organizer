@@ -1,5 +1,5 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
 # last-edited: 2026-11-06
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
@@ -44,8 +44,29 @@ class ManifestTests(unittest.TestCase):
                 "vet-darwin",
                 "vet-integration",
                 "commits-build",
+                "core-errcheck",
+                "core-interface-width",
+                "core-pprof",
+                "core-mocks",
+                "core-coverage-floor",
             },
         )
+
+    def test_each_module_has_its_own_ratchet_baseline(self):
+        # 09 §9.4 R1: errcheck and interface-width ratchet per module over
+        # separate baselines, so a move into core cannot re-baseline the root.
+        by = {g.name: g for g in rg.parse_manifest((ROOT / "ci/gates.txt").read_text())}
+        for root_name, core_name in (
+            ("errcheck", "core-errcheck"),
+            ("interface-width", "core-interface-width"),
+        ):
+            self.assertNotEqual(by[root_name].baseline, by[core_name].baseline)
+            self.assertTrue(by[core_name].baseline.startswith("core/"), core_name)
+            self.assertEqual(by[core_name].kind, "ratchet")
+            self.assertEqual(by[core_name].job, "core-job")
+            for g in (by[root_name], by[core_name]):
+                n = rg.read_int_baseline((ROOT / g.baseline).read_text())
+                self.assertGreaterEqual(n, 0, g.name)
 
     def test_rejects_bad_rows(self):
         with self.assertRaises(rg.ManifestError):
@@ -120,7 +141,9 @@ class OneWayRuleTests(unittest.TestCase):
         for g in gates:
             if g.kind != "ratchet":
                 continue
-            m = re.search(r"scripts/\S+", g.command)
+            # The script is named by the measure command: core's gates run
+            # through `make -C core <target>`, which names no script.
+            m = re.search(r"(?:core/)?scripts/\S+", g.lower)
             self.assertIsNotNone(m, g.name)
             src = (ROOT / m.group(0)).read_text()
             checked += 1
@@ -131,11 +154,16 @@ class OneWayRuleTests(unittest.TestCase):
             )
             self.assertIsNotNone(blk, f"{g.name}: no actual<baseline branch found")
             self.assertNotIn("exit", blk.group(1), f"{g.name}: falling count must not exit")
-        self.assertGreaterEqual(checked, 2)
+        self.assertGreaterEqual(checked, 4)
 
     def test_ratchet_scripts_expose_measure(self):
-        for script in ("check-errcheck-ratchet.sh", "check-interface-width.sh"):
-            self.assertIn('"--measure"', (ROOT / "scripts" / script).read_text())
+        for script in (
+            "scripts/check-errcheck-ratchet.sh",
+            "scripts/check-interface-width.sh",
+            "core/scripts/ci/check-errcheck-ratchet.sh",
+            "core/scripts/ci/check-interface-width.sh",
+        ):
+            self.assertIn('"--measure"', (ROOT / script).read_text(), script)
 
 
 class LowerReportTests(unittest.TestCase):

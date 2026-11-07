@@ -1,7 +1,7 @@
 # file: .github/workflows/core-ci.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: 86d3ec85-7629-46f7-9682-c011fb888337
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 
 # core's merge gate (09 §9.2.1 core-ci row; 12 SC4). `./...` from the root
 # never reaches the nested core/ module, so core's own `make -C core ci` runs
@@ -59,6 +59,15 @@ jobs:
 
       - name: Pin
         run: echo "GOTOOLCHAIN=$(make -s -C core print-toolchain)" >> "$GITHUB_ENV"
+
+      # core's errcheck and interface-width ratchets (core/scripts/ci) drive
+      # golangci-lint. Same pin as ci.yml's ratchet jobs: a version bump can
+      # change the finding count on its own and trip a ratchet as if code had
+      # changed.
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: make -C core ci
         run: make -C core ci
