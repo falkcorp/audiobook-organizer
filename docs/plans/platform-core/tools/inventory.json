@@ -453,7 +453,10 @@
    "core/.interface-width-baseline",
    "core/scripts/ci/check-errcheck-ratchet.sh",
    "core/scripts/ci/check-interface-width.sh",
-   "ci/gates.txt"
+   "ci/gates.txt",
+   "scripts/tests/test_run_gates.py",
+   "scripts/tests/test_deadcode_ratchet.py",
+   ".github/workflows/core-ci.yml"
   ],
   "spec": "09 §9.4 R1's CI classification (every row); 12 §12.3.11 (core ci target); 03 §3.2 item 4",
   "notes": "Tier: many targets and baselines; a move must not silently re-baseline a ratchet. A move must not silently re-baseline a ratchet. core-ci (make -C core ci) is whole for an export of core/. Owns gate tests: every row of R1's CI classification table; scripts/ci/short_test_shards.py (one core shard, stale entries fail)."
