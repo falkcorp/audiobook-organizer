@@ -1,5 +1,5 @@
 // file: core/httpapi/route_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cb942937-3f29-482d-8361-0af61a978c2c
 // last-edited: 2026-11-07
 
@@ -272,6 +272,25 @@ func TestBind_TagsCompiledAtRegistration(t *testing.T) {
 	if called {
 		t.Fatal("a handler ran for a route refused at registration")
 	}
+}
+
+// TestHandle_UnboundedJSONBodyRefused: MaxBody -1 means a streamed body the
+// handler bounds itself; a body:"json" body is decoded into memory, so a
+// negative MaxBody on such a route is a boot error, not an unbounded read.
+func TestHandle_UnboundedJSONBodyRefused(t *testing.T) {
+	for _, maxBody := range []int64{-1, -5} {
+		r, g := newRouter(t, "createGadget")
+		Handle(g, Route{Method: http.MethodPost, Path: "/gadgets", Name: "createGadget", Perm: rbac.Public, MaxBody: maxBody},
+			func(_ context.Context, in *In[createGadgetReq]) (Gadget, error) { return in.Req.Body, nil })
+		if _, err := r.Build(); !errors.Is(err, ErrBadBinding) {
+			t.Fatalf("MaxBody %d on a body:\"json\" route: Build error = %v, want ErrBadBinding", maxBody, err)
+		}
+	}
+	// A route with no JSON body may stream: MaxBody -1 builds.
+	r, g := newRouter(t, "uploadGadget")
+	Handle(g, Route{Method: http.MethodPut, Path: "/gadgets/{id}/blueprint", Name: "uploadGadget", Perm: rbac.Public, MaxBody: -1},
+		func(context.Context, *In[getGadgetReq]) (NoContent, error) { return NoContent{}, nil })
+	mustBuild(t, r)
 }
 
 func TestHandle_RouteShape(t *testing.T) {

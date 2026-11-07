@@ -1,5 +1,5 @@
 // file: core/httpapi/route.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e02f805-1af9-41bb-87b2-82fc71cc65f0
 // last-edited: 2026-11-07
 
@@ -45,8 +45,13 @@ type Route struct {
 	Doc     string
 	Tags    []string
 
-	Guards    Guards    // extra identity requirements (interactive-only, owner step-up)
-	MaxBody   int64     // 0 = core.http.body.json_max_bytes; -1 = streaming upload, handler enforces
+	Guards Guards // extra identity requirements (interactive-only, owner step-up)
+	// MaxBody: 0 = core.http.body.json_max_bytes; -1 = streaming upload,
+	// handler enforces. A negative value is only for a raw body the handler
+	// reads itself: a body:"json" body is decoded into memory and always read
+	// through http.MaxBytesReader (05-http-api §3.4), so Build refuses a
+	// negative MaxBody on a route with one (ErrBadBinding).
+	MaxBody   int64
 	RateClass RateClass // RateDefault, RateAuth, RateExpensive, RateExempt
 	ETag      bool      // opt-in: GET returns ETag from the entity Version, writes honour If-Match (§4.3)
 	Success   int       // success status; 0 = 200 (201 if Resp is Created[T], 204 if NoContent)
@@ -192,6 +197,10 @@ func Handle[Req, Resp any](g *Group, rt Route, fn func(ctx context.Context, in *
 			e.errs = append(e.errs, err)
 		}
 		e.binding = b
+		if b.body != nil && rt.MaxBody < 0 {
+			e.errs = append(e.errs, fmt.Errorf("%w: %s: MaxBody %d with a body:\"json\" field: a decoded body is always bounded",
+				ErrBadBinding, describe(e.info), rt.MaxBody))
+		}
 		if b.body != nil {
 			reqSch, reqErr := jsonschemax.For[Req](schemaOverrides())
 			e.reflectBody(g.owner, b, reqSch, reqErr)

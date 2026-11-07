@@ -1,5 +1,5 @@
 // file: core/httpapi/bind.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9ce63bfe-21b4-463d-ac55-8db492ac4b2c
 // last-edited: 2026-11-07
 
@@ -325,15 +325,13 @@ func decodeBody(w http.ResponseWriter, r *http.Request, rt Route, dst reflect.Va
 		return &Error{Status: http.StatusUnsupportedMediaType, Code: "unsupported_media_type",
 			Detail: "Content-Type must be application/json"}
 	}
-	body := r.Body
+	// Handle refuses a negative MaxBody on a body:"json" route; a value <= 0
+	// still gets the default here, so a decoded body is never unbounded.
 	limit := rt.MaxBody
-	if limit == 0 {
+	if limit <= 0 {
 		limit = defaultJSONMaxBytes
 	}
-	if limit > 0 {
-		body = http.MaxBytesReader(w, r.Body, limit)
-	}
-	dec := json.NewDecoder(body)
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	if !rt.Lenient {
 		dec.DisallowUnknownFields()
 	}
