@@ -1,5 +1,5 @@
 // file: core/metrics/metrics_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 21f5d697-6d25-4e0b-be83-f34e89311ae5
 // last-edited: 2026-11-07
 
@@ -24,10 +24,12 @@ import (
 	"github.com/prometheus/common/model"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // newTest builds a Provider with the Prometheus exporter on and registers its
@@ -431,6 +433,8 @@ func TestModuleNamespace_StableUnderEnablement(t *testing.T) {
 	}
 }
 
+// TestTranslationStrategyPinned flips a process global: neither it nor any
+// sibling test that builds a Provider may call t.Parallel.
 func TestTranslationStrategyPinned(t *testing.T) {
 	// The test sets the deprecated process-global scheme on purpose: it is
 	// what the exporter would follow if its translation strategy were not
@@ -554,6 +558,67 @@ func TestShutdownFlushes(t *testing.T) {
 	})
 	if !slices.Contains(exp.names(), "flush.things") || !exp.shut {
 		t.Fatalf("last batch not exported on shutdown: names %v, exporter shut down %v", exp.names(), exp.shut)
+	}
+}
+
+// budgetExporter is a span exporter that records how much of its shutdown
+// context's deadline was left when the batcher handed it over.
+type budgetExporter struct {
+	left     time.Duration
+	deadline bool
+}
+
+func (*budgetExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error { return nil }
+func (b *budgetExporter) Shutdown(ctx context.Context) error {
+	dl, ok := ctx.Deadline()
+	b.deadline = ok
+	if ok {
+		b.left = time.Until(dl)
+	}
+	return nil
+}
+
+// TestShutdown_TracerBudget pins the span batcher's share of the shutdown
+// deadline. A Provider with a meter reader halves it so a hung tracer cannot
+// starve the metric flush; a tracing-only Provider (ABO's tracing half) has
+// no metric flush and passes the whole deadline on. Before this, the
+// tracing-only Provider halved too, so behind the facade's own split the
+// span batcher got a quarter of the shutdown budget instead of a half.
+func TestShutdown_TracerBudget(t *testing.T) {
+	const deadline = 8 * time.Second
+	for _, tc := range []struct {
+		name       string
+		prometheus bool
+		want       time.Duration
+	}{
+		{"tracing only: the whole deadline", false, deadline},
+		{"with a meter reader: half", true, deadline / 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				rec := &budgetExporter{}
+				e := grpcExporters()
+				e.span = func(context.Context, ...otlptracegrpc.Option) (sdktrace.SpanExporter, error) { return rec, nil }
+				p, err := newProvider(context.Background(), Options{
+					AppID:      "a",
+					Prometheus: tc.prometheus,
+					Tracing:    &OTLPTracing{Endpoint: "collector.example.invalid:4317"},
+				}, e)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Fake time: nothing elapses unless every goroutine blocks, so
+				// the share is exact.
+				ctx, cancel := context.WithTimeout(context.Background(), deadline)
+				defer cancel()
+				if err := p.Shutdown(ctx); err != nil {
+					t.Fatalf("shutdown: %v", err)
+				}
+				if !rec.deadline || rec.left != tc.want {
+					t.Errorf("span exporter shutdown got deadline=%v with %v left, want %v", rec.deadline, rec.left, tc.want)
+				}
+			})
+		})
 	}
 }
 

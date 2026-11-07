@@ -1,5 +1,5 @@
 // file: core/metrics/provider.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a82f67cc-87d5-45c3-a73b-811125fbe1cd
 // last-edited: 2026-11-07
 
@@ -89,6 +89,7 @@ type Provider struct {
 	regW    *familyRegisterer
 	fam     *families
 	sdkMP   *sdkmetric.MeterProvider
+	readers int // meter readers on sdkMP; 0 for a tracing-only Provider
 	mp      metric.MeterProvider
 	sdkTP   *sdktrace.TracerProvider
 	tp      trace.TracerProvider
@@ -183,6 +184,7 @@ func newProvider(ctx context.Context, o Options, exp exporters) (*Provider, erro
 			return nil, fmt.Errorf("metrics: build the Prometheus exporter: %w", err)
 		}
 		mpOpts = append(mpOpts, sdkmetric.WithReader(exp))
+		p.readers++
 	}
 	if o.OTLP != nil {
 		reader, endpoint, note, err := newOTLPReader(ctx, o.OTLP, exp.metric)
@@ -193,6 +195,7 @@ func newProvider(ctx context.Context, o Options, exp exporters) (*Provider, erro
 			p.degrade(DegradedOTLPDisabled, "the OTLP metric push is off; the Prometheus scrape is unaffected", err)
 		} else {
 			mpOpts = append(mpOpts, sdkmetric.WithReader(reader))
+			p.readers++
 			p.log.Info("metrics: OTLP metric push on", "endpoint", endpoint)
 		}
 	}
@@ -270,15 +273,17 @@ func (p *Provider) Gatherer() prometheus.Gatherer { return p.reg }
 func (p *Provider) Handler() http.Handler { return p.handler }
 
 // Shutdown flushes the OTLP readers and the span batcher and stops them. It
-// is idempotent and bounded by ctx: with a deadline, the tracer gets half of
-// the remaining time and the meter provider the rest, so a tracer hung on an
-// unreachable collector cannot starve the last metric flush.
+// is idempotent and bounded by ctx. With a deadline and at least one meter
+// reader, the tracer gets half of the remaining time and the meter provider
+// the rest, so a tracer hung on an unreachable collector cannot starve the
+// last metric flush. A Provider with no meter reader (tracing only) has no
+// metric flush to protect, so the span batcher gets the whole deadline.
 func (p *Provider) Shutdown(ctx context.Context) error {
 	p.shutdownOnce.Do(func() {
 		var errs []error
 		if p.sdkTP != nil {
 			tctx, cancel := ctx, context.CancelFunc(func() {})
-			if dl, ok := ctx.Deadline(); ok {
+			if dl, ok := ctx.Deadline(); ok && p.readers > 0 {
 				tctx, cancel = context.WithTimeout(ctx, time.Until(dl)/2)
 			}
 			errs = append(errs, p.sdkTP.Shutdown(tctx))
