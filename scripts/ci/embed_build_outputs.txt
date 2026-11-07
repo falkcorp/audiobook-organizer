@@ -1,0 +1,14 @@
+# file: scripts/ci/embed_build_outputs.txt
+# version: 1.0.0
+# guid: 025fad4d-8026-4e50-bb65-41bd3ad84c12
+# last-edited: 2026-11-07
+#
+# The in-image //go:embed outputs (03 §3.2 item 4): paths, relative to the root
+# module, that .dockerignore excludes and that a declared earlier stage of both
+# Dockerfiles produces and copies into the go build stage. One path per line;
+# blank lines and # lines are ignored. Read by scripts/ci/check_embed_context.py,
+# which compares this list with the Dockerfiles' COPY --from= lines into a go
+# build stage in both directions. Core's own list is
+# core/scripts/ci/embed_build_outputs.txt (module-relative, no Dockerfile
+# comparison).
+web/dist

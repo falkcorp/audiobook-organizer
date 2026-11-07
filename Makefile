@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.51.3
+# version: 2.51.4
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-07
 
@@ -93,7 +93,7 @@ GO_STRIP_LDFLAGS := -s -w
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet vet-darwin vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
-        build-modules tidy-check genproto-exclude-root module-skew \
+        build-modules tidy-check genproto-exclude-root module-skew embed-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -707,6 +707,16 @@ genproto-exclude-root:
 module-skew:
 	@python3 scripts/ci/check_module_skew.py --pin github.com/google/jsonschema-go@v0.4.3 --pin go.opentelemetry.io/otel/exporters/prometheus@v0.69.0
 
+## embed-check: every //go:embed input of the root module and of core lies inside
+## the Docker build context (.dockerignore, moby semantics) or is an in-image
+## output listed in scripts/ci/embed_build_outputs.txt, and that list agrees with
+## both Dockerfiles' COPY --from= lines into a go build stage (03 §3.2 item 4).
+## go list -e runs over every (GOOS, tag set) of 03 §3.5.1 item 4's list, so a
+## tree with no built web/dist passes and no placeholder web/dist is ever made.
+## Core's own half is `make -C core embed-check`.
+embed-check:
+	@python3 scripts/ci/check_embed_context.py
+
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test
 
@@ -862,7 +872,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check vet-darwin vet-integration genproto-exclude-root module-skew test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck oplint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check vet-darwin vet-integration genproto-exclude-root module-skew embed-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool

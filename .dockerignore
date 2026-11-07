@@ -1,6 +1,7 @@
 # file: .dockerignore
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5baf4c69-7e4c-4d37-8e5b-673d26ce7fd2
+# last-edited: 2026-11-07
 
 .git
 .gitignore
@@ -30,3 +31,12 @@ coverage.html
 *.md
 Makefile.local
 docker-compose.yml
+
+# Nested npm trees and core's built UI output (09 §9.4 R1; R4-4). Patterns are
+# anchored at the context root, so `node_modules` above covers only the root one.
+# Every //go:embed input must lie inside the context or be a listed in-image
+# output: scripts/ci/check_embed_context.py (make embed-check) enforces it, and
+# `docs` and root `*.md` above stay excluded.
+**/node_modules
+core/web/packages/*/dist
+core/examples/*/web/node_modules

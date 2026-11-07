@@ -1,7 +1,7 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.4.0
+# version: 1.4.1
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ class ManifestTests(unittest.TestCase):
                 "vet-darwin",
                 "vet-integration",
                 "commits-build",
+                "embed-context",
                 "core-errcheck",
                 "core-interface-width",
                 "core-pprof",

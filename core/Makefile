@@ -1,7 +1,7 @@
 # file: core/Makefile
-# version: 1.1.0
+# version: 1.2.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 
 # core's own Makefile (12 §12.3.11). It must run from an export of core/ alone
 # (12 SC4) and, after the split, the core repo has nothing else, so every
@@ -18,7 +18,7 @@ export GOTOOLCHAIN := go1.27.3
 PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
-	errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor test-nightly
+	errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor embed-check test-nightly
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
 print-toolchain:
@@ -36,10 +36,10 @@ print-toolchain:
 ## not outlive its reason.
 ##
 ## 12 §12.3.11's full list also has vet-darwin vet-integration staticcheck
-## replace-check version-check embed-check; each joins this target in the PR that
-## creates its subject or script (the darwin and integration vets run over core
-## from the root's `make ci` already, R1-02).
-ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor
+## replace-check version-check; each joins this target in the PR that creates its
+## subject or script (the darwin and integration vets run over core from the
+## root's `make ci` already, R1-02).
+ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor embed-check
 	@echo "core ci passed"
 
 build:
@@ -131,3 +131,11 @@ coverage-floor:
 		echo "coverage-floor: .ci/coverage-floor.txt exists but this target does not enforce it; wire it"; exit 1; \
 	fi
 	@echo "coverage-floor: no floor yet"
+
+## embed-check: every embed pattern of core resolves to a file, except a pattern
+## naming a build output listed in scripts/ci/embed_build_outputs.txt (empty until
+## hello's UI lands, 07 §7.6.3) that this tree has not built. core builds no
+## image, so there is no .dockerignore or Dockerfile comparison here; the root's
+## `make embed-check` judges core's packages against the Docker context too.
+embed-check:
+	$(PYTHON) scripts/ci/check_embed_outputs.py
