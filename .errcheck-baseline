@@ -81,4 +81,4 @@
 # were deleted along with the unchecked errors they carried. Nothing here
 # fixes a finding in code that still exists.
 # 2026-10-09 (07-C1): 779 -> 770, measured with this script
-770
+727
