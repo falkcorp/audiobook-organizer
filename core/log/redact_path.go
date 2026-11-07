@@ -1,7 +1,7 @@
 // file: core/log/redact_path.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 03986f4e-57ff-4667-bcfb-da4deb8f283b
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package log
 
@@ -27,6 +27,12 @@ const InviteTokenRedacted = "[REDACTED]"
 //	GET    /api/v1/auth/invite/:token              public lookup
 //	DELETE /api/v1/users/invites/:id               revoke
 //	POST   /api/v1/users/invites/:id/resend        resend
+//	GET    /api/core/v1/auth/invites/{token}       core's invite route (05-authn)
+//
+// The core route is listed here, not matched by a generic "invite segment at
+// any position" rule, so a dot-walked path over it still fails closed to
+// "/[REDACTED]" instead of being redacted positionally; Redactor's default
+// invite PathRule calls this function (05-logging §3 DefaultPathRules).
 //
 // Revoke and resend now take the invite's non-secret ID, not its token. The
 // segment is still redacted: an older client (or a hand-typed request) can
@@ -38,6 +44,7 @@ func inviteTokenPrefixes() [][]string {
 		{"api", "v1", "auth", "invite"},
 		{"api", "users", "invites"},
 		{"api", "v1", "users", "invites"},
+		{"api", "core", "v1", "auth", "invites"},
 	}
 }
 
