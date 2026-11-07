@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 package server
 
@@ -246,8 +246,18 @@ func TestInviteRateLimit_UnparseableBodiesShareAFallbackBucket(t *testing.T) {
 	}
 }
 
+// The global layer is a token bucket that refills 5 tokens a second, so on a
+// real clock "past the ceiling" lasts only until the next refill: a loaded CI
+// agent that stalls 200ms between the first refusal and the final probe sees a
+// token come back and answers 200 (observed on Woodpecker, pipeline 2519). The
+// test holds the global limiter's clock still, so the bucket cannot refill and
+// the count is exact rather than "about the burst".
 func TestInviteRateLimit_Global(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
+	// Atomic: the limiter's sweeper goroutine may read the clock too.
+	var clockNanos atomic.Int64
+	clockNanos.Store(time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC).UnixNano())
+	h.limits.global.UseClock(func() time.Time { return time.Unix(0, clockNanos.Load()).UTC() })
 	// A new token AND a new client every time: only the global ceiling can trip.
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteGlobalRateBurst+30, func(i int) *httptest.ResponseRecorder {
 		return h.get(inviteTestToken(1000+i), fmt.Sprintf("198.51.100.%d", i%254+1), map[string]string{"CF-Connecting-IP": fmt.Sprintf("203.0.113.%d", i%254+1)})
@@ -255,12 +265,22 @@ func TestInviteRateLimit_Global(t *testing.T) {
 	if !limited {
 		t.Fatalf("global ceiling never tripped after %d requests", allowed)
 	}
-	if allowed < inviteGlobalRateBurst || allowed > inviteGlobalRateBurst+10 {
-		t.Fatalf("global allowed %d requests, want about the burst of %d", allowed, inviteGlobalRateBurst)
+	if allowed != inviteGlobalRateBurst {
+		t.Fatalf("global allowed %d requests, want exactly the burst of %d", allowed, inviteGlobalRateBurst)
 	}
-	// Even a never-seen token from a never-seen client is refused.
+	// Even a never-seen token from a never-seen client is refused, however long
+	// the machine took to get here.
 	if w := h.get(inviteTestToken(9999), "203.0.113.250", nil); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("fresh token and client past the global ceiling: %d, want 429", w.Code)
+	}
+	// The refusal holds until the bucket really refills: one token's worth of
+	// the (stepped) clock admits exactly one request.
+	clockNanos.Add(int64(time.Minute / inviteGlobalRatePerMinute))
+	if w := h.get(inviteTestToken(9998), "203.0.113.249", nil); w.Code != http.StatusOK {
+		t.Fatalf("after one token's refill: %d, want 200", w.Code)
+	}
+	if w := h.get(inviteTestToken(9997), "203.0.113.248", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("a second request after a single token's refill: %d, want 429", w.Code)
 	}
 }
 

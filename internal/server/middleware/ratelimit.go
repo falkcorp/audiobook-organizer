@@ -1,7 +1,7 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
-// last-edited: 2026-10-21
+// last-edited: 2026-11-07
 
 package middleware
 
@@ -114,6 +114,21 @@ func NewIPRateLimiter(requestsPerMinute int, burst int) *IPRateLimiter {
 	}
 }
 
+// UseClock makes fn the limiter's clock; a nil fn is ignored. It is time.Now
+// in production. It exists so a test can hold the clock still (or step it)
+// and so decide exactly how many tokens a token bucket has refilled: the
+// bucket refills continuously with real time, so a test that compares a
+// request count against the burst is otherwise at the mercy of how long the
+// machine stalls between two requests. Safe to call while the sweeper runs.
+func (r *IPRateLimiter) UseClock(fn func() time.Time) {
+	if fn == nil {
+		return
+	}
+	r.mu.Lock()
+	r.now = fn
+	r.mu.Unlock()
+}
+
 func (r *IPRateLimiter) newLimiter() *rate.Limiter {
 	perSecond := float64(r.requestsPerMin) / 60.0
 	return rate.NewLimiter(rate.Limit(perSecond), r.burst)
@@ -123,10 +138,9 @@ func (r *IPRateLimiter) newLimiter() *rate.Limiter {
 // Cost is O(1): one map lookup and one list move/insert under r.mu. It
 // never iterates r.entries.
 func (r *IPRateLimiter) limiterForIP(ip string) *rate.Limiter {
-	now := r.now()
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	now := r.now()
 
 	if el, ok := r.entries[ip]; ok {
 		entry := el.Value.(*limiterEntry)
@@ -170,10 +184,10 @@ func (r *IPRateLimiter) removeLocked(el *list.Element) {
 // its cost is proportional to the number of evictions, not the map size.
 // It returns the number of entries evicted.
 func (r *IPRateLimiter) sweep() int {
-	now := r.now()
 	evicted := 0
 
 	r.mu.Lock()
+	now := r.now()
 	for el := r.lru.Back(); el != nil; el = r.lru.Back() {
 		if now.Sub(el.Value.(*limiterEntry).lastSeen) <= r.idleTTL {
 			break
@@ -276,9 +290,9 @@ func (r *IPRateLimiter) ReserveKey(key string) (KeyReservation, bool) {
 	if key == "" {
 		key = "unknown"
 	}
-	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	now := r.now()
 	el, ok := r.entries[key]
 	if !ok {
 		if r.pending[key] >= r.burst {
@@ -295,7 +309,12 @@ func (r *IPRateLimiter) ReserveKey(key string) (KeyReservation, bool) {
 	r.lru.MoveToFront(el)
 	bucket := entry.limiter
 
-	at := time.Now()
+	// The bucket arithmetic runs on the limiter's clock, the same one that
+	// judges idleness above, so a clock injected with UseClock governs every
+	// decision. (This line read time.Now() while the idle check read r.now(),
+	// which left refill beyond the reach of the seam: a test could not hold
+	// the bucket still and had to race the real clock.)
+	at := now
 	if bucket.TokensAt(at) < float64(1+r.pending[key]) {
 		return KeyReservation{}, false
 	}
@@ -320,7 +339,7 @@ func (k KeyReservation) Commit() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.releasePendingLocked(k.key)
-	r.insertLocked(k.key).ReserveN(time.Now(), 1)
+	r.insertLocked(k.key).ReserveN(r.now(), 1)
 }
 
 // Cancel gives the token back. For a tracked key it is returned to the
