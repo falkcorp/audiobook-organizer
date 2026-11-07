@@ -1,5 +1,5 @@
 // file: core/auth/auth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8eb27054-dc72-466c-99fe-670b02a386b8
 // last-edited: 2026-11-06
 
@@ -15,34 +15,34 @@ import (
 )
 
 // TestMethod_Classification: among core methods only MethodSession is
-// interactive and may change credentials; MethodAuthDisabled is explicitly
+// interactive; MethodSession and MethodSessionDelegated may change credentials
+// (the reset-link flow; owner decision 2026-11-06); MethodAuthDisabled is explicitly
 // non-interactive and may not change credentials (fail closed); unknown
 // methods, extension and compat names included, neither (05-authn §3.1).
 func TestMethod_Classification(t *testing.T) {
 	for _, c := range []struct {
 		m           Method
 		interactive bool
+		mayChange   bool
 	}{
-		{MethodSession, true},
-		{MethodSessionDelegated, false},
-		{MethodAPIKey, false},
-		{MethodAuthDisabled, false},
-		{MethodNone, false},
+		{MethodSession, true, true},
+		{MethodSessionDelegated, false, true},
+		{MethodAPIKey, false, false},
+		{MethodAuthDisabled, false, false},
+		{MethodNone, false, false},
 		// Extensions and compat surfaces declare their own classification in
 		// their MethodSpec; as bare Method values they are unknown.
-		{Method("ext:cfaccess"), false},
-		{Method("books.abs"), false},
-		{Method("SESSION"), false},
-		{Method("session "), false},
-		{Method("unheard_of"), false},
+		{Method("ext:cfaccess"), false, false},
+		{Method("books.abs"), false, false},
+		{Method("SESSION"), false, false},
+		{Method("session "), false, false},
+		{Method("unheard_of"), false, false},
 	} {
 		if got := c.m.Interactive(); got != c.interactive {
 			t.Errorf("Method(%q).Interactive() = %v, want %v", c.m, got, c.interactive)
 		}
-		// 05-authn §3.1: "only MethodSession is interactive and may change
-		// credentials among core methods".
-		if got := c.m.MayChangeCredentials(); got != c.interactive {
-			t.Errorf("Method(%q).MayChangeCredentials() = %v, want %v", c.m, got, c.interactive)
+		if got := c.m.MayChangeCredentials(); got != c.mayChange {
+			t.Errorf("Method(%q).MayChangeCredentials() = %v, want %v", c.m, got, c.mayChange)
 		}
 	}
 }
@@ -135,7 +135,8 @@ func TestPrincipal_Context(t *testing.T) {
 	}
 
 	// The key is this package's own: a plain string key does not collide.
-	if _, ok := PrincipalFrom(context.WithValue(context.Background(), "principalKey", want)); ok { //nolint:staticcheck // the point is a foreign string key
+	//lint:ignore SA1029 the point is that a foreign plain-string key never binds a principal
+	if _, ok := PrincipalFrom(context.WithValue(context.Background(), "principalKey", want)); ok {
 		t.Fatal("a foreign context key bound a principal")
 	}
 }
