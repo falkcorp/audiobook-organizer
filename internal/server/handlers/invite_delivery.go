@@ -1,15 +1,25 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.
 //
-// What an invite email carries: the invitee's own link and the AudioBooth
-// setup steps. There is no shared credential in it: a guest gets through
-// Cloudflare by email login, because accepting the invitation adds their
-// address to the guest Access policy (invite_guest_access.go). No admin
+// What an invite email carries: the invitee's own link, the browser sign-in
+// steps and, when accepting mints the guest's own phone-app key, where to put
+// that key in the phone app (AudioBooth on iPhone, Lissen on Android). There is
+// no credential in it: a guest gets through Cloudflare in the browser by email
+// login, because accepting the invitation adds their address to the guest
+// Access policy (invite_guest_access.go), and the phone-app key does not exist
+// until accept, which shows it once on the invitation page.
+//
+// Android names Lissen, not the official Audiobookshelf app, on purpose: as of
+// audiobookshelf-app v0.14.2-beta its Custom Headers screen is unreachable and
+// its headers are sent only on /ping and /login, never on /status (its first
+// request), the API, streaming or downloads, so Cloudflare Access turns it away
+// (upstream advplyr/audiobookshelf-app PR #1768). Lissen sends custom headers on
+// every request and lets them be set before signing in. No admin
 // response, error or log line contains the rendered body; admins get only
 // email_sent / email_error.
 
@@ -174,7 +184,24 @@ You have been invited to Audiobook Organizer.
 {{- end}}
 
 {{if .PhoneAppToken}}Phone app: when you create your account, the invitation page shows your own phone-app key
-(two values). Copy it then: it is shown only once and is not in this email.{{else}}Phone app access will be added to your account soon.{{end}}
+(two values, each with a name). Copy it then: it is shown only once and is not in this email.
+Add the key to the app BEFORE you sign in to it, or the app cannot reach the server.
+
+iPhone or iPad: install AudioBooth from the App Store.
+  1. Open AudioBooth, go to Servers and tap + to add a server.
+  2. Server address: {{.ServerURL}}
+  3. Before signing in, tap Custom Headers, then Add Header. Add each of the two
+     values from the invitation page under the name shown next to it.
+  4. Go back and sign in with your username ({{.Username}}) and password.
+
+Android 9 or newer: install Lissen from Google Play or F-Droid.
+  https://play.google.com/store/apps/details?id=org.grakovne.lissen
+  (The official Audiobookshelf Android app cannot connect to this server.)
+  1. Open Lissen. On the "Connect to server" screen, tap the gear icon.
+  2. Tap Connection, then Custom Headers. Add the two values from the invitation
+     page: Key is the name shown, Value is the value next to it.
+  3. Go back. Server URL: {{.ServerURL}}  Login: {{.Username}}
+     Password: the one you chose. Tap Connect.{{else}}Phone app access will be added to your account soon.{{end}}
 
 If you were not expecting this invitation, you can ignore this email.
 `))
@@ -191,7 +218,22 @@ If the link does not open, copy this address into your browser:<br>
 <h3>2. Sign in</h3>
 <p>Then open <a href="{{.ServerURL}}">{{.ServerURL}}</a> in your browser and sign in with your username (<strong>{{.Username}}</strong>) and the password you chose.</p>
 {{if .EmailLogin}}<p>If Cloudflare asks you to sign in first, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</p>
-{{end}}{{if .PhoneAppToken}}<p>Phone app: when you create your account, the invitation page shows your own phone-app key (two values). Copy it then: it is shown only once and is not in this email.</p>{{else}}<p>Phone app access will be added to your account soon.</p>{{end}}
+{{end}}{{if .PhoneAppToken}}<h3>3. Phone app (optional)</h3>
+<p>When you create your account, the invitation page shows your own phone-app key (two values, each with a name). Copy it then: it is shown only once and is not in this email. Add the key to the app <strong>before</strong> you sign in to it, or the app cannot reach the server.</p>
+<p><strong>iPhone or iPad:</strong> install AudioBooth from the App Store.</p>
+<ol>
+<li>Open AudioBooth, go to <strong>Servers</strong> and tap <strong>+</strong> to add a server.</li>
+<li>Server address: <code>{{.ServerURL}}</code></li>
+<li>Before signing in, tap <strong>Custom Headers</strong>, then <strong>Add Header</strong>. Add each of the two values from the invitation page under the name shown next to it.</li>
+<li>Go back and sign in with your username (<strong>{{.Username}}</strong>) and password.</li>
+</ol>
+<p><strong>Android 9 or newer:</strong> install <a href="https://play.google.com/store/apps/details?id=org.grakovne.lissen">Lissen from Google Play</a> or F-Droid. The official Audiobookshelf Android app cannot connect to this server.</p>
+<ol>
+<li>Open Lissen. On the <strong>Connect to server</strong> screen, tap the gear icon.</li>
+<li>Tap <strong>Connection</strong>, then <strong>Custom Headers</strong>. Add the two values from the invitation page: <strong>Key</strong> is the name shown, <strong>Value</strong> is the value next to it.</li>
+<li>Go back. Server URL: <code>{{.ServerURL}}</code>, Login: <strong>{{.Username}}</strong>, Password: the one you chose. Tap <strong>Connect</strong>.</li>
+</ol>
+{{else}}<p>Phone app access will be added to your account soon.</p>{{end}}
 <p style="color:#666">If you were not expecting this invitation, you can ignore this email.</p>
 </body></html>`))
 
