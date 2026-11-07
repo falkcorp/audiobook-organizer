@@ -1,5 +1,5 @@
 // file: core/metrics/trace_redact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7188af3d-51e5-4732-bd81-f3468d1c7288
 // last-edited: 2026-11-07
 
@@ -8,6 +8,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -24,6 +25,13 @@ var errNoRedactor = errors.New("metrics: Options.Tracing is set but Options.Reda
 // numSpanKinds is the number of kind label values of the span redaction
 // counter (05-metrics §11): key, url, path.
 const numSpanKinds = 3
+
+// maxSpanValueDepth bounds the recursion into MAP and SLICE attribute values;
+// a part nested deeper fails closed to redactedText.
+const maxSpanValueDepth = 8
+
+// redactedText is the Redactor's replacement text.
+const redactedText = log.InviteTokenRedacted
 
 // spanRedactionKinds are those kinds, in label order.
 func spanRedactionKinds() [numSpanKinds]log.RedactionKind {
@@ -69,12 +77,15 @@ func (sr *spanRedactor) wrap(next sdktrace.SpanExporter) sdktrace.SpanExporter {
 }
 
 // redactingExporter is the redacting span exporter of 05-metrics §3 (SEC-22).
-// Before export, each span's name and every string attribute go through
+// Before export, each span's name and event names and every attribute value
+// are redacted (spanRedactor.value): strings and string slices go through
 // Redactor.StringKinds (the key deny-list, URL handling for URLKeys() and
-// URL-shaped values); a non-string attribute under a deny-listed key becomes
-// "[REDACTED]". The same applies to event and link attributes and to the
-// status description, which carry error text (an http client error quotes the
-// URL it fetched). A span with nothing to redact is passed on as it is.
+// URL-shaped values, the text scan), byte slices are scanned as text, MAP and
+// SLICE values are recursed into, scalars follow Redactor.KeyDenied, and a
+// type it does not know fails closed. The same applies to event and link
+// attributes and to the status description, which carry error text (an http
+// client error quotes the URL it fetched). A span with nothing to redact is
+// passed on as it is.
 type redactingExporter struct {
 	next sdktrace.SpanExporter
 	sr   *spanRedactor
@@ -139,13 +150,20 @@ func (sr *spanRedactor) span(s sdktrace.ReadOnlySpan, n *tally) sdktrace.ReadOnl
 	rs.events = s.Events()
 	cloned := false
 	for i, ev := range rs.events {
-		if a, ch := sr.attrs(ev.Attributes, n); ch {
-			if !cloned {
-				rs.events, cloned = slices.Clone(rs.events), true
-			}
-			rs.events[i].Attributes = a
-			changed = true
+		name, nk := sr.r.StringKinds("", ev.Name)
+		a, ch := sr.attrs(ev.Attributes, n)
+		if nk == 0 && !ch {
+			continue
 		}
+		if !cloned {
+			rs.events, cloned = slices.Clone(rs.events), true
+		}
+		if nk != 0 {
+			rs.events[i].Name = name
+			n.add(nk)
+		}
+		rs.events[i].Attributes = a
+		changed = true
 	}
 	rs.links = s.Links()
 	cloned = false
@@ -191,27 +209,93 @@ func (sr *spanRedactor) attrs(kvs []attribute.KeyValue, n *tally) ([]attribute.K
 
 // attr redacts one attribute and reports what it replaced.
 func (sr *spanRedactor) attr(kv attribute.KeyValue) (attribute.KeyValue, log.RedactionKind) {
-	key := string(kv.Key)
-	switch kv.Value.Type() {
+	v, k := sr.value(string(kv.Key), kv.Value, 0)
+	if k == 0 {
+		return kv, 0
+	}
+	return attribute.KeyValue{Key: kv.Key, Value: v}, k
+}
+
+// value redacts one attribute value under key and reports what it replaced
+// (empty when v is returned unchanged):
+//
+//   - STRING and STRINGSLICE: Redactor.StringKinds on each string;
+//   - BYTESLICE: the same, on the bytes as text;
+//   - BOOL, INT64, FLOAT64 and their slices: "[REDACTED]" when
+//     Redactor.KeyDenied denies the key for that scalar kind (an exact
+//     deny-list match; a credential suffix alone spares a count or a flag);
+//   - MAP: "[REDACTED]" under a denied key, else each entry under its own key,
+//     recursively;
+//   - SLICE: "[REDACTED]" under a denied key, else each element under the
+//     slice's key, recursively;
+//   - EMPTY: nothing to hide;
+//   - any other type, or nesting beyond maxSpanValueDepth: "[REDACTED]" (fail
+//     closed: a type added to the SDK later is not exported unread).
+func (sr *spanRedactor) value(key string, v attribute.Value, depth int) (attribute.Value, log.RedactionKind) {
+	redacted := attribute.StringValue(redactedText)
+	if depth > maxSpanValueDepth {
+		return redacted, log.RedactKey
+	}
+	switch v.Type() {
 	case attribute.STRING:
-		if s, k := sr.r.StringKinds(key, kv.Value.AsString()); k != 0 {
-			return attribute.String(key, s), k
+		if s, k := sr.r.StringKinds(key, v.AsString()); k != 0 {
+			return attribute.StringValue(s), k
 		}
 	case attribute.STRINGSLICE:
-		in := kv.Value.AsStringSlice()
+		in := v.AsStringSlice() // a copy
 		var kinds log.RedactionKind
-		for i, v := range in {
-			s, k := sr.r.StringKinds(key, v)
+		for i, e := range in {
+			s, k := sr.r.StringKinds(key, e)
 			in[i], kinds = s, kinds|k
 		}
 		if kinds != 0 {
-			return attribute.StringSlice(key, in), kinds
+			return attribute.StringSliceValue(in), kinds
 		}
+	case attribute.BYTESLICE:
+		if s, k := sr.r.StringKinds(key, string(v.AsByteSlice())); k != 0 {
+			return attribute.ByteSliceValue([]byte(s)), k
+		}
+	case attribute.BOOL, attribute.BOOLSLICE:
+		if sr.r.KeyDenied(key, slog.KindBool) {
+			return redacted, log.RedactKey
+		}
+	case attribute.INT64, attribute.INT64SLICE:
+		if sr.r.KeyDenied(key, slog.KindInt64) {
+			return redacted, log.RedactKey
+		}
+	case attribute.FLOAT64, attribute.FLOAT64SLICE:
+		if sr.r.KeyDenied(key, slog.KindFloat64) {
+			return redacted, log.RedactKey
+		}
+	case attribute.MAP:
+		if sr.r.KeyDenied(key, slog.KindGroup) {
+			return redacted, log.RedactKey
+		}
+		in := v.AsMap() // a copy
+		var kinds log.RedactionKind
+		for i, e := range in {
+			ev, k := sr.value(string(e.Key), e.Value, depth+1)
+			in[i].Value, kinds = ev, kinds|k
+		}
+		if kinds != 0 {
+			return attribute.MapValue(in...), kinds
+		}
+	case attribute.SLICE:
+		if sr.r.KeyDenied(key, slog.KindAny) {
+			return redacted, log.RedactKey
+		}
+		in := v.AsSlice() // a copy
+		var kinds log.RedactionKind
+		for i, e := range in {
+			ev, k := sr.value(key, e, depth+1)
+			in[i], kinds = ev, kinds|k
+		}
+		if kinds != 0 {
+			return attribute.SliceValue(in...), kinds
+		}
+	case attribute.EMPTY:
 	default:
-		// A number or bool carries no URL; only its key can make it secret.
-		if s, k := sr.r.StringKinds(key, ""); k&log.RedactKey != 0 {
-			return attribute.String(key, s), k
-		}
+		return redacted, log.RedactKey
 	}
-	return kv, 0
+	return v, 0
 }

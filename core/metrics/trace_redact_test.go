@@ -1,5 +1,5 @@
 // file: core/metrics/trace_redact_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 37db43f9-ebc0-4da7-b3e5-db3f12162464
 // last-edited: 2026-11-07
 
@@ -221,5 +221,73 @@ func TestRedactingExporter_ForwardsAndCopies(t *testing.T) {
 	}
 	if n := len(mem.GetSpans()); n != 0 {
 		t.Errorf("Shutdown did not reach the wrapped exporter (still %d spans held)", n)
+	}
+}
+
+// Independent review M2: MAP and SLICE attribute values are recursed into,
+// BYTESLICE is scanned as text, event names are redacted, and scalars follow
+// Redactor.KeyDenied (a suffix alone spares a count or a flag).
+func TestRedactingExporter_NestedValuesAndEventNames(t *testing.T) {
+	stub := tracetest.SpanStub{
+		Name: "op",
+		Attributes: []attribute.KeyValue{
+			attribute.Map("http.request.header", attribute.String("authorization", "Bearer "+spanFakeToken),
+				attribute.String("accept", "*/*")),
+			attribute.Slice("urls", attribute.StringValue("https://example.test/x?token="+spanFakeToken)),
+			attribute.Slice("pairs", attribute.MapValue(attribute.String("api_key", spanFakeAPIKey))),
+			attribute.ByteSlice("body", []byte(`{"password":"`+spanFakePass+`"}`)),
+			attribute.Map("credentials", attribute.String("user", "bruce")),
+			attribute.String("db.statement", `{"password":"`+spanFakePass+`"}`),
+			attribute.Bool("cf_cookie", true),
+			attribute.Int("prompt_tokens", 12),
+			attribute.Int64Slice("completion_tokens", []int64{1, 2}),
+			attribute.Bool("password", true),
+		},
+		Events: []sdktrace.Event{{Name: "fetched https://example.test/x?token=" + spanFakeToken}},
+	}
+	var n tally
+	got := testSpanRedactor(t).span(stub.Snapshot(), &n)
+	var dump strings.Builder
+	for _, kv := range got.Attributes() {
+		dump.WriteString(string(kv.Key) + "=" + kv.Value.String() + " ")
+		if kv.Value.Type() == attribute.BYTESLICE {
+			dump.WriteString(string(kv.Value.AsByteSlice()) + " ")
+		}
+	}
+	for _, ev := range got.Events() {
+		dump.WriteString(ev.Name)
+	}
+	for _, s := range []string{spanFakeToken, spanFakeAPIKey, spanFakePass} {
+		if strings.Contains(dump.String(), s) {
+			t.Errorf("%q leaked: %s", s, dump.String())
+		}
+	}
+	want := map[string]string{"cf_cookie": "true", "prompt_tokens": "12", "completion_tokens": "[1,2]",
+		"password": "[REDACTED]", "credentials": "[REDACTED]"}
+	for _, kv := range got.Attributes() {
+		if w, ok := want[string(kv.Key)]; ok && kv.Value.String() != w {
+			t.Errorf("%s = %s, want %s", kv.Key, kv.Value.String(), w)
+		}
+	}
+	if !strings.Contains(dump.String(), `accept`) {
+		t.Errorf("harmless map entry lost: %s", dump.String())
+	}
+}
+
+// Nesting deeper than maxSpanValueDepth fails closed. (The other fail-closed
+// branch, a value type the exporter does not know, cannot be built outside
+// the SDK: attribute.Type values come only from its constructors.)
+func TestRedactingExporter_DeepValuesFailClosed(t *testing.T) {
+	sr := testSpanRedactor(t)
+	v := attribute.StringValue("Hush")
+	for range maxSpanValueDepth + 2 {
+		v = attribute.SliceValue(v)
+	}
+	if got, k := sr.value("titles", v, 0); k&log.RedactKey == 0 || strings.Contains(got.String(), "Hush") {
+		t.Errorf("deep value = %s (%v), want failed closed", got.String(), k)
+	}
+	shallow := attribute.SliceValue(attribute.StringValue("Hush"))
+	if got, k := sr.value("titles", shallow, 0); k != 0 || got.String() != shallow.String() {
+		t.Errorf("shallow harmless value = %s (%v), want unchanged", got.String(), k)
 	}
 }
