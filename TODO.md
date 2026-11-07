@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.32 -->
+<!-- version: 10.78.33 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -1739,9 +1739,10 @@ into one of the curated sections below, is a normal direct edit.
       comes from `@typescript/old` (`npm:typescript@^6`). A lockfile refresh could pull a
       6.1 that typescript-eslint does not support, and npm would not warn. Add an
       `overrides` entry pinning `@typescript/old` to `~6.0.3` in `web/package.json`.
-- [ ] **WOODPECKER-TYPECHECK** Woodpecker's `web-test` step runs only vitest and has never
-      type-checked. Add `npm run typecheck` (about 2 s on TS 7) to that step in
-      `.woodpecker/checks-build.yaml`.
+- [ ] **WOODPECKER-TYPECHECK** The frontend tests run only vitest and have never
+      type-checked (Woodpecker's `web-test` step was removed with `checks-build.yaml` on
+      2026-11-07; the web tests now run in `.github/workflows/frontend-ci.yml`). Add
+      `npm run typecheck` (about 2 s on TS 7) to the frontend test job there.
 
 - [ ] **WINDOW-QUIESCED-SCAN-OVERLAP** A maintenance window
       (`internal/server/scheduler_maintenance_window_op.go:186`) stops waiting
