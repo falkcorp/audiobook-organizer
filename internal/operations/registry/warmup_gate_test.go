@@ -1,7 +1,7 @@
 // file: internal/operations/registry/warmup_gate_test.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 3e8c1a74-5b92-4f06-a1d7-0c6b9e2f4a53
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package registry_test
 
@@ -120,8 +120,14 @@ func TestDispatch_OpHeldWhileWarmingThenRuns(t *testing.T) {
 	awaitStatus(t, store.fakeStore, opID, "completed", 5*time.Second)
 }
 
-// The wait spends none of the op's own Timeout: Timeout 200 ms, warmup released
-// at 600 ms; the body starts with a live context and most of a fresh timeout.
+// The wait spends none of the op's own Timeout. The Timeout (500 ms) is shorter
+// than the hold (600 ms), so if the hold were counted the deadline would pass
+// before warmup released and the body would start with a dead context: a live
+// context with time left is the proof. The test used to pair a 200 ms Timeout
+// with a "more than 100 ms left" floor, which a loaded CI agent stalling ~130 ms
+// between the release and the body broke although the hold spent nothing
+// (Woodpecker pipeline 2544). Now a stall up to 500 ms is tolerated, and a
+// counted hold still fails every time.
 func TestDispatch_WarmupHoldDoesNotSpendOpTimeout(t *testing.T) {
 	ctx := t.Context()
 	store := newWarmingStore()
@@ -130,7 +136,8 @@ func TestDispatch_WarmupHoldDoesNotSpendOpTimeout(t *testing.T) {
 	var ctxDead atomic.Bool
 	var remaining atomic.Int64
 	def := makeValidDef("test.w-hold-timeout")
-	def.Timeout = 200 * time.Millisecond
+	const hold = 600 * time.Millisecond
+	def.Timeout = 500 * time.Millisecond // < hold: a counted hold kills the context
 	def.Run = func(c context.Context, _ json.RawMessage, _ registry.Reporter) error {
 		ctxDead.Store(c.Err() != nil)
 		if dl, ok := c.Deadline(); ok {
@@ -142,15 +149,15 @@ func TestDispatch_WarmupHoldDoesNotSpendOpTimeout(t *testing.T) {
 	r.Start(ctx)
 
 	opID, _ := r.EnqueueOp(ctx, "test.w-hold-timeout", nil)
-	time.Sleep(600 * time.Millisecond)
+	time.Sleep(hold)
 	close(store.release)
 	awaitStatus(t, store.fakeStore, opID, "completed", 5*time.Second)
 
 	if ctxDead.Load() {
-		t.Fatal("body started with a dead context")
+		t.Fatal("body started with a dead context: the hold spent the op's timeout")
 	}
-	if rem := time.Duration(remaining.Load()); rem < 100*time.Millisecond {
-		t.Fatalf("body started with only %v of its 200ms timeout left; the hold spent the budget", rem)
+	if rem := time.Duration(remaining.Load()); rem <= 0 || rem > def.Timeout {
+		t.Fatalf("body started with %v of its %v timeout left; want a fresh deadline set after the hold", rem, def.Timeout)
 	}
 }
 
