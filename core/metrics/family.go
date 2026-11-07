@@ -1,5 +1,5 @@
 // file: core/metrics/family.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 750823bb-4a76-4075-95b0-2dc2bc337766
 // last-edited: 2026-11-07
 
@@ -188,7 +188,8 @@ func (r *familyRegisterer) Register(c prometheus.Collector) error {
 		return err
 	}
 	if err := r.reg.Register(c); err != nil {
-		if _, ok := errors.AsType[prometheus.AlreadyRegisteredError](err); !ok {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
 			r.f.releaseCollector(names)
 		}
 		return err
@@ -244,8 +245,10 @@ func claim[T any](m *familyMeter, name, kind, number, unit, desc string, typ otl
 	id.name, id.kind, id.number, id.unit, id.description = name, kind, number, unit, desc
 	release, err := m.f.claimInstrument(id, typ)
 	if err != nil {
-		n, _ := refused()
-		return n, err
+		// The no-op meter does not fail today; join its error anyway so a
+		// future one is reported rather than dropped.
+		n, nerr := refused()
+		return n, errors.Join(err, nerr)
 	}
 	inst, err := create()
 	if err != nil {

@@ -1,11 +1,12 @@
 // file: core/metrics/scope.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fc9abe1f-d731-4202-9cdf-0f1e54c27c2b
 // last-edited: 2026-11-07
 
 package metrics
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -127,8 +128,9 @@ type scopeMeter struct {
 // the no-op instrument and ErrInstrumentName.
 func checked[T any](s *Scope, name, kind, unit string, create, refused func() (T, error)) (T, error) {
 	if err := s.check(name, kind, unit); err != nil {
-		n, _ := refused()
-		return n, err
+		// See claim: the no-op's error is joined, not dropped.
+		n, nerr := refused()
+		return n, errors.Join(err, nerr)
 	}
 	return create()
 }
