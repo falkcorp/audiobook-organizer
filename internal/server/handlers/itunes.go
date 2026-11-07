@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -20,7 +21,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )
 
@@ -296,7 +296,7 @@ func (h *ITunesHandler) Import(c *gin.Context) {
 		return
 	}
 
-	cleanLibPath, err := pathvalidation.CleanAbsolutePath(req.LibraryPath)
+	cleanLibPath, err := library.CleanAbsolutePath(req.LibraryPath)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, "invalid library_path: "+err.Error())
 		return
@@ -538,7 +538,7 @@ func (h *ITunesHandler) LibraryStatus(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "path query parameter required")
 		return
 	}
-	cleanPath, err := pathvalidation.CleanAbsolutePath(path)
+	cleanPath, err := library.CleanAbsolutePath(path)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, "invalid path: "+err.Error())
 		return

@@ -3,7 +3,7 @@
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-05-09
 
-package util
+package library
 
 import (
 	"path/filepath"

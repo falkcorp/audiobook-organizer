@@ -3,7 +3,7 @@
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
 // last-edited: 2026-10-26
 
-package libroot
+package library
 
 import (
 	"errors"
@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 func TestMounted(t *testing.T) {
@@ -118,7 +117,7 @@ func TestReportPathUnwritableDirFails(t *testing.T) {
 	}
 }
 
-// A report directory the helper creates is util.DirMode (group write kept, so a
+// A report directory the helper creates is DirMode (group write kept, so a
 // POSIX ACL's mask keeps working) whatever the umask, and is never world-writable.
 func TestReportPathCreatesTheDirWithTheStandardModeAndNoWorldWrite(t *testing.T) {
 	old := syscall.Umask(0) // so only the requested mode decides
@@ -131,8 +130,8 @@ func TestReportPathCreatesTheDirWithTheStandardModeAndNoWorldWrite(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != util.DirMode {
-		t.Fatalf("report dir mode = %o, want %o", got, util.DirMode)
+	if got := info.Mode().Perm(); got != DirMode {
+		t.Fatalf("report dir mode = %o, want %o", got, DirMode)
 	}
 	if info.Mode().Perm()&worldWrite != 0 {
 		t.Fatalf("report dir mode %o is world-writable", info.Mode().Perm())
@@ -230,7 +229,7 @@ func TestReportPathRemovesOnlyWorldWriteFromAnExistingReportsDir(t *testing.T) {
 				t.Fatalf("nothing was changed but the callback ran %v", calls)
 			}
 			// The write goes ahead: a report file can be created where the path points.
-			if werr := os.WriteFile(path, []byte("x"), util.FileMode); werr != nil {
+			if werr := os.WriteFile(path, []byte("x"), FileMode); werr != nil {
 				t.Fatalf("writing the report after the check failed: %v", werr)
 			}
 		})

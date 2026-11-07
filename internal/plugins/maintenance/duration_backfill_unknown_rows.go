@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/falkcorp/mediacore/library"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
@@ -27,7 +28,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -229,7 +229,7 @@ type UnknownRowsResult struct {
 	// is neither probed nor borrowed into.
 	SkippedUserExcluded int `json:"skipped_user_excluded,omitempty"`
 	// SkippedBadPath: the row's path is not absolute and clean
-	// (pathvalidation.CleanAbsolutePath refuses it), so it is never opened.
+	// (library.CleanAbsolutePath refuses it), so it is never opened.
 	SkippedBadPath int `json:"skipped_bad_path,omitempty"`
 	// SkippedNotAudio: the row needs a probe but its extension is not one the
 	// duration probe reads (audioext.DefaultSet), so no subprocess is started.
@@ -307,7 +307,7 @@ const (
 	// it is not probed and not borrowed into.
 	unknownRowUserExcluded
 	// unknownRowBadPath: the path is not absolute and clean, which the probe pass
-	// refuses (pathvalidation.CleanAbsolutePath) before it looks at the file.
+	// refuses (library.CleanAbsolutePath) before it looks at the file.
 	unknownRowBadPath
 	// unknownRowNotAudio: the extension is not one mediainfo reads, so it returns
 	// ErrUnsupportedFormat without starting a probe. The scanner admits the
@@ -366,7 +366,7 @@ func unknownRowVerdict(r database.BookFileCore, disk *unknownRowDisk) unknownRow
 	case unknownRowPromotable(r):
 		return unknownRowActs
 	}
-	path, err := pathvalidation.CleanAbsolutePath(r.FilePath)
+	path, err := library.CleanAbsolutePath(r.FilePath)
 	switch {
 	case err != nil:
 		return unknownRowBadPath
@@ -981,7 +981,7 @@ func (r *unknownRowsRun) skipGroupEnvironment(group []unknownRowWork) {
 // decisions are unknownRowVerdict's, so the folder-books holds read them too.
 func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork) error {
 	first := group[0]
-	path, pathErr := pathvalidation.CleanAbsolutePath(first.row.FilePath)
+	path, pathErr := library.CleanAbsolutePath(first.row.FilePath)
 	if pathErr != nil {
 		r.skipGroupEnvironment(group)
 		if r.warns.allow() {

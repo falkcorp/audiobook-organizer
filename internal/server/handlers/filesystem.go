@@ -25,7 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -231,7 +231,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	// roots are intentionally arbitrary absolute directories, so we normalize
 	// rather than confine to a fixed root; CleanAbsolutePath's return value is
 	// the sanitized path used downstream.
-	cleanPath, err := pathvalidation.CleanAbsolutePath(req.Path)
+	cleanPath, err := library.CleanAbsolutePath(req.Path)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
@@ -278,7 +278,7 @@ func (h *FilesystemHandler) AddImportPath(c *gin.Context) {
 	// Fallback: synchronous scan when op registry is unavailable.
 	//
 	// folder.Path is the value CreateImportPath stored from cleanPath above,
-	// i.e. the output of pathvalidation.CleanAbsolutePath, which rejects any
+	// i.e. the output of library.CleanAbsolutePath, which rejects any
 	// relative path and any path whose filepath.Clean form differs from the
 	// input (so no traversal sequence survives). It deliberately does NOT
 	// confine the path to a root: an import root is by design an arbitrary

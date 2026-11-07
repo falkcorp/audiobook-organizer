@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // coverFetchTimeout bounds one proxied cover fetch. http.DefaultClient, which
@@ -154,7 +154,7 @@ func fetchAndCacheCoverWithClient(client *http.Client, coverURL, cacheDir string
 func FindCoverFile(filename string, rootDir string) (string, error) {
 	roots := []string{".covers", "covers"}
 	for _, sub := range roots {
-		sp, err := safepath.Join(rootDir, sub, filename)
+		sp, err := library.Join(rootDir, sub, filename)
 		if err != nil {
 			continue
 		}

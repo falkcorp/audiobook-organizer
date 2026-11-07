@@ -3,7 +3,7 @@
 // guid: a2b3c4d5-e6f7-8901-ab23-cd45ef678901
 // last-edited: 2026-10-18
 
-package util
+package library
 
 import "os"
 

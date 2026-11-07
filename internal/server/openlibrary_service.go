@@ -18,7 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -48,7 +48,7 @@ func (s *Server) getOLStatus(c *gin.Context) {
 	if dumpDir != "" {
 		files := map[string]metafetch.UploadedFileInfo{}
 		for _, dumpType := range []string{"editions", "authors", "works"} {
-			if sp, err := safepath.Join(dumpDir, openlibrary.DumpFilename(dumpType)); err == nil {
+			if sp, err := library.Join(dumpDir, openlibrary.DumpFilename(dumpType)); err == nil {
 				path := sp.String()
 				if info, err := os.Stat(path); err == nil {
 					files[dumpType] = metafetch.UploadedFileInfo{
@@ -167,7 +167,7 @@ func (s *Server) uploadOLDump(c *gin.Context) {
 		return
 	}
 
-	sp, err := safepath.Join(targetDir, openlibrary.DumpFilename(dumpType))
+	sp, err := library.Join(targetDir, openlibrary.DumpFilename(dumpType))
 	if err != nil {
 		httputil.RespondWithInternalError(c, "invalid target path")
 		return

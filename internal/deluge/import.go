@@ -24,8 +24,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/mediacore/library"
 )
 
 var importLog = logger.New("deluge-import")
@@ -208,16 +208,16 @@ func ImportToLibraryWith(
 	// place the file directly under RootDir.
 	rel, relErr := filepath.Rel(cfg.RootDir, filepath.Dir(src))
 
-	var destSP safepath.SafePath
+	var destSP library.SafePath
 	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
 		// Source is under RootDir — preserve structure.
-		destSP, err = safepath.Join(cfg.RootDir, rel, filepath.Base(src))
+		destSP, err = library.Join(cfg.RootDir, rel, filepath.Base(src))
 		if err != nil {
 			return "", fmt.Errorf("ImportToLibrary: invalid destination path: %w", err)
 		}
 	} else {
 		// Source is outside RootDir — place directly under RootDir.
-		destSP, err = safepath.Join(cfg.RootDir, filepath.Base(src))
+		destSP, err = library.Join(cfg.RootDir, filepath.Base(src))
 		if err != nil {
 			return "", fmt.Errorf("ImportToLibrary: invalid destination path: %w", err)
 		}

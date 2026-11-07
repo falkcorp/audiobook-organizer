@@ -205,6 +205,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/mediacore/library"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 
@@ -216,7 +217,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -744,7 +744,7 @@ func fbUnknownFileOf(r database.BookFileCore, look fbFileLook, open func(path st
 // closes. The path goes through the same absolute-and-clean check the backfill
 // applies before it opens anything.
 func (f *folderBooksFixer) openable(p string) error {
-	clean, err := pathvalidation.CleanAbsolutePath(p)
+	clean, err := library.CleanAbsolutePath(p)
 	if err != nil {
 		return err
 	}

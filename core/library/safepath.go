@@ -2,7 +2,7 @@
 // version: 1.0.1
 // guid: 2f8e4b29-9c1f-4f8b-8b6a-2c3f4e5a6b7c
 // last-edited: 2026-10-18
-package safepath
+package library
 
 import (
 	"fmt"

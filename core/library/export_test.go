@@ -5,7 +5,7 @@
 
 //go:build unix
 
-package libroot
+package library
 
 // SetEUIDForTest makes OwnedByCurrentUser compare against uid and returns a
 // function that restores the real one.

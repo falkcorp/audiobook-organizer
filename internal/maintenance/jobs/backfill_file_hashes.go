@@ -26,17 +26,16 @@ import (
 
 	"log/slog"
 
+	"github.com/falkcorp/mediacore/library"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
-	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
@@ -216,7 +215,7 @@ type hbFile interface {
 	Stat() (os.FileInfo, error)
 }
 
-// hbReportPerm is the mode a new report file is created with: util.FileMode,
+// hbReportPerm is the mode a new report file is created with: library.FileMode,
 // the repo's standard (group write kept, because on a POSIX-ACL filesystem the
 // group bits are the ACL mask and dropping group write would silently strip the
 // write access the operator granted). Never world-writable. The report is
@@ -225,7 +224,7 @@ type hbFile interface {
 // counts, and can never cause a hash write (see the trust note on loadPrior). The
 // checks on the open descriptor (hbCheckReportFile) turn away files other
 // accounts made, not the share's group or ACL users.
-const hbReportPerm = util.FileMode
+const hbReportPerm = library.FileMode
 
 // hbMaxReportBytes caps the size of a report that is read back on resume, and
 // hbMaxReportLine the length of one of its lines. The expected report is about
@@ -253,7 +252,7 @@ func hbCheckReportFile(f hbFile) error {
 	switch {
 	case !info.Mode().IsRegular():
 		return errors.New("report is not a regular file")
-	case !libroot.OwnedByCurrentUser(info):
+	case !library.OwnedByCurrentUser(info):
 		return errors.New("report is not owned by the user this process runs as; refusing to trust it")
 	case info.Size() > hbMaxReportBytes:
 		return fmt.Errorf("report is %d bytes, over the %d byte limit", info.Size(), hbMaxReportBytes)
@@ -1256,15 +1255,15 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		// must be readable and hold something other than dot-prefixed entries (an
 		// unmounted share leaves an empty directory, so every path under it
 		// answers not-found and the whole library would be reported as gone);
-		// that is a coarse check (libroot.Mounted), not proof of a healthy mount.
+		// that is a coarse check (library.Mounted), not proof of a healthy mount.
 		// It must be an absolute path, and {root}/.reports must be writable,
 		// because the report is this run's deliverable. The mount check runs
 		// BEFORE the report is resolved because that creates {root}/.reports.
-		if merr := libroot.Mounted(root); merr != nil {
+		if merr := library.Mounted(root); merr != nil {
 			return fmt.Errorf("backfill-file-hashes: refusing to run: %w", merr)
 		}
 		run.root = filepath.Clean(root)
-		path, rerr := libroot.ReportPathNotify(root, "", hashBackfillReportName(opID, time.Now()), func(dir string, was fs.FileMode) {
+		path, rerr := library.ReportPathNotify(root, "", hashBackfillReportName(opID, time.Now()), func(dir string, was fs.FileMode) {
 			hbLog.Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
 		})
 		if rerr != nil {
@@ -1383,7 +1382,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		// again. A chunk with no under-root not-found has nothing to distrust, so
 		// the common case costs no directory read.
 		if run.root != "" && hbHasNotFound(outs) {
-			if merr := libroot.Mounted(run.root); merr != nil {
+			if merr := library.Mounted(run.root); merr != nil {
 				return fmt.Errorf("backfill-file-hashes: chunk at row %d: the library root no longer looks mounted, so its not-found rows are not recorded: %w", start, merr)
 			}
 		}

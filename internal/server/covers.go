@@ -17,7 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/covers"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,7 +36,7 @@ func (s *Server) handleCoverProxy(c *gin.Context) {
 		return
 	}
 
-	cacheDirSP, err := safepath.Join(config.AppConfig.RootDir, ".covers")
+	cacheDirSP, err := library.Join(config.AppConfig.RootDir, ".covers")
 	if err != nil {
 		httputil.RespondWithInternalError(c, "invalid cache directory")
 		return
@@ -73,7 +73,7 @@ func (s *Server) handleLocalCover(c *gin.Context) {
 	}
 
 	// Validate cover path with safepath
-	coverSP, err := safepath.Join(config.AppConfig.RootDir, "covers", filename)
+	coverSP, err := library.Join(config.AppConfig.RootDir, "covers", filename)
 	if err != nil {
 		httputil.RespondWithBadRequest(c, "invalid filename")
 		return

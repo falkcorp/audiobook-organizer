@@ -61,17 +61,3 @@ func TestCoverage_ExtractBoolField_WrongType(t *testing.T) {
 		t.Error("expected false for string value")
 	}
 }
-
-// --- Coverage for perms.go ---
-
-func TestCoverage_PermConstants(t *testing.T) {
-	if DirMode != 0o775 {
-		t.Errorf("DirMode = %o, want 775", DirMode)
-	}
-	if FileMode != 0o664 {
-		t.Errorf("FileMode = %o, want 664", FileMode)
-	}
-	if SecretFileMode != 0o600 {
-		t.Errorf("SecretFileMode = %o, want 600", SecretFileMode)
-	}
-}

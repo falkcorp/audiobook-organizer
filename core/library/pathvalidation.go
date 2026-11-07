@@ -19,7 +19,7 @@
 // unit-test, and usable before any disk access occurs. For callers that need
 // symlink-safe joins, use [SecureJoinResolved] which also calls
 // [filepath.EvalSymlinks].
-package pathvalidation
+package library
 
 import (
 	"errors"

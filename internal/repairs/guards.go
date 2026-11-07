@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // Guard skip kinds. They are also the decision kinds
@@ -144,7 +144,7 @@ func guardBookPaths(res *PathResolver, bookID string, paths []string, seriesName
 // clearing it.
 //
 // Every filesystem call it makes is bounded (ResolverBound). A call on a
-// hung mount cannot be interrupted, only abandoned (boundedcall.Call), so the
+// hung mount cannot be interrupted, only abandoned (library.Call), so the
 // resolver limits what a dead mount can cost: a folder that timed out once is
 // remembered as doubt and not tried again, and once ResolverMaxAbandoned of
 // its abandoned calls are still stuck it answers doubt at once instead of
@@ -298,11 +298,11 @@ func (r *PathResolver) spellings(p string) (out []string, doubt error) {
 	if n := resolverAbandoned.Load(); n >= ResolverMaxAbandonedTotal {
 		return nil, fmt.Errorf("resolve %s: %d filesystem calls of earlier runs are still hung (cap %d); not trying more, check the mount", p, n, ResolverMaxAbandonedTotal)
 	}
-	out, err := boundedcall.Call(context.Background(), r.bound, func() ([]string, error) {
+	out, err := library.Call(context.Background(), r.bound, func() ([]string, error) {
 		w := &resolveWalk{hops: maxLinkHops, visited: map[string]bool{}}
 		return r.walk(p, w)
 	}, &r.abandoned, &resolverAbandoned)
-	if errors.Is(err, boundedcall.ErrTimeout) {
+	if errors.Is(err, library.ErrTimeout) {
 		doubt = fmt.Errorf("no answer from the filesystem within %v (the mount may be hung)", r.bound)
 		r.mu.Lock()
 		r.stuck[folder] = doubt

@@ -24,8 +24,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // GetAudiobook retrieves a single audiobook by ID with full metadata provenance
@@ -1119,7 +1119,7 @@ func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, refer
 //   - lexically outside the root (a sibling such as "<root>2", or a ".."
 //     escape): refused;
 //   - inside lexically but resolving outside through a symlink
-//     (pathvalidation.SecureJoinResolved, which also resolves the root, so a
+//     (library.SecureJoinResolved, which also resolves the root, so a
 //     root reached through a symlink such as macOS /var -> /private/var still
 //     matches): refused, as is a root or path that cannot be resolved.
 func purgePathInsideRoot(path, root string) error {
@@ -1140,14 +1140,14 @@ func purgePathInsideRoot(path, root string) error {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%s is outside the library root %s", path, root)
 	}
-	if _, err := pathvalidation.SecureJoinResolved(cleanRoot, rel); err != nil {
+	if _, err := library.SecureJoinResolved(cleanRoot, rel); err != nil {
 		// A path that escapes the root (ErrPathTraversal, ErrAbsolutePathNotAllowed)
 		// is a definite refusal, and a root that does not exist is the library not
 		// being there (libraryRootReady's to catch). Anything else is the
 		// filesystem failing to answer (EIO, ESTALE, EACCES resolving a link): it
 		// may pass, so it is a failed lookup, and a book is not purged on it
 		// (decideFile) with its file left with no record.
-		if !errors.Is(err, pathvalidation.ErrPathTraversal) && !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) && !errors.Is(err, fs.ErrNotExist) {
+		if !errors.Is(err, library.ErrPathTraversal) && !errors.Is(err, library.ErrAbsolutePathNotAllowed) && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("%s cannot be resolved inside the library root %s: %w: %w", path, root, errPathLookupFailed, err)
 		}
 		return fmt.Errorf("%s does not resolve inside the library root %s: %w", path, root, err)

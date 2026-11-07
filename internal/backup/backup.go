@@ -20,9 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/diskstats"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safepath"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // Checkpointable is satisfied by PebbleStore. The backup handler type-asserts
@@ -198,8 +197,8 @@ const defaultMaxTotalBytes uint64 = 40 << 30
 const backupSpaceMargin uint64 = 2 << 30
 
 // diskStatsFn is a seam so tests can drive the guard without needing a real
-// full filesystem. Production always uses diskstats.Stats.
-var diskStatsFn = diskstats.Stats
+// full filesystem. Production always uses library.Stats.
+var diskStatsFn = library.Stats
 
 // ErrInsufficientDiskSpace is returned when a backup would not fit.
 //
@@ -680,7 +679,7 @@ func writeChecksumSidecar(backupPath, checksum string) error {
 // Both paths must already be resolved from a directory listing (see
 // RestoreBackupIn) rather than built by joining a caller-supplied filename
 // onto a directory: CodeQL's go/path-injection query does not credit
-// pathvalidation.SanitizeFilename, safepath.SecureJoin, filepath.Base, or a
+// library.SanitizeFilename, library.SecureJoin, filepath.Base, or a
 // prefix check as barriers in this repo (measured against PR #3183) -- the
 // only thing it credits is the dataflow never reaching a tainted string in
 // the first place, i.e. resolving the caller's string against
@@ -818,9 +817,9 @@ func extractArchive(archivePath, targetPath string) error {
 		if entryName == "" {
 			continue
 		}
-		// safepath.Join validates that the entry stays within targetPath and
+		// library.Join validates that the entry stays within targetPath and
 		// returns a clean path value — breaking the CodeQL taint chain.
-		targetSP, err := safepath.Join(targetPath, entryName)
+		targetSP, err := library.Join(targetPath, entryName)
 		if err != nil {
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
@@ -1046,7 +1045,7 @@ func addToArchive(tarWriter *tar.Writer, path, dbType string, progress BackupPro
 			}
 
 			// Validate that the file really lies within the root directory.
-			sp, err := safepath.Validate(root, file)
+			sp, err := library.Validate(root, file)
 			if err != nil {
 				return fmt.Errorf("safepath validation failed for %q: %w", file, err)
 			}

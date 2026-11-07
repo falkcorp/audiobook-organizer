@@ -7,7 +7,7 @@
 // syscall on a stuck mount, a WASM tag parser) with a time bound, abandoning
 // it on timeout and counting the goroutines left behind. It is a leaf package
 // so the maintenance plugin and the repairs framework share one copy.
-package boundedcall
+package library
 
 import (
 	"context"

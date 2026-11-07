@@ -89,7 +89,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/boundedcall"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
@@ -97,6 +96,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 type durationReextractParams struct {
@@ -211,10 +211,10 @@ const extractTimeout = 30 * time.Second
 // if it does not complete within extractTimeout. It also respects ctx so the op
 // can be cancelled between files.
 func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaInfo, error) {
-	info, err := boundedcall.Call(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
+	info, err := library.Call(ctx, extractTimeout, func() (*mediainfo.MediaInfo, error) {
 		return mediainfo.Extract(filePath)
 	})
-	if errors.Is(err, boundedcall.ErrTimeout) {
+	if errors.Is(err, library.ErrTimeout) {
 		return nil, fmt.Errorf("extract: %w", err)
 	}
 	return info, err

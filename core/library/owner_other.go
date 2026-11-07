@@ -5,7 +5,7 @@
 // guid: 54fbfe80-14c2-4655-8363-7421cb1bd420
 // last-edited: 2026-10-26
 
-package libroot
+package library
 
 import "os"
 

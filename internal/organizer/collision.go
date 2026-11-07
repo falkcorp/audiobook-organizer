@@ -57,12 +57,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/mediacore/library"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
 // CollisionStore is the narrow store surface the resolver needs. It is
@@ -919,7 +919,7 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 	// the thing that satisfies the scanner — the repo's CodeQL model pack
 	// declares it a barrier and it is still not credited. Keeping the input off
 	// the taint path is what does the work; this is defence in depth behind it.
-	dir, err := pathvalidation.SecureJoin(qRoot, sanitizePath(dirName))
+	dir, err := library.SecureJoin(qRoot, sanitizePath(dirName))
 	if err != nil {
 		return "", fmt.Errorf("quarantine dir for book %q escapes %s: %w", dirName, qRoot, err)
 	}
@@ -934,7 +934,7 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 	// filepath.Base(src) is a single component by construction, but src is a
 	// path read off the filesystem, so it goes through the same barrier rather
 	// than relying on that reasoning holding at every future call site.
-	dest, err := pathvalidation.SecureJoin(dir, filepath.Base(src))
+	dest, err := library.SecureJoin(dir, filepath.Base(src))
 	if err != nil {
 		return "", fmt.Errorf("quarantine destination for %s escapes %s: %w", filepath.Base(src), dir, err)
 	}

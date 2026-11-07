@@ -21,7 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/mediacore/library"
 )
 
 func init() { maintenance.Register(&bulkDelugeImportJob{}) }
@@ -294,14 +294,14 @@ func bdi_destination(root, src string) (string, error) {
 	rel, relErr := filepath.Rel(root, filepath.Dir(src))
 	if relErr == nil && !filepath.IsAbs(rel) && !pathutil.RelEscapesBase(rel) {
 		var joinErr error
-		destDir, joinErr = util.SafeJoin(root, rel)
+		destDir, joinErr = library.SafeJoin(root, rel)
 		if joinErr != nil {
 			destDir = filepath.Clean(root)
 		}
 	} else {
 		destDir = filepath.Clean(root)
 	}
-	return util.SafeJoin(destDir, filepath.Base(src))
+	return library.SafeJoin(destDir, filepath.Base(src))
 }
 
 // bdi_inPlaceUnloaded is the verdict on a file at its own library destination

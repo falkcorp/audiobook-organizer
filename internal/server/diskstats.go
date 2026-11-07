@@ -5,7 +5,7 @@
 
 package server
 
-import "github.com/falkcorp/audiobook-organizer/internal/diskstats"
+import "github.com/falkcorp/mediacore/library"
 
 // getDiskStats returns total, free bytes for the given path.
 //
@@ -15,5 +15,5 @@ import "github.com/falkcorp/audiobook-organizer/internal/diskstats"
 // value into the system handler (wire_handlers.go), and that seam is worth
 // keeping stable.
 func getDiskStats(path string) (total, free uint64, err error) {
-	return diskstats.Stats(path)
+	return library.Stats(path)
 }

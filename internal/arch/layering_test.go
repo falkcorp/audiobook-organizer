@@ -86,68 +86,63 @@ type edge = archtest.Edge
 // syncapi/progress import nothing from the module, so they compute to 0.
 var layerOf = map[string]int{
 	// Layer 0: leaf
-	"internal/acoustid":                0, // computed: imports no module package
-	"internal/applycap":                0, // computed: imports no module package
-	"internal/arch":                    0, // computed: imports no module package
-	"internal/audioext":                0, // table: leaf
-	"internal/audioutil":               0, // computed: imports no module package
-	"internal/boundedcall":             0, // computed: imports no module package
-	"internal/authorname":              0, // table: leaf
-	"internal/cache":                   0, // table: leaf
-	"internal/cfaccesspolicy":          0, // computed: imports no module package
-	"internal/cfservicetoken":          0, // computed: imports no module package
-	"internal/chaptershape":            0, // computed: imports no module package
-	"internal/covertext":               0, // computed: imports no module package
-	"internal/database/aggtest":        0, // computed: imports no module package
-	"internal/diagnosis":               0, // computed: imports no module package
-	"internal/diskstats":               0, // computed: imports no module package
-	"internal/errhandling":             0, // computed: imports no module package
-	"internal/filehash":                0, // computed: imports no module package
-	"internal/fingerprint":             0, // reclassified from domain: imports only internal/audioutil
-	"internal/fingerprint/workerapi":   0, // computed: imports no module package
-	"internal/flight":                  0, // computed: imports no module package
-	"internal/franchise":               0, // computed: imports no module package
-	"internal/httputil":                0, // table: leaf
-	"internal/keyedmutex":              0, // computed: imports no module package
-	"internal/libroot":                 3, // computed: max of imports=0, floored at 3
-	"internal/linkintegrity":           0, // computed: imports no module package
-	"internal/logger":                  0, // table: leaf
-	"internal/logger/logtest":          0, // computed: imports no module package
-	"internal/logger/mocks":            0, // computed: imports no module package
-	"internal/mail":                    0, // computed: imports no module package
-	"internal/masterlist":              0, // computed: imports no module package
-	"internal/matcher":                 0, // reclassified from domain: imports only internal/personname
-	"internal/metadata/dailyquota":     0, // computed: imports no module package
-	"internal/metastate":               0, // computed: imports no module package
-	"internal/metrics":                 0, // table: leaf
-	"internal/models":                  0, // table: leaf
-	"internal/mtls":                    0, // computed: imports no module package
-	"internal/walkresume":              0, // computed: imports no module package
-	"internal/operations/freshness":    0, // computed: imports no module package
-	"internal/operations/opmode":       0, // computed: imports no module package
-	"internal/operations/state":        0, // computed: imports no module package
-	"internal/pathutil":                0, // table: leaf
-	"internal/personname":              0, // table: leaf
-	"internal/policy":                  0, // computed: imports no module package
-	"internal/querygrammar":            0, // table: leaf
-	"internal/scanlock":                0, // computed: imports no module package
-	"internal/sdnotify":                0, // computed: imports no module package
-	"internal/security/pathvalidation": 0, // computed: imports no module package
-	"internal/security/safehttp":       0, // computed: imports no module package
-	"internal/security/safepath":       0, // computed: imports no module package
-	"internal/seqnum":                  0, // table: leaf
-	"internal/serverdecode":            0, // computed: imports no module package
-	"internal/serviceregistry":         0, // computed: imports no module package
-	"internal/startup":                 0, // computed: imports no module package
-	"internal/syncapi/conformance":     0, // computed: imports no module package
-	"internal/syncapi/progress":        0, // computed: imports no module package
-	"internal/telemetry":               0, // computed: imports no module package
-	"internal/telemetrypolicy":         0, // computed: imports no module package (test-only; was internal/telemetry/contract)
-	"internal/testutil/durtest":        0, // computed: imports no module package
-	"internal/titleutil":               0, // table: leaf
-	"internal/tools":                   0, // computed: imports no module package
-	"internal/trackseq":                0, // computed: imports no module package
-	"internal/util":                    0, // table: leaf
+	"internal/acoustid":              0, // computed: imports no module package
+	"internal/applycap":              0, // computed: imports no module package
+	"internal/arch":                  0, // computed: imports no module package
+	"internal/audioext":              0, // table: leaf
+	"internal/audioutil":             0, // computed: imports no module package
+	"internal/authorname":            0, // table: leaf
+	"internal/cache":                 0, // table: leaf
+	"internal/cfaccesspolicy":        0, // computed: imports no module package
+	"internal/cfservicetoken":        0, // computed: imports no module package
+	"internal/chaptershape":          0, // computed: imports no module package
+	"internal/covertext":             0, // computed: imports no module package
+	"internal/database/aggtest":      0, // computed: imports no module package
+	"internal/diagnosis":             0, // computed: imports no module package
+	"internal/errhandling":           0, // computed: imports no module package
+	"internal/filehash":              0, // computed: imports no module package
+	"internal/fingerprint":           0, // reclassified from domain: imports only internal/audioutil
+	"internal/fingerprint/workerapi": 0, // computed: imports no module package
+	"internal/flight":                0, // computed: imports no module package
+	"internal/franchise":             0, // computed: imports no module package
+	"internal/httputil":              0, // table: leaf
+	"internal/keyedmutex":            0, // computed: imports no module package
+	"internal/linkintegrity":         0, // computed: imports no module package
+	"internal/logger":                0, // table: leaf
+	"internal/logger/logtest":        0, // computed: imports no module package
+	"internal/logger/mocks":          0, // computed: imports no module package
+	"internal/mail":                  0, // computed: imports no module package
+	"internal/masterlist":            0, // computed: imports no module package
+	"internal/matcher":               0, // reclassified from domain: imports only internal/personname
+	"internal/metadata/dailyquota":   0, // computed: imports no module package
+	"internal/metastate":             0, // computed: imports no module package
+	"internal/metrics":               0, // table: leaf
+	"internal/models":                0, // table: leaf
+	"internal/mtls":                  0, // computed: imports no module package
+	"internal/walkresume":            0, // computed: imports no module package
+	"internal/operations/freshness":  0, // computed: imports no module package
+	"internal/operations/opmode":     0, // computed: imports no module package
+	"internal/operations/state":      0, // computed: imports no module package
+	"internal/pathutil":              0, // table: leaf
+	"internal/personname":            0, // table: leaf
+	"internal/policy":                0, // computed: imports no module package
+	"internal/querygrammar":          0, // table: leaf
+	"internal/scanlock":              0, // computed: imports no module package
+	"internal/sdnotify":              0, // computed: imports no module package
+	"internal/security/safehttp":     0, // computed: imports no module package
+	"internal/seqnum":                0, // table: leaf
+	"internal/serverdecode":          0, // computed: imports no module package
+	"internal/serviceregistry":       0, // computed: imports no module package
+	"internal/startup":               0, // computed: imports no module package
+	"internal/syncapi/conformance":   0, // computed: imports no module package
+	"internal/syncapi/progress":      0, // computed: imports no module package
+	"internal/telemetry":             0, // computed: imports no module package
+	"internal/telemetrypolicy":       0, // computed: imports no module package (test-only; was internal/telemetry/contract)
+	"internal/testutil/durtest":      0, // computed: imports no module package
+	"internal/titleutil":             0, // table: leaf
+	"internal/tools":                 0, // computed: imports no module package
+	"internal/trackseq":              0, // computed: imports no module package
+	"internal/util":                  0, // table: leaf
 
 	// Layer 1: config
 	"internal/config": 1, // table: config
