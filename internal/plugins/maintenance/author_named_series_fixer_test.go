@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: aa736089-b4ed-43cf-b00e-426629a38cb7
-// last-edited: 2026-10-25
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -55,7 +55,7 @@ type ansLibrary struct {
 
 func newANSLibrary(t *testing.T) *ansLibrary {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	l := &ansLibrary{st: st}

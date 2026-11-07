@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-10-21
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -27,7 +27,7 @@ import (
 
 func newRelinkTrashedStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	s.WaitForWarmup()
 	t.Cleanup(func() { _ = s.Close() })

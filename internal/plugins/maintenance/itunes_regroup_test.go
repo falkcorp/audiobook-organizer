@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -33,7 +33,7 @@ func (e *errExtIDStore) GetExternalIDsForBook(bookID string) ([]database.Externa
 
 func regroupStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

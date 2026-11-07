@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/decode_guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d7a2e91-b3f0-4c58-8e16-a9c5d02f7b34
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -50,7 +50,7 @@ func TestDecodeOps_RefuseWithoutServerDecode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := database.NewPebbleStore(t.TempDir())
+			s, err := database.NewPebbleStoreInMemory(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestDecodeOps_RefuseWithoutServerDecode(t *testing.T) {
 // reparse_only never decodes audio, so it must keep working with the switch off.
 func TestIntroTranscribe_ReparseOnlyStillRunsWithoutServerDecode(t *testing.T) {
 	t.Setenv(serverdecode.EnvVar, "")
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

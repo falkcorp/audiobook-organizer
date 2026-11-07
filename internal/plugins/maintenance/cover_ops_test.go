@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1c8f4a27-9e3b-4d60-b5a2-7d0e6f3c9b18
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -40,7 +40,7 @@ func coverTestPNG(t *testing.T, path string, w, h int) {
 // a cover.png, and a root dir for .covers.
 func coverOpFixture(t *testing.T) (*database.PebbleStore, rootDirDeps, []string) {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

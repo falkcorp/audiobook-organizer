@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b7314ebb-e6db-49d3-af82-37738df6214a
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -157,7 +157,7 @@ func TestReportOps_RefuseApplyWithoutAUsableReportDir(t *testing.T) {
 // With an absolute root and default params, every report-writing op leaves its
 // report at {root}/.reports/<name> and nothing in the package directory.
 func TestReportOps_DefaultReportLandsUnderRoot(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	defer s.Close()
 	s.WaitForWarmup()

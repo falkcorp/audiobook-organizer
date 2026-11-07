@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_relink_trashed_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3b8d5e72-0c4f-4a91-9e26-d71f84a3c6b0
-// last-edited: 2026-10-13
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -60,7 +60,7 @@ func (f splitFaultStore) ModifyBook(id string, fn func(*database.Book) error) (*
 
 func newSplitRelinkStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	st.WaitForWarmup()
 	t.Cleanup(func() { _ = st.Close() })

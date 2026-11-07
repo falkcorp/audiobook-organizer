@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -34,7 +34,7 @@ type vtLib struct {
 
 func newVTLib(t *testing.T) *vtLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	// memdb serving reads, as in production after warmup: the apply's

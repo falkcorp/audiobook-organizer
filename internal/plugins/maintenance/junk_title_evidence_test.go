@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -325,7 +325,7 @@ type evLib struct {
 
 func newEvLib(t *testing.T) *evLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	return &evLib{junkLib: &junkLib{store: st, ids: map[string]string{}}, t: t}

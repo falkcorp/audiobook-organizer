@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 63020fe7-ecfe-4a9a-8450-fccba4c32c64
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -42,7 +42,7 @@ const strMissingID = "01SYNTHETICMISSINGBOOK0000"
 
 func newSTRLibrary(t *testing.T) *strLibrary {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	l := &strLibrary{st: st}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
-// last-edited: 2026-10-22
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -33,7 +33,7 @@ type combinedLib struct {
 
 func newCombinedLib(t *testing.T) *combinedLib {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	return &combinedLib{t: t, store: st, ids: map[string]string{},

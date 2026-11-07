@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_parallel_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7f21c6ad-95be-4c30-8d02-5b3a1e6f4c99
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -109,7 +109,7 @@ func TestDedupeBookFileRows_ParallelApplyCollapsesEveryBook(t *testing.T) {
 	}
 	const books, copies = 24, 6
 
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestDedupeBookFileRows_ParallelDryRunDeletesNothing(t *testing.T) {
 	}
 	const books, copies = 12, 4
 
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -271,7 +271,7 @@ func seedActiveOp(t *testing.T, s *database.PebbleStore, id, defID, status strin
 // identical rows each.
 func newDupStore(t *testing.T, books, copies int) (*database.PebbleStore, []string) {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

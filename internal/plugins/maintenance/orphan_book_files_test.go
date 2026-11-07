@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-10-23
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -318,7 +318,7 @@ func TestFindOrphanBookFiles_ReadsTheGuardedBookGetter(t *testing.T) {
 // then hard-deleted by the caller. The mock-store tests above cannot see this:
 // the bug lived in the key range, below the interface they fake.
 func TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

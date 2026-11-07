@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ai_journal_prune_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 27ded651-bee8-45c3-a464-9159918a1f1f
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -27,7 +27,7 @@ func (d journalPruneDeps) AIJournalRetentionDays() int { return d.days }
 // one fresh one, and one aijournal:batch: key the prune does not own.
 func seedJournal(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

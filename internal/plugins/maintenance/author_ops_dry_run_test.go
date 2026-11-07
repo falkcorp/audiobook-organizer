@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_ops_dry_run_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5c1e4571-8bcf-4190-ac2d-ae141026d139
-// last-edited: 2026-10-13
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -30,7 +30,7 @@ import (
 
 func newDryRunSplitStore(t *testing.T) (*database.PebbleStore, int, string) {
 	t.Helper()
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	st.WaitForWarmup()
 	t.Cleanup(func() { _ = st.Close() })

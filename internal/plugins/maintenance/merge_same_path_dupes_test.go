@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -302,7 +302,7 @@ func (d samePathMergeDeps) MergeBooks(opID string, bookIDs []string, _ string) (
 // the registry.ReporterOpID lookup (or passing "") fails here; the plan tests
 // above call planMergeSamePathDupes directly and never see the id.
 func TestMergeSamePathRun_MergesUnderTheRunID(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	path := "/lib/Author/Book.m4b"

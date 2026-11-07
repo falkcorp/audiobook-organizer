@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_report_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e3b8c71-2d94-4f0a-a6c7-91b4e2d0f358
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -94,7 +94,7 @@ func newDupeReportStore(t *testing.T) *database.PebbleStore {
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

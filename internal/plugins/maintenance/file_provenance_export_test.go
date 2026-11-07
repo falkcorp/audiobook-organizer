@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-08-21
+// last-edited: 2026-11-06
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a
@@ -32,7 +32,7 @@ import (
 
 func newExportFixture(t *testing.T) (*Plugin, *database.PebbleStore, string) {
 	t.Helper()
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return New(provDeps{prov: store}), store, filepath.Join(t.TempDir(), "ledger.jsonl")

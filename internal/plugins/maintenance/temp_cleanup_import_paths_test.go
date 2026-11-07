@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/temp_cleanup_import_paths_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 5b8e2f4a-7c19-4d63-a0e5-91f3c6d28b47
-// last-edited: 2026-10-20
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -40,7 +40,7 @@ type transcodeTempFixture struct {
 
 func newTranscodeTempFixture(t *testing.T) transcodeTempFixture {
 	t.Helper()
-	store, err := database.NewPebbleStore(t.TempDir())
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops_batch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d3a390db-7a5a-41df-ba14-226aeb15655c
-// last-edited: 2026-09-19
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 
 func newJobsStore(t *testing.T) database.AIJobsStore {
 	t.Helper()
-	ps, err := database.NewPebbleStore(t.TempDir())
+	ps, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	return ps

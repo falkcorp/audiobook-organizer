@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_fpwin_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9578f32b-f95b-4ff6-a7bf-4ceead8fea41
-// last-edited: 2026-11-04
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -26,7 +26,7 @@ func TestDedupeBookFileRows_CarriesDonorWindowsToTheKeeper(t *testing.T) {
 	const books, copies = 4, 3
 	slots := [copies]int{1000, 5000, 9000}
 
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDedupeBookFileRows_ZeroWindowGroupWithUnrepresentableIDsStillCollapses(
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

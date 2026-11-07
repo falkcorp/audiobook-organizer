@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f6a41d8-90b3-4c57-8e12-b5d70c3a9f46
-// last-edited: 2026-08-24
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -33,7 +33,7 @@ import (
 // multiply the runtime by the track count — so maintenance.duration-backfill
 // fills it in later.
 func TestRelinkOne_Directory_CreatesEveryTrackAndSumsTheBook(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestRelinkOne_Directory_CreatesEveryTrackAndSumsTheBook(t *testing.T) {
 // correct because it re-reads the book's files under the write path and returns
 // early. Remove that check and re-running the repair silently doubles every row.
 func TestRelinkOne_Directory_SkipsABookThatAlreadyOwnsFiles(t *testing.T) {
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops_planonly_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4e1a97b-3d62-4b08-a5f9-7e20d8b61c43
-// last-edited: 2026-11-05
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -70,7 +70,7 @@ func (d planOnlyOpsDeps) OperationQueueStore() OpQueueReader { return d.ops }
 // after the plan was read, and would also stop the writes) is that no op row
 // read for the plan, and the error carries the op's own prefix.
 func TestRepairsOps_ApplyOpRefusesAPlanOnlyFixerBeforeReadingAnything(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
+	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	ops := &planOnlyCountingOps{planOps: &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}}}
