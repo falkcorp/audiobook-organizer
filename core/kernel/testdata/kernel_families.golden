@@ -1,0 +1,10 @@
+# file: core/kernel/testdata/kernel_families.golden
+# version: 1.0.0
+# guid: 38821bf4-ab7b-41a5-9d90-602a27710289
+# last-edited: 2026-11-07
+#
+# The kernel-emitted families a zero-module boot serves on its Provider's
+# Handler() (05-metrics §12 TestKernelFamiliesGathered, 06 §6.9), default
+# namespace, one per line, sorted. R1-20 adds mediacore_storage_level and
+# mediacore_storage_checkpoint_bytes when storage lands.
+mediacore_kernel_boot_phase_seconds
