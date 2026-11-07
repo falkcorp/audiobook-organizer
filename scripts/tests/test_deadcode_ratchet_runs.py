@@ -1,5 +1,5 @@
-# file: scripts/tests/test_deadcode_ratchet.py
-# version: 2.0.0
+# file: scripts/tests/test_deadcode_ratchet_runs.py
+# version: 2.2.0
 # guid: 6fe9f117-94bd-4108-86b2-efeb0a64cc75
 # last-edited: 2026-11-07
 """Tests for the deadcode ratchet's runs and how it combines them (09 §9.4 R1, MOD2-19).
@@ -7,16 +7,21 @@
 core/ is its own module, so the analysis is two deadcode runs, each in its own
 module context: the root run (`./...` from the repo root) and, once hello
 exists, the core run (hello's mains, cwd core/). A function is dead only if
-every run that loaded its package reports it. `-filter` replaces deadcode's
+every run that loaded its package reports it. The core run also roots a
+synthetic main that references core's public API (tools/deadcode/surface), in
+a scratch copy of core/. `-filter` replaces deadcode's
 default, so each run's filter is pinned too: a filter naming only core's trees
 would drop every root finding and `--prune` would then empty the baseline.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,10 +30,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location(
-    "deadcode_ratchet", ROOT / "scripts/deadcode-ratchet.py"
+    "deadcode_ratchet_runs", ROOT / "scripts/deadcode-ratchet.py"
 )
 dr = importlib.util.module_from_spec(_spec)
-sys.modules["deadcode_ratchet"] = dr
+sys.modules["deadcode_ratchet_runs"] = dr
 _spec.loader.exec_module(dr)
 
 ROOT_MOD = "example.com/app"
@@ -126,6 +131,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(specs[0].patterns, ("./...",))
         self.assertEqual(specs[1].cwd, tree / "core")
         self.assertEqual(specs[1].patterns, ("./examples/hello/...",))
+        self.assertEqual((specs[1].base, specs[1].surface), ("core", True))
+        self.assertEqual((specs[0].base, specs[0].surface), ("", False))
 
     def test_hello_in_a_subdirectory_counts(self) -> None:
         self.assertEqual(len(dr.plan(_tree(["cmd/hello/main.go"]))), 2)
@@ -209,46 +216,127 @@ class CombineTests(unittest.TestCase):
 class RunDeadcodeTests(unittest.TestCase):
     """run_deadcode with the subprocess layer faked (no Go needed)."""
 
-    def _drive(self, tree: Path) -> tuple[list[dr.RunResult], list[tuple[str, str]]]:
-        calls: list[tuple[str, str]] = []
-        real_root = os.path.realpath(tree)
+    def _drive(self, tree: Path) -> tuple[list[dr.RunResult], list[tuple[str, str, Path]]]:
+        calls: list[tuple[str, str, Path]] = []
 
         def fake_run(cmd, spec, env, what):
-            calls.append((what, spec.name))
+            calls.append((what, spec.name, spec.cwd))
             self.assertEqual(
                 (env["GOOS"], env["GOARCH"], env["CGO_ENABLED"]), ("linux", "amd64", "0")
             )
+            cwd = os.path.realpath(spec.cwd)
             if what == "go list":
-                dirs = [
-                    f"{real_root}/internal/a",
-                    "/go/pkg/mod/x.org/m@v1",
-                    f"{real_root}/core/kernel",
-                ]
-                return "\n".join(dirs if spec.name == "root" else dirs[1:])
+                # Dirs as `go list` prints them: absolute, under the run's cwd.
+                core = (
+                    os.path.join(cwd, "kernel") if spec.base else os.path.join(cwd, "core/kernel")
+                )
+                dirs = [os.path.join(cwd, "internal/a"), "/go/pkg/mod/x.org/m@v1", core]
+                return "\n".join(dirs[1:] if spec.name == "core" else dirs)
+            if what == "surface":
+                return ""
             if spec.name == "root":
-                return "internal/a/a.go:1:1: unreachable func: F\ncore/kernel/k.go:1:1: unreachable func: K\n"
+                return (
+                    "internal/a/a.go:1:1: unreachable func: F\n"
+                    "core/kernel/k.go:1:1: unreachable func: K\n"
+                )
             return "kernel/k.go:1:1: unreachable func: K\nkernel/k.go:2:1: unreachable func: L\n"
 
-        with mock.patch.object(dr, "find_binary", return_value="/x/deadcode"), mock.patch.object(
-            dr, "check_binary_version"
-        ), mock.patch.object(dr, "_run", side_effect=fake_run):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(dr, "find_binary", return_value="/x/deadcode"))
+            stack.enter_context(mock.patch.object(dr, "check_binary_version"))
+            stack.enter_context(
+                mock.patch.object(dr, "build_surface_helper", return_value="/x/surface")
+            )
+            stack.enter_context(mock.patch.object(dr, "_run", side_effect=fake_run))
             return dr.run_deadcode(tree), calls
 
-    def test_hello_absent_is_one_run_and_no_go_list(self) -> None:
-        results, calls = self._drive(_tree(None))
-        self.assertEqual(calls, [("deadcode", "root")])
+    def test_hello_absent_is_one_run_no_go_list_no_surface_no_copy(self) -> None:
+        tree = _tree(None)
+        results, calls = self._drive(tree)
+        self.assertEqual(calls, [("deadcode", "root", tree)])
         self.assertEqual(dr.combine(results), {"internal/a.F", "core/kernel.K"})
 
     def test_hello_present_runs_both_and_intersects(self) -> None:
-        results, calls = self._drive(_tree(["main.go"]))
+        tree = _tree(["main.go"])
+        results, calls = self._drive(tree)
         self.assertEqual(
-            calls,
-            [("deadcode", "root"), ("go list", "root"), ("deadcode", "core"), ("go list", "core")],
+            [(w, n) for w, n, _ in calls],
+            [
+                ("deadcode", "root"),
+                ("go list", "root"),
+                ("surface", "core"),
+                ("deadcode", "core"),
+                ("go list", "core"),
+            ],
         )
+        # The root run executes in the real tree; the core run in a scratch
+        # copy of core/, never the real core/.
+        self.assertEqual(calls[0][2], tree)
+        self.assertNotEqual(calls[3][2], tree / "core")
+        self.assertEqual(calls[2][2], calls[3][2])
         # F: root module, judged by the root run alone. K: both runs load
         # core/kernel and both report it. L: reported by the core run only; the
         # root run loads core/kernel too and does not report L, so it reaches L.
         self.assertEqual(dr.combine(results), {"internal/a.F", "core/kernel.K"})
+        self.assertFalse((tree / "core" / dr.SURFACE_DIR).exists())  # real tree untouched
+
+
+class WithSurfaceTests(unittest.TestCase):
+    def test_copy_gets_the_surface_main_and_the_real_tree_is_untouched(self) -> None:
+        tree = _tree(["main.go"])
+        (tree / "core" / "go.mod").write_text("module example.com/core\n")
+        (tree / "core" / ".git").mkdir()
+        (tree / "core" / ".git" / "HEAD").write_text("x")
+        spec = dr.plan(tree)[1]
+        seen = {}
+
+        def fake_run(cmd, s, env, what):
+            seen["cmd"], seen["spec"], seen["what"] = cmd, s, what
+            return ""
+
+        with tempfile.TemporaryDirectory() as scratch, mock.patch.object(dr, "_run", fake_run):
+            got = dr.with_surface(spec, "/x/surface", scratch, {})
+            self.assertNotEqual(got.cwd, spec.cwd)
+            self.assertTrue((got.cwd / "go.mod").is_file())
+            self.assertTrue((got.cwd / "examples/hello/main.go").is_file())
+            self.assertFalse((got.cwd / ".git").exists())
+            self.assertEqual(got.patterns, ("./examples/hello/...", "./" + dr.SURFACE_DIR))
+            self.assertEqual((got.base, got.filter), (spec.base, spec.filter))
+            self.assertEqual(
+                seen["cmd"],
+                ["/x/surface", "-dir", str(got.cwd), "-out", str(got.cwd / dr.SURFACE_DIR)],
+            )
+        self.assertFalse((tree / "core" / dr.SURFACE_DIR).exists())
+
+    def test_loaded_dirs_are_re_rooted_with_the_spec_base(self) -> None:
+        tree = _tree(["main.go"])
+        spec = dr.plan(tree)[1]
+        dirs = (
+            f"{os.path.realpath(spec.cwd)}/kernel\n/go/pkg/mod/m@v1\n{os.path.realpath(spec.cwd)}\n"
+        )
+        with mock.patch.object(dr, "_run", return_value=dirs):
+            self.assertEqual(dr.loaded_dirs(spec, {}), frozenset({"core/kernel", "core"}))
+
+    def test_no_test_flag_so_test_only_code_stays_dead(self) -> None:
+        for spec in dr.plan(_tree(["main.go"])):
+            self.assertNotIn("-test", spec.args)
+
+
+@unittest.skipUnless(shutil.which("go"), "needs the Go toolchain")
+class SurfaceHelperTests(unittest.TestCase):
+    """The Go helper's own tests (generation, exclusions, method expressions,
+    generics) live in tools/deadcode/surface; run them here so CI sees them."""
+
+    def test_go_tests_pass(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k not in ("GOOS", "GOARCH")}
+        res = subprocess.run(
+            ["go", "-C", str(ROOT / "tools/deadcode"), "test", "./surface"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

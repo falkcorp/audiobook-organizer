@@ -1,5 +1,5 @@
 # file: ci/gates.txt
-# version: 1.7.1
+# version: 1.7.2
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
 # last-edited: 2026-11-07
 #
@@ -33,8 +33,10 @@
 #   deadcode-ratchet                   root, as two deadcode runs in their own module contexts:
 #                                      ABO's mains from the root (root-plus-core-internal filter)
 #                                      and, once it exists, hello's mains from core/ (core
-#                                      internal+kernel filter); dead only if every run that
-#                                      loads a package reports it; one baseline, no core baseline
+#                                      internal+kernel filter, plus a synthetic main that
+#                                      references core's public API so the SDK surface counts as
+#                                      live); dead only if every run that loads a package reports
+#                                      it; one baseline, no core baseline
 #   core-pprof, core-mocks, core-coverage-floor  core halves of the root's pprof-check,
 #                                      mocks-check and coverage-check-short; "not applicable"
 #                                      or "no floor yet" lines until their subject exists

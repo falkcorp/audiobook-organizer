@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_deadcode_ratchet.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 2b8e41c7-6d09-4f3a-a5e2-90c1d7f3b648
 # last-edited: 2026-11-07
 """Unit tests for scripts/deadcode-ratchet.py (stdlib unittest, no Go needed)."""
@@ -10,6 +10,7 @@ import io
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -17,9 +18,12 @@ from pathlib import Path
 from unittest import mock
 
 _spec = importlib.util.spec_from_file_location(
-    "deadcode_ratchet", Path(__file__).with_name("deadcode-ratchet.py")
+    "deadcode_ratchet_unit", Path(__file__).with_name("deadcode-ratchet.py")
 )
 dr = importlib.util.module_from_spec(_spec)
+# Registered before exec_module: dataclasses resolves sys.modules[cls.__module__]
+# while the module body runs, and fails without it on newer Pythons.
+sys.modules["deadcode_ratchet_unit"] = dr
 _spec.loader.exec_module(dr)
 
 SAMPLE = """\
