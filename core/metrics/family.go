@@ -1,5 +1,5 @@
 // file: core/metrics/family.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 750823bb-4a76-4075-95b0-2dc2bc337766
 // last-edited: 2026-11-07
 
@@ -188,8 +188,7 @@ func (r *familyRegisterer) Register(c prometheus.Collector) error {
 		return err
 	}
 	if err := r.reg.Register(c); err != nil {
-		var already prometheus.AlreadyRegisteredError
-		if !errors.As(err, &already) {
+		if _, ok := errors.AsType[prometheus.AlreadyRegisteredError](err); !ok {
 			r.f.releaseCollector(names)
 		}
 		return err
