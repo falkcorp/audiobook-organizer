@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.35.3
+# version: 3.35.4
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-07
 
@@ -521,6 +521,14 @@ jobs:
       # the old shape. Same make target `make ci` runs.
       - name: Generated TypeScript types are fresh
         run: make types-check
+
+      # Every //go:embed input of both modules is inside the Docker build context
+      # or a listed in-image output (03 §3.2 item 4; R1-04). A path filter cannot
+      # catch it: the change that breaks it touches only a *.go file. The docker-image
+      # job is the backstop that builds the image; this one needs no Docker.
+      # Registered in ci/gates.txt as embed-context.
+      - name: Embed inputs are inside the Docker build context
+        run: make embed-check
 
       # The auto-revert selector decides which commits get reverted off main, so
       # it gets tested somewhere that actually runs. Stdlib unittest, no pip step

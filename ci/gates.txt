@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.6.0
+# version: 1.7.0
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -35,6 +35,11 @@
 #   core-pprof, core-mocks, core-coverage-floor  core halves of the root's pprof-check,
 #                                      mocks-check and coverage-check-short; "not applicable"
 #                                      or "no floor yet" lines until their subject exists
+#   embed-context                      root: scripts/ci/check_embed_context.py judges every
+#                                      //go:embed input of both modules against .dockerignore
+#                                      and compares scripts/ci/embed_build_outputs.txt with the
+#                                      Dockerfiles; core's half (`make -C core embed-check`,
+#                                      core's own list, no image) is a step of core's ci target
 #   store-width, store-references      root, until the split deletes database.Store
 #   layering, appconfig-reads, slog-guard  root (Go tests in the sharded short suite)
 #   core-layering                      core only
@@ -70,3 +75,4 @@ core-interface-width	make -C core interface-width	core/.interface-width-baseline
 core-pprof	make -C core pprof-check	-	check	-	core-job
 core-mocks	make -C core mocks-check	-	check	-	core-job
 core-coverage-floor	make -C core coverage-floor	-	check	-	core-job
+embed-context	python3 scripts/ci/check_embed_context.py	-	check	-	own-job
