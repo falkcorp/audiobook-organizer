@@ -1,0 +1,38 @@
+// core/examples/hello/cmd/hello/main.go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/examples/hello"
+)
+
+var version = "dev" // set by -ldflags
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	a, err := app.New(ctx, app.Options{
+		AppID:       "hello",
+		DisplayName: "Hello",
+		Version:     version,
+		EnvPrefix:   "HELLO",       // the default, strings.ToUpper(AppID), spelled out
+		StateDir:    "hello-state", // compiled default; flags and HELLO_* env override it, never the config file
+		UI:          hello.UIBundle(), // ui_embed.go (embed_frontend) or ui_nonembed.go
+	}, hello.New())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err) // a *module.ValidationError prints every problem
+		os.Exit(2)
+	}
+	if err := a.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
