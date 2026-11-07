@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-11-07
 
@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 
+	logging "github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 )
 
@@ -224,8 +225,11 @@ func (h emitHandler) WithAttrs(as []slog.Attr) slog.Handler {
 func (h emitHandler) WithGroup(string) slog.Handler { return h }
 
 // metricsOptions is the core Options for cfg: ABO's identity (app ID, service
-// name, the audiobook_organizer namespace, its one module), the build version
-// and this process's instance ID. The halves are filled by the callers.
+// name, the audiobook_organizer namespace, its one module), the build version,
+// this process's instance ID and core's default Redactor, which core requires
+// once tracing is on (05-metrics §8) and runs every exported span through.
+// The halves are filled by the callers. HEAD's span middleware
+// (middleware.TraceWithRedactedInvitePath) stays until R1-17.
 func metricsOptions(cfg *Config) metrics.Options {
 	return metrics.Options{
 		AppID:           appID,
@@ -236,6 +240,7 @@ func metricsOptions(cfg *Config) metrics.Options {
 		InstanceID:      instanceID,
 		Environment:     cfg.Environment,
 		Logger:          slog.New(emitHandler{}),
+		Redactor:        logging.NewRedactor(nil),
 	}
 }
 

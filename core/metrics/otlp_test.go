@@ -1,5 +1,5 @@
 // file: core/metrics/otlp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f3c6edc8-8ed7-4463-9a07-89749eda8af6
 // last-edited: 2026-11-07
 
@@ -35,6 +35,8 @@ import (
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/falkcorp/mediacore/log"
 )
 
 // metricSink is a plaintext OTLP/gRPC metrics collector that keeps what it
@@ -316,8 +318,9 @@ func TestOTLPMetrics_UserinfoNeverLogged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	p, err := New(ctx, Options{AppID: "a", Logger: slog.New(slog.NewTextHandler(&logs, nil)),
-		OTLP:    &OTLPMetrics{Endpoint: "dns:///user:secret@192.0.2.1:4317", Insecure: true},
-		Tracing: &OTLPTracing{Endpoint: "https://user:secret@192.0.2.1:4317"}})
+		OTLP:     &OTLPMetrics{Endpoint: "dns:///user:secret@192.0.2.1:4317", Insecure: true},
+		Tracing:  &OTLPTracing{Endpoint: "https://user:secret@192.0.2.1:4317"},
+		Redactor: log.NewRedactor(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +355,7 @@ func TestTracing_SpansReachAPlaintextCollector(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			o := tc.o
-			p, err := New(ctx, Options{AppID: "a", Tracing: &o})
+			p, err := New(ctx, Options{AppID: "a", Tracing: &o, Redactor: log.NewRedactor(nil)})
 			if err != nil {
 				t.Fatal(err)
 			}
