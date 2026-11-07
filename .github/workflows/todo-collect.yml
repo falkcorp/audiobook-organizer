@@ -1,5 +1,5 @@
 # file: .github/workflows/todo-collect.yml
-# version: 1.2.0
+# version: 1.2.1
 # guid: b615828c-4cc4-4c68-bb94-429744870438
 # last-edited: 2026-11-06
 
@@ -113,7 +113,7 @@ jobs:
           # No fallback to GITHUB_TOKEN or a personal token: either would fail
           # the ruleset (GH013) later with a far less obvious message.
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
-            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            echo "::error::Variable CI_BOT_APP_CLIENT_ID and the ci-bot environment secret CI_BOT_APP_PRIVATE_KEY must both be visible to this job; one or both are empty (is the ci-bot environment created, and does it allow this branch?)."
             exit 1
           fi
 
@@ -165,12 +165,18 @@ jobs:
           # no credentials, so nothing overrides it).
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          n=0
-          until git push "${REMOTE}" "HEAD:${DEFAULT_BRANCH}" || [ "$n" -ge 4 ]; do
-            n=$((n + 1))
-            echo "Retry $n/4 for TODO push..."
-            sleep $((2 ** n))
+          # Up to 5 attempts. The old loop counted retries and tested the count
+          # after the loop, so a push that succeeded on the last attempt was
+          # reported as a failure.
+          attempt=1
+          until git push "${REMOTE}" "HEAD:${DEFAULT_BRANCH}"; do
+            if [ "$attempt" -ge 5 ]; then
+              echo "::error::Failed to push TODO.md after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Push attempt ${attempt}/5 failed; rebasing and retrying..."
+            sleep $((2 ** attempt))
             git pull --rebase "${REMOTE}" "${DEFAULT_BRANCH}"
+            attempt=$((attempt + 1))
           done
-          [ "$n" -lt 4 ] || { echo "::error::Failed to push TODO.md"; exit 1; }
           echo "TODO.md updated."

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/ci/set_bot_git_identity.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: 4e9b7c21-5d38-4a6f-8c14-b2a07e3d9f56
 # last-edited: 2026-11-06
 #
@@ -17,24 +17,33 @@
 # bot's numeric user id is looked up at runtime, never hard-coded, so renaming
 # or recreating the app needs no edit here. The commit identity is cosmetic;
 # which actor a ruleset bypass applies to is decided by the token that pushes.
-set -euo pipefail
+#
+# This script never fails the calling step. A bot commit that is attributed a
+# little less nicely is better than a failed revert or a lost TODO commit, so any
+# lookup problem is a ::warning:: and the identity degrades:
+#   - id lookup fails      -> <slug>[bot] / <slug>[bot]@users.noreply.github.com
+#   - slug empty or odd    -> github-actions[bot] (the slug cannot be trusted)
+set -uo pipefail
 
-slug=${1:?usage: set_bot_git_identity.sh <app-slug>}
+slug=${1:-}
 
 # GitHub App slugs are lowercase letters, digits and hyphens. Anything else means
 # the argument is wrong (an empty or unresolved expression, for instance).
 if ! [[ $slug =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-  echo "::error::unexpected GitHub App slug '${slug}'" >&2
-  exit 1
+  echo "::warning::unexpected GitHub App slug '${slug}'; committing as github-actions[bot]"
+  git config user.name "github-actions[bot]"
+  git config user.email "github-actions[bot]@users.noreply.github.com"
+  exit 0
 fi
 
 # %5B / %5D are the brackets of "<slug>[bot]".
-bot_id=$(gh api "users/${slug}%5Bbot%5D" --jq .id)
-if ! [[ $bot_id =~ ^[0-9]+$ ]]; then
-  echo "::error::could not resolve the bot user id for '${slug}[bot]' (got '${bot_id}')" >&2
-  exit 1
-fi
-
+bot_id=$(gh api "users/${slug}%5Bbot%5D" --jq .id 2>/dev/null) || bot_id=""
 git config user.name "${slug}[bot]"
-git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
-echo "git identity: ${slug}[bot] (user id ${bot_id})"
+if [[ $bot_id =~ ^[0-9]+$ ]]; then
+  git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+  echo "git identity: ${slug}[bot] (user id ${bot_id})"
+else
+  echo "::warning::could not resolve the bot user id for '${slug}[bot]'; using an id-less noreply address"
+  git config user.email "${slug}[bot]@users.noreply.github.com"
+fi
+exit 0
