@@ -99,15 +99,6 @@ const (
 	tmpSuffix   = ".tmp"
 )
 
-var (
-	reasonPattern = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
-	// filePattern is the only shape Open, List and rotation accept: a bare
-	// name with no separator, so neither a request nor a stray file can
-	// reach outside Dir or delete something the recorder did not write.
-	// Group 1 is the pair's basename, group 2 the file kind.
-	filePattern = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}Z-[a-z0-9_-]+)(\.trace|\.goroutines\.txt)$`)
-)
-
 // Config configures a Recorder. Zero values take the defaults above.
 type Config struct {
 	// Dir is where snapshots are written. Empty disables recording.
@@ -168,9 +159,16 @@ type Recorder struct {
 	minGap    time.Duration
 	disabled  bool
 	fr        *trace.FlightRecorder
-	log       *slog.Logger
-	clock     func() time.Time // injectable for tests
-	stopWait  time.Duration    // injectable for tests
+	// reasonRe validates a Snapshot reason. fileRe is the only shape Open, List
+	// and rotation accept: a bare name with no separator, so neither a request
+	// nor a stray file can reach outside Dir or delete something the recorder
+	// did not write. Group 1 is the pair's basename, group 2 the file kind.
+	// They are fields, not package variables: core has none (03 R5).
+	reasonRe *regexp.Regexp
+	fileRe   *regexp.Regexp
+	log      *slog.Logger
+	clock    func() time.Time // injectable for tests
+	stopWait time.Duration    // injectable for tests
 	// dropf logs a dropped request; injectable for tests.
 	dropf func(format string, args ...any)
 	// afterTrace, when set, runs on the writer goroutine after the trace file
@@ -194,7 +192,10 @@ type Recorder struct {
 	dropLog    map[string]time.Time
 }
 
-// logf writes one sanitized line to the recorder's logger (interim, see R1-36).
+// logf writes one line to the recorder's logger. Sanitize keeps the behaviour
+// of the logger this recorder used before it moved to core: every line is
+// newline-escaped before it is written. It is an interim; the log handler's
+// own control-character escaping replaces it (R1-36).
 func (r *Recorder) logf(level slog.Level, format string, args ...any) {
 	r.log.Log(context.Background(), level, corelog.Sanitize(fmt.Sprintf(format, args...)))
 }
@@ -212,6 +213,8 @@ func New(cfg Config) *Recorder {
 		clock:     time.Now,
 		stopWait:  stopWait,
 		log:       cfg.Logger,
+		reasonRe:  regexp.MustCompile(`^[a-z0-9_-]{1,40}$`),
+		fileRe:    regexp.MustCompile(`^([0-9]{8}T[0-9]{6}Z-[a-z0-9_-]+)(\.trace|\.goroutines\.txt)$`),
 		reasons:   make(map[string]*reasonState),
 		pinned:    make(map[string]struct{}),
 		dropLog:   make(map[string]time.Time),
@@ -283,7 +286,7 @@ func (r *Recorder) Snapshot(reason string) {
 	if r == nil || r.disabled {
 		return
 	}
-	if !reasonPattern.MatchString(reason) {
+	if !r.reasonRe.MatchString(reason) {
 		reason = "unknown"
 	}
 	r.mu.Lock()
@@ -509,7 +512,7 @@ func (r *Recorder) writeGoroutines(path string) error {
 
 // rotate deletes the oldest unpinned snapshots (both files of a pair together)
 // until at most maxFiles remain. Pinned pairs are never deleted. Only names
-// matching filePattern are considered; anything else in Dir is left alone.
+// matching fileRe are considered; anything else in Dir is left alone.
 // Names sort chronologically because they start with the UTC time.
 func (r *Recorder) rotate() {
 	pairs, err := r.pairs()
@@ -550,7 +553,7 @@ func (r *Recorder) pairs() ([]pair, error) {
 	var out []pair
 	idx := map[string]int{}
 	for _, name := range names {
-		base := filePattern.FindStringSubmatch(name)[1]
+		base := r.fileRe.FindStringSubmatch(name)[1]
 		i, ok := idx[base]
 		if !ok {
 			i = len(out)
@@ -570,7 +573,7 @@ func (r *Recorder) snapshotNames() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() && filePattern.MatchString(e.Name()) {
+		if e.Type().IsRegular() && r.fileRe.MatchString(e.Name()) {
 			names = append(names, e.Name())
 		}
 	}
@@ -604,11 +607,11 @@ func (r *Recorder) List() ([]FileInfo, error) {
 }
 
 // Open opens one snapshot file for reading. name must be a bare snapshot file
-// name (filePattern); anything else, including a path or a symbolic link, is
+// name (fileRe); anything else, including a path or a symbolic link, is
 // fs.ErrNotExist. The file is opened through an os.Root rooted at Dir, so even
 // a link planted in Dir between the check and the open cannot lead outside it.
 func (r *Recorder) Open(name string) (fs.File, error) {
-	if r == nil || r.dir == "" || !filePattern.MatchString(name) {
+	if r == nil || r.dir == "" || !r.fileRe.MatchString(name) {
 		return nil, fs.ErrNotExist
 	}
 	root, err := os.OpenRoot(r.dir)
