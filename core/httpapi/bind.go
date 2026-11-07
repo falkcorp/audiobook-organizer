@@ -1,20 +1,23 @@
 // file: core/httpapi/bind.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9ce63bfe-21b4-463d-ac55-8db492ac4b2c
 // last-edited: 2026-11-07
 
 package httpapi
 
 import (
+	"bytes"
 	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -331,35 +334,230 @@ func decodeBody(w http.ResponseWriter, r *http.Request, rt Route, dst reflect.Va
 	if limit <= 0 {
 		limit = defaultJSONMaxBytes
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		return bodyError(err, nil, nil)
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
 	if !rt.Lenient {
 		dec.DisallowUnknownFields()
 	}
 	if err := dec.Decode(dst.Addr().Interface()); err != nil {
-		return bodyError(err)
+		var located []byte
+		if !rt.Lenient {
+			located = body
+		}
+		return bodyError(err, located, dst.Type())
 	}
 	if err := dec.Decode(&json.RawMessage{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return &Error{Status: http.StatusBadRequest, Code: "malformed_json", Detail: "trailing data after the JSON value"}
 		}
-		return bodyError(err)
+		return bodyError(err, nil, nil)
 	}
 	return nil
 }
 
-func bodyError(err error) error {
+// bodyError maps a body read or decode failure to the client's *Error. No
+// detail carries err's own text: encoding/json's messages name Go types and
+// struct fields, which are not the API's vocabulary. A type mismatch is 422
+// validation_failed with an invalid_type field at the property's JSON
+// pointer; a syntax error names only its byte offset. An unknown field is
+// located by walking the body against t (unknownField), never by parsing
+// encoding/json's message: body is the strict route's raw body, nil when
+// unknown fields are allowed.
+func bodyError(err error, body []byte, t reflect.Type) error {
 	var tooBig *http.MaxBytesError
+	var syntax *json.SyntaxError
+	var mismatch *json.UnmarshalTypeError
 	switch {
 	case errors.As(err, &tooBig):
 		return &Error{Status: http.StatusRequestEntityTooLarge, Code: "body_too_large",
 			Detail: fmt.Sprintf("body exceeds %d bytes", tooBig.Limit)}
-	case strings.HasPrefix(err.Error(), "json: unknown field "):
-		name := strings.Trim(strings.TrimPrefix(err.Error(), "json: unknown field "), `"`)
-		return &Error{Status: http.StatusBadRequest, Code: "unknown_field", Detail: err.Error(),
-			Fields: []FieldError{Field("/body/"+name, "unknown_field", "unknown field")}}
 	case errors.Is(err, io.EOF):
 		return &Error{Status: http.StatusBadRequest, Code: "malformed_json", Detail: "empty body"}
-	default:
-		return &Error{Status: http.StatusBadRequest, Code: "malformed_json", Detail: err.Error()}
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return &Error{Status: http.StatusBadRequest, Code: "malformed_json", Detail: "the body ends inside the JSON value"}
+	case errors.As(err, &syntax):
+		return &Error{Status: http.StatusBadRequest, Code: "malformed_json",
+			Detail: fmt.Sprintf("malformed JSON at byte offset %d", syntax.Offset)}
+	case errors.As(err, &mismatch):
+		return Invalid(Field(typePointer(mismatch.Field), "invalid_type", expectation(mismatch)))
 	}
+	if body != nil && t != nil {
+		if ptr, ok := unknownField(body, t); ok {
+			return &Error{Status: http.StatusBadRequest, Code: "unknown_field", Detail: "the body has a property this route does not accept",
+				Fields: []FieldError{Field(ptr, "unknown_field", "unknown field")}}
+		}
+	}
+	return &Error{Status: http.StatusBadRequest, Code: "malformed_json", Detail: "the body is not a valid value for this route"}
+}
+
+// typePointer turns json.UnmarshalTypeError.Field (the dotted path of JSON
+// property names from the root) into a JSON pointer under /body.
+func typePointer(field string) string {
+	if field == "" {
+		return "/body"
+	}
+	var b strings.Builder
+	b.WriteString("/body")
+	for seg := range strings.SplitSeq(field, ".") {
+		b.WriteString("/" + escapePointer(seg))
+	}
+	return b.String()
+}
+
+// expectation says what JSON value a mismatched property takes, in JSON's
+// terms (never a Go type name).
+func expectation(e *json.UnmarshalTypeError) string {
+	t := e.Type
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil {
+		return "has the wrong JSON type"
+	}
+	want := "a different JSON type"
+	switch {
+	case reflect.PointerTo(t).Implements(reflect.TypeFor[encoding.TextUnmarshaler]()):
+		want = "a string"
+	default:
+		switch t.Kind() {
+		case reflect.Bool:
+			want = "a boolean"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			if strings.HasPrefix(e.Value, "number") {
+				return "is out of range for this property or not an integer"
+			}
+			want = "an integer"
+		case reflect.Float32, reflect.Float64:
+			if strings.HasPrefix(e.Value, "number") {
+				return "is out of range for this property"
+			}
+			want = "a number"
+		case reflect.String:
+			want = "a string"
+		case reflect.Slice:
+			want = "an array"
+			if t.Elem().Kind() == reflect.Uint8 {
+				want = "a base64 string"
+			}
+		case reflect.Array:
+			want = "an array"
+		case reflect.Map, reflect.Struct:
+			want = "an object"
+		}
+	}
+	return "must be " + want
+}
+
+// unknownField finds a property of body that t does not accept, as a JSON
+// pointer under /body, the way encoding/json matches names: exact first,
+// then case-insensitively. Keys are visited in sorted order, so the answer is
+// deterministic. ok is false when nothing is found (a custom UnmarshalJSON
+// failed instead).
+func unknownField(body []byte, t reflect.Type) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil {
+		return "", false
+	}
+	return findUnknown(v, t, "/body")
+}
+
+func findUnknown(v any, t reflect.Type, at string) (string, bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Implements(reflect.TypeFor[json.Unmarshaler]()) || reflect.PointerTo(t).Implements(reflect.TypeFor[json.Unmarshaler]()) {
+		return "", false // its own decoder decides what it accepts
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		fields := jsonFields(t)
+		for _, k := range slices.Sorted(maps.Keys(obj)) {
+			p := at + "/" + escapePointer(k)
+			ft, found := fields[k]
+			if !found {
+				for name, typ := range fields {
+					if strings.EqualFold(name, k) {
+						ft, found = typ, true
+						break
+					}
+				}
+			}
+			if !found {
+				return p, true
+			}
+			if ptr, ok := findUnknown(obj[k], ft, p); ok {
+				return ptr, true
+			}
+		}
+	case reflect.Map:
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		for _, k := range slices.Sorted(maps.Keys(obj)) {
+			if ptr, ok := findUnknown(obj[k], t.Elem(), at+"/"+escapePointer(k)); ok {
+				return ptr, true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		arr, ok := v.([]any)
+		if !ok {
+			return "", false
+		}
+		for i, e := range arr {
+			if ptr, ok := findUnknown(e, t.Elem(), at+"/"+strconv.Itoa(i)); ok {
+				return ptr, true
+			}
+		}
+	}
+	return "", false
+}
+
+// jsonFields is the JSON property name and type of every field
+// encoding/json decodes into struct type t, promoted fields of embedded
+// structs included. It may list a name encoding/json would not (a field
+// shadowed under a tagged embedded struct), never omit one it would accept.
+func jsonFields(t reflect.Type) map[string]reflect.Type {
+	out := make(map[string]reflect.Type)
+	for _, f := range reflect.VisibleFields(t) {
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if f.Anonymous && name == "" {
+			ft := f.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				continue // promoted: VisibleFields lists its fields
+			}
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		if _, dup := out[name]; !dup {
+			out[name] = f.Type
+		}
+	}
+	return out
+}
+
+// escapePointer escapes one JSON pointer segment (RFC 6901).
+func escapePointer(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }

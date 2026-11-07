@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e9d797ab-e187-456c-b23a-12fae047e7b9
 // last-edited: 2026-11-07
 
@@ -363,7 +363,7 @@ func TestNewCleansUpCoreGoroutines(t *testing.T) {
 	// alive when the function returns: a boot failing in P7 must leave none.
 	synctest.Test(t, func(t *testing.T) {
 		spa := func(r *module.Registrar) error {
-			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), ServesSPA: true})
+			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, ServesSPA: true})
 			return nil
 		}
 		k, err := New(t.Context(), testConfig(t, mod("batcave", spa), mod("arkham", spa)))
@@ -374,7 +374,7 @@ func TestNewCleansUpCoreGoroutines(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// The same with the kernel's own log.Logging, not a capture.
 		c := Config{AppID: "gotham", LogOutput: io.Discard, Modules: []module.Module{mod("batcave", func(r *module.Registrar) error {
-			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), TopSegments: []string{"arkham"}})
+			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, TopSegments: []string{"arkham"}})
 			return nil
 		})}}
 		if _, err := New(t.Context(), c); !hasKind(err, module.ProblemRouteOutsidePrefix) {

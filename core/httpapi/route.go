@@ -1,5 +1,5 @@
 // file: core/httpapi/route.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e02f805-1af9-41bb-87b2-82fc71cc65f0
 // last-edited: 2026-11-07
 
@@ -71,7 +71,7 @@ const (
 	RateDefault   RateClass = iota
 	RateAuth                // login/setup/bootstrap/invite: tighter per-source buckets (05-authn §4.9)
 	RateExpensive           // search, exports
-	RateExempt              // infra probes and the SPA handler only; rejected for non-Public routes
+	RateExempt              // infra probes and the SPA handler only (Handle refuses it, and any unknown class)
 )
 
 // Group is a mount point whose whole core chain is already applied. A module
@@ -282,6 +282,17 @@ func checkRouteShape(g *Group, rt Route) []error {
 		errs = append(errs, fmt.Errorf("%w: %s: path %q does not start with /", ErrOutsideClaim, what, rt.Path))
 	} else if err := cleanUnder(g.base+rt.Path, g.root+"/"); err != nil {
 		errs = append(errs, fmt.Errorf("%w: %s: %v", ErrOutsideClaim, what, err))
+	} else if strings.HasSuffix(rt.Path, "/") {
+		// ServeMux serves a pattern ending in "/" as a subtree and redirects
+		// the slashless path to it; native patterns are exact (05-http-api
+		// §4.8), so the one trailing-slash form is ".../{$}".
+		errs = append(errs, fmt.Errorf("%w: %s: path %q ends in \"/\", which ServeMux serves as a subtree; drop the slash or end the path in \"/{$}\"",
+			ErrSchema, what, rt.Path))
+	}
+	if rt.RateClass > RateExempt {
+		errs = append(errs, fmt.Errorf("%w: %s: unknown RateClass %d", ErrSchema, what, rt.RateClass))
+	} else if rt.RateClass == RateExempt {
+		errs = append(errs, fmt.Errorf("%w: %s: RateExempt is for infra probes and the SPA handler only", ErrSchema, what))
 	}
 	return errs
 }
@@ -347,6 +358,10 @@ func (e *routeEntry) reflectResponse(owner string, t reflect.Type, sch *jsonsche
 	e.status = statusOr(e.route.Success, http.StatusOK)
 	if t == reflect.TypeFor[NoContent]() {
 		e.status = statusOr(e.route.Success, http.StatusNoContent)
+		return
+	}
+	if t.Kind() == reflect.Pointer && t.Implements(reflect.TypeFor[createdResponse]()) {
+		e.errs = append(e.errs, fmt.Errorf("%w: %s: response %s: return Created[T] by value, not a pointer", ErrSchema, describe(e.info), t))
 		return
 	}
 	if t.Implements(reflect.TypeFor[createdResponse]()) {

@@ -1,14 +1,16 @@
 // file: core/httpapi/dispatch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 10f67bda-3d92-4798-b55c-741cfba03165
 // last-edited: 2026-11-07
 
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -289,7 +291,7 @@ func TestSPA_SingleOwnerOfRoot(t *testing.T) {
 	if err := r.SPA(&spaHandler{}, SPAOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	err := r.MountLegacy(LegacyMount{Owner: "batcomputer", Handler: http.NotFoundHandler(), ServesSPA: true})
+	err := r.MountLegacy(LegacyMount{Owner: "batcomputer", Handler: http.NotFoundHandler(), Auth: LegacyAuthCore, ServesSPA: true})
 	if !errors.Is(err, ErrPrefixCollision) {
 		t.Fatalf("ServesSPA mount after SPA = %v, want ErrPrefixCollision", err)
 	}
@@ -303,7 +305,7 @@ func TestNonSPA_PredicateCoversClaims(t *testing.T) {
 	for _, p := range []string{"GET /livez", "GET /readyz", "GET /metrics"} {
 		r.Infra(p, rbac.Public, http.NotFoundHandler())
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "batcomputer", Handler: http.NotFoundHandler(),
+	if err := r.MountLegacy(LegacyMount{Owner: "batcomputer", Handler: http.NotFoundHandler(), Auth: LegacyAuthCore,
 		TopSegments: []string{"socket.io", "login"}, SPAShared: []string{"login"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -374,5 +376,134 @@ func TestStage2_RouteSurvivesRequestClone(t *testing.T) {
 	// The span name is "GET " + route (stage 2, R1-17); both read the carrier.
 	if len(routes) != 2 || routes[0] != "/api/batcave/v1/gadgets/{id}" || routes[1] != "" {
 		t.Fatalf("observed routes = %q, want the pattern, then none for an unmatched path", routes)
+	}
+}
+
+// utilityBelt is a nested body whose wrong-typed and unknown properties must
+// be reported by JSON pointer, in JSON's vocabulary.
+type utilityBelt struct {
+	Owner   string   `json:"owner"`
+	Gadgets []Gadget `json:"gadgets"`
+	Charges int      `json:"charges"`
+}
+
+type packBeltReq struct {
+	Body utilityBelt `body:"json"`
+}
+
+// TestDecode_ErrorsNameNoGoTypes is the review's M3: a body error's detail
+// never carries encoding/json's text (Go type and struct field names); a
+// type mismatch is 422 invalid_type at the property's pointer; a syntax
+// error names only its offset; an unknown property is located by pointer,
+// nested ones included, without parsing encoding/json's wording.
+func TestDecode_ErrorsNameNoGoTypes(t *testing.T) {
+	r, g := newRouter(t, "packBelt")
+	Handle(g, Route{Method: http.MethodPost, Path: "/belts", Name: "packBelt", Perm: rbac.Public},
+		func(_ context.Context, in *In[packBeltReq]) (Gadget, error) {
+			return Gadget{Owner: in.Req.Body.Owner}, nil
+		})
+	h := mustBuild(t, r)
+	cases := map[string]struct {
+		body          string
+		status        int
+		code, field   string
+		fieldCode     string
+		detailContain string
+	}{
+		"wrong type":        {`{"owner":"Bruce Wayne","charges":"three"}`, 422, "validation_failed", "/body/charges", "invalid_type", ""},
+		"nested wrong type": {`{"gadgets":[{"name":7}]}`, 422, "validation_failed", "/body/gadgets/0/name", "invalid_type", ""},
+		"top-level type":    {`["batarang"]`, 422, "validation_failed", "/body", "invalid_type", ""},
+		"out of range":      {`{"charges":1e400}`, 422, "validation_failed", "/body/charges", "invalid_type", ""},
+		"syntax":            {`{"owner":"Bruce Wayne",}`, 400, "malformed_json", "", "", "byte offset"},
+		"truncated":         {`{"owner":"Bru`, 400, "malformed_json", "", "", "ends inside"},
+		"unknown":           {`{"owner":"Bruce Wayne","cape":"black"}`, 400, "unknown_field", "/body/cape", "unknown_field", ""},
+		"nested unknown":    {`{"gadgets":[{"name":"batarang"},{"name":"grapple","range":30}]}`, 400, "unknown_field", "/body/gadgets/1/range", "unknown_field", ""},
+		"case-folded known": {`{"OWNER":"Bruce Wayne"}`, 200, "", "", "", ""},
+		"pointer escape":    {`{"a/b~c":1}`, 400, "unknown_field", "/body/a~1b~0c", "unknown_field", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := serve(h, http.MethodPost, "/api/batcave/v1/belts", tc.body)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.status)
+			}
+			raw := rec.Body.String()
+			for _, leak := range []string{"Go struct", "Go value", "struct field", "utilityBelt", "json: ", "unmarshal", "of type", "Gadget"} {
+				if strings.Contains(raw, leak) {
+					t.Fatalf("body leaks %q: %s", leak, raw)
+				}
+			}
+			if tc.status == 200 {
+				return
+			}
+			var p Problem
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Code != tc.code || !strings.Contains(p.Detail, tc.detailContain) {
+				t.Fatalf("problem = %+v, want code %s with detail containing %q", p, tc.code, tc.detailContain)
+			}
+			if tc.field != "" && (len(p.Errors) != 1 || p.Errors[0].Field != tc.field || p.Errors[0].Code != tc.fieldCode) {
+				t.Fatalf("errors = %+v, want one %s at %s", p.Errors, tc.fieldCode, tc.field)
+			}
+		})
+	}
+}
+
+// TestRouter_RegistrationAfterBuildRefused is the review's m4: the handler
+// Build returned can never serve a later registration, so each one is
+// refused, logged at ERROR and absent from Routes.
+func TestRouter_RegistrationAfterBuildRefused(t *testing.T) {
+	var logged bytes.Buffer
+	r := NewRouter(Options{}, Deps{Log: slog.New(slog.NewTextHandler(&logged, nil))})
+	g := r.ModuleGroup("batcave")
+	r.AllowPublic("batcave", "getGadget", "lateGadget")
+	Handle(g, Route{Method: http.MethodGet, Path: "/gadgets/{id}", Name: "getGadget", Perm: rbac.Public}, getGadget)
+	mustBuild(t, r)
+
+	Handle(g, Route{Method: http.MethodGet, Path: "/late", Name: "lateGadget", Perm: rbac.Public}, noop)
+	if err := r.Claim("batcave", "/batcave/"); !errors.Is(err, errBuilt) {
+		t.Fatalf("Claim after Build = %v, want errBuilt", err)
+	}
+	if err := r.MountLegacy(LegacyMount{Owner: "batcave", Handler: http.NotFoundHandler(), Auth: LegacyAuthCore}); !errors.Is(err, errBuilt) {
+		t.Fatalf("MountLegacy after Build = %v, want errBuilt", err)
+	}
+	if err := r.SPA(http.NotFoundHandler(), SPAOptions{}); !errors.Is(err, errBuilt) {
+		t.Fatalf("SPA after Build = %v, want errBuilt", err)
+	}
+	for ri := range r.Routes() {
+		if ri.Name == "lateGadget" {
+			t.Fatal("a route registered after Build is listed")
+		}
+	}
+	if n := strings.Count(logged.String(), "registration after Router.Build ignored"); n != 4 {
+		t.Fatalf("logged %d late registrations, want 4:\n%s", n, logged.String())
+	}
+}
+
+// TestClaim_RefusesUncleanPrefix is the review's m5: the overlap test
+// compares claims as strings, so a claim must be a clean literal path.
+func TestClaim_RefusesUncleanPrefix(t *testing.T) {
+	for _, p := range []string{"/x/../api/hello/", "/{w}/", "//api/hello/", "/api/./hello/", "/api/hello?x/", "relative/", "/"} {
+		r := NewRouter(Options{}, Deps{})
+		if err := r.Claim("joker", p); !errors.Is(err, ErrPrefixCollision) {
+			t.Errorf("Claim(%q) = %v, want ErrPrefixCollision", p, err)
+		}
+	}
+	r := NewRouter(Options{}, Deps{})
+	if err := r.Claim("joker", "/api/joker/"); err != nil {
+		t.Fatalf("a clean claim was refused: %v", err)
+	}
+}
+
+// TestMountLegacy_RequiresAuth is the review's m2 at the router: a zero or
+// unknown LegacyAuth is refused (the registrar reports it as
+// ProblemLegacyAuth before the router sees it).
+func TestMountLegacy_RequiresAuth(t *testing.T) {
+	for _, a := range []LegacyAuth{0, LegacyAuthGin + 1} {
+		r := NewRouter(Options{}, Deps{})
+		if err := r.MountLegacy(LegacyMount{Owner: "batcave", Handler: http.NotFoundHandler(), Auth: a}); !errors.Is(err, ErrLegacyManifest) {
+			t.Errorf("MountLegacy(Auth %d) = %v, want ErrLegacyManifest", a, err)
+		}
 	}
 }
