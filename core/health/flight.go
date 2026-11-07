@@ -47,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -198,6 +199,14 @@ type Recorder struct {
 // own control-character escaping replaces it (R1-36).
 func (r *Recorder) logf(level slog.Level, format string, args ...any) {
 	r.log.Log(context.Background(), level, corelog.Sanitize(fmt.Sprintf(format, args...)))
+}
+
+// closeLogged closes c and logs a failure: a close error on a read-only handle
+// changes no result, but it is evidence about the disk and must not vanish.
+func (r *Recorder) closeLogged(c io.Closer, what string) {
+	if err := c.Close(); err != nil {
+		r.logf(slog.LevelWarn, "close %s: %v", what, err)
+	}
 }
 
 func (r *Recorder) infof(format string, args ...any) { r.logf(slog.LevelInfo, format, args...) }
@@ -619,7 +628,7 @@ func (r *Recorder) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 	// A file already opened stays valid after the Root is closed.
-	defer func() { _ = root.Close() }()
+	defer r.closeLogged(root, "snapshot directory")
 	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -633,7 +642,7 @@ func (r *Recorder) Open(name string) (fs.File, error) {
 	}
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
-		_ = f.Close()
+		r.closeLogged(f, name)
 		return nil, fs.ErrNotExist
 	}
 	return f, nil
