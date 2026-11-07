@@ -21,9 +21,14 @@ import (
 // §8: "Redactor nil while tracing is on | fail-closed (boot)").
 var errNoRedactor = errors.New("metrics: Options.Tracing is set but Options.Redactor is nil: spans would export credentials unredacted")
 
-// spanRedactionKinds are the kind label values of the span redaction counter
-// (05-metrics §11): key, url, path.
-var spanRedactionKinds = [...]log.RedactionKind{log.RedactKey, log.RedactURL, log.RedactPath}
+// numSpanKinds is the number of kind label values of the span redaction
+// counter (05-metrics §11): key, url, path.
+const numSpanKinds = 3
+
+// spanRedactionKinds are those kinds, in label order.
+func spanRedactionKinds() [numSpanKinds]log.RedactionKind {
+	return [numSpanKinds]log.RedactionKind{log.RedactKey, log.RedactURL, log.RedactPath}
+}
 
 // spanRedactor is the stateless half of the redacting span exporter: the
 // immutable Redactor and the counter. One per Provider, built before the
@@ -31,7 +36,7 @@ var spanRedactionKinds = [...]log.RedactionKind{log.RedactKey, log.RedactURL, lo
 type spanRedactor struct {
 	r     *log.Redactor
 	count metric.Int64Counter
-	kinds [len(spanRedactionKinds)]metric.AddOption
+	kinds [numSpanKinds]metric.AddOption
 }
 
 // newSpanRedactor builds the redactor half for p and creates
@@ -51,7 +56,7 @@ func newSpanRedactor(p *Provider, r *log.Redactor) (*spanRedactor, error) {
 		return nil, err
 	}
 	sr := &spanRedactor{r: r, count: c}
-	for i, k := range spanRedactionKinds {
+	for i, k := range spanRedactionKinds() {
 		sr.kinds[i] = metric.WithAttributeSet(attribute.NewSet(attribute.String("kind", k.String())))
 	}
 	return sr, nil
@@ -92,10 +97,10 @@ func (e *redactingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Re
 func (e *redactingExporter) Shutdown(ctx context.Context) error { return e.next.Shutdown(ctx) }
 
 // tally counts redacted values per spanRedactionKinds entry.
-type tally [len(spanRedactionKinds)]int64
+type tally [numSpanKinds]int64
 
 func (t *tally) add(k log.RedactionKind) {
-	for i, b := range spanRedactionKinds {
+	for i, b := range spanRedactionKinds() {
 		if k&b != 0 {
 			t[i]++
 		}
