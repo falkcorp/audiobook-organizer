@@ -1,138 +1,50 @@
 // file: internal/telemetry/metric_otlp_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 4c9e2a7d-1b63-4f08-a5d2-7e3b9c0f6a18
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
+// The OTLP reader, endpoint-form, interval-clamp and resource tests moved to
+// core/metrics with the code they test (R1-10). What stays is ABO's: which
+// Config fields feed the metric push, that a bad push endpoint never fails
+// InitOTEL, and the OTEL_METRIC_EXPORT_INTERVAL parser.
+
 import (
 	"context"
-	"net"
-	"net/http"
-	"net/http/httptest"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	promclient "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
-	"google.golang.org/grpc"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/falkcorp/mediacore/metrics"
 )
 
-// metricSink is a plaintext OTLP/gRPC metrics collector that keeps what it gets.
-type metricSink struct {
-	colmetricpb.UnimplementedMetricsServiceServer
-	mu   sync.Mutex
-	reqs []*colmetricpb.ExportMetricsServiceRequest
-}
-
-func (s *metricSink) Export(_ context.Context, req *colmetricpb.ExportMetricsServiceRequest) (*colmetricpb.ExportMetricsServiceResponse, error) {
-	s.mu.Lock()
-	s.reqs = append(s.reqs, req)
-	s.mu.Unlock()
-	return &colmetricpb.ExportMetricsServiceResponse{}, nil
-}
-
-func (s *metricSink) snapshot() []*colmetricpb.ExportMetricsServiceRequest {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]*colmetricpb.ExportMetricsServiceRequest(nil), s.reqs...)
-}
-
-func privateProm() prometheus.Option {
-	return prometheus.WithRegisterer(promclient.NewRegistry())
-}
-
-func TestNewMeterProvider_OTLPOffByDefault(t *testing.T) {
-	mp, status, err := newMeterProvider(context.Background(), LoadConfig("test", "tempo:4317"), privateProm())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
-	if status.Enabled || status.Err != nil || status.Readers != 1 {
-		t.Fatalf("status = %+v, want Enabled=false Err=nil Readers=1", status)
+func TestMetricsProviderOptions_OTLPOffByDefault(t *testing.T) {
+	o := metricsProviderOptions(LoadConfig("test", ""))
+	if !o.Prometheus || o.OTLP != nil || o.Tracing != nil {
+		t.Fatalf("options = %+v, want Prometheus only", o)
 	}
 }
 
 func TestMetricsEndpointNeverFallsBackToTraceEndpoint(t *testing.T) {
-	cfg := LoadConfig("test", "http://192.0.2.10:4317") // trace endpoint set, metrics empty
-	mp, status, err := newMeterProvider(context.Background(), cfg, privateProm())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
-	if status.Enabled || status.Readers != 1 {
-		t.Fatalf("status = %+v: the trace endpoint must never feed the metric reader", status)
+	o := metricsProviderOptions(LoadConfig("test", "http://192.0.2.10:4317")) // trace endpoint set, metrics empty
+	if o.OTLP != nil {
+		t.Fatalf("OTLP = %+v: the trace endpoint must never feed the metric push", o.OTLP)
 	}
 }
 
-func TestNewMeterProvider_OTLPOnAddsPeriodicReader(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+func TestMetricsProviderOptions_CarryThePushConfig(t *testing.T) {
+	cfg := LoadConfig("test-svc", "", WithMetricsOTLP("http://192.0.2.10:4317", 5*time.Second, true), WithEnvironment("staging"))
+	o := metricsProviderOptions(cfg)
+	want := metrics.OTLPMetrics{Endpoint: "http://192.0.2.10:4317", Insecure: true, Interval: 5 * time.Second}
+	if o.OTLP == nil || *o.OTLP != want {
+		t.Fatalf("OTLP = %+v, want %+v", o.OTLP, want)
 	}
-	sink := &metricSink{}
-	srv := grpc.NewServer()
-	colmetricpb.RegisterMetricsServiceServer(srv, sink)
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-
-	cfg := LoadConfig("test-svc", "",
-		WithMetricsOTLP("http://"+lis.Addr().String(), 5*time.Second, false),
-		WithEnvironment("staging"))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	mp, status, err := newMeterProvider(ctx, cfg, privateProm())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !status.Enabled || status.Err != nil || status.Readers != 2 {
-		t.Fatalf("status = %+v, want Enabled=true Err=nil Readers=2", status)
-	}
-	c, err := mp.Meter("otlp-test").Int64Counter("otlp_test_things")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Add(ctx, 3)
-	// Shutdown flushes the periodic reader once, so the test need not wait a
-	// full interval.
-	if err := mp.Shutdown(ctx); err != nil {
-		t.Fatalf("shutdown: %v", err)
-	}
-
-	var found bool
-	for _, req := range sink.snapshot() {
-		for _, rm := range req.GetResourceMetrics() {
-			attrs := map[string]string{}
-			for _, kv := range rm.GetResource().GetAttributes() {
-				attrs[kv.GetKey()] = kv.GetValue().GetStringValue()
-			}
-			for _, sm := range rm.GetScopeMetrics() {
-				for _, m := range sm.GetMetrics() {
-					if m.GetName() != "otlp_test_things" {
-						continue
-					}
-					found = true
-					sum := m.GetSum()
-					if sum.GetAggregationTemporality() != metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE {
-						t.Errorf("temporality = %v, want cumulative", sum.GetAggregationTemporality())
-					}
-					if pts := sum.GetDataPoints(); len(pts) != 1 || pts[0].GetAsInt() != 3 {
-						t.Errorf("data points = %v, want one point of 3", pts)
-					}
-					if attrs["service.name"] != "test-svc" || attrs["service.version"] == "" || attrs["deployment.environment"] != "staging" {
-						t.Errorf("resource attrs = %v", attrs)
-					}
-				}
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("collector never received the counter; got %d requests", len(sink.snapshot()))
+	if o.ServiceName != "test-svc" || o.Environment != "staging" || o.MetricNamespace != metricNamespace || o.AppID != appID {
+		t.Errorf("identity = %+v", o)
 	}
 }
 
@@ -152,141 +64,39 @@ func TestInitOTEL_BadMetricEndpointIsNotFatal(t *testing.T) {
 		// process-wide provider, and shutting it down here would starve the
 		// later tests that scrape it (TestInitOTEL_NoEndpoint_StillInstallsMeterProvider).
 
-		// Same endpoint through the pure builder: the failure is reported,
-		// not returned, and the Prometheus reader still serves.
-		reg := promclient.NewRegistry()
-		mp, status, err := newMeterProvider(context.Background(), cfg, prometheus.WithRegisterer(reg))
+		// The same options through a Provider of the test's own: the failure
+		// is a degraded token, not an error, and the Prometheus reader still
+		// serves.
+		p, err := metrics.New(context.Background(), metricsProviderOptions(cfg))
 		if err != nil {
-			t.Fatalf("newMeterProvider(%q) = %v", ep, err)
+			t.Fatalf("metrics.New(%q) = %v", ep, err)
 		}
-		if status.Enabled || status.Err == nil || status.Readers != 1 {
-			t.Errorf("status for %q = %+v, want Enabled=false with Err and Readers=1", ep, status)
+		if !slices.Contains(p.Degraded(), metrics.DegradedOTLPDisabled) {
+			t.Errorf("Degraded for %q = %v, want %s", ep, p.Degraded(), metrics.DegradedOTLPDisabled)
 		}
-		c, _ := mp.Meter("bad-ep").Int64Counter("bad_ep_things")
+		c, _ := p.MeterProvider().Meter("bad-ep").Int64Counter("bad_ep_things")
 		c.Add(context.Background(), 1)
-		rec := httptest.NewRecorder()
-		promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-		if !strings.Contains(rec.Body.String(), "bad_ep_things") {
+		mfs, err := p.Gatherer().Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(mfs, func(mf *dto.MetricFamily) bool { return strings.HasPrefix(mf.GetName(), "bad_ep_things") }) {
 			t.Errorf("/metrics lost the instrument after bad endpoint %q", ep)
 		}
-		_ = mp.Shutdown(context.Background())
+		_ = p.Shutdown(context.Background())
 	}
 }
 
-func TestInitOTEL_UnreachableCollectorDoesNotBlockStart(t *testing.T) {
-	// Grab a port, then close it so nothing listens there.
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := lis.Addr().String()
-	_ = lis.Close()
-
-	cfg := LoadConfig("test", "", WithMetricsOTLP("http://"+addr, time.Minute, false))
-	start := time.Now()
-	mp, status, err := newMeterProvider(context.Background(), cfg, privateProm())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("start took %v with an unreachable collector, want < 1s", took)
-	}
-	if !status.Enabled {
-		t.Errorf("status = %+v: a dial failure must not be known at start", status)
-	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_ = mp.Shutdown(shutdownCtx) // the final flush fails; irrelevant to the start path
-}
-
-func TestMetricEndpointOption_Forms(t *testing.T) {
-	ok := []string{"127.0.0.1:4317", "localhost:4317", "[::1]:4317", "tempo:4317",
-		"http://127.0.0.1:4317", "https://collector.example.invalid:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
-	for _, ep := range ok {
-		tgt, err := parseOTLPEndpoint(keyMetricsEndpoint, ep)
-		if err != nil {
-			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) = %v, want accepted", ep, err)
-			continue
-		}
-		for _, insecure := range []bool{false, true} {
-			opts := metricEndpointOption(tgt, insecure)
-			want := 2 // endpoint + TLS credentials
-			if metricPlaintext(tgt, insecure) {
-				want = 3 // endpoint + WithInsecure + insecure credentials
-			}
-			if len(opts) != want {
-				t.Errorf("metricEndpointOption(%q, insecure=%v) gave %d options, want %d", ep, insecure, len(opts), want)
-			}
-		}
-	}
-	for _, ep := range []string{"", "127.0.0.1", "http://127.0.0.1", "ftp://host:21", "dns:///", ":4317"} {
-		if _, err := parseOTLPEndpoint(keyMetricsEndpoint, ep); err == nil {
-			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) accepted, want an error", ep)
-		}
-	}
-}
-
-func TestInterval_ParsingAndClamp(t *testing.T) {
+func TestParseMetricsInterval(t *testing.T) {
 	for in, want := range map[string]time.Duration{
 		"60s": 60 * time.Second, "": 0, "abc": 0, "-5s": 0, "0s": 0, "2m": 2 * time.Minute,
 		// OTEL_METRIC_EXPORT_INTERVAL's standard form: integer milliseconds.
 		"60000": 60 * time.Second, " 30000 ": 30 * time.Second, "5000": 5 * time.Second,
 		"0": 0, "-1000": 0, "1.5": 0,
-		"99999999999999999": 24 * time.Hour, // capped, not overflowed; clampInterval clamps it to 1h
+		"99999999999999999": 24 * time.Hour, // capped, not overflowed; core clamps it to 1h
 	} {
 		if got := ParseMetricsInterval(in); got != want {
 			t.Errorf("ParseMetricsInterval(%q) = %v, want %v", in, got, want)
 		}
-	}
-	for _, tc := range []struct {
-		in   time.Duration
-		want time.Duration
-		note bool
-	}{
-		{0, 60 * time.Second, true},
-		{time.Second, 5 * time.Second, true},
-		{5 * time.Second, 5 * time.Second, false},
-		{30 * time.Second, 30 * time.Second, false},
-		{time.Hour, time.Hour, false},
-		{2 * time.Hour, time.Hour, true},
-	} {
-		got, note := clampInterval(tc.in)
-		if got != tc.want || (note != "") != tc.note {
-			t.Errorf("clampInterval(%v) = %v, %q; want %v, note=%v", tc.in, got, note, tc.want, tc.note)
-		}
-	}
-}
-
-func TestMetricPlaintext_OneRule(t *testing.T) {
-	for _, tc := range []struct {
-		ep       string
-		insecure bool
-		want     bool
-	}{
-		{"http://192.0.2.10:4317", false, true},
-		{"http://192.0.2.10:4317", true, true},
-		{"https://collector.example.invalid:4317", false, false},
-		{"https://collector.example.invalid:4317", true, false},
-		{"192.0.2.10:4317", false, false},
-		{"192.0.2.10:4317", true, true},
-		{"dns:///collector.example.invalid:4317", false, false},
-		{"dns:///collector.example.invalid:4317", true, true},
-	} {
-		tgt, err := parseOTLPEndpoint(keyMetricsEndpoint, tc.ep)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := metricPlaintext(tgt, tc.insecure); got != tc.want {
-			t.Errorf("metricPlaintext(%q, insecure=%v) = %v, want %v", tc.ep, tc.insecure, got, tc.want)
-		}
-	}
-}
-
-func TestNewResource_EnvironmentDefaultsToProd(t *testing.T) {
-	if got := resourceAttrs(NewResourceWithEnvironment("svc", ""))["deployment.environment"]; got != "prod" {
-		t.Errorf("empty environment = %q, want prod", got)
-	}
-	if got := resourceAttrs(NewResourceWithEnvironment("svc", "dev"))["deployment.environment"]; got != "dev" {
-		t.Errorf("environment = %q, want dev", got)
 	}
 }

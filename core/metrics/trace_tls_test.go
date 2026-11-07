@@ -1,9 +1,9 @@
-// file: internal/telemetry/trace_tls_test.go
-// version: 1.0.0
+// file: core/metrics/trace_tls_test.go
+// version: 1.1.0
 // guid: a4d2f7c8-6e13-4b95-9c0a-3e58d1b7f642
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
-package telemetry
+package metrics
 
 import (
 	"context"
@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -83,13 +82,11 @@ func startTraceServer(t *testing.T, opts ...grpc.ServerOption) (*traceSink, stri
 
 func exportOneSpan(t *testing.T, endpoint string) error {
 	t.Helper()
-	prev := otel.GetTracerProvider()
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tp, err := initTracing(ctx, LoadConfig("test", endpoint))
+	tp, _, err := newTracerProvider(ctx, &OTLPTracing{Endpoint: endpoint}, newResource("test", "v", "id", ""), grpcExporters().span)
 	if err != nil {
-		t.Fatalf("initTracing(%q): %v", endpoint, err)
+		t.Fatalf("newTracerProvider(%q): %v", endpoint, err)
 	}
 	_, span := tp.Tracer("test").Start(ctx, "op")
 	span.End()
@@ -101,7 +98,7 @@ func exportOneSpan(t *testing.T, endpoint string) error {
 // An https trace endpoint honours OTEL_EXPORTER_OTLP_CERTIFICATE (a private
 // CA), as it did before the transport was pinned, and the explicit
 // dns:///host:port dial target still reaches the server. The metric exporter
-// deliberately does not (see metricEndpointOption).
+// deliberately does not (see metricOptions).
 func TestTraceHTTPS_HonoursEnvCertificate(t *testing.T) {
 	caFile, cert := testPKI(t)
 	sink, addr := startTraceServer(t, grpc.Creds(credentials.NewServerTLSFromCert(&cert)))
@@ -149,7 +146,7 @@ func TestTraceOptions_DialExplicitDNSTarget(t *testing.T) {
 		if got := canonicalGRPCTarget(t, tgt.GRPCTarget()); got != tgt.GRPCTarget() {
 			t.Errorf("%q: gRPC reads %q as %q", ep, tgt.GRPCTarget(), got)
 		}
-		if len(traceOptions(tgt)) == 0 {
+		if len(traceOptions(tgt, false)) == 0 {
 			t.Errorf("%q: no trace options", ep)
 		}
 	}

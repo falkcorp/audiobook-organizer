@@ -1,7 +1,7 @@
 // file: internal/telemetry/sdklog_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1a9e43-2b86-4d05-a3f7-d84e60b19c2a
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
@@ -17,6 +17,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
+
+	"github.com/falkcorp/mediacore/metrics"
 )
 
 // capture collects what a logger or log func emits.
@@ -49,11 +51,11 @@ func buildExporters(t *testing.T) {
 	if tp, err := initTracing(ctx, cfg); err == nil {
 		_ = tp.Shutdown(ctx)
 	}
-	mp, _, err := newMeterProvider(ctx, cfg, privateProm())
+	p, err := metrics.New(ctx, metricsProviderOptions(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = mp.Shutdown(ctx)
+	_ = p.Shutdown(ctx)
 }
 
 // Control: with a plain value-printing logger the SDK DOES print the raw env

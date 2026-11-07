@@ -7,9 +7,11 @@
 #
 # What is counted: calls to prometheus.New{Counter,Gauge,Histogram,Summary,Untyped}[Vec|Func]
 # and the same names on promauto, calls to newPebbleDesc with a string-literal first
-# argument, and prometheus.NewDesc calls outside the body of newPebbleDesc.
+# argument, and prometheus.NewDesc calls outside the body of newPebbleDesc. The registry
+# bridge's bridgeDesc (internal/telemetry/telemetry.go only, until R1-15) is treated the
+# same way: its body is skipped and a call with a string-literal name counts.
 #
 # This number may only be LOWERED, by hand, in the PR that moves a family to OTel.
 # Never raise it to make a PR pass. Print the current count with:
 #   go test -count=1 -v -run TestClientGolangConstructorRatchet ./internal/telemetrypolicy/
-64
+63

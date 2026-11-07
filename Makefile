@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.51.2
+# version: 2.51.3
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -696,12 +696,16 @@ tidy-check:
 genproto-exclude-root:
 	@python3 scripts/ci/genproto_exclude_root.py
 
-## module-skew: blocking root-side check that core and the root resolve every
-## shared module to one version, that core/go.sum exists (03 §3.2 item 6) and
-## that each pinned module (13 §13.5.2) holds its exact version in both. A new
-## pin is one more --pin argument, in the PR that makes core require it.
+## module-skew: blocking root-side check that every module supplying a package
+## to core's build or tests (`go list -deps -test ./...` in core, linux, darwin
+## and windows) resolves to the same version in core and the root, that
+## core/go.sum exists (03 §3.2 item 6) and that each pinned module
+## (13 §13.5.2) holds its exact version in both. Modules in core's
+## `go list -m all` that supply no package are skipped: core CI cannot run
+## them, and go mod tidy would delete a require raising them (R1-10 seam). A
+## new pin is one more --pin argument, in the PR that makes core require it.
 module-skew:
-	@python3 scripts/ci/check_module_skew.py --pin github.com/google/jsonschema-go@v0.4.3
+	@python3 scripts/ci/check_module_skew.py --pin github.com/google/jsonschema-go@v0.4.3 --pin go.opentelemetry.io/otel/exporters/prometheus@v0.69.0
 
 ## test-all: Run all tests (backend full + frontend)
 test-all: test web-test

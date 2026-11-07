@@ -1,7 +1,7 @@
 // file: internal/aidispatch/metrics.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: a8bcb9cf-e760-4b64-b4b9-35d8b18de82d
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package aidispatch
 
@@ -65,6 +65,7 @@ func createInstruments(m metric.Meter) {
 		metric.WithDescription("AI dispatch calls refused because no endpoint was capable."))
 	slotWait, _ = m.Float64Histogram("ai_dispatch.slot_wait",
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()["ai_dispatch.slot_wait"]...),
 		metric.WithDescription("Time spent waiting for an endpoint in-flight slot."))
 }
 
