@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package opsmetrics
 
@@ -23,7 +23,7 @@ import (
 func newRig(t *testing.T) (*Recorder, func() map[string]metricdata.Metrics) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	collect := func() map[string]metricdata.Metrics {
 		var rm metricdata.ResourceMetrics
 		if err := reader.Collect(context.Background(), &rm); err != nil {

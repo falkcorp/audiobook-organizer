@@ -1,7 +1,7 @@
 // file: internal/operations/registry/metrics_otel_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4d7c1e92-a3b8-4f06-8c5d-9e2f0b61a7d3
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package registry_test
 
@@ -21,7 +21,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
-	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
 // otelRig is a registry wired to a private meter provider, so a test reads
@@ -42,7 +41,7 @@ func newOtelRig(t *testing.T) *otelRig {
 func newOtelRigWith(t *testing.T, opts registry.Options) *otelRig {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	store := newFakeStore()
 	opts.OpsMetrics = opsmetrics.New(mp)
 	reg := registry.NewWithOptions(store, slog.Default(), 1, opts)

@@ -1,7 +1,7 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package ai
 
@@ -44,7 +44,7 @@ type aiTelemetry struct {
 func installAITelemetry(t *testing.T) *aiTelemetry {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	spans := tracetest.NewSpanRecorder()
 	tr := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)).Tracer("ai-test")
 
