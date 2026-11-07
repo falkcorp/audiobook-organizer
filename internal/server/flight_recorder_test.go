@@ -1,7 +1,7 @@
 // file: internal/server/flight_recorder_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2871ad47-cc1c-48ee-a8a8-51b2ac987666
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
+	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/stretchr/testify/require"
 )
 

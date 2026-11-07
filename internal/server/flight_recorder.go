@@ -1,16 +1,17 @@
 // file: internal/server/flight_recorder.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c64f779e-5ec5-46b3-8883-8d6f1b56bec9
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 package server
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
+	diagflight "github.com/falkcorp/mediacore/health"
 )
 
 // traceSnapshotter is the one thing the two watchdogs need from the runtime
@@ -28,7 +29,7 @@ func newFlightRecorder() *diagflight.Recorder {
 	if config.AppConfig.DatabasePath != "" {
 		dir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "traces")
 	}
-	return diagflight.New(diagflight.Config{Dir: dir})
+	return diagflight.New(diagflight.Config{Dir: dir, Logger: slog.Default().With("subsystem", "flight-recorder")})
 }
 
 // startFlightRecorder starts recording. Failure is logged and ignored: tracing

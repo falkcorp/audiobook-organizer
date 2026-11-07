@@ -1,11 +1,11 @@
-// file: internal/diag/flight/flight_pprof_test.go
-// version: 1.0.0
+// file: core/health/flight_pprof_test.go
+// version: 1.0.1
 // guid: 293bf75e-c047-4e1c-80e3-e74ee8c9328c
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
 //go:build pprof
 
-package flight
+package health
 
 import (
 	"net/http"
