@@ -1,0 +1,45 @@
+# file: internal/server/testdata/public_routes.golden
+# version: 1.0.0
+# guid: 1d4d1106-e43f-4e97-b110-00992aeec352
+# last-edited: 2026-11-07
+# abs_off
+GET /api/health
+POST /api/v1/auth/accept-invite
+POST /api/v1/auth/bootstrap
+GET /api/v1/auth/invite/:token
+POST /api/v1/auth/login
+GET /api/v1/auth/oauth-providers
+GET /api/v1/auth/oauth/:provider/callback
+GET /api/v1/auth/oauth/:provider/start
+POST /api/v1/auth/setup
+GET /api/v1/auth/status
+POST /api/v1/csp-report
+GET /api/v1/health
+GET /auth/temp-login
+GET /health
+# abs_on
+GET /api/health
+GET /api/items/:id/cover
+HEAD /api/items/:id/cover
+POST /api/v1/auth/accept-invite
+POST /api/v1/auth/bootstrap
+GET /api/v1/auth/invite/:token
+POST /api/v1/auth/login
+GET /api/v1/auth/oauth-providers
+GET /api/v1/auth/oauth/:provider/callback
+GET /api/v1/auth/oauth/:provider/start
+POST /api/v1/auth/setup
+GET /api/v1/auth/status
+POST /api/v1/csp-report
+GET /api/v1/health
+GET /auth/openid
+GET /auth/openid/browser
+POST /auth/openid/browser
+GET /auth/openid/callback
+POST /auth/refresh
+GET /auth/temp-login
+GET /health
+POST /login
+GET /ping
+GET /public/session/:id/track/:index
+GET /status

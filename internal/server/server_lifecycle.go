@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.0
+// version: 4.66.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package server
 
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -1740,6 +1741,41 @@ func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
 	return servermiddleware.RequirePermission(s.storeForWiring(), p)
 }
 
+// versionedAPIPrefix matches the paths reserved for versioned APIs,
+// /api/<name>/v<N>/... (core's /api/core/v1 and every module's
+// /api/<id>/v<N>): 09 §9.2.4 and §9.4 R1 exclude them from the /api/*
+// redirect, so a module or core route is never redirected into /api/v1.
+var versionedAPIPrefix = regexp.MustCompile(`^/api/(core|[a-z][a-z0-9]{1,15})/v[0-9]+(/|$)`)
+
+// legacyAPIRedirect is HEAD's /api/* -> /api/v1/* compatibility rule: the
+// 301 target for an unversioned /api/ path, and false for every path it
+// excludes.
+//
+// absReservedPath excludes the Audiobookshelf-compatible surface: the ABS
+// protocol is UNVERSIONED, so GET /api/me is a real ABS endpoint. Without this
+// exclusion it would 301 to /api/v1/me and the client would follow the redirect
+// into the app API — the route would look implemented and behave broken.
+func legacyAPIRedirect(method, path string) (string, bool) {
+	if strings.HasPrefix(path, "/api/") &&
+		!strings.HasPrefix(path, "/api/v1/") &&
+		// /api/v3/ops is the operations v3 API: its own version, not a
+		// v1 path missing its prefix.
+		!strings.HasPrefix(path, "/api/v3/") &&
+		!strings.HasPrefix(path, "/api/health") &&
+		!strings.HasPrefix(path, "/api/events") &&
+		!strings.HasPrefix(path, "/api/metrics") &&
+		!absReservedPath(path) &&
+		// Gated on the flag, unlike every other exclusion here: these paths
+		// have a live /api/v1 twin, so reserving them while ABS is OFF would
+		// 404 a working app route instead of redirecting it.
+		!(config.AppConfig.ABSAPIEnabled && absCollisionDetailReserved(method, path)) &&
+		// 09 §9.2.4: /api/<name>/v<N>/... is a versioned API's path.
+		!versionedAPIPrefix.MatchString(path) {
+		return strings.Replace(path, "/api/", "/api/v1/", 1), true
+	}
+	return "", false
+}
+
 func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.itunesSvc == nil || !s.itunesSvc.Enabled() {
@@ -1751,6 +1787,11 @@ func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
+	// The legacy mount's post-match check (05-http-api §4.8, SEC2-22) is the
+	// first middleware of every route: gin binds a route's chain when the
+	// route is registered, so it is installed before any route below.
+	s.router.Use(legacyMatchCheck())
+
 	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless
 	// configured). Built FIRST, ahead of every route registration below, because
 	// gin binds a route's middleware chain at registration time: a top-level
@@ -1830,30 +1871,11 @@ func (s *Server) setupRoutes() {
 	// creates a 24h session, sets the cookie, redirects to the SPA.
 	s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
 
-	// Redirect /api/* to /api/v1/* for v1 compatibility
+	// Redirect /api/* to /api/v1/* for v1 compatibility. The rule is
+	// legacyAPIRedirect, which books' legacy mount also carries as its
+	// Redirects (legacy_manifest.go), so gin and core's router answer alike.
 	s.router.Use(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		// If path starts with /api/ but not /api/v1/ and not /api/health and not /api/events
-		//
-		// absReservedPath excludes the Audiobookshelf-compatible surface: the ABS
-		// protocol is UNVERSIONED, so GET /api/me is a real ABS endpoint. Without this
-		// exclusion it would 301 to /api/v1/me and the client would follow the redirect
-		// into the app API — the route would look implemented and behave broken.
-		if strings.HasPrefix(path, "/api/") &&
-			!strings.HasPrefix(path, "/api/v1/") &&
-			// /api/v3/ops is the operations v3 API: its own version, not a
-			// v1 path missing its prefix.
-			!strings.HasPrefix(path, "/api/v3/") &&
-			!strings.HasPrefix(path, "/api/health") &&
-			!strings.HasPrefix(path, "/api/events") &&
-			!strings.HasPrefix(path, "/api/metrics") &&
-			!absReservedPath(path) &&
-			// Gated on the flag, unlike every other exclusion here: these paths
-			// have a live /api/v1 twin, so reserving them while ABS is OFF would
-			// 404 a working app route instead of redirecting it.
-			!(config.AppConfig.ABSAPIEnabled && absCollisionDetailReserved(c.Request.Method, path)) {
-			// Redirect to /api/v1/
-			newPath := strings.Replace(path, "/api/", "/api/v1/", 1)
+		if newPath, ok := legacyAPIRedirect(c.Request.Method, c.Request.URL.Path); ok {
 			c.Redirect(http.StatusMovedPermanently, newPath)
 			c.Abort()
 			return
