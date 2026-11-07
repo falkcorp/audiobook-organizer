@@ -1,5 +1,5 @@
 # file: Dockerfile
-# version: 2.7.5
+# version: 2.7.6
 # guid: audiobook-organizer-dockerfile-production
 # last-edited: 2026-11-07
 
@@ -14,8 +14,13 @@ FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a
 
 WORKDIR /build/web
 
+# The one web-dependency entry point (platform-core 07 §7.3.2). The script finds
+# its repo root two levels above itself, so it sits at /build/scripts/ci/ and this
+# stage's WORKDIR is /build/web. prefer-offline is the old flag, now through npm's
+# own environment so the script needs no flag plumbing.
+COPY scripts/ci/build_web.sh ../scripts/ci/
 COPY web/package*.json ./
-RUN npm ci --prefer-offline --no-audit
+RUN npm_config_prefer_offline=true sh ../scripts/ci/build_web.sh deps
 
 COPY web/ ./
 RUN npm run build

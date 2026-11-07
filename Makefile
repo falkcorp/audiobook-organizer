@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.51.4
+# version: 2.52.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-07
 
@@ -89,7 +89,7 @@ GO_STRIP_LDFLAGS := -s -w
 -include Makefile.local
 
 .PHONY: all build build-api run run-api install clean help \
-        web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
+        web-deps web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet vet-darwin vet-integration mocks mockery-install mocks-check staticcheck staticcheck-install deadcode-install lint-deadcode-ratchet oplint sdkguard bench-check pprof-check fmt-check \
@@ -113,7 +113,8 @@ help:
 	@echo "  make run-api        - Backend-only build then serve (API endpoints only)"
 	@echo ""
 	@echo "Frontend:"
-	@echo "  make web-install    - Install npm dependencies (exactly the lockfile, as CI)"
+	@echo "  make web-deps       - Install web dependencies via scripts/ci/build_web.sh (stamp; web-install is an alias)"
+	@echo "  make web-install    - Alias of web-deps"
 	@echo "  make web-build      - Build frontend (outputs to web/dist)"
 	@echo "  make web-typecheck  - Type-check frontend (TypeScript 7; npm run typecheck:ts6 for TS 6)"
 	@echo "  make web-dev        - Start Vite dev server"
@@ -209,40 +210,60 @@ run-api: build-api
 
 # --- Frontend targets ---
 
-## web-install: Install npm dependencies exactly as locked (npm ci, same as CI)
-# npm ci, not npm install: CI installs the lockfile as-is, and npm install
+## web-deps: Install web dependencies through the one entry point (scripts/ci/build_web.sh deps)
+# The one place a build site gets its web dependencies: the core/web packages are
+# installed and built first when core/web exists, then web/ is installed with
+# `npm ci`, not `npm install`: CI installs the lockfile as-is, and `npm install`
 # re-resolves it. A dependency bump whose lockfile CI accepted then broke every
 # deploy at this step (ERESOLVE, 2026-11-03). To add or bump a dependency, run
-# npm install <pkg> in web/ by hand and commit the lockfile.
-web-install:
-	@echo "📦 Installing frontend dependencies..."
-	@cd $(WEB_DIR) && npm ci --no-audit --no-fund
-	@echo "✅ Dependencies installed"
+# `npm install <pkg>` in web/ by hand and commit the lockfile.
+#
+# A stamp target (platform-core 07 §7.3.2): a no-op while both lockfiles, the
+# script and every core/web package source are older than the stamp, so
+# web-build, web-test, web-lint and web-typecheck pay for the install once, and
+# two of them under `make -j` never run the install in the same directory at once.
+# The stamp lives in node_modules, so deleting node_modules also forces a reinstall.
+# GNU make has no `**`, hence the find over core/web/packages (empty until core/web exists).
+WEB_DEPS_STAMP := $(WEB_DIR)/node_modules/.web-deps.stamp
+WEB_DEPS_INPUTS := $(WEB_DIR)/package-lock.json $(wildcard $(ROOT_DIR)/core/web/package-lock.json) \
+	$(ROOT_DIR)/scripts/ci/build_web.sh \
+	$(shell find $(ROOT_DIR)/core/web/packages -path '*/src/*' -type f 2>/dev/null)
+
+web-deps: $(WEB_DEPS_STAMP)
+
+$(WEB_DEPS_STAMP): $(WEB_DEPS_INPUTS)
+	@echo "📦 Installing web dependencies (scripts/ci/build_web.sh deps)..."
+	@sh $(ROOT_DIR)/scripts/ci/build_web.sh deps
+	@mkdir -p $(dir $@) && touch $@
+	@echo "✅ Web dependencies installed"
+
+## web-install: Install web dependencies exactly as locked (alias of web-deps, which runs build_web.sh deps)
+web-install: web-deps
 
 ## web-build: Build frontend (produces web/dist for embedding)
-web-build: web-install
+web-build: web-deps
 	@echo "🌐 Building frontend..."
 	@cd $(WEB_DIR) && npm run build
 	@echo "✅ Frontend built (web/dist)"
 
 ## web-typecheck: Type-check the frontend with TypeScript 7 (tsc); TS 6 stays as `npm run typecheck:ts6`
-web-typecheck:
+web-typecheck: web-deps
 	@echo "🔎 Type-checking frontend..."
 	@npm run typecheck --prefix $(WEB_DIR)
 	@echo "✅ Frontend type check passed"
 
-## web-dev: Start Vite dev server
-web-dev:
+## web-dev: Start Vite dev server (installs through web-install, the install half: no core/web build step of its own)
+web-dev: web-install
 	@cd $(WEB_DIR) && npm run dev
 
 ## web-test: Run frontend unit tests (single pass, no watch)
-web-test:
+web-test: web-deps
 	@echo "🧪 Running frontend tests..."
 	@cd $(WEB_DIR) && npm run test -- --run
 	@echo "✅ Frontend tests passed"
 
 ## web-lint: Lint frontend code
-web-lint:
+web-lint: web-deps
 	@echo "🔍 Linting frontend..."
 	@cd $(WEB_DIR) && npm run lint
 	@echo "✅ Frontend lint passed"
