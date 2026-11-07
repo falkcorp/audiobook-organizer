@@ -1,0 +1,61 @@
+{
+  "blocks": [
+    {
+      "dest": "examples/hello/hello.go",
+      "heading": "6.12.1 Module, manifest, settings, migration",
+      "sha256": "1956d56bd80fb4d0957109adc43bf69fa5ab3ca96d7ff15d43b2715bb49c07cb",
+      "snapshot": "hello.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/migrations.go",
+      "heading": "6.12.1 Module, manifest, settings, migration",
+      "sha256": "a24d88a743cc6d50a3867e3d780df3abdbad2a1ebc21f719bff8be6c8f378e68",
+      "snapshot": "migrations.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/greeting.go",
+      "heading": "6.12.2 Route `GET /api/hello/v1/greeting`",
+      "sha256": "b56e7c8625d0252b299704ac0ea1dbc07fb77c7170ae1f2886a3bb6f8f4a887c",
+      "snapshot": "greeting.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/count.go",
+      "heading": "6.12.3 Task `hello.count`",
+      "sha256": "90870e3fb9795f33e903fc38cc342c94673a1627decd4616a42fa27ad3394321",
+      "snapshot": "count.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/cmd/hello/main.go",
+      "heading": "6.12.5 `main.go` and the embedded UI",
+      "sha256": "d4ea6a7efbbb8907edb9105a1cf9ecf671ea1bd4a004fbaf591702728ccfc55d",
+      "snapshot": "cmd-hello-main.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/ui_embed.go",
+      "heading": "6.12.5 `main.go` and the embedded UI",
+      "sha256": "0d9b8f949a12a2e642a719d15e6dfa89ef3e86c605787ff1f5be37eaf37430c4",
+      "snapshot": "ui_embed.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/ui_nonembed.go",
+      "heading": "6.12.5 `main.go` and the embedded UI",
+      "sha256": "2f3b4b18d2acd78df0bce5b570dd77f00891db50f85ec01b50ee67b6bb6adf5d",
+      "snapshot": "ui_nonembed.go.txt",
+      "spec": "06-app-sdk.md"
+    },
+    {
+      "dest": "examples/hello/hello_test.go",
+      "heading": "6.12.6 Test",
+      "sha256": "2ae992f08702c438715ccdd1a0fde9463d21513c2ffe4d30ff4888592036e1eb",
+      "snapshot": "hello_test.go.txt",
+      "spec": "06-app-sdk.md"
+    }
+  ],
+  "generator": "core/examples/hello/testdata/specblocks/regen.py"
+}

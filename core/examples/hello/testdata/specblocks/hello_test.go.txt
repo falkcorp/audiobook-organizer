@@ -1,0 +1,30 @@
+// core/examples/hello/hello_test.go
+package hello_test
+
+import (
+	"net/http"
+	"testing"
+	"testing/synctest"
+
+	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/examples/hello"
+	"github.com/falkcorp/mediacore/rbac"
+)
+
+func TestHello(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := coretest.New(t,
+			coretest.WithModules(hello.New()),
+			coretest.WithUser("v", hello.PermRead),
+			coretest.WithUser("a", rbac.CoreAdmin))
+		coretest.AssertPermission(t, h, http.MethodGet, "/api/hello/v1/greeting?name=x", hello.PermRead)
+
+		var g hello.Greeting
+		if st := h.As("v").GetJSON(t, "/api/hello/v1/greeting?name=world", &g); st != http.StatusOK || g.Seen != 1 {
+			t.Fatalf("status %d, greeting %+v", st, g)
+		}
+		if run := h.RunTask(t, "hello.count", hello.CountParams{}); !run.Succeeded {
+			t.Fatalf("count: %s: %s", run.State, run.Error)
+		}
+	})
+}

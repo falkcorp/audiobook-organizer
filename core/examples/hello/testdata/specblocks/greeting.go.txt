@@ -1,0 +1,62 @@
+// core/examples/hello/greeting.go
+package hello
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"unicode/utf8"
+
+	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
+)
+
+type service struct {
+	names    storage.Keyspace
+	settings *config.Handle[Settings]
+	log      *slog.Logger
+}
+
+type GreetingQuery struct {
+	Name string `query:"name"`
+}
+
+type Greeting struct {
+	Message string `json:"message"`
+	Seen    int64  `json:"seen"` // how often the name was recorded; 0 if unknown
+}
+
+func registerGreeting(g *httpapi.Group, s *service) {
+	httpapi.Handle(g, httpapi.Route{
+		Method:  http.MethodGet,
+		Path:    "/greeting",
+		Name:    "getGreeting",
+		Perm:    rbac.Need(PermRead),
+		Summary: "Greet a name and report how often it was recorded",
+	}, s.greet)
+}
+
+func (s *service) greet(ctx context.Context, in *httpapi.In[GreetingQuery]) (Greeting, error) {
+	cfg := s.settings.Get()
+	name := in.Req.Name
+	if name == "" || utf8.RuneCountInString(name) > cfg.MaxNameLen {
+		return Greeting{}, httpapi.Invalid(httpapi.Field("/query/name", "invalid_length",
+			fmt.Sprintf("must be 1..%d characters", cfg.MaxNameLen)))
+	}
+	var seen int64
+	switch v, err := s.names.Get(ctx, []byte(name)); {
+	case errors.Is(err, storage.ErrNotFound):
+	case err != nil:
+		return Greeting{}, fmt.Errorf("hello: read %q: %w", name, err)
+	default:
+		if seen, err = strconv.ParseInt(string(v), 10, 64); err != nil {
+			return Greeting{}, fmt.Errorf("hello: bad count for %q: %w", name, err)
+		}
+	}
+	return Greeting{Message: cfg.Greeting + ", " + name, Seen: seen}, nil
+}

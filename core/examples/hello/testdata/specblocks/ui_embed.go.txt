@@ -1,0 +1,18 @@
+//go:build embed_frontend
+
+// core/examples/hello/ui_embed.go
+package hello
+
+import (
+	"embed"
+
+	"github.com/falkcorp/mediacore/ui"
+)
+
+// web/dist is a sibling of this file, so the pattern needs no ".." (MOD-20).
+//
+//go:embed all:web/dist
+var webDist embed.FS
+
+// UIBundle returns hello's built SPA (07 §7.6).
+func UIBundle() ui.Bundle { return ui.MustFromFS(webDist, "web/dist") }

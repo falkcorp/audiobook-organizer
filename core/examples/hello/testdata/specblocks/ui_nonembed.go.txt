@@ -1,0 +1,9 @@
+//go:build !embed_frontend
+
+// core/examples/hello/ui_nonembed.go
+package hello
+
+import "github.com/falkcorp/mediacore/ui"
+
+// UIBundle returns the zero Bundle: the API-only placeholder.
+func UIBundle() ui.Bundle { return ui.Bundle{} }
