@@ -1,14 +1,17 @@
 // file: internal/operations/registry/batch_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-08-30
+// last-edited: 2026-11-07
 
 package registry_test
 
 // M3 batching tests — all required by the spec:
 //
-//  1. 50 rapid enqueues of a batchable op → exactly ONE row dispatched,
-//     params carry all 50 subjects.
+//  1. 50 rapid enqueues of a batchable op → every enqueue re-arms the window,
+//     only the last timer is live, and firing it dispatches exactly ONE row
+//     carrying all 50 subjects (deterministic: the window is fired by hand).
+//     A real-timer companion proves each subject is dispatched exactly once
+//     across rows however the host schedules the enqueuing goroutines.
 //  2. A subject whose requirement is unmet is excluded from dispatch and stays
 //     bucketed; once its requirement is satisfied a later flush includes it.
 //  3. BatchMaxWait forces a dispatch even under a steady trickle.
@@ -106,16 +109,65 @@ func newBatchRegistry(store *fakeStore) *registry.Registry {
 	return registry.NewWithOptions(store, slog.Default(), 1, registry.Options{})
 }
 
+// fakeBatchTimers is a Options.BatchAfterFunc that arms nothing: it records
+// every timer the registry arms so a test decides when (and which) one fires.
+// The registry calls it under its batch mutex, so the slice order is the
+// order the windows were armed in.
+type fakeBatchTimers struct {
+	mu     sync.Mutex
+	timers []*fakeBatchTimer
+}
+
+type fakeBatchTimer struct {
+	delay   time.Duration
+	fire    func()
+	stopped bool
+}
+
+func (f *fakeBatchTimers) afterFunc(d time.Duration, fn func()) func() bool {
+	t := &fakeBatchTimer{delay: d, fire: fn}
+	f.mu.Lock()
+	f.timers = append(f.timers, t)
+	f.mu.Unlock()
+	return func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		was := !t.stopped
+		t.stopped = true
+		return was
+	}
+}
+
+func (f *fakeBatchTimers) snapshot() []fakeBatchTimer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakeBatchTimer, len(f.timers))
+	for i, t := range f.timers {
+		out[i] = *t
+	}
+	return out
+}
+
 // TestBatch_50RapidEnqueues verifies that 50 rapid enqueues of a batchable op
-// within the window produce exactly ONE dispatched row carrying all 50 subjects.
+// inside one window produce exactly ONE dispatched row carrying all 50
+// subjects.
+//
+// The debounce window is trailing-edge (batch.go): it flushes BatchWindow
+// after the LAST enqueue, so whether a wall-clock burst lands in one row
+// depends on no enqueuing goroutine stalling for longer than the window. On a
+// loaded CI agent one did (21 of 50 subjects in the first row), so this test
+// does not race a real window: it injects the timer primitive, lets all 50
+// enqueues finish, then fires the window by hand.
 func TestBatch_50RapidEnqueues(t *testing.T) {
 	t.Parallel()
 
+	const window = 100 * time.Millisecond
+	timers := &fakeBatchTimers{}
 	store := newFakeStore()
-	r := newBatchRegistry(store)
+	r := registry.NewWithOptions(store, slog.Default(), 1, registry.Options{BatchAfterFunc: timers.afterFunc})
 
 	const defID = "test.batch-50"
-	def := batchableDef(defID, 100*time.Millisecond, 5*time.Second)
+	def := batchableDef(defID, window, 5*time.Second)
 	if err := r.RegisterOp(def); err != nil {
 		t.Fatalf("RegisterOp: %v", err)
 	}
@@ -139,29 +191,127 @@ func TestBatch_50RapidEnqueues(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Wait for the debounce window to fire.
+	// Nothing dispatches until a window fires.
+	if n := countOpsWithDef(store, defID); n != 0 {
+		t.Fatalf("expected no row before the window fires, got %d", n)
+	}
+
+	// Every enqueue re-armed the window: 50 timers, each at most one window
+	// out, and only the newest still live.
+	armed := timers.snapshot()
+	if len(armed) != 50 {
+		t.Fatalf("expected 50 armed windows (one per enqueue), got %d", len(armed))
+	}
+	for i, tm := range armed {
+		if tm.delay > window {
+			t.Errorf("window %d armed %v out, want <= %v", i, tm.delay, window)
+		}
+		if last := i == len(armed)-1; tm.stopped == last {
+			t.Errorf("window %d: stopped=%v, want %v (only the newest stays live)", i, tm.stopped, !last)
+		}
+	}
+
+	// A superseded window that already left the timer queue must not flush:
+	// the generation guard makes it a no-op.
+	armed[0].fire()
+	if n := countOpsWithDef(store, defID); n != 0 {
+		t.Fatalf("a superseded window flushed %d row(s); the generation guard should have dropped it", n)
+	}
+
+	// The live window dispatches everything, once.
+	armed[len(armed)-1].fire()
+
 	op, found := pollForOp(t, store, func(op database.OperationV2Row) bool {
 		return op.DefID == defID
 	}, 3*time.Second)
 	if !found {
-		t.Fatal("timed out: no dispatched row for batchable op")
+		t.Fatal("no dispatched row after firing the live window")
 	}
-
-	// Must be exactly one row.
 	if n := countOpsWithDef(store, defID); n != 1 {
 		t.Errorf("expected exactly 1 dispatched row, got %d", n)
 	}
 
-	// The params must carry all 50 subjects.
+	// The params must carry all 50 distinct subjects, all of type "book".
 	subs := subjectsFromParams(t, op.Params)
 	if len(subs) != 50 {
 		t.Errorf("expected 50 subjects in params, got %d: %v", len(subs), subs)
 	}
-
-	// All subject types must be "book".
+	seen := make(map[string]bool, len(subs))
 	for _, s := range subs {
 		if s.Type != "book" {
 			t.Errorf("unexpected subject type %q (want %q)", s.Type, "book")
+		}
+		seen[s.ID] = true
+	}
+	if len(seen) != 50 {
+		t.Errorf("expected 50 distinct subject ids, got %d", len(seen))
+	}
+}
+
+// TestBatch_50RapidEnqueues_EverySubjectDispatchedOnce is the real-timer
+// companion of TestBatch_50RapidEnqueues. It makes no claim about HOW MANY rows
+// the burst becomes (a stalled enqueuing goroutine can legitimately end a
+// trailing-edge window early); it asserts what must hold under any scheduling:
+// each of the 50 subjects is dispatched exactly once across all rows.
+func TestBatch_50RapidEnqueues_EverySubjectDispatchedOnce(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	r := newBatchRegistry(store)
+
+	const defID = "test.batch-50-once"
+	if err := r.RegisterOp(batchableDef(defID, 50*time.Millisecond, 5*time.Second)); err != nil {
+		t.Fatalf("RegisterOp: %v", err)
+	}
+
+	ctx := context.Background()
+	r.Start(ctx)
+	defer r.Shutdown(context.Background())
+
+	var wg sync.WaitGroup
+	for n := range 50 {
+		wg.Go(func() {
+			if _, err := r.EnqueueOp(ctx, defID, paramsForBook(fmt.Sprintf("book-%03d", n))); err != nil {
+				t.Errorf("EnqueueOp[%d]: %v", n, err)
+			}
+		})
+	}
+	wg.Wait()
+
+	// dispatched returns every subject id across all rows, with repeats.
+	dispatched := func() []string {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		var ids []string
+		for _, op := range store.ops {
+			if op.DefID != defID {
+				continue
+			}
+			for _, s := range subjectsFromParams(t, op.Params) {
+				ids = append(ids, s.ID)
+			}
+		}
+		return ids
+	}
+
+	// 10s is a failure bound for a hung flush, not a tuned wait: the loop
+	// exits as soon as all 50 subjects have been dispatched.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(dispatched()) < 50 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ids := dispatched()
+	seen := make(map[string]int, len(ids))
+	for _, id := range ids {
+		seen[id]++
+	}
+	if len(ids) != 50 || len(seen) != 50 {
+		t.Errorf("expected 50 subjects dispatched once each, got %d dispatches over %d distinct subjects", len(ids), len(seen))
+	}
+	for id, c := range seen {
+		if c != 1 {
+			t.Errorf("subject %s dispatched %d times, want 1", id, c)
 		}
 	}
 }
