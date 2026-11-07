@@ -872,7 +872,7 @@ func urlStart(tok string) int {
 }
 
 func (r *Redactor) scanPairs(s string) (string, RedactionKind) {
-	if strings.IndexAny(s, "=:") < 0 && !r.authRE.MatchString(s) {
+	if !strings.ContainsAny(s, "=:") && !r.authRE.MatchString(s) {
 		return s, 0
 	}
 	var spans [][2]int // value ranges to replace

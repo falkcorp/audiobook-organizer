@@ -113,11 +113,11 @@ func TestTrace_NoApikeyInSpanAttributes(t *testing.T) {
 		}
 		check("name", s.Name)
 		for _, kv := range s.Attributes {
-			check("attribute "+string(kv.Key), kv.Value.Emit())
+			check("attribute "+string(kv.Key), kv.Value.String())
 		}
 		for _, ev := range s.Events {
 			for _, kv := range ev.Attributes {
-				check("event attribute "+string(kv.Key), kv.Value.Emit())
+				check("event attribute "+string(kv.Key), kv.Value.String())
 			}
 		}
 		check("status", s.Status.Description)
@@ -131,11 +131,11 @@ func TestTrace_NoApikeyInSpanAttributes(t *testing.T) {
 		switch kv.Key {
 		case "session_id":
 			if kv.Value.AsString() != "[REDACTED]" {
-				t.Errorf("deny-listed int attribute = %v", kv.Value.Emit())
+				t.Errorf("deny-listed int attribute = %v", kv.Value.String())
 			}
 		case "http.request.method":
 			if kv.Value.AsString() != "GET" {
-				t.Errorf("harmless attribute changed: %v", kv.Value.Emit())
+				t.Errorf("harmless attribute changed: %v", kv.Value.String())
 			}
 		}
 	}
