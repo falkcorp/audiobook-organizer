@@ -310,8 +310,10 @@ func initMetrics(ctx context.Context, cfg *Config) (*metrics.Provider, func(cont
 			return
 		}
 		if err := prometheus.DefaultRegisterer.Register(&registryBridge{g: p.Gatherer()}); err != nil {
-			_ = p.Shutdown(ctx)
-			meterErr = fmt.Errorf("bridge the metrics registry onto the default registry: %w", err)
+			meterErr = errors.Join(
+				fmt.Errorf("bridge the metrics registry onto the default registry: %w", err),
+				p.Shutdown(ctx),
+			)
 			return
 		}
 		metricsProvider = p
