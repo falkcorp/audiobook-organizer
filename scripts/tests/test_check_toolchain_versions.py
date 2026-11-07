@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_toolchain_versions.py
-# version: 1.5.0
+# version: 1.5.1
 # guid: 741ea392-1f28-423c-ae7a-45e56620c26c
-# last-edited: 2026-11-05
+# last-edited: 2026-11-07
 """Tests for scripts/check_toolchain_versions.py (CI-04, CI-03).
 
 The inline shell check this replaced truncated go.mod to major.minor, read only
@@ -246,9 +246,9 @@ class CheckToolchainVersionsTest(unittest.TestCase):
 
     def test_woodpecker_gotoolchain_mismatch_fails(self) -> None:
         self.mutate(
-            ".woodpecker/test-rest.yaml", f"GOTOOLCHAIN: go{PIN}", f"GOTOOLCHAIN: go{WRONG_PATCH}"
+            ".woodpecker/test-native-taglib.yaml", f"GOTOOLCHAIN: go{PIN}", f"GOTOOLCHAIN: go{WRONG_PATCH}"
         )
-        self.assert_fails("::error file=.woodpecker/test-rest.yaml,line=")
+        self.assert_fails("::error file=.woodpecker/test-native-taglib.yaml,line=")
         self.assert_fails(f"GOTOOLCHAIN go{WRONG_PATCH} != Makefile pin")
 
     def _woodpecker_image_digest(self) -> str:

@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.51.3
+# version: 2.51.4
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-07
 
@@ -367,8 +367,7 @@ test-short-shard:
 ## different shards (FIXTURE_JOBS caps the test binaries a shard runs at once,
 ## default the CPU count); see its docstring.
 ##
-## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m; each of the three
-## Woodpecker test-fixtures-N workflows passes it explicitly).
+## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m).
 ## FIXTURE_SHARD=i/n runs shard i of n (ci.yml's fixture-tests matrix). The
 ## script fails on an empty list or an empty shard: `go test` with no package
 ## arguments would test only the module root and pass.

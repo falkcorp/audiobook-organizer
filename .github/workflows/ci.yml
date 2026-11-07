@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.35.3
+# version: 3.36.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-07
 
@@ -508,6 +508,13 @@ jobs:
 
       - name: Check Go formatting
         run: make fmt-check
+
+      # Vets and runs the pprof-tagged tests, which no other job compiles. Was
+      # run only by Woodpecker's checks-build until 2026-11-07, when that
+      # workflow was removed as a duplicate of the jobs here; core's own
+      # pprof-check runs in core-ci.yml's `make -C core ci`. Static, Go only.
+      - name: Vet and test the pprof build tag
+        run: make pprof-check
 
       # web/src/generated/ops.ts is generated from internal/operations/state
       # (tools/cmd/opsgen). A status added on the Go side without regenerating
