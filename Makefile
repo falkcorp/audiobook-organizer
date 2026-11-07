@@ -367,8 +367,7 @@ test-short-shard:
 ## different shards (FIXTURE_JOBS caps the test binaries a shard runs at once,
 ## default the CPU count); see its docstring.
 ##
-## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m; each of the three
-## Woodpecker test-fixtures-N workflows passes it explicitly).
+## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m).
 ## FIXTURE_SHARD=i/n runs shard i of n (ci.yml's fixture-tests matrix). The
 ## script fails on an empty list or an empty shard: `go test` with no package
 ## arguments would test only the module root and pass.
