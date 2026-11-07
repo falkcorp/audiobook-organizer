@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.39.0 -->
+<!-- version: 1.40.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-06 -->
 
 # Platform-core planning operation — state
 
@@ -81,22 +81,34 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W01 | R0-06 | #4389 `32c432b12` | CodeQL `go/request-forgery` fixed with a release-tag match at the URL site; the AppConfig read ratchet kept by `config.Snapshot()` |
 | W02 | R0-05 | #4391 `d617240ac` | T4 independent review: 0 BLOCKER, 1 MAJOR (blank saved password trimmed, invisible to P14) reverted to the brief, pinned by two rows; first PR through the merge queue |
 | W02 | R0-03 | #4393 `1df727a55` | step-6 STOP: 2 master-list tests asserted the defect; lead approved, 1 path added to the inventory |
+| W03 | OWNER-02 | — | owner-authorized run 2026-11-06: R0 production release **v0.223.0**, deployed, `RELEASE_FREEZE=R1`; recorded on #4382 |
+| W04 | R1-35 | #4394 `7b2560718` | merge queue dropped it twice (concurrency cancel of the queue run), fixed by #4403; step-5 release checks clean |
+| W05 | R1-01 | #4397 `88a962140` | owner overrode the 09 §9.2.10 move window ("no waiting"); Dockerfile `core/` COPY left to R1-04 per inventory |
+| W06 | R1-02 | #4407 `ef186c16c` | e2e `merge_group` runs never cancelled and chromium-only (same check name as the PR run); ruleset +3 checks after merge |
+| W06 | R1-11 | #4405 `2f774e3d8` | 8 writes through `Mutate`; `TestNoDirectAppConfigWrites` AST guard |
+| W06 | R1-22 | #4406 `2fdf0b475` | pure move, 8185 decls byte-identical except NewPebbleStore/RunMigrations: 12 slog calls moved to `internal/logger` (owner decision; ratchet at its file ceiling) |
+| W07 | R1-12 | #4411 `41042309b` | merged with Woodpecker staticcheck red (SA1029); follow-up #4413 also lets `MethodSessionDelegated` change credentials (owner decision, spec amendment in seams.d) |
 
-Merge queue: on since 2026-11-05 (repo ruleset `main merge queue`, REBASE, no bypass actors, no required checks yet;
-owner choice). `ci.yml` gains a `merge_group` trigger in #4395; the existing GitHub checks become required before
-R1-01 (owner choice), and R1-02 brings the 09 §9.2.1 named set.
+Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
+(github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
+collected by hand), #4403 `5c6d4d598` (merge-queue runs never cancelled); github-common #386–#388 (Rust toolchain
+input, minimatch override, changelog collection lands through a PR when direct push is refused).
 
-Built ahead, held until OWNER-02 (owner-approved): R1-35 (#4394, draft) and R1-01 (#4397, draft). R1-01 widened its
-file list by `scripts/tests/test_run_gates.py`, `Dockerfile` and `Dockerfile.build-cgo` (lead decision; the image build
-needs `core/go.mod` in context, 03 §3.2).
+Merge queue: on since 2026-11-05 (repo ruleset 26660812, REBASE, ALLGREEN, no bypass actors). Required checks (11, all
+GitHub Actions): Changes, TODO Fragment Headers, Interface Width Ratchet, Errcheck Ratchet, Deadcode Ratchet, Repo
+Guards, Mock Freshness, Coverage Floor (PR gate), and from R1-02 `extraction-gates`, `vet-darwin`, `vet-integration`.
+`e2e` is **not** required yet (owner decision 2026-11-06): its `pull_request` `paths:` filter leaves docs-only PRs with
+no E2E status; R1-05 edits e2e.yml. Woodpecker statuses are not required, so a PR can merge with them red. Enqueue with
+the GraphQL `enqueuePullRequest` mutation: `gh pr merge` no longer enqueues.
+
+Move windows (09 §9.2.10): the owner directed on 2026-11-06 that move rows (R1-01, R1-07, R1-10, R1-09, R1-08, …)
+start as soon as their dependencies merge, announced on #4382, still running alone over the packages they move.
 
 ## Blockers
 
-None for agents. R0 is complete (6/6 rows merged).
+None for agents. R0 complete (6/6). R1: 6 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12).
 
 ## Next action
 
-Owner: OWNER-02. Cut the R0 production release from `main` (prepend the release-note lines of the OWNER-02 brief), deploy,
-optional smoke run, then `gh variable set RELEASE_FREEZE --body R1` and record the R0 tag in the tracking issue. Before
-the deploy: an admin automation key holding only `users.manage` no longer reaches routes behind `RequireAdmin` (R0-03).
-Then R1-35 merges, the required checks go on the ruleset, and R1-01 enters its merge gate.
+W07: R1-07 (#4410, move window open) to merge. Then W08 R1-10 (T3, move window) and W09 R1-03 (in progress) / R1-32.
+Follow-ups in flight: #4413 (R1-12 follow-up), #4414 (vitest EventSource mock flake).
