@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.1.4
+# version: 1.2.0
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
-# last-edited: 2026-11-04
+# last-edited: 2026-11-06
 """Ratchet on production functions unreachable from every `main`.
 
 Runs golang.org/x/tools/cmd/deadcode (pinned) and compares the set of
@@ -40,6 +40,17 @@ the linux cgo packages and the run fails. The pin is x/tools v0.51.0 (the
 version the baseline was measured with): a version bump can change the set on
 its own and trip the ratchet as if code had changed.
 
+Mains and filter (09 §9.4 R1, MOD2-19). The program is ABO's mains (`./...` of
+the root module) plus, once core/examples/hello exists, hello's main. `-filter`
+REPLACES deadcode's default (which is the root module's own packages), so it is
+the union of the root module and core's `internal` and `kernel` trees:
+`github.com/falkcorp/mediacore/(internal|kernel)`. Core's exported packages are
+SDK surface and out of scope here, as `pkg/` is. A filter naming only core's
+trees would drop every root finding, and `--prune` would then empty the
+baseline, which is the silent re-baseline this gate exists to prevent.
+There is no separate core baseline: core's identifiers (path-prefixed `core/`)
+live in the same scripts/deadcode-baseline.txt.
+
 Excluded from the set: pkg/ (public SDK, exported on purpose),
 internal/writeback/ (the iTunes writer), test files, test helper packages
 (testutil, conformance, rapidgen and the explicit TEST_HELPER_DIRS list), mock_store.go, and any name
@@ -71,6 +82,33 @@ EXCLUDED_PKG_NAMES = {"testutil", "conformance", "rapidgen"} | TEST_HELPER_DIRS
 
 class ToolError(Exception):
     """The tool could not be run or its output not understood (exit 2)."""
+
+
+CORE_MODULE = "github.com/falkcorp/mediacore"
+CORE_FILTER = CORE_MODULE + r"/(internal|kernel)"
+HELLO_DIR = ("core", "examples", "hello")
+MODULE_RE = re.compile(r"^module\s+(\S+)\s*$", re.M)
+
+
+def root_module(root: Path) -> str:
+    m = MODULE_RE.search((root / "go.mod").read_text())
+    if not m:
+        raise ToolError(f"no module line in {root / 'go.mod'}")
+    return m.group(1)
+
+
+def deadcode_args(root: Path) -> list[str]:
+    """The deadcode command line (after the binary): the filter, then the mains.
+
+    The filter is anchored and is the union of the root module and core's
+    internal and kernel trees; hello's main joins the program when its directory
+    holds Go files."""
+    filt = f"^({re.escape(root_module(root))}|{re.escape(CORE_MODULE)}/(internal|kernel))(/|$)"
+    args = ["-filter", filt, "./..."]
+    hello = root.joinpath(*HELLO_DIR)
+    if hello.is_dir() and any(hello.glob("*.go")):
+        args.append(CORE_MODULE + "/" + "/".join(HELLO_DIR[1:]))
+    return args
 
 
 def repo_root() -> Path:
@@ -210,7 +248,7 @@ def run_deadcode(root: Path) -> str:
         env = dict(os.environ, GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
         try:
             res = subprocess.run(
-                [binary, "./..."],
+                [binary, *deadcode_args(root)],
                 cwd=root,
                 env=env,
                 capture_output=True,
