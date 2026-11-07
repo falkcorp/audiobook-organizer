@@ -1,7 +1,7 @@
 # file: core/.errcheck-baseline
-# version: 1.0.0
+# version: 1.0.1
 # guid: 640872fa-4e9d-4b60-8411-f75919f42f6f
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 
 # The number of `errcheck` findings tolerated in the core module. A ONE-WAY
 # RATCHET like the root's .errcheck-baseline: core/scripts/ci/check-errcheck-ratchet.sh
@@ -17,4 +17,9 @@
 # (R1-03; core/scripts/ci/check-errcheck-ratchet.sh --measure): 1, the unchecked
 # `f.Close` at core/buildid/buildid.go:83. Re-measure when rebasing onto a PR that
 # moves packages into core before trusting this number.
-1
+#
+# Re-measured 2026-11-07 after rebasing onto R1-07 (#4410), which moved
+# internal/logging to core/log: 2. The new finding is the discarded `json.Marshal`
+# error at core/log/structured.go:24 (opAttrs), which moved with the package, so it
+# is not new code. A todo.d entry tracks handling it; lower this file then.
+2
