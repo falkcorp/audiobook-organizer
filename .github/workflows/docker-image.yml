@@ -1,0 +1,238 @@
+# file: .github/workflows/docker-image.yml
+# version: 1.0.0
+# guid: b2699763-511a-4b87-bf7f-c52dc086fdcc
+# last-edited: 2026-11-07
+
+# The `docker-image` required check (09 §9.2.1; R1-04): every PR builds the
+# production image and Dockerfile.build-cgo, starts the image and probes it. A
+# `.dockerignore` or Dockerfile mistake, a core/ module the image build cannot
+# resolve, or an encryption key that does not survive a container recreate
+# otherwise reaches only the manual production release (prereleases build no
+# image, prerelease.yml docker-enabled: false).
+#
+#   build         the full image, layer-cached in the GitHub Actions cache, loaded
+#                 into the local daemon; Dockerfile.build-cgo with
+#                 --output type=local, and the binary must exist
+#   run 1         the image on a named volume: started once on the default
+#                 /data/audiobooks.pebble until "ready":true and stopped (seeding a
+#                 store), then started again on the same volume (a non-empty store)
+#                 and probed with scripts/ci/image_probe.sh
+#   run 2         `--db /config/x.pebble` on a named volume: .encryption_key sits
+#                 beside the database (/config/.encryption_key) and survives a
+#                 container recreate on the same volume byte-identical. From F3
+#                 the same is asserted for secrets.keyring (OPS5-7, OPS6-10)
+#
+# The level probe (--print-storage-levels, R1-23) and the build-ID probe
+# (X-App-Build equals the embedded mediacore-build meta, R1-19) are wired in
+# image_probe.sh and OFF here: each task turns its own flag on below when the
+# subject exists.
+#
+# Trigger: every PR to main that touches a non-doc file, decided by the same
+# `changes` classifier as ci.yml (a web-only change rebuilds the image too, so
+# either output gates the job; a skipped job reports success through its
+# job-level `if:`, so a docs-only PR is not left "expected"). It also runs on the
+# merge queue's merge_group event (D15): the required check must report on the
+# queued commit or the queue waits forever. The job `name:` is the check name the
+# ruleset requires; do not rename it.
+
+name: Docker Image
+
+on:
+  pull_request:
+    branches: [main, master]
+  merge_group:
+    types: [checks_requested]
+
+# A merge-queue run is never cancelled by a sibling run (the same rule as
+# ci.yml: a cancelled required check reads as failed and the queue drops the
+# PR). PR runs keep the per-ref cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
+permissions:
+  contents: read
+
+env:
+  # A local tag only: nothing in this workflow pushes an image anywhere.
+  IMAGE: abo-docker-image:pr
+
+jobs:
+  # The step below is a verbatim copy of ci.yml's `Classify changed paths`:
+  # scripts/tests/test_check_embed_context.py fails when the two differ, so
+  # change both together (and extraction-gates.yml's). See ci.yml's `changes`
+  # job for what go= and web= mean.
+  changes:
+    name: docker-image-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.classify.outputs.go }}
+      web: ${{ steps.classify.outputs.web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          go=true; web=true; range=''
+          case "$EVENT" in
+            pull_request) range="origin/${BASE_REF}...HEAD" ;;
+            push) [[ "$BEFORE" =~ ^0+$ ]] || range="${BEFORE}...${AFTER}" ;;
+          esac
+          if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
+            go=false; web=false
+            while IFS= read -r f; do
+              case "$f" in web/*|.github/workflows/*) web=true ;; esac
+              case "$f" in
+                # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
+                # must run when only the generated file changed.
+                web/src/generated/*) go=true ;;
+                # Generated from Go by tygo (tygo.yaml); the Go job's types-check
+                # must run when only a generated type file changed.
+                web/src/types/generated/*) go=true ;;
+                # The contract goldens are marshalled from Go (internal/wirecontract),
+                # whose test must run when only a golden or the TS test changed.
+                web/src/types/contract/*) go=true ;;
+                # A Markdown file (or any docs-glob file) that a Go test or a
+                # //go:embed reads as an input goes HERE, before the docs line
+                # below, as `path/to/file.md) go=true ;;` -- the docs line would
+                # otherwise hide it and a docs-only PR would skip the Go jobs
+                # that read it (09 §9.2.1; OPS5-4). None today.
+                # scripts/tests/test_ci_classifier.py scans the Go sources for
+                # every such file and fails when one has no case here.
+                web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
+                *) go=true ;;
+              esac
+            done <<<"$files"
+          fi
+          echo "go=$go web=$web (${range:-no range: fail open})"
+          { echo "go=$go"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+
+  docker-image:
+    name: docker-image
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # The cache is best effort (ignore-error): a fork's PR token cannot write
+      # it, and a cache outage must not turn the check red.
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha,scope=docker-image
+          cache-to: type=gha,mode=max,scope=docker-image,ignore-error=true
+
+      - name: Build Dockerfile.build-cgo (binary only)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.build-cgo
+          push: false
+          outputs: type=local,dest=dist/
+          cache-from: type=gha,scope=docker-image-cgo
+          cache-to: type=gha,mode=max,scope=docker-image-cgo,ignore-error=true
+
+      - name: The cgo build produced the binary
+        run: |
+          set -eu
+          test -s dist/audiobook-organizer || { echo "::error::Dockerfile.build-cgo output has no dist/audiobook-organizer"; ls -la dist; exit 1; }
+          test -x dist/audiobook-organizer || { echo "::error::dist/audiobook-organizer is not executable"; exit 1; }
+          echo "Dockerfile.build-cgo produced dist/audiobook-organizer ($(wc -c < dist/audiobook-organizer) bytes)"
+
+      # Run 1. The first start seeds /data/audiobooks.pebble on a fresh named
+      # volume and is stopped; the second runs on the now non-empty store and is
+      # the one probed.
+      - name: Run 1, seeded volume, probe
+        env:
+          READY_TIMEOUT: '300'
+          PROBE_STORAGE_LEVELS: '0'
+          PROBE_BUILD_ID: '0'
+        run: |
+          set -eu
+          docker volume create abo-data >/dev/null
+          start() {
+            docker run -d --name "$1" -p 127.0.0.1:18484:8484 -v abo-data:/data "$IMAGE" >/dev/null
+          }
+          start abo-seed
+          sh scripts/ci/image_probe.sh abo-seed http://127.0.0.1:18484
+          docker stop -t 30 abo-seed >/dev/null
+          docker rm abo-seed >/dev/null
+          start abo-run1
+          sh scripts/ci/image_probe.sh abo-run1 http://127.0.0.1:18484
+          docker stop -t 30 abo-run1 >/dev/null
+          echo "run 1: ready on a seeded volume, probes passed"
+
+      # Run 2. A new named volume is root-owned and the image runs as uid 1000,
+      # so it is chowned once, the way a deployment does. The encryption key
+      # (config.EnsureSecureStateDir falls back to the database's directory when
+      # the system state directory is not creatable) must sit beside the
+      # database, and a recreated container on the same volume must keep the
+      # same bytes: a regenerated key silently destroys every encrypted setting.
+      - name: Run 2, encryption key beside the database and kept across recreate
+        env:
+          READY_TIMEOUT: '300'
+          PROBE_STORAGE_LEVELS: '0'
+          PROBE_BUILD_ID: '0'
+        run: |
+          set -eu
+          docker volume create abo-config >/dev/null
+          docker run --rm --user 0:0 --entrypoint chown -v abo-config:/config "$IMAGE" 1000:1000 /config
+          start() {
+            docker run -d --name "$1" -p 127.0.0.1:18485:8484 -v abo-config:/config "$IMAGE" \
+              serve --host 0.0.0.0 --db /config/x.pebble >/dev/null
+          }
+          key_sum() {
+            docker exec "$1" sh -c 'test -s /config/.encryption_key && sha256sum /config/.encryption_key'
+          }
+          start abo-config-1
+          sh scripts/ci/image_probe.sh abo-config-1 http://127.0.0.1:18485
+          docker exec abo-config-1 test -e /config/x.pebble || { echo "::error::the database /config/x.pebble does not exist"; exit 1; }
+          before=$(key_sum abo-config-1) || { echo "::error::no /config/.encryption_key beside /config/x.pebble"; exit 1; }
+          docker stop -t 30 abo-config-1 >/dev/null
+          docker rm abo-config-1 >/dev/null
+          start abo-config-2
+          sh scripts/ci/image_probe.sh abo-config-2 http://127.0.0.1:18485
+          after=$(key_sum abo-config-2) || { echo "::error::no /config/.encryption_key after the container was recreated"; exit 1; }
+          if [ "$before" != "$after" ]; then
+            echo "::error::/config/.encryption_key changed across a container recreate ($before -> $after)"
+            exit 1
+          fi
+          echo "run 2: encryption key beside the database and kept across recreate"
+
+      - name: Container logs
+        if: ${{ failure() }}
+        run: |
+          docker ps -a || true
+          for c in $(docker ps -aq); do
+            echo "::group::docker logs $(docker inspect -f '{{.Name}}' "$c")"
+            docker logs "$c" 2>&1 | tail -n 300 || true
+            echo "::endgroup::"
+          done
+
+      - name: Remove containers and volumes
+        if: ${{ always() }}
+        run: |
+          docker ps -aq | xargs -r docker rm -f >/dev/null 2>&1 || true
+          docker volume rm abo-data abo-config 2>/dev/null || true
