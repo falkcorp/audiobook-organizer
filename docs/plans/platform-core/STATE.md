@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.42.0 -->
+<!-- version: 1.43.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-07 -->
 
@@ -92,6 +92,8 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W08 | R1-10 | #4430 `58456d7de` | move window; T3 with an independent Opus review: 0 BLOCKER, 0 MAJOR, 8 MINOR (served /metrics identical apart from the instance id); 3 MINORs fixed on the branch, 4 filed as todo.d; `.errcheck-baseline` 770 → 726 (earned by earlier PRs, R1-10 net zero); deployed 2026-11-07 10:10 |
 | W09 | R1-03 | #4417 `73dd3dbb7` | per-module `make ci`: core ratchets, the core/4 shard, core in nightly, CodeQL and Woodpecker; core's errcheck exempts `errors.AsType` (matched at root by #4434) |
 | W09 | R1-32 | #4436 `fbda477b0` | T3: independent review, verification review and re-verification, last verdict 0 BLOCKER / 0 MAJOR; 3 MINORs go to a follow-up PR before R1-36 touches core/log; deployed 2026-11-07 |
+| W10 | R1-04 | #4438 `9f4534d5b` | docker-image PR job and the embed-context check; the first real image build ran in CI |
+| W10 | R1-09 | #4437 `3caa19fff` | move window: core leaves (version 0.1.0, entity, coretest's injected logger) and the flight recorder into core/health |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -110,13 +112,13 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 10 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32).
+None for agents. R0 complete (6/6). R1: 12 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
-W10: R1-04 (#4438) and R1-09 (#4437, move window) in CI. Then W11: the R1-32 follow-up first, then R1-36 (after #4437), R1-08 (after #4437) and R1-05 (after #4438).
+W11 in progress: R1-05, R1-08 (move window) and R1-36 started 2026-11-07 14:30-14:40; the R1-32 follow-up is #4441. Next W12: R1-13 (after R1-36) and R1-29 (after R1-05).
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
