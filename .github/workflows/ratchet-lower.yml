@@ -1,11 +1,15 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.5.1
+# version: 1.5.2
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
 # last-edited: 2026-11-06
 
 # Weekly: measure every file-backed ratchet baseline listed in ci/gates.txt and,
 # when a measured count is now LOWER, open a PR that lowers the file (07-G4,
 # owner decision D47: ratchets fail only on a rise; a bot lowers the baseline).
+#
+# One baseline per module (09 §9.4 R1): the root's two and core's two
+# (core/.errcheck-baseline, core/.interface-width-baseline) are separate gates
+# in ci/gates.txt, each lowered only against its own measurement.
 #
 # This workflow only ever opens a PR. It never pushes to main, never edits Go
 # source (Go-constant baselines are only listed in the PR body), and
@@ -153,7 +157,7 @@ jobs:
           fi
 
           # Only baseline files may change; anything else is a bug in the bot.
-          bad=$(git diff --name-only | grep -vxE '\.errcheck-baseline|\.interface-width-baseline|scripts/deadcode-baseline\.txt' || true)
+          bad=$(git diff --name-only | grep -vxE '\.errcheck-baseline|\.interface-width-baseline|core/\.errcheck-baseline|core/\.interface-width-baseline|scripts/deadcode-baseline\.txt' || true)
           if [ -n "$bad" ]; then
             echo "::error::unexpected files changed by --lower: $bad"
             exit 1
@@ -161,7 +165,7 @@ jobs:
 
           bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
           git checkout -b "$BRANCH"
-          git add .errcheck-baseline .interface-width-baseline scripts/deadcode-baseline.txt
+          git add .errcheck-baseline .interface-width-baseline core/.errcheck-baseline core/.interface-width-baseline scripts/deadcode-baseline.txt
           git commit -m "chore(ci): lower ratchet baselines"
 
           {

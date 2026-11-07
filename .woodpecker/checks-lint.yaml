@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-lint.yaml
-# version: 2.8.1
+# version: 2.8.2
 # guid: e5b7c2a9-4d18-4a3e-9f60-8b2c1d7e3a55
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # The linter gates of `make ci`: staticcheck, the errcheck ratchet, the
 # deadcode ratchet and mocks-check, each as its own step so one failure does
@@ -89,6 +89,7 @@ steps:
     commands:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory lint-errcheck-ratchet
+      - make --no-print-directory -C core errcheck-ratchet
 
   - name: deadcode-ratchet
     # Chained after BOTH memory-heavy linters: it peaks ~5.2 GB, and on U0 the
@@ -110,6 +111,7 @@ steps:
     commands:
       - export PATH="$$GOBIN:$$PATH"
       - make --no-print-directory mocks-check
+      - make --no-print-directory -C core mocks-check
 
   - name: cache-trim
     # Keeps the shared build cache under its budget, least recently used

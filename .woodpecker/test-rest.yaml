@@ -1,9 +1,12 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.10.1
+# version: 1.10.2
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
-# `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
+# `make ci` test-short, part 3 of 3: every other package in `go list ./...`,
+# plus the core module's short tests (the one core shard of 09 §9.4 R1's CI
+# classification: `./...` from the root never reaches the nested core module,
+# so it runs as its own `go -C core test`, with no coverage profile).
 # That includes internal/plugins/maintenance (65-110 s), internal/operations/
 # registry (about 95 s), internal/applygate (about 450 s on Linux) and the
 # remaining decode packages: audiobooks, audioutil, fingerprint, mediainfo,
@@ -73,6 +76,9 @@ steps:
         grep -vxE 'github.com/falkcorp/audiobook-organizer/internal/(database|server|scanner|server/handlers/abs)')
         && go test $$PKGS -short -race -covermode=atomic -coverprofile=cover.out -timeout 25m
       - awk -v wf=test-rest 'NR>1{t+=$$2; if($$3>0)c+=$$2} END{printf "CI-COVERAGE workflow=%s covered=%d total=%d\n", wf, c, t}' cover.out
+      # The core shard: no coverage profile, so the CI-COVERAGE line above stays
+      # a root-only total.
+      - go -C core test ./... -short -race -count=1 -timeout 25m
 
   - name: cleanup
     # Runs on success and failure: clear this clone and anything left in the

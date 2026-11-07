@@ -1,7 +1,11 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.5.1
+# version: 2.5.2
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
+# Classification (09 §9.4 R1): this scan reads web/src only, so it is the root
+# npm workspace's gate. core/web does not exist yet (R1-30 creates it) and
+# scripts/check-memory-leaks.py takes no second source tree, so there is no core
+# leg here; the one that creates core/web adds it with the path trigger.
 name: Memory Leak Detection
 
 on:

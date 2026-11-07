@@ -1,7 +1,7 @@
 # file: .github/workflows/codeql.yml
-# version: 1.6.2
+# version: 1.6.3
 # guid: 4e7a1b2c-3d5f-6e8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # Overrides GitHub's dynamic default CodeQL workflow so the Go toolchain and
 # build steps match ci.yml. (Until Go 1.27 this also carried GOEXPERIMENT=jsonv2
@@ -50,8 +50,14 @@ jobs:
           languages: go
           config-file: .github/codeql/codeql-config.yml
 
+      # Per module (09 §9.4 R1's CI classification): `./...` from the root never
+      # reaches the nested core module, so core's code is built here too or
+      # CodeQL would not see it. build-modules is `go build ./...` in every
+      # module but the root.
       - name: Build for CodeQL
-        run: go build ./...
+        run: |
+          go build ./...
+          make build-modules
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2

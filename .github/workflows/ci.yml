@@ -760,6 +760,16 @@ jobs:
   # `short_test_shards.py --check` runs the same check over every test name.
   # Each shard uploads its merged profile as coverage-k.out; the `coverage`
   # job below merges the four and applies the floor.
+  #
+  # The fifth leg, `core/4`, is the one core shard (09 §9.4 R1's CI
+  # classification): every package of the nested core module, which `./...`
+  # from the root never reaches, runs there under `go -C core test` in one
+  # `go test` call. It writes no coverage profile (core has no floor until
+  # R1-23, and the root floor must keep comparing the same four-profile
+  # total), so it uploads no artifact and the coverage job below merges legs
+  # 1-4 only. `core-ci` runs core's short tests as well, from an export of
+  # core/ alone (12 SC4); this leg is the one that runs them in the root's
+  # sharded suite next to the plan check that every package is assigned.
   go-test-short-shards:
     name: Go Tests (short, race) shard ${{ matrix.shard }}
     needs: changes
@@ -768,7 +778,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1/4', '2/4', '3/4', '4/4']
+        shard: ['1/4', '2/4', '3/4', '4/4', 'core/4']
     # 35, not 20. `make test-short-shard` runs go test with `-timeout 25m`, so
     # a cap of 20 would let the runner kill this job BEFORE Go's own timeout
     # could fire — and Go's timeout is the only thing that prints a goroutine
@@ -871,6 +881,7 @@ jobs:
           key: ${{ steps.race-cache.outputs.cache-primary-key }}
 
       - name: Upload shard coverage profile
+        if: ${{ matrix.shard != 'core/4' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ steps.shard.outputs.n }}

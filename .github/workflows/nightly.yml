@@ -3,7 +3,8 @@
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 # last-edited: 2026-11-07
 
-# Nightly full CI: property tests, coverage check, E2E, staticcheck.
+# Nightly full CI: property tests, coverage check, E2E, staticcheck, and core's
+# non-short tests (the core-nightly job).
 # Runs the complete reusable-ci.yml suite on a schedule.
 # Does NOT run on PRs — use ci.yml (minimal/fast) for PR feedback.
 name: Nightly Full CI
@@ -52,3 +53,33 @@ jobs:
       # ERR_CONNECTION_REFUSED (run 42233931710, 2026-11-06).
       skip-e2e-tests: true
     secrets: inherit
+
+  # core's non-short tests (09 §9.4 R1's CI classification: nightly is per
+  # module). `./...` from the root never reaches the nested core module, so the
+  # suite above cannot run them; core's own Makefile runs everything -short
+  # skips, under -race, from core/ alone like core-ci.
+  core-nightly:
+    name: Core nightly tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+
+      - name: Pin
+        run: echo "GOTOOLCHAIN=$(make -s -C core print-toolchain)" >> "$GITHUB_ENV"
+
+      - name: make -C core test-nightly
+        run: make -C core test-nightly
