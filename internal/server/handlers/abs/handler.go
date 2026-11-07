@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-25
+// last-edited: 2026-11-07
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -758,6 +758,11 @@ func (h *Handler) Register(r gin.IRouter) {
 	// follows them when a user taps an author in a book detail screen, so this
 	// must be an explicit ABS route rather than falling through to /api/v1.
 	r.GET("/api/authors/:id", auth, h.AuthorDetail)
+	// Author portraits (Lissen passes ?width=). No author image exists in our data
+	// model, so an honest 404 — see AuthorImage. Claimed from the redirect in
+	// absCollisionDetailRoutes: /api/authors has a live /api/v1 twin.
+	r.GET("/api/authors/:id/image", auth, h.AuthorImage)
+	r.HEAD("/api/authors/:id/image", auth, h.AuthorImage)
 	r.GET("/api/series/:id", auth, h.SeriesDetail)
 	r.GET("/api/libraries/:libraryId/narrators", auth, h.LibraryNarrators)
 	// Narrator portraits. There is no narrator image anywhere in our data model
@@ -769,12 +774,17 @@ func (h *Handler) Register(r gin.IRouter) {
 	// a clear 400 instead of the 301 → GET downgrade the app used to get.
 	r.POST("/api/emails/send-ebook-to-device", auth, h.SendEbookToDevice)
 	r.GET("/api/libraries/:libraryId/filterdata", auth, h.LibraryFilterData)
+	// Lissen's Genre grouping reads genresWithCount from here.
+	r.GET("/api/libraries/:libraryId/stats", auth, h.LibraryStats)
 	r.GET("/api/libraries/:libraryId/search", auth, h.LibrarySearch)
 	// Podcast stub: a probing client gets a valid empty response, not an error
 	// (§1.8.6 — the wrapper key is required, and `{}` throws).
 	r.GET("/api/libraries/:libraryId/recent-episodes", auth, h.RecentEpisodes)
 
 	r.GET("/api/items/:id", auth, h.Item)
+	// Lissen resolves a search hit's series books in one call. Static "batch"
+	// beside the ":id" wildcard is fine for gin; only POST uses this shape.
+	r.POST("/api/items/batch/get", auth, h.ItemsBatchGet)
 	// The cover endpoint is deliberately OUTSIDE the auth middleware. §1.8.8 item 7 /
 	// §1.9.5: AudioBooth's widget extension sends no headers at all — not even
 	// ?token= — and its widget cover art has no other path. It stays
