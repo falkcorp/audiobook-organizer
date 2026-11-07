@@ -1,5 +1,5 @@
 // file: core/log/redactor.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 44521f1f-a2ba-4b3c-a385-eb582b10e892
 // last-edited: 2026-11-07
 
@@ -953,9 +953,10 @@ func applyRule(rule PathRule, p string) (out string) {
 //     the authority has no '@' but a port that is not a number
 //     ("bob:pa/x@host"), a password holding an unencoded '/', '?' or '#'
 //     ended it early: everything up to the last '@' is userinfo.
-//  2. The rest is cut at the first '#' and then the first '?': the path rules
-//     run over the path, and the query and the fragment have their
-//     credential parameters replaced.
+//  2. The rest is cut at its fragment's '#' (fragStart: the first '#', but
+//     not one inside a nested URL's userinfo in the query) and then the
+//     first '?': the path rules run over the path, and the query and the
+//     fragment have their credential parameters replaced.
 //  3. When the path rules left that path unchanged but a '?' or '#' follows
 //     it, they run again over the whole rest with '?' and '#' as path text (a
 //     decoded /invite/?<token> is still a token); if that redacts, it is the
@@ -974,7 +975,10 @@ func (r *Redactor) urlKinds(raw string, depth int) (string, RedactionKind) {
 		}
 		prefix, rest = raw[:a.start]+raw[a.host:a.end], raw[a.end:]
 	}
-	beforeFrag, frag, hasFrag := strings.Cut(rest, "#")
+	beforeFrag, frag, hasFrag := rest, "", false
+	if f := fragStart(rest); f >= 0 {
+		beforeFrag, frag, hasFrag = rest[:f], rest[f+1:], true
+	}
 	path, query, hasQuery := strings.Cut(beforeFrag, "?")
 	path, k := r.pathKinds(path)
 	kinds |= k
@@ -1044,16 +1048,96 @@ func authorityOf(raw string) (a authority, ok bool) {
 	if start < 0 {
 		return authority{}, false
 	}
-	a = authority{start: start, host: start, end: authEnd(raw, start)}
+	return authorityAt(raw, start, -2), true
+}
+
+// authorityAt is the authority that starts at raw[start] (authorityOf).
+// lastAt is the index of raw's last '@' (-1 for none) when the caller
+// already knows it, or -2 to look it up only if the bad-port rule needs it;
+// a caller reading many authorities in one string (paramEnd) passes it so
+// each read stays local.
+func authorityAt(raw string, start, lastAt int) authority {
+	a := authority{start: start, host: start, end: authEnd(raw, start)}
 	if at := strings.LastIndexByte(raw[start:a.end], '@'); at >= 0 {
 		a.host = start + at + 1
 	} else if badPort(raw[start:a.end]) {
-		if at := strings.LastIndexByte(raw[start:], '@'); at >= 0 {
-			a.host = start + at + 1
+		if lastAt == -2 {
+			lastAt = strings.LastIndexByte(raw, '@')
+		}
+		if lastAt >= start {
+			a.host = lastAt + 1
 			a.end = authEnd(raw, a.host)
 		}
 	}
-	return a, true
+	return a
+}
+
+// paramEnd is where the query parameter that starts at q[from] ends: the
+// first of seps after it, or len(q). When its value starts a URL whose
+// authority has userinfo ("next=https://bob:pa;<t>@host/"), the userinfo is
+// read whole first (nestedUserinfoEnd), so a ';', '&' or '#' in a nested
+// password cannot split the nested URL from its '@' and leave
+// "https://bob:pa" with no userinfo to remove. Only the userinfo is read
+// whole: what follows the '@' is split as usual, so in
+// "next=https://host&token=<t>" the token is still its own parameter.
+// lastAt is the index of q's last '@', or -1.
+func paramEnd(q string, from int, seps string, lastAt int) int {
+	j := from
+	if e := strings.IndexAny(q[from:], "="+seps); e >= 0 && q[from+e] == '=' {
+		j = nestedUserinfoEnd(q, from+e+1, lastAt)
+	}
+	if k := strings.IndexAny(q[j:], seps); k >= 0 {
+		return j + k
+	}
+	return len(q)
+}
+
+// nestedUserinfoEnd is, for a query value at q[v] that starts a URL
+// ("<scheme>://" or "//") whose authority has userinfo (authorityAt, the
+// bad-port rule included), the index just past that userinfo's '@'; else v.
+// The scheme is read at most maxNameBytes far.
+func nestedUserinfoEnd(q string, v, lastAt int) int {
+	s := v
+	for s < len(q) && s-v < maxNameBytes && isSchemeChar(q[s]) {
+		s++
+	}
+	start := -1
+	switch {
+	case s > v && isAlpha(q[v]) && strings.HasPrefix(q[s:], "://"):
+		start = s + 3
+	case strings.HasPrefix(q[v:], "//"):
+		start = v + 2
+	}
+	if start < 0 {
+		return v
+	}
+	if a := authorityAt(q, start, lastAt); a.host > a.start {
+		return a.host
+	}
+	return v
+}
+
+// fragStart is the index of the '#' that starts rest's fragment, or -1:
+// the first '#' when no '?' comes before it, else the first '#' that ends a
+// query parameter (paramEnd), so a '#' in a nested URL's password
+// ("?next=https://bob:pa#<t>@host/") is not one.
+func fragStart(rest string) int {
+	q := strings.IndexByte(rest, '?')
+	h := strings.IndexByte(rest, '#')
+	if q < 0 || h < q {
+		return h
+	}
+	lastAt := strings.LastIndexByte(rest, '@')
+	for p := q + 1; ; {
+		e := paramEnd(rest, p, "&;#", lastAt)
+		if e >= len(rest) {
+			return -1
+		}
+		if rest[e] == '#' {
+			return e
+		}
+		p = e + 1
+	}
 }
 
 // authEnd is where the authority that starts at from ends: the first '/',
@@ -1089,7 +1173,8 @@ func badPort(auth string) bool {
 }
 
 // maskQuery replaces the value of every credential parameter in q (split on
-// '&' and ';', which some servers also accept). Order, other parameters, the
+// '&' and ';', which some servers also accept, by paramEnd, which reads a
+// nested URL's userinfo whole). Order, other parameters, the
 // raw spelling of names and separators are kept; a name without '=' has no
 // value to replace. Another parameter's value that holds a URL or a path
 // (?next=/invite/<token>) gets URL handling (nestedValue).
@@ -1100,10 +1185,12 @@ func (r *Redactor) maskQuery(q string, depth int) (string, RedactionKind) {
 	var b strings.Builder
 	b.Grow(len(q))
 	var kinds RedactionKind
-	for rest := q; ; {
-		part, sep, more := rest, "", false
-		if j := strings.IndexAny(rest, "&;"); j >= 0 {
-			part, sep, rest, more = rest[:j], rest[j:j+1], rest[j+1:], true
+	lastAt := strings.LastIndexByte(q, '@')
+	for p := 0; ; {
+		e := paramEnd(q, p, "&;", lastAt)
+		part, sep, more := q[p:e], "", e < len(q)
+		if more {
+			sep, p = q[e:e+1], e+1
 		}
 		name, val, hasValue := strings.Cut(part, "=")
 		switch {
