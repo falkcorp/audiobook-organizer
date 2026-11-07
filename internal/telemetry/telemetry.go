@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-11-07
 
@@ -369,7 +369,8 @@ func (b *registryBridge) Collect(ch chan<- prometheus.Metric) {
 // its name is always a family the Provider already serves, read back from a
 // gather, so the static family guards (TestDeclaredFamiliesInGolden and the
 // client_golang ratchet in internal/telemetrypolicy) skip its body and refuse
-// a call with a literal name. It goes with the bridge in R1-15.
+// every other use of it in this package: only the call in Collect above, with
+// a ranged family's GetName(), passes. It goes with the bridge in R1-15.
 func bridgeDesc(name, help string) *prometheus.Desc {
 	return prometheus.NewDesc(name, help, nil, nil)
 }

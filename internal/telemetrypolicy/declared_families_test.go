@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/declared_families_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c98c5717-1401-41f2-8a41-3b568da2ac3d
 // last-edited: 2026-11-07
 
@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -52,10 +53,99 @@ var descHelpers = map[string]struct {
 // (internal/telemetry/telemetry.go bridgeDesc). It declares no family: its
 // name is always one the core Provider already serves, read back from a
 // gather. Both static guards (TestDeclaredFamiliesInGolden and the
-// client_golang ratchet) skip its body, in that one file only, and refuse a
-// call to it with a literal name. R1-15 removes the bridge, and this entry
-// with it.
-var bridgeHelper = struct{ file, fn string }{file: "internal/telemetry/telemetry.go", fn: "bridgeDesc"}
+// client_golang ratchet) skip its body, in that one file only, and refuse
+// every other use of it in its package (bridgeMisuses). R1-15 removes the
+// bridge, and this entry with it.
+var bridgeHelper = struct{ file, fn, recv, method string }{
+	file: "internal/telemetry/telemetry.go", fn: "bridgeDesc", recv: "registryBridge", method: "Collect",
+}
+
+// bridgeMisuses returns every use of bridgeHelper.fn in the files of its
+// package directory except the one sanctioned call: in bridgeHelper.file,
+// inside (*registryBridge).Collect, whose name argument is v.GetName() with v
+// the value variable of an enclosing range (a gathered family). Anything else
+// (a literal or a named constant, a variable, a call from another file of
+// the package, the function taken as a value) could declare a family the
+// core Provider does not serve through the bridge's NewDesc. rel is the
+// file's slash-separated path from the module root. The helper's own
+// declaration is not a use. Names are matched textually (the files are
+// parsed without object resolution), so a range variable shadowed inside
+// the loop is not caught; the bridge has one loop and R1-15 deletes it.
+func bridgeMisuses(rel string, f *ast.File) []ast.Node {
+	if path.Dir(rel) != path.Dir(bridgeHelper.file) {
+		return nil
+	}
+	var out []ast.Node
+	for _, decl := range f.Decls {
+		fd, _ := decl.(*ast.FuncDecl)
+		sanctioned := rel == bridgeHelper.file && fd != nil && fd.Name.Name == bridgeHelper.method && recvTypeName(fd) == bridgeHelper.recv
+		var stack []ast.Node
+		ast.Inspect(decl, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			stack = append(stack, n)
+			id, ok := n.(*ast.Ident)
+			if !ok || id.Name != bridgeHelper.fn || (fd != nil && fd.Recv == nil && id == fd.Name) {
+				return true
+			}
+			if !sanctioned || !gatheredNameCall(stack) {
+				out = append(out, id)
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// gatheredNameCall reports whether the identifier on top of stack is called
+// as fn(v.GetName(), ...) with v the value variable of a range in stack.
+func gatheredNameCall(stack []ast.Node) bool {
+	if len(stack) < 2 {
+		return false
+	}
+	id := stack[len(stack)-1]
+	call, ok := stack[len(stack)-2].(*ast.CallExpr)
+	if !ok || call.Fun != id || len(call.Args) == 0 {
+		return false
+	}
+	arg, ok := call.Args[0].(*ast.CallExpr)
+	if !ok || len(arg.Args) != 0 {
+		return false
+	}
+	sel, ok := arg.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "GetName" {
+		return false
+	}
+	v, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	for _, n := range stack {
+		if r, ok := n.(*ast.RangeStmt); ok {
+			if val, ok := r.Value.(*ast.Ident); ok && val.Name == v.Name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// recvTypeName is the receiver's type name of a method ("" for a function).
+func recvTypeName(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) != 1 {
+		return ""
+	}
+	t := fd.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
 
 type declared struct {
 	name, typ, pos string
@@ -122,6 +212,31 @@ func TestDeclaredFamiliesInGolden(t *testing.T) {
 }
 
 // scanDeclarations parses the scanned trees.
+// TestDeclaredFamilies_BridgeMisuses: scanFile reports each use of the
+// bridge helper that bridgeMisuses refuses (a literal or constant name, a call
+// outside (*registryBridge).Collect or from another file of the package, the
+// function as a value) and nothing for the one gathered-name call. The
+// fixtures are shared with the ratchet (ratchet_test.go bridgeFixtures).
+func TestDeclaredFamilies_BridgeMisuses(t *testing.T) {
+	fset := token.NewFileSet()
+	for _, fx := range bridgeFixtures {
+		f, err := parser.ParseFile(fset, filepath.Join(repoRoot, fx.rel), fx.body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", fx.rel, err)
+		}
+		fams, _, probs := scanFile(fset, f)
+		got := 0
+		for _, p := range probs {
+			if strings.Contains(p, bridgeHelper.fn+" may only be called") {
+				got++
+			}
+		}
+		if got != fx.want || len(fams) != 0 {
+			t.Errorf("%s: %d bridge problems and families %v, want %d and none; problems: %q", fx.rel, got, fams, fx.want, probs)
+		}
+	}
+}
+
 func scanDeclarations(t *testing.T) (families, instruments []declared, problems []string) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -187,6 +302,10 @@ func scanFile(fset *token.FileSet, f *ast.File) (families, instruments []declare
 		fileRel = filepath.ToSlash(rel)
 	}
 	bridgeFile := fileRel == bridgeHelper.file
+	for _, n := range bridgeMisuses(fileRel, f) {
+		problems = append(problems, fmt.Sprintf("%s: %s may only be called from (*%s).%s with a gathered family's GetName(); any other use could declare a family the core Provider does not serve",
+			pos(n), bridgeHelper.fn, bridgeHelper.recv, bridgeHelper.method))
+	}
 	for _, decl := range f.Decls {
 		fn, _ := decl.(*ast.FuncDecl)
 		_, inHelper := descHelpers[funcName(fn)]
@@ -200,11 +319,6 @@ func scanFile(fset *token.FileSet, f *ast.File) (families, instruments []declare
 			case *ast.Ident:
 				if h, ok := descHelpers[fun.Name]; ok {
 					families, problems = appendHelper(families, problems, call, h.prefix, h.nameArg, h.typeArg, pos(call))
-				}
-				if bridgeFile && fun.Name == bridgeHelper.fn && len(call.Args) > 0 {
-					if _, lit := stringLit(call.Args[0]); lit {
-						problems = append(problems, fmt.Sprintf("%s: %s with a literal name declares a family; the bridge only re-exposes families the core Provider serves", pos(call), bridgeHelper.fn))
-					}
 				}
 			case *ast.SelectorExpr:
 				sel := fun.Sel.Name

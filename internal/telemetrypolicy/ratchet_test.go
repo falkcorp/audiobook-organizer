@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/ratchet_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8e6f10-3c4d-4a7e-9f15-a0b1c2d3e4f5
 // last-edited: 2026-11-07
 
@@ -68,8 +68,8 @@ func countFileFamilies(rel string, f *ast.File) int {
 	n := 0
 	ast.Inspect(f, func(node ast.Node) bool {
 		// The sanctioned NewDescs live inside the helpers; their callers are
-		// counted instead (a bridgeDesc call with a literal name counts, so
-		// it fails the ratchet; with a gathered name it declares nothing).
+		// counted instead (bridgeDesc: every use bridgeMisuses reports counts,
+		// so it fails the ratchet; the gathered-name call declares nothing).
 		if fd, ok := node.(*ast.FuncDecl); ok && fd.Recv == nil &&
 			(fd.Name.Name == pebbleDescHelper || (bridgeFile && fd.Name.Name == bridgeHelper.fn)) {
 			return false
@@ -80,7 +80,7 @@ func countFileFamilies(rel string, f *ast.File) int {
 		}
 		switch fn := call.Fun.(type) {
 		case *ast.Ident:
-			if (fn.Name == pebbleDescHelper || (bridgeFile && fn.Name == bridgeHelper.fn)) && len(call.Args) > 0 {
+			if fn.Name == pebbleDescHelper && len(call.Args) > 0 {
 				if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 					n++
 				}
@@ -103,7 +103,7 @@ func countFileFamilies(rel string, f *ast.File) int {
 		}
 		return true
 	})
-	return n
+	return n + len(bridgeMisuses(rel, f))
 }
 
 // countClientGolangFamilies walks internal, pkg and cmd under root and returns
@@ -253,14 +253,7 @@ var d = newPebbleDesc("x")
 var e = prometheus.NewDesc("y", "", nil, nil)
 func f(n string) any { return newPebbleDesc(n) } // non-literal: not counted
 `)
-	// The bridge helper: its body is skipped in its one file, a call with a
-	// gathered (non-literal) name declares nothing, a literal call counts.
-	writeFixture(t, root, "internal/telemetry/telemetry.go", `package telemetry
-import "github.com/prometheus/client_golang/prometheus"
-func bridgeDesc(name, help string) *prometheus.Desc { return prometheus.NewDesc(name, help, nil, nil) }
-func bridged(n string) any { return bridgeDesc(n, "") }
-var lit = bridgeDesc("batman_total", "")
-`)
+	writeBridgeFixtures(t, root)
 	// The same function name anywhere else is not exempt.
 	writeFixture(t, root, "internal/x/x.go", `package x
 import "github.com/prometheus/client_golang/prometheus"
@@ -284,6 +277,43 @@ func init() { prometheus.NewCounter() }
 	return root
 }
 
+// bridgeFixtures are the registry bridge cases, shared by the ratchet and
+// TestDeclaredFamilies_BridgeMisuses: the helper's body is skipped, the one
+// gathered-name call in (*registryBridge).Collect declares nothing, and each
+// other use is a misuse (want per file).
+var bridgeFixtures = []struct {
+	rel, body string
+	want      int
+}{
+	{"internal/telemetry/telemetry.go", `package telemetry
+import "github.com/prometheus/client_golang/prometheus"
+type registryBridge struct{ g prometheus.Gatherer }
+func (b *registryBridge) Collect(ch chan<- prometheus.Metric) {
+	mfs, _ := b.g.Gather()
+	for _, mf := range mfs {
+		_ = bridgeDesc(mf.GetName(), mf.GetHelp()) // the sanctioned call
+		_ = bridgeDesc("batman_total", "")         // literal name
+	}
+}
+const robin = "robin_total"
+func bridgeDesc(name, help string) *prometheus.Desc { return prometheus.NewDesc(name, help, nil, nil) }
+func bridged(n string) any { return bridgeDesc(n, "") } // outside Collect
+var named = bridgeDesc(robin, "")                      // named constant
+var alias = bridgeDesc                                 // taken as a value
+`, 4},
+	// Another file of the package, no client_golang import of its own.
+	{"internal/telemetry/other.go", `package telemetry
+func joker() any { return bridgeDesc("joker_total", "") }
+`, 1},
+}
+
+func writeBridgeFixtures(t *testing.T, root string) {
+	t.Helper()
+	for _, fx := range bridgeFixtures {
+		writeFixture(t, root, fx.rel, fx.body)
+	}
+}
+
 func TestRatchetCounter_FixtureTree(t *testing.T) {
 	root := fixtureTree(t)
 	got, per, err := countClientGolangFamilies(root)
@@ -291,11 +321,12 @@ func TestRatchetCounter_FixtureTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a.go 1, b.go 2, c.go: literal helper call 1 + stray NewDesc 1,
-	// telemetry.go: the literal bridgeDesc call 1, x.go: the unexempt NewDesc 1.
-	if got != 7 {
-		t.Fatalf("fixture count = %d, want 7 (per file: %v)", got, per)
+	// telemetry.go: the four bridgeDesc misuses, other.go: 1, x.go: the
+	// unexempt NewDesc 1. The gathered-name call in Collect counts nothing.
+	if got != 11 {
+		t.Fatalf("fixture count = %d, want 11 (per file: %v)", got, per)
 	}
-	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2, "internal/telemetry/telemetry.go": 1, "internal/x/x.go": 1}
+	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2, "internal/telemetry/telemetry.go": 4, "internal/telemetry/other.go": 1, "internal/x/x.go": 1}
 	for f, n := range want {
 		if per[f] != n {
 			t.Errorf("%s: got %d, want %d", f, per[f], n)
