@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.8.0
+# version: 1.8.1
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-10-09
+# last-edited: 2026-11-07
 
 # The number of `errcheck` findings tolerated in the tree. This is a ONE-WAY
 # RATCHET, exactly like .interface-width-baseline: CI fails if the count goes
@@ -81,4 +81,9 @@
 # were deleted along with the unchecked errors they carried. Nothing here
 # fixes a finding in code that still exists.
 # 2026-10-09 (07-C1): 779 -> 770, measured with this script
-727
+# 2026-11-07 (R1-10): 770 -> 726, measured with this script both at R1-10's
+# base (f1f9936ca: actual=726) and on its branch. The drop was earned by
+# PRs merged since 07-C1 that did not lower this file. R1-10 itself is net
+# zero: the code it moved into core carried no finding, and the one discarded
+# Provider.Shutdown error it first added is now returned.
+726
