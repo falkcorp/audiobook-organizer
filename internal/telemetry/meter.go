@@ -1,7 +1,7 @@
 // file: internal/telemetry/meter.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e198161-ea71-41ea-aec3-4900357db30b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
@@ -23,13 +23,15 @@ const ScopePrefix = "audiobook-organizer/"
 // consumers.
 //
 // Instrument naming (enforced by TestInstrumentNames in
-// internal/telemetry/contract over the series golden):
+// internal/telemetrypolicy over the series golden):
 //   - dotted, lowercase, prefixed: "audiobook_organizer.<area>.<what>"
 //     (the exporter turns dots into underscores: audiobook_organizer_<area>_<what>);
 //   - counters are nouns ("...removed"), never "..._total": the exporter appends it;
 //   - histograms name the quantity ("...duration") and set WithUnit("s"), which
 //     yields "<name>_seconds"; sizes use WithUnit("By") -> "_bytes". Every
-//     histogram needs an entry in the views table (views.go);
+//     histogram needs an entry in the bucket table (views.go) and passes it
+//     at creation as advice:
+//     metric.WithExplicitBucketBoundaries(HistogramBuckets()["<name>"]...);
 //   - gauges whose legacy Prometheus name ends in "_total" (books_total,
 //     search_index_docs_total, import_paths_total) keep that literal name:
 //     the exporter adds no suffix to a gauge; they use a bracket unit

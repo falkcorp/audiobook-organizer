@@ -71,7 +71,7 @@ func createInstruments(m metric.Meter) {
 
 // RegisterMetrics creates the five instruments now instead of on the first
 // Call. Production never calls it (creation stays lazy, as the comment above
-// says); the /metrics series contract test in internal/telemetry/contract
+// says); the /metrics series contract test in internal/telemetrypolicy
 // does, so it can pin the families without depending on Call being the first
 // thing to run.
 func RegisterMetrics() { ensureMetrics() }

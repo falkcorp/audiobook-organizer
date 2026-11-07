@@ -1,7 +1,7 @@
 // file: internal/telemetry/attr.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
@@ -16,7 +16,7 @@ import (
 // key is a reviewed addition to this file. Two lists:
 //
 //   - AttributeKeys: what a NEW instrument created through Meter may use.
-//     TestInstrumentNames in internal/telemetry/contract rejects any other key.
+//     TestInstrumentNames in internal/telemetrypolicy rejects any other key.
 //   - ScrapeOnlyAttributeKeys: keys that exist on /metrics today but no new
 //     instrument may adopt (the legacy op_id label, and the semconv keys
 //     otelgin sets). Only the golden and scrape checks accept them.

@@ -60,7 +60,7 @@
 //
 // Declared but not wired here: see Unwired. They have no recorder yet because
 // an OTel instrument created without a golden row and a seed fails the series
-// contract test (internal/telemetry/contract); 05-PR5 adds each with its row
+// contract test (internal/telemetrypolicy); 05-PR5 adds each with its row
 // (05-PR2 added ops.zombies that way).
 package opsmetrics
 

@@ -362,7 +362,7 @@ func TestInflightFoldsKeys(t *testing.T) {
 
 // TestDeclaredButUnwiredAreListed pins the three spec 11 §3.7 instruments that
 // are declared but not created here. Creating one needs an ourInstruments
-// declaration, a golden row and a seed in internal/telemetry/contract, which
+// declaration, a golden row and a seed in internal/telemetrypolicy, which
 // is how the task that wires it (05-PR5) moves it out of Unwired. 05-PR2 moved
 // ops.zombies out that way.
 func TestDeclaredButUnwiredAreListed(t *testing.T) {
