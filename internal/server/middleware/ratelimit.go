@@ -1,5 +1,5 @@
 // file: internal/server/middleware/ratelimit.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 1331705a-85cb-4158-92f5-5ce203d8a0e7
 // last-edited: 2026-11-07
 
@@ -115,7 +115,8 @@ func NewIPRateLimiter(requestsPerMinute int, burst int) *IPRateLimiter {
 }
 
 // UseClock makes fn the limiter's clock; a nil fn is ignored. It is time.Now
-// in production. It exists so a test can hold the clock still (or step it)
+// in production (newInviteRateLimits binds every invite layer to the clock it
+// is given). It exists so a test can hold the clock still (or step it)
 // and so decide exactly how many tokens a token bucket has refilled: the
 // bucket refills continuously with real time, so a test that compares a
 // request count against the burst is otherwise at the mercy of how long the

@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package server
 
@@ -330,8 +330,11 @@ var inviteLimitLog = logger.New("server.invite-rate-limit")
 // short enough for a legitimate guest to simply try again.
 const inviteRetryAfterSeconds = "60"
 
-// newInviteRateLimits builds the limiters and starts their idle sweepers on ctx.
-func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
+// newInviteRateLimits builds the limiters on the clock now (time.Now in
+// production) and starts their idle sweepers on ctx. All seven layers share the
+// one clock, so a refill, an idle sweep and a Retry-After are judged against the
+// same instant whichever layer is asked.
+func newInviteRateLimits(ctx context.Context, now func() time.Time) *inviteRateLimits {
 	l := &inviteRateLimits{
 		perToken:          servermiddleware.NewIPRateLimiter(inviteTokenRatePerMinute, inviteTokenRateBurst),
 		perClient:         servermiddleware.NewIPRateLimiter(inviteAuthRatePerMinute, inviteAuthRateBurst),
@@ -346,13 +349,15 @@ func newInviteRateLimits(ctx context.Context) *inviteRateLimits {
 	if len(l.connectors()) == 0 {
 		inviteLimitLog.Info("TUNNEL_CONNECTOR_ADDRS is not set: no tunnel visitor address can be established, so each tunnel connector gets one invite per-client bucket shared by every visitor it relays, and all tunnel traffic shares the unlisted LAN total (a quarter of the global limit); the per-token and global limits still apply")
 	}
-	l.perToken.Start(ctx)
-	l.perClient.Start(ctx)
-	l.directLANPrefix.Start(ctx)
-	l.directLANTotal.Start(ctx)
-	l.unlistedLANPrefix.Start(ctx)
-	l.unlistedLANTotal.Start(ctx)
-	l.global.Start(ctx)
+	for _, lim := range []*servermiddleware.IPRateLimiter{
+		l.perToken, l.perClient,
+		l.directLANPrefix, l.directLANTotal,
+		l.unlistedLANPrefix, l.unlistedLANTotal,
+		l.global,
+	} {
+		lim.UseClock(now)
+		lim.Start(ctx)
+	}
 	return l
 }
 
