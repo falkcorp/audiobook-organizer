@@ -1,5 +1,5 @@
 // file: core/metrics/provider.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a82f67cc-87d5-45c3-a73b-811125fbe1cd
 // last-edited: 2026-11-07
 
@@ -128,6 +128,12 @@ func newProvider(ctx context.Context, o Options, exp exporters) (*Provider, erro
 			return nil, fmt.Errorf("%w: module ID %q must match [a-z][a-z0-9_]*", ErrInstrumentName, m)
 		}
 	}
+	// Spans would export credentials without the redacting exporter, so
+	// tracing without a redactor fails boot (05-metrics §8). Without tracing
+	// there is no exporter and nothing to redact.
+	if o.Tracing != nil && o.Redactor == nil {
+		return nil, errNoRedactor
+	}
 	serviceName := o.ServiceName
 	if serviceName == "" {
 		serviceName = o.AppID
@@ -204,7 +210,11 @@ func newProvider(ctx context.Context, o Options, exp exporters) (*Provider, erro
 
 	p.tp = tracenoop.NewTracerProvider()
 	if o.Tracing != nil {
-		tp, endpoint, err := newTracerProvider(ctx, o.Tracing, res, exp.span)
+		sr, err := newSpanRedactor(p, o.Redactor)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("metrics: build the span redactor: %w", err), p.sdkMP.Shutdown(ctx))
+		}
+		tp, endpoint, err := newTracerProvider(ctx, o.Tracing, res, exp.span, sr)
 		if err != nil {
 			p.degrade(DegradedTracingDisabled, "tracing is off: the trace exporter could not be started", err)
 		} else {

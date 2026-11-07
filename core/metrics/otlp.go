@@ -1,5 +1,5 @@
 // file: core/metrics/otlp.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92813fce-3a0a-4079-b970-9bea6e4e040a
 // last-edited: 2026-11-07
 
@@ -176,8 +176,13 @@ func newOTLPReader(ctx context.Context, o *OTLPMetrics, newExporter func(context
 }
 
 // newTracerProvider builds the batching TracerProvider for o. It returns the
-// canonical endpoint for logging.
-func newTracerProvider(ctx context.Context, o *OTLPTracing, res resourceOption, newExporter func(context.Context, ...otlptracegrpc.Option) (sdktrace.SpanExporter, error)) (*sdktrace.TracerProvider, string, error) {
+// canonical endpoint for logging. The span exporter goes into the batcher
+// only through sr.wrap (05-metrics §3 span redaction), and a nil sr is
+// refused, so no span leaves a Provider unredacted.
+func newTracerProvider(ctx context.Context, o *OTLPTracing, res resourceOption, newExporter func(context.Context, ...otlptracegrpc.Option) (sdktrace.SpanExporter, error), sr *spanRedactor) (*sdktrace.TracerProvider, string, error) {
+	if sr == nil {
+		return nil, "", errNoRedactor
+	}
 	target, err := parseOTLPEndpoint(keyTraceEndpoint, o.Endpoint)
 	if err != nil {
 		return nil, "", err
@@ -186,7 +191,7 @@ func newTracerProvider(ctx context.Context, o *OTLPTracing, res resourceOption, 
 	if err != nil {
 		return nil, target.Display(), err
 	}
-	opts := []sdktrace.TracerProviderOption{sdktrace.WithBatcher(exp), sdktrace.WithResource(res)}
+	opts := []sdktrace.TracerProviderOption{sdktrace.WithBatcher(sr.wrap(exp)), sdktrace.WithResource(res)}
 	if r := o.SampleRatio; r > 0 && r < 1 {
 		opts = append(opts, sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(r))))
 	}

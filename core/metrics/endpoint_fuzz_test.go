@@ -1,5 +1,5 @@
 // file: core/metrics/endpoint_fuzz_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 97a852e3-8ef5-4f25-95c0-678244cdc79a
 // last-edited: 2026-11-07
 
@@ -21,6 +21,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/falkcorp/mediacore/log"
 )
 
 // sentinel can never appear in an accepted endpoint: '_' is not valid in a
@@ -162,7 +164,8 @@ func checkNoLeak(t *testing.T, in string) {
 	var logs lockedBuffer
 	p, err := New(context.Background(), Options{AppID: "t",
 		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		OTLP:   &OTLPMetrics{Endpoint: in, Insecure: true}, Tracing: &OTLPTracing{Endpoint: in}})
+		OTLP:   &OTLPMetrics{Endpoint: in, Insecure: true}, Tracing: &OTLPTracing{Endpoint: in},
+		Redactor: log.NewRedactor(nil)})
 	if err != nil {
 		t.Fatalf("%q: New = %v; a bad endpoint must degrade, not fail", in, err)
 	}

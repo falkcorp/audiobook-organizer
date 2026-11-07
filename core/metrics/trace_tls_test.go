@@ -1,5 +1,5 @@
 // file: core/metrics/trace_tls_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a4d2f7c8-6e13-4b95-9c0a-3e58d1b7f642
 // last-edited: 2026-11-07
 
@@ -84,7 +84,7 @@ func exportOneSpan(t *testing.T, endpoint string) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tp, _, err := newTracerProvider(ctx, &OTLPTracing{Endpoint: endpoint}, newResource("test", "v", "id", ""), grpcExporters().span)
+	tp, _, err := newTracerProvider(ctx, &OTLPTracing{Endpoint: endpoint}, newResource("test", "v", "id", ""), grpcExporters().span, testSpanRedactor(t))
 	if err != nil {
 		t.Fatalf("newTracerProvider(%q): %v", endpoint, err)
 	}

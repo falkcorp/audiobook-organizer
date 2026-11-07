@@ -1,5 +1,5 @@
 // file: core/metrics/options.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 671171f6-2188-4861-a716-61b088c5b563
 // last-edited: 2026-11-07
 
@@ -8,16 +8,13 @@ package metrics
 import (
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/mediacore/log"
 )
 
 // Options configures one App's Provider (05-metrics §3). The kernel fills it
 // from app.Options and the core.metrics / core.tracing config sections; until
 // the kernel exists an app's own telemetry init fills it.
-//
-// R1-32 adds the Redactor field (Logging.Redactor(), applied to span names and
-// URL attributes before export), the redacting span exporter wrapper and the
-// boot refusal of tracing without a redactor. It is absent here because the
-// log.Redactor type it names does not exist yet (04 §8 minimum surface).
 type Options struct {
 	// AppID is app.Options.AppID, e.g. "abo"; the ServiceName default.
 	AppID string
@@ -50,6 +47,12 @@ type Options struct {
 	// Tracing, when non-nil, builds an OTLP/gRPC span exporter and batching
 	// TracerProvider; nil gives a no-op TracerProvider.
 	Tracing *OTLPTracing
+	// Redactor is from Logging.Redactor(); applied to span names and URL
+	// attributes before export (05-metrics §3, SEC-22): every span exporter
+	// the Provider builds is wrapped in a redacting exporter that runs them
+	// through it. Required when Tracing is set (New fails without one: spans
+	// would export credentials); unused when Tracing is nil.
+	Redactor *log.Redactor
 	// CardinalityLimit is the per-instrument series limit; 0 keeps the SDK
 	// default (2000, core.metrics.cardinality_limit).
 	CardinalityLimit int

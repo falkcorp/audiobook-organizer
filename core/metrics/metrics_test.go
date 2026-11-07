@@ -1,5 +1,5 @@
 // file: core/metrics/metrics_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 21f5d697-6d25-4e0b-be83-f34e89311ae5
 // last-edited: 2026-11-07
 
@@ -30,6 +30,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/falkcorp/mediacore/log"
 )
 
 // newTest builds a Provider with the Prometheus exporter on and registers its
@@ -603,6 +605,7 @@ func TestShutdown_TracerBudget(t *testing.T) {
 					AppID:      "a",
 					Prometheus: tc.prometheus,
 					Tracing:    &OTLPTracing{Endpoint: "collector.example.invalid:4317"},
+					Redactor:   log.NewRedactor(nil),
 				}, e)
 				if err != nil {
 					t.Fatal(err)
@@ -628,7 +631,7 @@ func TestOTLPBadEndpointDegrades(t *testing.T) {
 		var logs bytes.Buffer
 		p := newTest(t, Options{AppID: "a", Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 			OTLP:    &OTLPMetrics{Endpoint: ep},
-			Tracing: &OTLPTracing{Endpoint: ep}})
+			Tracing: &OTLPTracing{Endpoint: ep}, Redactor: log.NewRedactor(nil)})
 		if d := p.Degraded(); !slices.Equal(d, []string{DegradedOTLPDisabled, DegradedTracingDisabled}) {
 			t.Errorf("%q: Degraded = %v, want both OTLP tokens", ep, d)
 		}
