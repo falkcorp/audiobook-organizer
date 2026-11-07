@@ -1,5 +1,5 @@
 // file: internal/server/opcontext_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 14942c06-75c3-4b74-a4c2-ad3a8105aa5e
 // last-edited: 2026-11-07
 
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	logging "github.com/falkcorp/mediacore/log"
 )
 
@@ -71,4 +72,35 @@ func TestOpContextAttrsResolvedAtLogTime(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// TestOpContextThroughInfoCtxAndDefaultHandler is the production path until
+// R1-15: logger.InfoCtx over a stdlib TextHandler as slog.Default(), with the
+// operation in the context under the empty key. The keys are flat, the op
+// attrs come first, and a newline in an entity is escaped. Not parallel: it
+// swaps slog.Default() and restores it.
+func TestOpContextThroughInfoCtxAndDefaultHandler(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	op := &opContext{ID: "op-gcpd-7", Type: "dedup.book-merge", Status: "pending"}
+	ctx := logging.WithAttrs(context.Background(), slog.Any("", op))
+	op.AddEntity("books", "book-ra's\nINFO forged")
+	op.SetStatus("failed")
+	logger.InfoCtx(ctx, "merge failed", "err", context.Canceled)
+
+	line := buf.String()
+	if strings.Count(line, "\n") != 1 {
+		t.Fatalf("want one line, got %q", line)
+	}
+	for _, want := range []string{" opID=op-gcpd-7 opType=dedup.book-merge opStatus=failed entities=", `INFO forged`, " err="} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line lacks %q: %q", want, line)
+		}
+	}
+	if strings.Index(line, "opID=") > strings.Index(line, " err=") {
+		t.Errorf("op attrs not written before the record's: %q", line)
+	}
 }
