@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: core/scripts/ci/check-errcheck-ratchet.sh
-# version: 1.0.0
+# version: 1.0.1
 # guid: c13f1080-a3a4-46a7-95d6-d68fc528942a
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 #
 # Ratchet on the number of `errcheck` findings in the core module: core's own
 # copy of scripts/check-errcheck-ratchet.sh with its own baseline,
@@ -104,6 +104,11 @@ linters:
         - (*encoding/json.Encoder).Encode
         - os.Remove
         - os.RemoveAll
+        # A type test, not a dropped error: in `_, ok := errors.AsType[T](err)`
+        # the blank is the matched value and ok carries the answer. `go fix`
+        # (fix-check) rewrites errors.As to this form, so without the
+        # exemption the two gates contradict each other.
+        - errors.AsType
   exclusions:
     generated: lax
     paths:
