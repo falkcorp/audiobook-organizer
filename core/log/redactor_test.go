@@ -562,6 +562,7 @@ func TestRedact_TextScanForms(t *testing.T) {
 		"[" + core + "]",
 		"{" + core + "}",
 		"next=" + core,
+		"next=" + core + "?r=https://example.test/",
 		"url:" + core,
 		`redirect to "` + core + `".`,
 		`location="/invite/` + fakeInvite + `"`,
@@ -676,5 +677,110 @@ func TestRedact_AnyContainers(t *testing.T) {
 	m, ok := got.Value.Any().(map[string]any)
 	if !ok || m["user"] != "bruce" || m["n"] != 7 || m["token"] != "[REDACTED]" {
 		t.Errorf("rebuilt map = %#v", got.Value.Any())
+	}
+}
+
+type pinnedCredential struct {
+	// The Go name is denied; the json name alone would not be.
+	Password string `json:"p"`
+	Title    string `json:"title"`
+}
+
+type textCredential struct{}
+
+func (textCredential) MarshalText() ([]byte, error) { return []byte("token=" + fakeToken), nil }
+
+type hiddenURL struct {
+	Title string
+	link  *url.URL
+}
+
+// Second review pass: opaque leaves inside the walk, the Go name of a struct
+// field, and percent-encoded or depth-limited nested URLs.
+func TestRedact_WalkOpaqueLeavesAndNestedURLs(t *testing.T) {
+	r := NewRedactor(nil)
+	u, err := url.Parse("https://example.test/x?apikey=" + fakeAPIKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]any{
+		"error in a map":        map[string]any{"cause": errors.New("GET /invite/" + fakeInvite + " failed")},
+		"Stringer in a map":     map[string]any{"req": stringerURL{}},
+		"TextMarshaler in a []": []any{textCredential{}},
+		"*url.URL in a struct":  struct{ Link *url.URL }{u},
+		"url.URL in a map":      map[string]url.URL{"link": *u},
+		"Go name denied":        pinnedCredential{Password: fakePass, Title: "Hush"},
+		"int-keyed map":         map[int]any{1: errors.New("token=" + fakeToken)},
+		"[]byte in a map":       map[string]any{"body": []byte("password=" + fakePass)},
+		"unexported field":      map[string]any{"h": hiddenURL{Title: "Hush", link: u}},
+	} {
+		text, js := logBoth(t, r, slog.Any("v", v))
+		got := r.Attr(slog.Any("v", v))
+		for where, out := range map[string]string{"attr": got.Value.String(), "text": text, "json": js} {
+			assertAbsent(t, name+" "+where, out, fakeToken, fakePass, fakeAPIKey, fakeInvite)
+		}
+	}
+	if got := r.Attr(slog.Any("v", pinnedCredential{Password: fakePass, Title: "Hush"})); got.Value.Any().(map[string]any)["p"] != "[REDACTED]" {
+		t.Errorf("Go-name-denied field = %v", got)
+	}
+
+	// A percent-encoded invite path in next= is decoded and the whole value
+	// replaced.
+	enc := "/login?next=%2Fapi%2Fcore%2Fv1%2Fauth%2Finvites%2F" + fakeInvite + "&page=2"
+	if got := r.URL(enc); got != "/login?next=[REDACTED]&page=2" {
+		t.Errorf("URL(encoded next) = %q", got)
+	}
+	// An invalid escape does not hide one.
+	if got := r.URL("/login?next=%2Finvite%2F" + fakeInvite + "%zz"); strings.Contains(got, fakeInvite) {
+		t.Errorf("URL(next with a bad escape) = %q", got)
+	}
+	// At the depth limit a value that still holds a URL or path fails closed.
+	deep := "/a?n=/b?n=/c?n=/d"
+	if got := r.URL(deep); got != "/a?n=/b?n=/c?n=[REDACTED]" {
+		t.Errorf("URL(%q) = %q, want the deepest value redacted", deep, got)
+	}
+	if got := r.URL("/a?n=/b?n=/c?n=https://example.test/x"); !strings.HasSuffix(got, "n=[REDACTED]") {
+		t.Errorf("URL at the depth limit = %q", got)
+	}
+	// Below the limit a plain nested path is kept.
+	if got := r.URL("/a?next=/books/7"); got != "/a?next=/books/7" {
+		t.Errorf("URL(harmless next) = %q", got)
+	}
+}
+
+// Third review pass: the scheme words without '=' or ':', a padded value
+// after a spaced separator, and the whole Digest credential.
+func TestRedact_AuthSchemesAndPadding(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, in := range []string{
+		"Basic " + fakeToken,
+		"auth with Digest " + fakeToken,
+		"Negotiate " + fakeToken,
+		"BEARER " + fakeToken,
+		"token: " + fakeToken + "==",
+		"token: " + fakeToken + "=",
+		"password: https://" + fakePass,
+		`Authorization: Digest username="bruce", response="` + fakeToken + `", nonce="` + fakePass + `", cnonce="` + fakeAPIKey + `"`,
+		`header "Bearer ` + fakeToken + `" rejected`,
+	} {
+		got, k := r.StringKinds("detail", in)
+		assertAbsent(t, in, got, fakeToken, fakePass, fakeAPIKey)
+		if k&RedactKey == 0 {
+			t.Errorf("StringKinds(%q) kinds = %v, want key", in, k)
+		}
+	}
+	// The closing quote ends the credential; text after it stays.
+	if got := r.String("detail", `header "Bearer `+fakeToken+`" rejected`); got != `header "Bearer [REDACTED]" rejected` {
+		t.Errorf("quoted bearer = %q", got)
+	}
+	// Digest's credential parameters are denied keys too.
+	for _, k := range []string{"response", "nonce", "cnonce"} {
+		if got := r.String(k, fakeToken); got != "[REDACTED]" {
+			t.Errorf("String(%q) = %q, want [REDACTED]", k, got)
+		}
+	}
+	// An empty field in %+v output is still read as the next pair.
+	if got := r.String("detail", "{Password: Title:Hush}"); got != "{Password: Title:Hush}" {
+		t.Errorf("empty %%+v field = %q", got)
 	}
 }
