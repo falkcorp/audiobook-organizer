@@ -1,7 +1,7 @@
 # file: .woodpecker/test-native-taglib.yaml
-# version: 1.3.1
+# version: 1.3.2
 # guid: 8e2d6a41-5c93-4b7f-a0d8-1f4b9c3e7a52
-# last-edited: 2026-11-05
+# last-edited: 2026-11-06
 #
 # The tag writers under `-tags native_taglib`: the cgo build the production
 # binary is made with (Dockerfile, Dockerfile.build-cgo). Every other workflow
@@ -32,6 +32,9 @@
 # Clone, environment, trigger and cleanup are copied from test-fixtures-1.yaml;
 # see that file for why each setting is there.
 
+# Classification (09 §9.4 R1): root only. No package of the nested core module
+# carries the native_taglib tag, so there is no core shard here; core's short
+# tests run in test-rest.
 labels:
   taglib: "true"
 
