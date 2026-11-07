@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-11-04
+// last-edited: 2026-11-07
 
 package database
 
@@ -49,7 +49,7 @@ func (p *PebbleStore) GetAllSeries_Pebble() ([]Series, error) {
 		series = append(series, s)
 	}
 
-	sortByLowerName(series, func(s Series) string { return s.Name })
+	sortByLowerName(series, func(s Series) string { return s.Name }, func(s Series) int { return s.ID })
 	return series, nil
 }
 

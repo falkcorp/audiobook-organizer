@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.37.1
+// version: 1.37.2
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package database
 
@@ -39,7 +39,7 @@ func (m *MemStore) GetAllSeries() ([]Series, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*Series)))
 	}
-	sortByLowerName(out, func(v Series) string { return v.Name })
+	sortByLowerName(out, func(v Series) string { return v.Name }, func(v Series) int { return v.ID })
 	return out, nil
 }
 
@@ -56,7 +56,7 @@ func (m *MemStore) GetAllAuthors() ([]Author, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*Author)))
 	}
-	sortByLowerName(out, func(v Author) string { return v.Name })
+	sortByLowerName(out, func(v Author) string { return v.Name }, func(v Author) int { return v.ID })
 	return out, nil
 }
 
@@ -73,7 +73,7 @@ func (m *MemStore) GetAllImportPaths() ([]ImportPath, error) {
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		out = append(out, *(obj.(*ImportPath)))
 	}
-	sortByLowerName(out, func(v ImportPath) string { return v.Name })
+	sortByLowerName(out, func(v ImportPath) string { return v.Name }, func(v ImportPath) int { return v.ID })
 	return out, nil
 }
 

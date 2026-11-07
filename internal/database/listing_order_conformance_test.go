@@ -1,7 +1,7 @@
 // file: internal/database/listing_order_conformance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f4a2c68-3b71-4e05-8a9d-6c0e5b17d234
-// last-edited: 2026-08-14
+// last-edited: 2026-11-07
 
 package database
 
@@ -119,6 +119,51 @@ func TestGetAllSeries_OrderMatchesOnBothPaths(t *testing.T) {
 		}
 		require.Equal(t, want, actual,
 			"series must come back name-sorted (useMemDB=%v)", useMemDB)
+	}
+}
+
+// Names that differ only in case compare equal under the lower-cased key, so
+// the order between them is the ID tie-break's alone. Before that tie-break
+// existed sort.Slice (unstable at 12+ rows) left each pair in whatever order
+// its input had, and memdb (ID order) and Pebble ("series:N" key order) fed it
+// different inputs: the two paths disagreed on every pair. The series-prune
+// fixer fingerprints duplicate groups in listing order, so that disagreement
+// was a flaky "changed since preview" refusal.
+func TestGetAllSeries_CaseOnlyDuplicatesTieBreakByID(t *testing.T) {
+	store, p := newOrderConformanceStore(t)
+
+	// 7 case pairs = 14 rows: past both sort.Slice's insertion-sort cutoff
+	// and the series:10-before-series:2 key-order crossover.
+	// CreateSeries folds a case-only variant into the existing row, so each
+	// variant is created under a placeholder name and then renamed.
+	var names []string
+	for _, n := range []string{"Gotham Knights", "Hush", "Year One", "The Long Halloween", "Arkham Asylum", "Court of Owls", "Zero Year"} {
+		names = append(names, n, strings.ToLower(n))
+	}
+	for i, n := range names {
+		s, err := store.CreateSeries(fmt.Sprintf("placeholder %d", i), nil)
+		require.NoError(t, err)
+		require.NoError(t, store.UpdateSeriesName(s.ID, n))
+	}
+	all, err := p.GetAllSeries()
+	require.NoError(t, err)
+	require.Len(t, all, len(names), "every case variant must be its own row")
+
+	got := runBothPaths(t, p, func() ([]Series, error) { return p.GetAllSeries() })
+
+	ids := func(in []Series) []int {
+		out := make([]int, 0, len(in))
+		for _, s := range in {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	require.Equal(t, ids(got[true]), ids(got[false]), "memdb and Pebble must return the same sequence")
+	for i := 1; i < len(got[true]); i++ {
+		a, b := got[true][i-1], got[true][i]
+		if strings.EqualFold(a.Name, b.Name) {
+			require.Less(t, a.ID, b.ID, "case-only duplicates %q/%q must be ordered by ID", a.Name, b.Name)
+		}
 	}
 }
 
