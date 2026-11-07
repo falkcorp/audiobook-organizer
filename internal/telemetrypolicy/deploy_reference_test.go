@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/deploy_reference_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3dc4dda0-b7db-4683-8b0c-2541cea06869
 // last-edited: 2026-11-07
 
@@ -14,6 +14,7 @@ package telemetrypolicy
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,7 +31,8 @@ import (
 
 const (
 	dashboardsGlob = repoRoot + "/deploy/grafana/dashboards/*.json"
-	rulesGlob      = repoRoot + "/deploy/prometheus/*.yml"
+	// rulesDir is walked recursively for *.yml and *.yaml.
+	rulesDir = repoRoot + "/deploy/prometheus"
 )
 
 // foreignSeries are referenced series another exporter serves, never this
@@ -49,9 +51,15 @@ var syntheticSeries = map[string]bool{"up": true}
 type reference struct{ name, where string }
 
 func TestDeployReferencedSeriesServed(t *testing.T) {
-	refs, recorded := deployReferences(t)
+	refs, recorded, unchecked := deployReferences(t)
 	if len(refs) == 0 {
 		t.Fatal("no series referenced under deploy/: the extractor is reading nothing")
+	}
+	// No allowlist: deploy/ has no such selector today. If one must stay,
+	// add an explicit allowlist here with a reason per entry and a
+	// stale-entry check, as foreignSeries has.
+	for _, u := range unchecked {
+		t.Errorf("%s: the reference test cannot check it against the served series; name the series instead", u)
 	}
 	served := servedSeries(t)
 	usedForeign := map[string]bool{}
@@ -110,12 +118,24 @@ func servedSeries(t *testing.T) map[string]bool {
 
 // deployReferences reads every PromQL expression under deploy/: each `expr`
 // in the dashboards (any depth) and each `expr` and rule-test input `series`
-// in the Prometheus rule files. It returns the series names they select and
-// the names recording rules define (served when their inputs are).
-func deployReferences(t *testing.T) ([]reference, map[string]bool) {
+// in the Prometheus rule files (deploy/prometheus, recursively, .yml and
+// .yaml). It returns the series names they select, the names recording rules
+// define (served when their inputs are), and each selector the extractor
+// cannot read a name from, with its location.
+func deployReferences(t *testing.T) ([]reference, map[string]bool, []string) {
 	t.Helper()
 	var refs []reference
+	var unchecked []string
 	recorded := map[string]bool{}
+	add := func(expr, where string) {
+		names, bad := seriesNames(expr)
+		for _, n := range names {
+			refs = append(refs, reference{n, where})
+		}
+		for _, b := range bad {
+			unchecked = append(unchecked, fmt.Sprintf("%s: %s in %q", where, b, expr))
+		}
+	}
 	dashboards, err := filepath.Glob(dashboardsGlob)
 	if err != nil || len(dashboards) == 0 {
 		t.Fatalf("no dashboards at %s: %v", dashboardsGlob, err)
@@ -131,17 +151,26 @@ func deployReferences(t *testing.T) ([]reference, map[string]bool) {
 		}
 		walkStrings(doc, func(key, val string) {
 			if key == "expr" {
-				for _, n := range seriesNames(val) {
-					refs = append(refs, reference{n, filepath.Base(path)})
-				}
+				add(val, filepath.Base(path))
 			}
 		})
 	}
-	rules, err := filepath.Glob(rulesGlob)
+	var rules []string
+	err = filepath.WalkDir(rulesDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && (strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")) {
+			rules = append(rules, path)
+		}
+		return nil
+	})
 	if err != nil || len(rules) == 0 {
-		t.Fatalf("no rule files at %s: %v", rulesGlob, err)
+		t.Fatalf("no rule files under %s: %v", rulesDir, err)
 	}
 	for _, path := range rules {
+		where, _ := filepath.Rel(rulesDir, path)
+		where = filepath.ToSlash(where)
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -153,15 +182,13 @@ func deployReferences(t *testing.T) ([]reference, map[string]bool) {
 		walkStrings(doc, func(key, val string) {
 			switch key {
 			case "expr", "series":
-				for _, n := range seriesNames(val) {
-					refs = append(refs, reference{n, filepath.Base(path)})
-				}
+				add(val, where)
 			case "record":
 				recorded[strings.TrimSpace(val)] = true
 			}
 		})
 	}
-	return refs, recorded
+	return refs, recorded, unchecked
 }
 
 // walkStrings calls fn for every string value held under a map key.
@@ -187,6 +214,16 @@ var (
 	promqlStrings = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'|`[^`]*`")
 	// nameMatcher is a __name__ equality matcher inside braces.
 	nameMatcher = regexp.MustCompile(`__name__\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
+	// nameOtherMatcher is a __name__ regex or negative matcher: it selects
+	// series no name in the expression spells out.
+	nameOtherMatcher = regexp.MustCompile(`__name__\s*(=~|!=|!~)`)
+	// variableName is a Grafana variable used as (part of) a metric name:
+	// glued to a name ($x_total is one variable, so only ${x}_total glues
+	// after), followed by a matcher or range selector, or the whole
+	// expression. Matched after quoted strings are blanked, so a variable in
+	// a label value never counts; a variable in a range or subquery
+	// ([$__rate_interval], [1h:$__interval]) is preceded by "[" or ":".
+	variableName = regexp.MustCompile(`[A-Za-z0-9_]\$\{?\w+\}?|\$\{\w+\}[A-Za-z0-9_:]|\$\{?\w+\}?\s*[{\[]|^\s*\$\{?\w+\}?\s*$`)
 	// labelLists are the label-name lists of grouping and matching clauses.
 	labelLists = regexp.MustCompile(`\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)`)
 	// promqlToken splits what is left into variables, numbers and durations
@@ -206,12 +243,20 @@ var promqlKeywords = map[string]bool{
 // identifier that is not a function or aggregation (followed by "("), a
 // keyword, a label name in a grouping clause or a matcher, a number, a
 // duration or a Grafana variable, plus each __name__="x" matcher's value.
-func seriesNames(expr string) []string {
-	var names []string
+// unchecked describes each selector it cannot read a name from (a __name__
+// regex or negative matcher, a Grafana variable as a metric name), so the
+// caller can fail on it instead of passing a series it never saw.
+func seriesNames(expr string) (names, unchecked []string) {
 	for _, m := range nameMatcher.FindAllStringSubmatch(expr, -1) {
 		names = append(names, strings.Trim(m[1], `"'`))
 	}
 	s := promqlStrings.ReplaceAllString(expr, `""`)
+	for _, m := range nameOtherMatcher.FindAllStringSubmatch(s, -1) {
+		unchecked = append(unchecked, fmt.Sprintf("a __name__%s matcher", m[1]))
+	}
+	for _, m := range variableName.FindAllString(s, -1) {
+		unchecked = append(unchecked, fmt.Sprintf("a Grafana variable as a metric name (%s)", strings.TrimSpace(m)))
+	}
 	s = labelLists.ReplaceAllString(s, " ")
 	s = stripBracketed(stripBracketed(s, '{', '}'), '[', ']')
 	toks := promqlToken.FindAllString(s, -1)
@@ -226,7 +271,7 @@ func seriesNames(expr string) []string {
 		names = append(names, tok)
 	}
 	sort.Strings(names)
-	return slices.Compact(names)
+	return slices.Compact(names), unchecked
 }
 
 // stripBracketed removes every open...close span (label matchers, range and
@@ -266,9 +311,29 @@ func TestSeriesNames_Extractor(t *testing.T) {
 		`audiobook_organizer:ops_items_by_op_type:sum`:                                                                    {"audiobook_organizer:ops_items_by_op_type:sum"},
 		`ai_failures_total{provider="local",model="m",task="embed",reason="unreachable"}`:                                 {"ai_failures_total"},
 		`sum(rate(ai_tokens_total{task="batch_parse"}[1h])) / sum(rate(x_total{task="batch_parse",accepted="true"}[1h]))`: {"ai_tokens_total", "x_total"},
+		`histogram_quantile($quantile, sum by (le) (rate(batman_bucket[$__rate_interval])))`:                              {"batman_bucket"},
+		`sum(rate(robin_total[1h:$__interval])) > $threshold`:                                                             {"robin_total"},
+		`alfred_total{job="$job", instance=~"${instance}"}`:                                                               {"alfred_total"},
 	} {
-		if got := seriesNames(expr); !slices.Equal(got, want) {
-			t.Errorf("seriesNames(%q) = %v, want %v", expr, got, want)
+		got, unchecked := seriesNames(expr)
+		if !slices.Equal(got, want) || len(unchecked) != 0 {
+			t.Errorf("seriesNames(%q) = %v (unchecked %q), want %v and nothing unchecked", expr, got, unchecked, want)
+		}
+	}
+	// Selectors the extractor cannot read a name from must be reported, not
+	// skipped: each would otherwise pass a series nobody checked.
+	for _, expr := range []string{
+		`{__name__=~"batman_.*"}`,
+		`sum({__name__!="robin_total", job="x"})`,
+		`count({__name__!~"joker_.*"})`,
+		`$metric{job="x"}`,
+		`rate(${metric}[5m])`,
+		`sum(alfred_${suffix})`,
+		`${prefix}_total`,
+		`$query`,
+	} {
+		if _, unchecked := seriesNames(expr); len(unchecked) == 0 {
+			t.Errorf("seriesNames(%q) reported nothing unchecked; the selector names no series the test can check", expr)
 		}
 	}
 }
