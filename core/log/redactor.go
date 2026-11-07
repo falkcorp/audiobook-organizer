@@ -161,8 +161,8 @@ type Redactor struct {
 	query    map[string]struct{} // lower-case credential query names
 	urlKeys  map[string]struct{} // lower-case URL keys
 	rules    []PathRule
-	// bearerRE finds "Bearer <credential>" in free text. *regexp.Regexp is
-	// safe for concurrent use.
+	// bearerRE finds "<auth scheme> <credential>" (Bearer, Basic, Digest,
+	// Negotiate) in free text. *regexp.Regexp is safe for concurrent use.
 	bearerRE *regexp.Regexp
 }
 
@@ -179,7 +179,7 @@ func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor {
 		urlKeys:  map[string]struct{}{},
 		// A value never starts with '[', so an already-redacted
 		// "[REDACTED]" is not matched again.
-		bearerRE: regexp.MustCompile(`(?i)\bbearer\s+([^\s"'<>;,()\[\]{}]+)`),
+		bearerRE: regexp.MustCompile(`(?i)\b(?:bearer|basic|digest|negotiate)\s+([^\s"'<>;,()\[\]{}]+)`),
 	}
 	keys := append(DefaultRedactKeys(), builtinCredentialKeys()...)
 	for _, k := range append(keys, extraKeys...) {
@@ -786,17 +786,41 @@ func (r *Redactor) scanPairs(s string) (string, RedactionKind) {
 			continue
 		}
 		v := i + 1
+		spaced := false
+		if s[i] == ':' {
+			// "Authorization: <value>", a header written as text.
+			for v < len(s) && (s[v] == ' ' || s[v] == '\t') {
+				v, spaced = v+1, true
+			}
+		}
 		if v < len(s) && (s[v] == '"' || s[v] == '\'') {
 			v++
 		}
 		end := v
-		for end < len(s) && isValueChar(s[end]) {
-			end++
+		if strings.HasSuffix(normKey(s[n:i]), "cookie") {
+			// A Cookie or Set-Cookie value is a list ("a=1; session=<t>")
+			// whose names are not credentials themselves: all of it, to the
+			// end of the line.
+			for end < len(s) && s[end] != '\n' && s[end] != '\r' {
+				end++
+			}
+		} else {
+			for end < len(s) && isValueChar(s[end]) {
+				end++
+			}
+			// After a space, a word holding its own '=' or ':' is the next
+			// pair (an empty field in %+v output: "{Password: URL:https://...}"),
+			// not this name's value; its own separator is checked on its own.
+			if spaced && strings.ContainsAny(s[v:end], "=:") {
+				continue
+			}
 		}
 		if end > v {
 			spans = append(spans, [2]int{v, end})
 		}
 	}
+	// "<scheme> <credential>" for the HTTP auth schemes: the scheme word is
+	// kept, the credential after it is replaced.
 	for _, m := range r.bearerRE.FindAllStringSubmatchIndex(s, -1) {
 		spans = append(spans, [2]int{m[2], m[3]})
 	}
