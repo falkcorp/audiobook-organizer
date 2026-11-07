@@ -1,5 +1,5 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
 // last-edited: 2026-11-07
 
@@ -46,7 +46,7 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	gin.SetMode(gin.TestMode)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	limits := newInviteRateLimits(ctx)
+	limits := newInviteRateLimits(ctx, time.Now)
 	limits.isLocalPeer = func(string) bool { return localPeer }
 
 	r := gin.New()

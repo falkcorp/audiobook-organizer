@@ -1,12 +1,13 @@
 // file: internal/server/wire_auth_routes.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package server
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
@@ -26,7 +27,7 @@ func (s *Server) wireAuthRoutes(
 	// globally (see inviteRateLimits): the lookup says whether a token is
 	// live, and accept answers differently for missing, used and expired
 	// tokens.
-	inviteLimits := newInviteRateLimits(s.bgCtx)
+	inviteLimits := newInviteRateLimits(s.bgCtx, time.Now)
 
 	authGroup := api.Group("/auth")
 	{
