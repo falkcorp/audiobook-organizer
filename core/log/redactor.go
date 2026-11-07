@@ -1,5 +1,5 @@
 // file: core/log/redactor.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 44521f1f-a2ba-4b3c-a385-eb582b10e892
 // last-edited: 2026-11-07
 
@@ -839,11 +839,11 @@ func resolve(v slog.Value) (out slog.Value, ok bool) {
 // URL returns raw with userinfo removed, credential query (and fragment)
 // parameter values replaced with "[REDACTED]" and the path rules applied.
 // A URL longer than maxRedactTextBytes is cut back to its last query
-// separator or whitespace before the bound (capCut) and the rest replaced
-// with "[REDACTED]".
+// separator or whitespace before the bound, never inside a userinfo
+// (urlCapCut), and the rest replaced with "[REDACTED]".
 func (r *Redactor) URL(raw string) string {
 	if len(raw) > maxRedactTextBytes {
-		head, sep, ok := capCut(raw, urlCutSeps)
+		head, sep, ok := urlCapCut(raw)
 		if !ok {
 			return redactedText
 		}
@@ -880,9 +880,9 @@ func (r *Redactor) String(key, value string) string {
 //     "token=<t>" and JSON "token":"<t>" pairs and "Bearer <t>".
 //
 // Text longer than maxRedactTextBytes is cut back to its last separator
-// before the bound (capCut: whitespace, and for a URL key also a query
-// separator); the head is redacted and the rest is replaced with
-// "[REDACTED]" (RedactKey).
+// before the bound (capCut: whitespace; for a URL key urlCapCut, which also
+// cuts at a query separator but never inside a userinfo); the head is
+// redacted and the rest is replaced with "[REDACTED]" (RedactKey).
 func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 	if r.keyDenied(key) {
 		if value == redactedText {
@@ -892,11 +892,11 @@ func (r *Redactor) StringKinds(key, value string) (string, RedactionKind) {
 	}
 	lk := strings.ToLower(key)
 	if len(value) > maxRedactTextBytes {
-		seps := textCutSeps
+		cut := func(s string) (string, string, bool) { return capCut(s, textCutSeps) }
 		if _, ok := r.urlKeys[lk]; ok {
-			seps = urlCutSeps
+			cut = urlCapCut
 		}
-		head, sep, ok := capCut(value, seps)
+		head, sep, ok := cut(value)
 		if !ok {
 			return redactedText, RedactKey
 		}
@@ -968,36 +968,11 @@ func (r *Redactor) urlKinds(raw string, depth int) (string, RedactionKind) {
 	}
 	var kinds RedactionKind
 	prefix, rest := "", raw
-	authStart := -1
-	if i := strings.Index(raw, "://"); i > 0 {
-		s := i
-		for s > 0 && isSchemeChar(raw[s-1]) {
-			s--
-		}
-		// Text before the scheme is kept (a quote, "next="), but not text
-		// that is already a path or query: "/c?n=https://..." is a path
-		// whose query holds a URL, not a URL.
-		if s < i && isAlpha(raw[s]) && !strings.ContainsAny(raw[:s], "/?#") {
-			authStart = i + 3
-		}
-	} else if strings.HasPrefix(raw, "//") {
-		authStart = 2
-	}
-	if authStart >= 0 {
-		end := authEnd(raw, authStart)
-		auth := raw[authStart:end]
-		if at := strings.LastIndexByte(auth, '@'); at >= 0 {
-			auth = auth[at+1:]
+	if a, ok := authorityOf(raw); ok {
+		if a.host > a.start {
 			kinds |= RedactURL
-		} else if badPort(auth) {
-			if at := strings.LastIndexByte(raw[authStart:], '@'); at >= 0 {
-				host := authStart + at + 1
-				end = authEnd(raw, host)
-				auth = raw[host:end]
-				kinds |= RedactURL
-			}
 		}
-		prefix, rest = raw[:authStart]+auth, raw[end:]
+		prefix, rest = raw[:a.start]+raw[a.host:a.end], raw[a.end:]
 	}
 	beforeFrag, frag, hasFrag := strings.Cut(rest, "#")
 	path, query, hasQuery := strings.Cut(beforeFrag, "?")
@@ -1037,6 +1012,48 @@ func (r *Redactor) urlKinds(raw string, depth int) (string, RedactionKind) {
 		return raw, 0
 	}
 	return b.String(), kinds
+}
+
+// authority is the authority of a URL as urlKinds reads it: raw[start:end],
+// whose userinfo (removed) is raw[start:host] and host raw[host:end].
+type authority struct{ start, host, end int }
+
+// authorityOf finds raw's authority (urlKinds step 1): after a
+// "<scheme>://" (anything before the scheme kept, unless it is already a
+// path or query) or a leading "//", up to the first '/', '?' or '#';
+// userinfo runs to its last '@', or, when there is none and the port is not
+// a number ("bob:pa/x@host"), to the last '@' anywhere after the start. ok
+// is false when raw has no authority. urlKinds and urlCapCut both read it
+// here, so the cap cut agrees with what urlKinds removes.
+func authorityOf(raw string) (a authority, ok bool) {
+	start := -1
+	if i := strings.Index(raw, "://"); i > 0 {
+		s := i
+		for s > 0 && isSchemeChar(raw[s-1]) {
+			s--
+		}
+		// Text before the scheme is kept (a quote, "next="), but not text
+		// that is already a path or query: "/c?n=https://..." is a path
+		// whose query holds a URL, not a URL.
+		if s < i && isAlpha(raw[s]) && !strings.ContainsAny(raw[:s], "/?#") {
+			start = i + 3
+		}
+	} else if strings.HasPrefix(raw, "//") {
+		start = 2
+	}
+	if start < 0 {
+		return authority{}, false
+	}
+	a = authority{start: start, host: start, end: authEnd(raw, start)}
+	if at := strings.LastIndexByte(raw[start:a.end], '@'); at >= 0 {
+		a.host = start + at + 1
+	} else if badPort(raw[start:a.end]) {
+		if at := strings.LastIndexByte(raw[start:], '@'); at >= 0 {
+			a.host = start + at + 1
+			a.end = authEnd(raw, a.host)
+		}
+	}
+	return a, true
 }
 
 // authEnd is where the authority that starts at from ends: the first '/',
@@ -1223,6 +1240,59 @@ func capCut(s, seps string) (head, sep string, ok bool) {
 	return s[:j], s[j : j+1], true
 }
 
+// urlCapCut is capCut for a URL-keyed value (urlCutSeps), which never cuts
+// inside a userinfo the redaction would remove: a separator there (a ';',
+// '&', '#' or space in a password, "https://bob:pa;<t>@host/...") would
+// leave a head ending "https://bob:pa", which has no '@' and keeps its
+// password prefix. The value may hold several URLs, so the cut at j fails
+// (ok false, and the whole value is replaced) when any of these holds:
+//
+//   - j is inside the value's own authority as urlKinds reads it
+//     (authorityOf, on the whole value, so an '@' past the bound still marks
+//     what before it is userinfo);
+//   - j is not whitespace and is inside the authority of the URL in its
+//     whitespace-delimited token, read as scanURLs reads it (urlStart, then
+//     authorityOf on the whole token): a second URL in the value;
+//   - the first '/', '?', '#' or '@' after j is an '@': j is in some
+//     userinfo, such as a URL nested in a query value
+//     ("?next=https://bob:pa;<t>@host/"). This also rejects a cut before an
+//     '@' that is not userinfo ("&email=bruce@example.test"), which only
+//     replaces more of a value already past the bound.
+//
+// A cut before every URL leaves them wholly in the replaced rest.
+func urlCapCut(s string) (head, sep string, ok bool) {
+	head, sep, ok = capCut(s, urlCutSeps)
+	if !ok {
+		return "", "", false
+	}
+	j := len(head)
+	if inAuthority(s, j) {
+		return "", "", false
+	}
+	if !isSpace(s[j]) {
+		ts := strings.LastIndexAny(s[:j], textCutSeps) + 1
+		te := len(s)
+		if k := strings.IndexAny(s[j:], textCutSeps); k >= 0 {
+			te = j + k
+		}
+		tok := s[ts:te]
+		if at := urlStart(tok); at >= 0 && inAuthority(tok[at:], j-ts-at) {
+			return "", "", false
+		}
+	}
+	if k := strings.IndexAny(s[j+1:], "/?#@"); k >= 0 && s[j+1+k] == '@' {
+		return "", "", false
+	}
+	return head, sep, true
+}
+
+// inAuthority reports whether index j of raw lies inside raw's authority,
+// userinfo included (authorityOf).
+func inAuthority(raw string, j int) bool {
+	a, ok := authorityOf(raw)
+	return ok && j >= a.start && j < a.end
+}
+
 func (r *Redactor) scanURLs(s string) (string, RedactionKind) {
 	if strings.IndexByte(s, '/') < 0 && strings.IndexByte(s, '%') < 0 {
 		return s, 0
@@ -1337,22 +1407,34 @@ func (r *Redactor) scanPairs(s string) (string, RedactionKind) {
 //     and "Digest" only in header context (authAt).
 func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 	var spans [][2]int
-	// braces counts the '{' the pass has read and not seen closed: a pair
-	// inside one may be a %+v struct field (pairAt's empty-field reading).
-	// Counted here, in the forward pass, so the check costs nothing per
-	// candidate.
-	braces := 0
+	// braces holds, for every '{' the pass has read and not seen closed,
+	// whether it opens a %+v struct (structBrace); structs counts the true
+	// ones. A pair inside an open struct may be a %+v field (pairAt's
+	// empty-field reading); a JSON '{"' never turns that reading on, and its
+	// '}' closes only itself. Tracked here, in the forward pass, so the check
+	// costs nothing per candidate.
+	var braces []bool
+	structs := 0
 	for i := 0; i < len(s); i++ {
 		*steps++
 		var sp [2]int
 		ok := false
 		switch c := s[i]; {
 		case c == '{':
-			braces++
+			st := structBrace(s, i, steps)
+			braces = append(braces, st)
+			if st {
+				structs++
+			}
 		case c == '}':
-			braces = max(braces-1, 0)
+			if n := len(braces); n > 0 {
+				if braces[n-1] {
+					structs--
+				}
+				braces = braces[:n-1]
+			}
 		case c == '=' || c == ':':
-			sp, ok = r.pairAt(s, i, braces > 0, steps)
+			sp, ok = r.pairAt(s, i, structs > 0, steps)
 		case (c|0x20 == 'b' || c|0x20 == 'd' || c|0x20 == 'n') && (i == 0 || !isWordChar(s[i-1])):
 			sp, ok = r.authAt(s, i, steps)
 		}
@@ -1398,9 +1480,10 @@ func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 // An unterminated quote or bracket runs to the end of the line. One case
 // reads the value as the next field instead, as an empty field in %+v is
 // ("{Token: Name:alice}"), and only when all of these hold: the pair is
-// inside an open '{' (inBrace), the name is a capitalised Go field name
-// written right before the ':', exactly one space follows, and the plain
-// first word is itself a capitalised Go field and ':' (isFieldStart).
+// inside an open %+v struct brace (inBrace, see structBrace; a JSON '{"'
+// is not one), the name is a capitalised Go field name written right
+// before the ':', exactly one space follows, and the plain first word is
+// itself a capitalised Go field and ':' (isFieldStart).
 // Anything else is the value and is replaced ("password= x=<t>",
 // "credentials: Admin:<t>", "token: V2:<t>").
 func (r *Redactor) pairAt(s string, i int, inBrace bool, steps *int) ([2]int, bool) {
@@ -1483,6 +1566,23 @@ func (r *Redactor) pairAt(s string, i int, inBrace bool, steps *int) ([2]int, bo
 		return none, false
 	}
 	return [2]int{start, end}, true
+}
+
+// structBrace reports whether the '{' at s[i] opens a struct as %+v prints
+// one: right after it, a Go identifier (a letter or '_', then letters,
+// digits or '_', read at most maxNameBytes far) and ':' ("{Name:",
+// "&{Name:", a nested "Inner:{Token:", or an unexported first field
+// "{ssn:"). JSON's '{"', a spaced "{ a" and an empty "{}" are not.
+func structBrace(s string, i int, steps *int) bool {
+	j := i + 1
+	if j >= len(s) || !isAlpha(s[j]) && s[j] != '_' {
+		return false
+	}
+	for j < len(s) && j-i <= maxNameBytes && isWordChar(s[j]) {
+		j++
+		*steps++
+	}
+	return j < len(s) && s[j] == ':'
 }
 
 // closingQuote is the index of the first q at or after from that no
@@ -1577,10 +1677,12 @@ func authSchemes() [4]string { return [4]string{"bearer", "basic", "digest", "ne
 //     or the end; for Digest an auth-param ("username=...") or such a token68
 //     of at least 20. In prose: for Basic a token68 that base64-decodes to
 //     "user:password" (any text holding ':'); for Negotiate and Digest such a
-//     token68 of at least 20 characters. So "Basic Economics: A Citizen's
-//     Guide", "How to Negotiate Anything", "negotiate a deal" and "failed to
-//     compute digest of ..." pass, and "sent Basic <base64 user:pass>" does
-//     not.
+//     token68 of at least 20 characters, and for Digest also an auth-param
+//     list whose first name RFC 7616 names or that holds two or more
+//     comma-separated auth-params (digestParamsAt). So "Basic Economics: A
+//     Citizen's Guide", "How to Negotiate Anything", "negotiate a deal",
+//     "failed to compute digest of ..." and "verified digest sha256=<hex>"
+//     pass, and "sent Basic <base64 user:pass>" does not.
 func (r *Redactor) authAt(s string, i int, steps *int) ([2]int, bool) {
 	var none [2]int
 	scheme := ""
@@ -1674,9 +1776,17 @@ func credentialShaped(s string, c int, scheme string, ctx bool, steps *int) bool
 	run, padEnd, plain, ended := token68Run(s, c, steps)
 	switch {
 	case scheme == "digest":
-		// An auth-param list ("username=\"u\", response=...") or a token68
-		// of at least minToken68Prose is a Digest credential in any context.
-		return authParamAt(s, c, steps) || ended && !plain && run-c >= minToken68Prose
+		// A token68 of at least minToken68Prose is a Digest credential in any
+		// context. An auth-param ("username=...") is one in header context;
+		// in prose ("verified digest sha256=<hex> path=...") only one RFC
+		// 7616 names, or a comma-separated list of them (digestParamsAt).
+		if ended && !plain && run-c >= minToken68Prose {
+			return true
+		}
+		if ctx {
+			return authParamAt(s, c, steps) > c
+		}
+		return digestParamsAt(s, c, steps)
 	case ctx:
 		return ended && !plain && run-c >= minToken68Header
 	case scheme == "basic":
@@ -1738,15 +1848,75 @@ func basicUserPass(tok string) bool {
 	return strings.IndexByte(string(b), ':') >= 0
 }
 
-// authParamAt reports whether s[c:] starts with an auth-param, a token and
-// '=' ("username=", "realm="), as a Digest credential does.
-func authParamAt(s string, c int, steps *int) bool {
+// authParamAt reads an auth-param's name at s[c:], a token and '='
+// ("username=", "realm="), as a Digest credential starts, and returns the
+// index of the '=', or c when there is none. The name is read at most
+// maxNameBytes far.
+func authParamAt(s string, c int, steps *int) int {
 	j := c
-	for j < len(s) && (isAlpha(s[j]) || '0' <= s[j] && s[j] <= '9' || s[j] == '-' || s[j] == '_') {
+	for j < len(s) && j-c < maxNameBytes && (isAlpha(s[j]) || '0' <= s[j] && s[j] <= '9' || s[j] == '-' || s[j] == '_') {
 		j++
 		*steps++
 	}
-	return j > c && j < len(s) && s[j] == '='
+	if j > c && j < len(s) && s[j] == '=' {
+		return j
+	}
+	return c
+}
+
+// digestParams are the auth-param names of RFC 7616's Authorization and
+// WWW-Authenticate Digest credentials, lower-case.
+func digestParams() []string {
+	return []string{"username", "realm", "nonce", "uri", "response", "cnonce", "qop", "nc", "opaque", "algorithm"}
+}
+
+// digestParamsAt reports whether s[c:], after a Digest word in prose, is a
+// Digest credential's auth-param list: its first name is one RFC 7616 names
+// (digestParams, any case), or a second auth-param follows the first after
+// a ',' (RFC 7235's list: name=value, name=value). A checksum
+// ("sha256=<hex> path=...") is neither. The first value is read at most
+// maxNameBytes far, so a run of unterminated candidates stays linear.
+func digestParamsAt(s string, c int, steps *int) bool {
+	eq := authParamAt(s, c, steps)
+	if eq == c {
+		return false
+	}
+	name := s[c:eq]
+	for _, p := range digestParams() {
+		if strings.EqualFold(name, p) {
+			return true
+		}
+	}
+	// The first value: a quoted-string or a token, then OWS ',' OWS.
+	j, limit := eq+1, min(len(s), eq+1+maxNameBytes)
+	if j < limit && s[j] == '"' {
+		for j++; j < limit && s[j] != '"'; j++ {
+			*steps++
+			if s[j] == '\\' {
+				j++
+			}
+		}
+		if j >= limit {
+			return false
+		}
+		j++
+	} else {
+		for j < limit && !isSpace(s[j]) && s[j] != ',' && s[j] != '"' {
+			j++
+			*steps++
+		}
+	}
+	for j < limit && (s[j] == ' ' || s[j] == '\t') {
+		j++
+		*steps++
+	}
+	if j >= limit || s[j] != ',' {
+		return false
+	}
+	for j++; j < limit && (s[j] == ' ' || s[j] == '\t'); j++ {
+		*steps++
+	}
+	return j < len(s) && authParamAt(s, j, steps) > j
 }
 
 // isGoField reports whether name is an exported Go field name: a capital,
