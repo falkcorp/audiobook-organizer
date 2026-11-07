@@ -1,20 +1,22 @@
 // file: internal/telemetry/views.go
-// version: 1.1.1
+// version: 2.0.0
 // guid: 9154168b-56f2-4d06-bb53-f0b09d8954fa
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package telemetry
 
 import (
-	"maps"
 	"slices"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel/sdk/metric"
 )
 
 // histogramBuckets declares the bucket boundaries of every OTel histogram the
-// binary exports, keyed by instrument name. A histogram must never ship with
+// binary exports, keyed by instrument name. An OTel histogram ABO creates
+// takes its list as creation advice at its call site
+// (metric.WithExplicitBucketBoundaries with HistogramBuckets()[name]), since a
+// core Provider takes no app views (R1-10); the advice applies because no view
+// matches the instrument. A histogram must never ship with
 // the SDK's default boundaries: they stop at 10000, which would flatten the
 // 86400-second tail the overnight dashboard reads from operation durations.
 //
@@ -22,7 +24,7 @@ import (
 // client_golang constructors, so a family migrated to OTel keeps byte-identical
 // `le` labels. The expected `le` text of every histogram family is pinned
 // independently of this file in
-// internal/telemetry/contract/testdata/histogram_buckets.golden;
+// internal/telemetrypolicy/testdata/histogram_buckets.golden;
 // TestHistogramBucketsPinned checks both the scrape and this table against
 // it, so editing a list here fails until that file is changed on purpose in
 // the same PR. The two exponential lists are
@@ -31,9 +33,10 @@ import (
 //
 // The http.server.* entries copy the boundaries otelgin produced before this
 // table existed (the semconv advice for request duration, the SDK default for
-// body sizes), so declaring them changes nothing on /metrics. A view overrides
-// an instrument's bucket advice, so an otelgin upgrade that changes its
-// defaults is pinned here, not passed through; change these lists on purpose.
+// body sizes), which otelgin's instruments still get without a view.
+// TestEveryHistogramHasAView compares every served histogram's `le` set with
+// this table, so an otelgin upgrade that changes its defaults fails there
+// instead of passing through; change these lists on purpose.
 var histogramBuckets = map[string][]float64{
 	// internal/metrics/metrics.go operationDuration.
 	"audiobook_organizer.operation.duration": {0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 43200, 86400},
@@ -64,7 +67,7 @@ var histogramBuckets = map[string][]float64{
 	"http.server.response.body.size": {0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000},
 }
 
-// HistogramBuckets returns a copy of the views table: instrument name to
+// HistogramBuckets returns a copy of the bucket table: instrument name to
 // bucket boundaries.
 func HistogramBuckets() map[string][]float64 {
 	out := make(map[string][]float64, len(histogramBuckets))
@@ -72,21 +75,4 @@ func HistogramBuckets() map[string][]float64 {
 		out[k] = slices.Clone(v)
 	}
 	return out
-}
-
-// Views returns one meter-provider option per histogramBuckets entry, in a
-// stable (sorted) order, each an explicit-bucket view matched by instrument
-// name.
-func Views() []metric.Option {
-	names := slices.Sorted(maps.Keys(histogramBuckets))
-	opts := make([]metric.Option, 0, len(names))
-	for _, name := range names {
-		opts = append(opts, metric.WithView(metric.NewView(
-			metric.Instrument{Name: name, Kind: metric.InstrumentKindHistogram},
-			metric.Stream{Aggregation: metric.AggregationExplicitBucketHistogram{
-				Boundaries: slices.Clone(histogramBuckets[name]),
-			}},
-		)))
-	}
-	return opts
 }

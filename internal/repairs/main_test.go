@@ -1,7 +1,7 @@
 // file: internal/repairs/main_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 721ccd8a-2fde-4c2a-8ce8-e5f22df5803b
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package repairs
 
@@ -28,6 +28,6 @@ const gaugeTestVersion = "v0.0.0-gauge-test"
 
 func TestMain(m *testing.M) {
 	telemetry.SetVersion(gaugeTestVersion)
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(gaugeReader)}, telemetry.Views()...)...))
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(gaugeReader)))
 	os.Exit(m.Run())
 }

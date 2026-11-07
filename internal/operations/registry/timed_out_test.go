@@ -1,7 +1,7 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 package registry_test
 
@@ -46,7 +46,7 @@ func newV3OtelRig(t *testing.T, opts registry.Options, release ...func()) (*otel
 	t.Helper()
 	store := newV3Store(t)
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	opts.OpsMetrics = opsmetrics.New(mp)
 	if opts.AbandonGrace == 0 {
 		opts.AbandonGrace = 50 * time.Millisecond
@@ -463,7 +463,7 @@ func TestShutdownUnregistersZombieSource(t *testing.T) {
 // or on a custom store).
 func privateMeter() (*opsmetrics.Recorder, *otelRig) {
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	return opsmetrics.New(mp), &otelRig{reader: reader}
 }
 

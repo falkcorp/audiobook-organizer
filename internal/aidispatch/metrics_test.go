@@ -1,7 +1,7 @@
 // file: internal/aidispatch/metrics_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0c8f1e-3a47-4c52-9b6e-72a1f0e4c9d3
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package aidispatch
 
@@ -27,7 +27,7 @@ import (
 func useReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	metricsMP = mp
 	metricsOnce = sync.Once{}
 	t.Cleanup(func() {

@@ -1,7 +1,7 @@
 // file: internal/repairs/guards_gauge_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e7a91c4-5b28-4d06-a1f3-9c84d2e07b15
-// last-edited: 2026-10-22
+// last-edited: 2026-11-07
 
 package repairs
 
@@ -23,7 +23,7 @@ import (
 // alert sees the same number the cap does.
 func TestResolverAbandonedIsExportedAsAGauge(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(append([]sdkmetric.Option{sdkmetric.WithReader(reader)}, telemetry.Views()...)...)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 	registerAbandonedGauge(opsmetrics.New(mp))
 
