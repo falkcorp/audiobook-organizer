@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-07
 
@@ -31,15 +31,17 @@ const corePath = "github.com/falkcorp/mediacore"
 // imports them (coreTestSupport).
 //
 // R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
-// §3.5.1 item 2), never this table; the one exception is R1-13's
-// internal/openapi entry, an R4 package the table missed.
+// §3.5.1 item 2), never this table; the exceptions are R1-13's
+// internal/openapi entry and R1-20's internal/pebble entry, R4 packages the
+// table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
 	"storage/keys": 0, "storage/codec": 0, "storage/restorejournal": 0,
 	"internal/keyedmutex": 0, "internal/jsonschemax": 0,
-	// L1 (internal/restoreswap imports only storage and its L0 leaves)
-	"storage": 1, "storage/index": 1, "internal/restoreswap": 1,
+	// L1 (internal/restoreswap imports only storage and its L0 leaves;
+	// internal/pebble implements storage, so it takes storage's layer, R4)
+	"storage": 1, "storage/index": 1, "internal/restoreswap": 1, "internal/pebble": 1,
 	// L2
 	"secrets": 2,
 	// L3
