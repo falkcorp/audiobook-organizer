@@ -1,5 +1,5 @@
 # file: .github/workflows/auto-revert.yml
-# version: 1.5.0
+# version: 1.5.1
 # guid: 2f7c4e19-6b83-4a05-9d21-8e5b0a3f7c64
 # last-edited: 2026-11-06
 
@@ -131,7 +131,7 @@ jobs:
           # main, and a revert that fails late leaves main red with nothing
           # watching it.
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
-            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty. main cannot be auto-reverted without them."
+            echo "::error::Variable CI_BOT_APP_CLIENT_ID and the ci-bot environment secret CI_BOT_APP_PRIVATE_KEY must both be visible to this job; one or both are empty (is the ci-bot environment created, and does it allow this branch?). main cannot be auto-reverted without them."
             exit 1
           fi
 

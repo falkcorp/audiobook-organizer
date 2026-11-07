@@ -1,5 +1,5 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.5.0
+# version: 2.5.1
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
 # last-edited: 2026-11-06
 name: Memory Leak Detection
@@ -136,7 +136,7 @@ jobs:
           # No fallback to GITHUB_TOKEN: its PR would run no CI and could never
           # pass the merge queue.
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
-            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            echo "::error::Variable CI_BOT_APP_CLIENT_ID and the ci-bot environment secret CI_BOT_APP_PRIVATE_KEY must both be visible to this job; one or both are empty (is the ci-bot environment created, and does it allow this branch?)."
             exit 1
           fi
 
@@ -231,7 +231,7 @@ jobs:
           PR_URL=$(gh pr create \
             --repo "$REPO" \
             --head "$BRANCH" \
-            --title "chore(todo): memory leak findings ${DATE}" \
+            --title "chore(todo): memory leak findings ${DATE} [skip changelog]" \
             --body-file /tmp/pr-body.md \
             --label "automation")
           PR_NUMBER="${PR_URL##*/}"

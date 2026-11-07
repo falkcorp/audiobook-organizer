@@ -1,5 +1,5 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.5.0
+# version: 1.5.1
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
 # last-edited: 2026-11-06
 
@@ -45,6 +45,7 @@ jobs:
     steps:
       # First, so a missing credential fails in seconds, not after the gates.
       - name: Require CI bot app credentials
+        id: preflight
         env:
           CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
           HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
@@ -60,7 +61,7 @@ jobs:
           # No fallback to GITHUB_TOKEN or a personal token: a PR opened with
           # GITHUB_TOKEN runs no CI and could never pass the merge queue.
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
-            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            echo "::error::Variable CI_BOT_APP_CLIENT_ID and the ci-bot environment secret CI_BOT_APP_PRIVATE_KEY must both be visible to this job; one or both are empty (is the ci-bot environment created, and does it allow this branch?)."
             exit 1
           fi
 
@@ -118,7 +119,7 @@ jobs:
       # Minted here, not at the top: an installation token lives one hour and the
       # gates above can run for most of the job's 45 minutes.
       - name: Mint CI bot app token
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.preflight.outcome == 'success' }}
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -126,14 +127,13 @@ jobs:
           private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
-          # permission-workflows is deliberately absent. Force-pushing the bot
-          # branch from last week's base can in principle include workflow-file
-          # changes that landed on main since; if a run is ever refused with
-          # "refusing to allow a GitHub App to create or update workflow", add
-          # `permission-workflows: write` here (and to the app) at that point.
+          # Force-pushing the bot branch from last week's base is a ref update
+          # whose diff can include .github/workflows/ changes that landed on main
+          # since; GitHub refuses such a push from an app without this.
+          permission-workflows: write
 
       - name: Open PR if a baseline changed
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # The app token authenticates both `git push` (via the URL below) and
