@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.34.1
+// version: 1.34.2
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -20,13 +20,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // --- purge-deleted ---
@@ -317,7 +317,7 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	}
 	msg := fmt.Sprintf("Activity log cleanup: %s, summarized %d, pruned %d, orphaned index entries removed %d",
 		compactMsg, summarized, pruned, indexOrphans)
-	logging.Info(ctx, msg)
+	logger.InfoCtx(ctx, msg)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	return nil
 }
@@ -466,11 +466,11 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 		func(level slog.Level, msg string, kv ...any) {
 			switch {
 			case level >= slog.LevelWarn:
-				logging.Warn(ctx, msg, kv...)
+				logger.WarnCtx(ctx, msg, kv...)
 			case level >= slog.LevelInfo:
-				logging.Info(ctx, msg, kv...)
+				logger.InfoCtx(ctx, msg, kv...)
 			default:
-				logging.Debug(ctx, msg, kv...)
+				logger.DebugCtx(ctx, msg, kv...)
 			}
 		})
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed))

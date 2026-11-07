@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.2
+// version: 1.43.3
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -180,7 +180,7 @@ func runBookFetchPool(ctx context.Context, workers, n int, processOne func(conte
 func prepareFetchChain(ctx context.Context, chain []metadata.MetadataSource, preferAudible bool) ([]metadata.MetadataSource, error) {
 	live, skipped, err := metafetch.PrepareFetchChain(chain, preferAudible)
 	if len(skipped) > 0 {
-		logging.Warn(ctx, "bulk-metadata-fetch: skipping throttled providers",
+		logger.WarnCtx(ctx, "bulk-metadata-fetch: skipping throttled providers",
 			"skipped", strings.Join(skipped, ","), "detail", metadata.ThrottleSummary(skipped),
 			"remaining_providers", len(live))
 	}
@@ -198,12 +198,12 @@ func (s *Server) runBulkMetadataFetchAll(
 	progress operations.ProgressReporter,
 ) (incomplete bool, err error) {
 	// Create operation context for structured logging
-	op := &logging.OpContext{
+	op := &opContext{
 		ID:     opID,
 		Type:   "metadata-fetch",
 		Status: "pending",
 	}
-	ctx = logging.WithOp(ctx, op)
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 	// Total unknown until books load; use placeholder (0/1) to avoid 0/0.
 	_ = progress.UpdateProgress(0, 1, "loading books (0/1 0.00%)")
@@ -211,7 +211,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	allBooks, err := store.GetAllBooksCore(0, 0)
 	if err != nil {
 		op.SetStatus("failed")
-		logging.Error(ctx, "failed to load all books", "err", err)
+		logger.ErrorCtx(ctx, "failed to load all books", "err", err)
 		return false, fmt.Errorf("GetAllBooksCore: %w", err)
 	}
 
@@ -283,7 +283,7 @@ func (s *Server) runBulkMetadataFetchAll(
 
 	totalBooks := len(existingResults) + len(work)
 	alreadyDone := len(existingResults)
-	logging.Info(ctx, "bulk-metadata-fetch books total, already cached, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
+	logger.InfoCtx(ctx, "bulk-metadata-fetch books total, already cached, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 
 	noMatch.log(ctx, "bulk-metadata-fetch")
 
@@ -421,7 +421,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			if werr := metafetch.WriteBackOutcome(store, bookID, out); werr != nil {
 				// Still found; only the book's own row is missing, so a later
 				// "fetch only what is missing" pass refetches it.
-				logging.Warn(gctx, "bulk-metadata-fetch: caching the result failed",
+				logger.WarnCtx(gctx, "bulk-metadata-fetch: caching the result failed",
 					"book_id", bookID, "provider", providerKey, "error", werr)
 			}
 			found.Add(1)
@@ -431,7 +431,7 @@ func (s *Server) runBulkMetadataFetchAll(
 			// but only if the ledger says the provider failed rather than that the
 			// book is absent from every catalog.
 			errored.Add(1)
-			logging.Warn(gctx, "bulk-metadata-fetch: provider error; book left retryable",
+			logger.WarnCtx(gctx, "bulk-metadata-fetch: provider error; book left retryable",
 				"book_id", bookID, "provider", out.ErrSource, "error", out.Err)
 		default:
 			notFound.Add(1)
@@ -477,7 +477,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
 		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
+	logger.InfoCtx(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
 		"errors", errored.Load(), "no_match_skipped", noMatch.n, "stopped_early", stoppedEarly.Load())
 	return stoppedEarly.Load(), nil
 }
@@ -855,14 +855,14 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 				// Not fatal to THIS run -- the books it did fetch are cached and
 				// ledgered -- but it does end the chain, so say so loudly rather
 				// than reporting a clean finish.
-				logging.Error(ctx, "bulk-metadata-fetch: could not queue continuation; chain ends here",
+				logger.ErrorCtx(ctx, "bulk-metadata-fetch: could not queue continuation; chain ends here",
 					"run_key", runKey, "continuation", next.Continuation, "err", eerr)
 				return fmt.Errorf("bulk_metadata_fetch: queue continuation %d: %w", next.Continuation, eerr)
 			}
 			if nextID == "" {
 				return fmt.Errorf("bulk_metadata_fetch: continuation %d returned an empty op id", next.Continuation)
 			}
-			logging.Info(ctx, "bulk-metadata-fetch: queued continuation",
+			logger.InfoCtx(ctx, "bulk-metadata-fetch: queued continuation",
 				"run_key", runKey, "continuation", next.Continuation, "next_op_id", nextID)
 			_ = reporter.Log(slog.LevelInfo, "stopped before timeout; queued continuation",
 				slog.String("next_op_id", nextID), slog.Int("continuation", next.Continuation))
@@ -887,12 +887,12 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	progress operations.ProgressReporter,
 ) (incomplete bool, err error) {
 	// Create operation context for structured logging
-	op := &logging.OpContext{
+	op := &opContext{
 		ID:     opID,
 		Type:   "metadata-fetch-ids",
 		Status: "pending",
 	}
-	ctx = logging.WithOp(ctx, op)
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
 	// Track requested books in operation context
 	op.AddEntity("books", bookIDs...)
 
@@ -968,7 +968,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 
 	alreadyDone := len(existingResults)
 	totalBooks := alreadyDone + len(work)
-	logging.Info(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
+	logger.InfoCtx(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 	noMatch.log(ctx, "bulk-metadata-fetch-ids")
 	_ = progress.UpdateProgress(alreadyDone, totalBooks,
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
@@ -1086,7 +1086,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			if werr := metafetch.WriteBackOutcome(store, bookID, out); werr != nil {
 				// Still found; only the book's own row is missing, so a later
 				// "fetch only what is missing" pass refetches it.
-				logging.Warn(gctx, "bulk-metadata-fetch: caching the result failed",
+				logger.WarnCtx(gctx, "bulk-metadata-fetch: caching the result failed",
 					"book_id", bookID, "provider", providerKey, "error", werr)
 			}
 			found.Add(1)
@@ -1096,7 +1096,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 			// but only if the ledger says the provider failed rather than that the
 			// book is absent from every catalog.
 			errored.Add(1)
-			logging.Warn(gctx, "bulk-metadata-fetch: provider error; book left retryable",
+			logger.WarnCtx(gctx, "bulk-metadata-fetch: provider error; book left retryable",
 				"book_id", bookID, "provider", out.ErrSource, "error", out.Err)
 		default:
 			notFound.Add(1)
@@ -1140,7 +1140,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	_ = progress.UpdateProgress(int(finalCount), totalBooks,
 		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
-	logging.Info(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
+	logger.InfoCtx(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
 		"errors", errored.Load(), "no_match_skipped", noMatch.n, "stopped_early", stoppedEarly.Load())
 	return stoppedEarly.Load(), nil
 }

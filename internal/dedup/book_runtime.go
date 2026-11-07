@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // bookRuntimeMemo caches canonical runtimes for ONE call (a candidate
@@ -86,7 +86,7 @@ var errNoRuntimeStore = errors.New("no book file store")
 func runtimeFromFiles(book *database.Book, files []database.BookFile, err error) (database.BookRuntime, int, bool) {
 	rt := database.ComputeBookRuntime(book, files)
 	if err != nil {
-		logging.Warn(context.Background(), "dedup: book files unreadable; runtime treated as unknown",
+		logger.WarnCtx(context.Background(), "dedup: book files unreadable; runtime treated as unknown",
 			"book_id", book.ID, "err", err)
 		rt = database.BookRuntime{Source: database.RuntimeSourceNone, BookAggregateSec: rt.BookAggregateSec}
 	}

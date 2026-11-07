@@ -1,5 +1,5 @@
 // file: core/health/flight_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f26518cf-c820-4b1a-a14b-c616781751e9
 // last-edited: 2026-11-07
 
@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/coretest"
+	corelog "github.com/falkcorp/mediacore/log"
 )
 
 // Only one flight recorder may be active per process, so no test here runs in
@@ -713,16 +714,22 @@ func TestRecorderLogsThroughInjectedLogger(t *testing.T) {
 	}
 }
 
-// A line built from request-controlled text must not forge a second record: the
-// recorder escapes newlines before it writes.
-func TestRecorderLogLinesAreSanitized(t *testing.T) {
-	capture := coretest.NewLogCapture(t)
-	r := New(Config{Logger: capture.Logger()})
-	r.logf(slog.LevelWarn, "snapshot %s failed", "x\nlevel=INFO msg=forged")
+// A line built from request-controlled text must not forge a second record.
+// The recorder writes it as is; the core pipeline's handler escapes it, in
+// both formats (05-logging §3: no message sanitizer of its own).
+func TestRecorderLogLinesEscapedByHandler(t *testing.T) {
+	for _, f := range []corelog.Format{corelog.FormatText, corelog.FormatJSON} {
+		var out bytes.Buffer
+		l, err := corelog.New(corelog.Options{Output: &out, Format: f, Level: corelog.LevelInfo, Redactor: corelog.NewRedactor(nil)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := New(Config{Logger: l.Scope("core", "flight-recorder")})
+		r.logf(slog.LevelWarn, "snapshot %s failed", "x\nlevel=INFO msg=forged\r")
 
-	msgs := capture.Messages()
-	if len(msgs) != 1 || strings.ContainsAny(msgs[0], "\r\n") {
-		t.Fatalf("want one record with no raw newline, got %q", msgs)
+		if got := out.String(); strings.Count(got, "\n") != 1 || strings.ContainsRune(strings.TrimSuffix(got, "\n"), '\r') {
+			t.Fatalf("format %d: want one record with no raw CR or LF, got %q", f, got)
+		}
 	}
 }
 

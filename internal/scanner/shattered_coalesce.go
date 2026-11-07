@@ -1,7 +1,7 @@
 // file: internal/scanner/shattered_coalesce.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9b4e2a17-6c08-4d35-8f91-3a7d05c2e6b4
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package scanner — scan-time prevention of the "shattered book" defect.
 //
@@ -32,7 +32,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
-	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // coalesceShatteredSiblings merges single-file books that are chapters of one
@@ -83,7 +83,7 @@ func coalesceShatteredSiblings(ctx context.Context, books []Book) []Book {
 			Format:       strings.ToLower(filepath.Ext(segs[0])),
 			SegmentFiles: segs,
 		}
-		logging.Info(ctx, "scanner coalesced shattered siblings",
+		logger.InfoCtx(ctx, "scanner coalesced shattered siblings",
 			"book", k.prefix, "chapters", len(segs), "dir", k.parent)
 	}
 	if len(coalesced) == 0 {

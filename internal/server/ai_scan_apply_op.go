@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -23,12 +23,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // scanApplyStore is what applying a result needs: the shared author merge and the
@@ -408,12 +408,12 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 		// startup, and expires anyway (database.AIScanApplyClaimTTL).
 		defer func() {
 			if err := s.aiScanStore.ReleaseScanApply(p.ScanID, claimID); err != nil {
-				logging.Warn(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
+				logger.WarnCtx(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
 			}
 		}()
 	}
 	if err := s.pipelineManager.EnsureKeepIDs(p.ScanID); err != nil {
-		logging.Warn(ctx, "ai scan apply: could not fill in keep authors", "scan_id", p.ScanID, "err", err)
+		logger.WarnCtx(ctx, "ai scan apply: could not fill in keep authors", "scan_id", p.ScanID, "err", err)
 	}
 	stored, err := s.aiScanStore.GetScanResults(p.ScanID)
 	if err != nil {
@@ -491,7 +491,7 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 			default:
 				if merr := s.aiScanStore.MarkResultApplied(p.ScanID, rid); merr != nil {
 					if verr := voidNote(); verr != nil {
-						logging.Warn(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
+						logger.WarnCtx(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
 							"scan_id", p.ScanID, "result_id", rid, "err", verr)
 					}
 					if _, ok := stderrors.AsType[*database.ScanSupersededError](merr); ok {
@@ -537,7 +537,7 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 // status carries the headline.
 func (s *Server) saveScanApplyReport(ctx context.Context, reporter opsregistry.Reporter, report scanApplyReport) {
 	if err := opsregistry.ReporterSetResult(reporter, report); err != nil {
-		logging.Warn(ctx, "ai scan apply: could not store the per-result outcomes", "scan_id", report.ScanID, "err", err)
+		logger.WarnCtx(ctx, "ai scan apply: could not store the per-result outcomes", "scan_id", report.ScanID, "err", err)
 	}
 }
 

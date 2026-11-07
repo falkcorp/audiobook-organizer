@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package server
 
@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // libraryAIParseParams carries one queued batch of books to AI-parse.
@@ -193,7 +193,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 	// would be scans quietly going back to blocking on the LLM -- a regression
 	// with no error anywhere. This line is what makes that visible.
 	if s.opRegistry == nil || s.opRegistry != reg {
-		logging.Warn(context.Background(), "library.ai-parse registered without wiring the scanner enqueue hook (not the server's own registry); scans will parse AI candidates inline")
+		logger.WarnCtx(context.Background(), "library.ai-parse registered without wiring the scanner enqueue hook (not the server's own registry); scans will parse AI candidates inline")
 		return nil
 	}
 	// The enqueue context is deliberately NOT the scan's ctx. Enqueuing is a
@@ -211,7 +211,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 		// Logged so a scan can be tied to the operations it spawned. Without it
 		// there is no path from "this book still has no title" back to the op
 		// that was supposed to fill it.
-		logging.Info(context.Background(), "library.ai-parse queued",
+		logger.InfoCtx(context.Background(), "library.ai-parse queued",
 			"op_id", opID, "books", len(books))
 		return nil
 	})

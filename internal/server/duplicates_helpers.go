@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.23.3
+// version: 1.23.4
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -37,10 +37,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -1002,13 +1002,13 @@ func writeStrippedSeriesPositions(
 			if len(refused) > 0 {
 				// Not an error: the user locked it deliberately. Logged so the
 				// number is not simply gone without explanation.
-				logging.Info(gctx, "series normalize: declined to record a stripped position on a locked field",
+				logger.InfoCtx(gctx, "series normalize: declined to record a stripped position on a locked field",
 					"book_id", bookID, "series_sequence", pos, "locked_fields", strings.Join(refused, ","))
 				return nil
 			}
 			// A silent rewrite of user-visible data is the pattern this repo keeps
 			// getting burned by, so the move is logged per book.
-			logging.Info(gctx, "series normalize: recorded the position stripped from the series name",
+			logger.InfoCtx(gctx, "series normalize: recorded the position stripped from the series name",
 				"book_id", bookID, "series_sequence", pos)
 			return nil
 		})

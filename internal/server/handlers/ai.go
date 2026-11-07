@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -29,11 +29,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -476,7 +476,7 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 	// 40 minutes long is worse than telling it nothing.
 	rt, rtErr := database.LoadBookRuntime(h.store, book)
 	if rtErr != nil {
-		logging.Warn(c.Request.Context(), "ai parse: book files unreadable; runtime omitted", "book_id", book.ID, "err", rtErr)
+		logger.WarnCtx(c.Request.Context(), "ai parse: book files unreadable; runtime omitted", "book_id", book.ID, "err", rtErr)
 	}
 	if sec, ok := rt.KnownSeconds(); ok {
 		abCtx.TotalDuration = sec
@@ -561,7 +561,7 @@ func (h *AIHandler) StartScan(c *gin.Context) {
 		// The scan row already exists and is not finished: left alone it would
 		// read as a running scan and refuse every later start. Cancel it.
 		if cerr := h.pipeline.CancelScan(scan.ID); cerr != nil {
-			logging.Warn(c.Request.Context(), "AI scan could not be canceled after its operation failed to enqueue",
+			logger.WarnCtx(c.Request.Context(), "AI scan could not be canceled after its operation failed to enqueue",
 				"scan_id", scan.ID, "err", cerr)
 		}
 		httputil.InternalError(c, "failed to enqueue AI scan operation", err)
@@ -671,7 +671,7 @@ func (h *AIHandler) GetScanResults(c *gin.Context) {
 	// Apply refuses them) rather than failing the read.
 	if h.pipeline != nil {
 		if kerr := h.pipeline.EnsureKeepIDs(id); kerr != nil {
-			logging.Warn(c.Request.Context(), "ai scan results: could not fill in keep authors", "scan_id", id, "err", kerr)
+			logger.WarnCtx(c.Request.Context(), "ai scan results: could not fill in keep authors", "scan_id", id, "err", kerr)
 		}
 	}
 	results, err := h.scanStore.GetScanResults(id)
@@ -788,7 +788,7 @@ func (h *AIHandler) ApplyScanResults(c *gin.Context) {
 
 	if h.pipeline != nil {
 		if kerr := h.pipeline.EnsureKeepIDs(scanID); kerr != nil {
-			logging.Warn(c.Request.Context(), "ai scan apply: could not fill in keep authors", "scan_id", scanID, "err", kerr)
+			logger.WarnCtx(c.Request.Context(), "ai scan apply: could not fill in keep authors", "scan_id", scanID, "err", kerr)
 		}
 	}
 	results, err := h.scanStore.GetScanResults(scanID)

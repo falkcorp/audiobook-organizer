@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).
@@ -110,8 +110,10 @@ func RespondWithServiceUnavailable(c *gin.Context, message string) {
 // a generic message to the client.
 func InternalError(c *gin.Context, msg string, err error) {
 	// Error text routinely wraps user-controlled strings (file names, tag
-	// values) — escape CR/LF so it cannot forge log records (CA12).
-	slog.Error(msg, "err", logging.SanitizeErr(err))
+	// values). The slog handlers quote control characters, so it cannot forge
+	// log records (CA12; core log's Sanitize was deleted for that reason,
+	// 05-logging §3).
+	slog.Error(msg, "err", err)
 	RespondWithInternalError(c, msg)
 }
 
@@ -149,12 +151,12 @@ func RespondWithList(c *gin.Context, items any, count int, limit int, offset int
 
 func logErrorWithContext(c *gin.Context, statusCode int, message string) {
 	method := c.Request.Method
-	// Path and message derive from the request; escape CR/LF so a crafted
-	// URL cannot forge log records (CA12). The path is also redacted: an invite
-	// token is a bearer secret that lives in the path, and a lookup of a used or
-	// expired token answers with an error that lands here.
-	path := logging.Sanitize(logging.RedactInvitePath(c.Request.URL.Path))
-	message = logging.Sanitize(message)
+	// Path and message derive from the request; the slog handlers quote
+	// control characters, so a crafted URL cannot forge log records (CA12).
+	// The path is also redacted: an invite token is a bearer secret that lives
+	// in the path, and a lookup of a used or expired token answers with an
+	// error that lands here.
+	path := logging.RedactInvitePath(c.Request.URL.Path)
 	clientIP := c.ClientIP()
 	if statusCode >= 500 {
 		slog.Error("http request", "method", method, "path", path, "status", statusCode, "message", message, "clientIP", clientIP)

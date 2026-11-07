@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.5
+// version: 2.31.6
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -89,22 +89,22 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.book-scan",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 			dismissed := loadDismissedDedupGroups(store)
 
-			logging.Info(ctx, "book duplicate scan starting")
+			logger.InfoCtx(ctx, "book duplicate scan starting")
 
 			result, err := dedup.ScanBookDuplicates(ctx, store, dismissed, progress)
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "book duplicate scan failed", "err", err)
+				logger.ErrorCtx(ctx, "book duplicate scan failed", "err", err)
 				return err
 			}
 
@@ -116,7 +116,7 @@ func (s *Server) RegisterBookDedupScanOp(reg *opsregistry.Registry) error {
 			s.dedupCache.SetWithTTL("book-dedup-scan", cacheVal, 30*time.Minute)
 
 			op.SetStatus("success")
-			logging.Info(ctx, "book duplicate scan complete", "groups", len(result.Groups), "duplicates", result.TotalDuplicates)
+			logger.InfoCtx(ctx, "book duplicate scan complete", "groups", len(result.Groups), "duplicates", result.TotalDuplicates)
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
@@ -167,18 +167,18 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.book-merge",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
 			op.AddEntity("books", p.KeepID)
 			op.AddEntity("books", p.MergeIDs...)
-			logging.Info(ctx, "book merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
+			logger.InfoCtx(ctx, "book merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
 			// F6 REROUTE: this op previously called dedup.MergeBooks, which
 			// hard-deleted losers via store.DeleteBook. DeleteBook does NOT
@@ -200,7 +200,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			mergeRes, skipped, err := applyBookMergeReroute(ms, opID, p.KeepID, p.MergeIDs)
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "book merge failed", "err", err)
+				logger.ErrorCtx(ctx, "book merge failed", "err", err)
 				// Store what the page needs to say about a failed merge: the
 				// op result is read by the same client that reads a finished
 				// one, and a bare "failed" cannot tell a merge that changed
@@ -209,13 +209,13 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				_, partial := errors.AsType[*merge.PartialMergeError](err)
 				failed := BookMergeOpResult{KeepID: p.KeepID, Skipped: skipped, Failed: true, Partial: partial, Error: err.Error()}
 				if serr := opsregistry.ReporterSetResult(reporter, failed); serr != nil {
-					logging.Warn(ctx, "book merge: failure payload not stored", "err", serr)
+					logger.WarnCtx(ctx, "book merge: failure payload not stored", "err", serr)
 				}
 				return err
 			}
 			for _, sk := range skipped {
 				op.AddEntity("skipped_books", sk.BookID)
-				logging.Warn(ctx, "book merge skipped a loser", "book_id", sk.BookID, "reason", sk.Reason)
+				logger.WarnCtx(ctx, "book merge skipped a loser", "book_id", sk.BookID, "reason", sk.Reason)
 			}
 			merged := 0
 			if mergeRes != nil {
@@ -225,7 +225,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 			if err := opsregistry.ReporterSetResult(reporter, payload); err != nil {
 				// The merge is done; only its report is lost. Say so rather than
 				// failing an op that changed the library.
-				logging.Warn(ctx, "book merge: result payload not stored", "err", err)
+				logger.WarnCtx(ctx, "book merge: result payload not stored", "err", err)
 			}
 			// The async twin of the link endpoints' response: which book holds
 			// the group's flag and the losers' user state, and whether
@@ -250,7 +250,7 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				s.dedupEngine.CleanupCandidatesAfterMerge(mergedLoserIDs(p.KeepID, p.MergeIDs, skipped, mergeRes))
 			}
 			op.SetStatus("success")
-			logging.Info(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", merged, "skipped_count", len(skipped))
+			logger.InfoCtx(ctx, "book merge complete", "kept_id", p.KeepID, "merged_count", merged, "skipped_count", len(skipped))
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
@@ -316,11 +316,11 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 				return fmt.Errorf("dedup.book-combine: database not initialized")
 			}
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{ID: opID, Type: "dedup.book-combine", Status: "pending"}
-			ctx = logging.WithOp(ctx, op)
+			op := &opContext{ID: opID, Type: "dedup.book-combine", Status: "pending"}
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 			op.AddEntity("books", p.KeepID)
 			op.AddEntity("books", p.MergeIDs...)
-			logging.Info(ctx, "book combine starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
+			logger.InfoCtx(ctx, "book combine starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
 			ms := s.mergeService
 			if ms == nil {
@@ -340,11 +340,11 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 				// later", not as a failure, and the result says so. The error
 				// text, which names the cause, is kept in retry_reason.
 				op.SetStatus("retry_later")
-				logging.Warn(ctx, "book combine not run: retry later; no absorbed file moved", "err", err)
+				logger.WarnCtx(ctx, "book combine not run: retry later; no absorbed file moved", "err", err)
 				cause, retryMessage := combineRetryLaterCause(err)
 				retry := BookCombineOpResult{PrimaryID: p.KeepID, RetryLater: true, RetryReason: err.Error(), RetryCause: cause, Message: retryMessage}
 				if serr := opsregistry.ReporterSetResult(reporter, retry); serr != nil {
-					logging.Warn(ctx, "book combine: retry-later payload not stored", "err", serr)
+					logger.WarnCtx(ctx, "book combine: retry-later payload not stored", "err", serr)
 				}
 				if s.activityWriter != nil && opID != "" {
 					activity.FlushOperation(s.activityWriter, opID)
@@ -359,16 +359,16 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 					// It may have moved files or retired books before it stopped.
 					// The result names the ids that undo it and says so; the
 					// store error itself stays in the log.
-					logging.Error(ctx, "book combine stopped part-way", "journal_id", incomplete.JournalID, "err", incomplete.Err)
+					logger.ErrorCtx(ctx, "book combine stopped part-way", "journal_id", incomplete.JournalID, "err", incomplete.Err)
 					failed.Incomplete = true
 					failed.JournalID = incomplete.JournalID
 					failed.OperationID = incomplete.OperationID
 					failed.Error = fmt.Sprintf("The combine stopped part-way and may already have moved some files or put some books in the trash. Revert operation %s to undo what it did.", incomplete.OperationID)
 				} else {
-					logging.Error(ctx, "book combine failed", "err", err)
+					logger.ErrorCtx(ctx, "book combine failed", "err", err)
 				}
 				if serr := opsregistry.ReporterSetResult(reporter, failed); serr != nil {
-					logging.Warn(ctx, "book combine: failure payload not stored", "err", serr)
+					logger.WarnCtx(ctx, "book combine: failure payload not stored", "err", serr)
 				}
 				return err
 			}
@@ -376,14 +376,14 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 			payload := newBookCombineOpResult(res, opID)
 			if serr := opsregistry.ReporterSetResult(reporter, payload); serr != nil {
 				// The combine is done; only its report is lost.
-				logging.Warn(ctx, "book combine: result payload not stored", "err", serr)
+				logger.WarnCtx(ctx, "book combine: result payload not stored", "err", serr)
 			}
 			s.dedupCache.InvalidateAll()
 			if s.dedupEngine != nil {
 				s.dedupEngine.CleanupCandidatesAfterMerge(combinedAwayIDs(p.MergeIDs, res.PrimaryID))
 			}
 			op.SetStatus("success")
-			logging.Info(ctx, "book combine complete", "primary_id", res.PrimaryID, "files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
+			logger.InfoCtx(ctx, "book combine complete", "primary_id", res.PrimaryID, "files_moved", res.FilesMoved, "books_deleted", res.BooksDeleted)
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
 				activity.EmitInfo(s.activityWriter, opID, "dedup.book-combine", "dedup", payload.Message, activity.AlwaysShow)
@@ -706,16 +706,16 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.author-scan",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "author duplicate scan starting")
+			logger.InfoCtx(ctx, "author duplicate scan starting")
 			// We don't know the final count until authors load; start with N=0
 			// and reset to a real N once we know it.
 			sp := sdk.NewProgress(reporter, 0)
@@ -725,10 +725,10 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			authors, err := store.GetAllAuthors()
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "author scan failed to fetch authors", "err", err)
+				logger.ErrorCtx(ctx, "author scan failed to fetch authors", "err", err)
 				return err
 			}
-			logging.Info(ctx, "authors loaded", "count", len(authors))
+			logger.InfoCtx(ctx, "authors loaded", "count", len(authors))
 			// Re-create the helper now that we know N = len(authors).
 			sp = sdk.NewProgress(reporter, len(authors))
 			sp.Start(fmt.Sprintf("Loaded %d authors, fetching book counts...", len(authors)))
@@ -736,7 +736,7 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 			bookCounts, err := store.GetAllAuthorBookCounts()
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "author scan failed to fetch book counts", "err", err)
+				logger.ErrorCtx(ctx, "author scan failed to fetch book counts", "err", err)
 				return err
 			}
 			bookCountFn := func(authorID int) int { return bookCounts[authorID] }
@@ -765,7 +765,7 @@ func (s *Server) RegisterAuthorDedupScanOp(reg *opsregistry.Registry) error {
 
 			op.SetStatus("success")
 			sp.Done(fmt.Sprintf("Found %d duplicate groups (after filtering reviewed)", len(groups)))
-			logging.Info(ctx, "author duplicate scan complete", "groups", len(groups))
+			logger.InfoCtx(ctx, "author duplicate scan complete", "groups", len(groups))
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
@@ -816,21 +816,21 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.series-scan",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "series duplicate scan starting")
+			logger.InfoCtx(ctx, "series duplicate scan starting")
 
 			result, err := dedup.ScanSeriesDuplicates(ctx, store, progress)
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series duplicate scan failed", "err", err)
+				logger.ErrorCtx(ctx, "series duplicate scan failed", "err", err)
 				return err
 			}
 
@@ -848,7 +848,7 @@ func (s *Server) RegisterSeriesDedupScanOp(reg *opsregistry.Registry) error {
 			s.dedupCache.Set("series-duplicates", resp)
 
 			op.SetStatus("success")
-			logging.Info(ctx, "series duplicate scan complete", "groups", len(result.Groups), "total_series", result.TotalSeries)
+			logger.InfoCtx(ctx, "series duplicate scan complete", "groups", len(result.Groups), "total_series", result.TotalSeries)
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
@@ -924,16 +924,16 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.series-dedup",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "series deduplication starting", "dry_run", dryRun)
+			logger.InfoCtx(ctx, "series deduplication starting", "dry_run", dryRun)
 
 			// opID is both the undo-ledger OperationChange.OperationID and the
 			// scan stand-down holder key: one id ties the journal rows to the
@@ -951,7 +951,7 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			}
 			if err != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series deduplication failed", "dry_run", dryRun, "err", err)
+				logger.ErrorCtx(ctx, "series deduplication failed", "dry_run", dryRun, "err", err)
 				return err
 			}
 			// An apply that kept a duplicate series is not a finished dedup. It
@@ -973,11 +973,11 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			kept := !dryRun && len(result.Errors) > 0
 			if kept {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series deduplication incomplete",
+				logger.ErrorCtx(ctx, "series deduplication incomplete",
 					"total_merged", result.TotalMerged, "kept", len(result.LeftIDs), "errors", len(result.Errors))
 			} else {
 				op.SetStatus("success")
-				logging.Info(ctx, "series deduplication complete",
+				logger.InfoCtx(ctx, "series deduplication complete",
 					"dry_run", dryRun, "total_merged", result.TotalMerged,
 					"books_reassigned", result.TotalBooksReassigned,
 					"errors", len(result.Errors))
@@ -1070,24 +1070,24 @@ func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.series-prune",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "series prune starting")
+			logger.InfoCtx(ctx, "series prune starting")
 			runErr := s.executeSeriesPrune(ctx, store, progress, opID)
 
 			if runErr != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series prune failed", "err", runErr)
+				logger.ErrorCtx(ctx, "series prune failed", "err", runErr)
 			} else {
 				op.SetStatus("success")
-				logging.Info(ctx, "series prune complete")
+				logger.InfoCtx(ctx, "series prune complete")
 			}
 
 			if s.activityWriter != nil && opID != "" {
@@ -1144,12 +1144,12 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.series-merge",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
@@ -1157,7 +1157,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			for _, mid := range p.MergeIDs {
 				op.AddEntity("series", strconv.Itoa(mid))
 			}
-			logging.Info(ctx, "series merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
+			logger.InfoCtx(ctx, "series merge starting", "keep_id", p.KeepID, "merge_count", len(p.MergeIDs))
 
 			// Locks are honoured unless the caller says otherwise, and the scanner is
 			// stood down for the merge (s is the ScanStandDownController). The Authors
@@ -1171,7 +1171,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 				// series; the cached list must not keep offering them.
 				s.dedupCache.InvalidateAll()
 				op.SetStatus("failed")
-				logging.Error(ctx, "series merge failed", "err", err)
+				logger.ErrorCtx(ctx, "series merge failed", "err", err)
 				return err
 			}
 
@@ -1194,7 +1194,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 			// The op is ResumeDrop with no retry policy, so failing here marks
 			// the run and does not re-attempt the merge.
 			s.dedupCache.InvalidateAll()
-			logging.Info(ctx, "series merge complete", "kept_id", p.KeepID,
+			logger.InfoCtx(ctx, "series merge complete", "kept_id", p.KeepID,
 				"merged_count", result.MergedCount,
 				"requested_count", len(p.MergeIDs),
 				"errors", len(result.Errors))
@@ -1278,16 +1278,16 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// No v1 row is involved: the client polls this id against
 			// GET /operations/v2/:id.
 			opID := opsregistry.ReporterOpID(reporter)
-			op := &logging.OpContext{
+			op := &opContext{
 				ID:     opID,
 				Type:   "dedup.series-normalize",
 				Status: "pending",
 			}
-			ctx = logging.WithOp(ctx, op)
+			ctx = logging.WithAttrs(ctx, slog.Any("", op))
 
 			progress := registryProgressAdapter{r: reporter}
 
-			logging.Info(ctx, "series normalization starting")
+			logger.InfoCtx(ctx, "series normalization starting")
 			_ = progress.Log("info", "Starting series name normalization...", nil)
 
 			// A partial failure must NOT discard the work that succeeded.
@@ -1303,7 +1303,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// still ends "failed", so the error is not swallowed.
 			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, opID)
 			if opErr != nil {
-				logging.Error(ctx, "series normalization reported errors; organizing the books it did collect before failing the operation",
+				logger.ErrorCtx(ctx, "series normalization reported errors; organizing the books it did collect before failing the operation",
 					"err", opErr, "affected_books", len(affectedBookIDs))
 				_ = progress.Log("warn", fmt.Sprintf(
 					"Series normalization hit errors (%v); still organizing the %d books it collected so their files match the series rows that changed",
@@ -1324,7 +1324,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 				s.InvalidateSeriesCache()
 			}
 
-			logging.Info(ctx, "series normalization normalize complete, now organizing", "affected_books", len(affectedBookIDs))
+			logger.InfoCtx(ctx, "series normalization normalize complete, now organizing", "affected_books", len(affectedBookIDs))
 			_ = progress.Log("info", fmt.Sprintf("Renamed/merged series; organizing %d affected books...", len(affectedBookIDs)), nil)
 
 			log2 := logger.NewWithActivityLog("series-normalize", store)
@@ -1333,7 +1333,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			for _, bookID := range affectedBookIDs {
 				if ctx.Err() != nil {
 					op.SetStatus("failed")
-					logging.Error(ctx, "series normalization cancelled", "err", ctx.Err())
+					logger.ErrorCtx(ctx, "series normalization cancelled", "err", ctx.Err())
 					// errors.Join, not a bare ctx.Err(): if the normalize pass already
 					// returned a real failure (a list of series whose rename failed),
 					// returning only "context canceled" discards the only durable record
@@ -1367,7 +1367,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 					// hard-deleted between collection and here looks identical to one
 					// whose on-disk row survives while the in-memory index has lost it.
 					// The first is harmless; the second is a live book left behind.
-					logging.Error(ctx, "book listed as affected does not resolve",
+					logger.ErrorCtx(ctx, "book listed as affected does not resolve",
 						"book_id", bookID, "op", "series-normalize")
 					_ = progress.Log("warn", fmt.Sprintf(
 						"book %s does not resolve: it was either deleted after this run collected it "+
@@ -1411,7 +1411,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 				}
 			}
 			if organizeRefused > 0 {
-				logging.Info(ctx, "series normalization declined to organize some books by policy",
+				logger.InfoCtx(ctx, "series normalization declined to organize some books by policy",
 					"refused", organizeRefused, "total", len(affectedBookIDs))
 			}
 			// Folded into the operation's outcome rather than left in the log. A
@@ -1430,17 +1430,17 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 					"retry them because the series names are already normalized. See the per-book warnings above "+
 					"for each cause",
 					organizeFailed, len(affectedBookIDs))
-				logging.Error(ctx, "series normalization could not organize every affected book",
+				logger.ErrorCtx(ctx, "series normalization could not organize every affected book",
 					"failed", organizeFailed, "refused", organizeRefused, "total", len(affectedBookIDs))
 				_ = progress.Log("warn", organizeErr.Error(), nil)
 				opErr = errors.Join(opErr, organizeErr)
 			}
 
 			if len(affectedBookIDs) > 0 {
-				logging.Info(ctx, "writing tags for affected books", "count", len(affectedBookIDs))
+				logger.InfoCtx(ctx, "writing tags for affected books", "count", len(affectedBookIDs))
 				_ = progress.Log("info", fmt.Sprintf("Writing tags for %d affected books...", len(affectedBookIDs)), nil)
 				if wbErr := s.runBulkWriteBack(ctx, opID, affectedBookIDs, false, 0, progress, nil); wbErr != nil {
-					logging.Warn(ctx, "tag write-back incomplete", "err", wbErr)
+					logger.WarnCtx(ctx, "tag write-back incomplete", "err", wbErr)
 					_ = progress.Log("warn", fmt.Sprintf("tag write-back incomplete: %v", wbErr), nil)
 				}
 			}
@@ -1450,7 +1450,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// silence.
 			if opErr != nil {
 				op.SetStatus("failed")
-				logging.Error(ctx, "series normalization failed", "err", opErr, "affected_books", len(affectedBookIDs))
+				logger.ErrorCtx(ctx, "series normalization failed", "err", opErr, "affected_books", len(affectedBookIDs))
 				if s.activityWriter != nil && opID != "" {
 					activity.FlushOperation(s.activityWriter, opID)
 				}
@@ -1458,7 +1458,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			}
 
 			op.SetStatus("success")
-			logging.Info(ctx, "series normalization complete", "affected_books", len(affectedBookIDs))
+			logger.InfoCtx(ctx, "series normalization complete", "affected_books", len(affectedBookIDs))
 			_ = progress.Log("info", "Series normalization complete.", nil)
 
 			if s.activityWriter != nil && opID != "" {

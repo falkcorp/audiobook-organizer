@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package dedup
 
@@ -9,13 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	logging "github.com/falkcorp/mediacore/log"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -122,7 +122,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		return fmt.Errorf("store does not implement LSHIndexStore (PebbleDB required)")
 	}
 
-	logging.Info(ctx, "lsh-index-build: starting")
+	logger.InfoCtx(ctx, "lsh-index-build: starting")
 	loadProg := sdk.NewProgress(reporter, 0)
 	loadProg.Start("Loading BookFiles for LSH indexing…")
 
@@ -133,10 +133,10 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 	total := len(files)
 	if total == 0 {
 		loadProg.Done("No BookFiles found — nothing to index")
-		logging.Info(ctx, "lsh-index-build: no files, exiting")
+		logger.InfoCtx(ctx, "lsh-index-build: no files, exiting")
 		return nil
 	}
-	logging.Info(ctx, "lsh-index-build: loaded files", "total", total)
+	logger.InfoCtx(ctx, "lsh-index-build: loaded files", "total", total)
 
 	// Group files by BookID so each worker hydrates a book's full BookFile
 	// rows (via p.store.GetBookFiles, a raw Pebble read that bypasses memdb
@@ -321,7 +321,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		mu.Unlock()
 
 		if shouldLog {
-			logging.Info(ctx, "lsh-index-build: progress",
+			logger.InfoCtx(ctx, "lsh-index-build: progress",
 				"processed", curProcessed, "total", total,
 				"indexed", curIndexed, "skipped", curSkipped,
 				"no_fp", curNoFP, "no_fp_perm_failed", curPermFailed, "errors", curErrs)
@@ -340,7 +340,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		},
 	})
 	if runErr != nil {
-		logging.Info(ctx, "lsh-index-build: stopped", "processed", processedFiles, "indexed", indexed, "error", runErr)
+		logger.InfoCtx(ctx, "lsh-index-build: stopped", "processed", processedFiles, "indexed", indexed, "error", runErr)
 		return runErr
 	}
 
@@ -364,7 +364,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 			} else {
 				reporter.Logger().Info("lsh-index-build: queued fingerprint-rescan for unfingerprinted books",
 					"books", len(noFPBookIDs), "files", noFP)
-				logging.Info(ctx, "lsh-index-build: enqueued fingerprint-rescan",
+				logger.InfoCtx(ctx, "lsh-index-build: enqueued fingerprint-rescan",
 					"books", len(noFPBookIDs), "files", noFP)
 			}
 		} else {
@@ -385,7 +385,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		"LSH index build complete — %d indexed, %d skipped (already indexed), %d no-fingerprint (%d books queued for rescan, %d permanently failed), %d errors (of %d files)",
 		indexed, skipped, noFP, len(noFPBookSet), noFPPermFailed, errs, total)
 	prog.Done(summary)
-	logging.Info(ctx, "lsh-index-build: complete",
+	logger.InfoCtx(ctx, "lsh-index-build: complete",
 		"indexed", indexed, "skipped", skipped,
 		"no_fp", noFP, "no_fp_books", len(noFPBookSet),
 		"no_fp_perm_failed", noFPPermFailed, "errors", errs, "total", total)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/manual_candidates.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: fa18d5e2-e868-4872-866e-cd8bb2b6f9ff
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package deduphandler
 
@@ -16,7 +16,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	logging "github.com/falkcorp/mediacore/log"
 	"github.com/gin-gonic/gin"
 )
 
@@ -227,8 +226,8 @@ func (h *Handler) checkManualPair(ctx context.Context, r *manualCandidateResult,
 			// caller to treat a transient store failure as a bad ID.
 			r.Outcome, r.Code = manualOutcomeRejected, "lookup_failed"
 			r.Error = fmt.Sprintf("could not read book %s", id)
-			logging.Warn(ctx, "dedup manual candidate: book lookup failed",
-				"book_id", logger.SanitizeLogValue(id), "err", logging.SanitizeErr(err))
+			logger.WarnCtx(ctx, "dedup manual candidate: book lookup failed",
+				"book_id", logger.SanitizeLogValue(id), "err", err)
 			return
 		}
 		if b == nil {
@@ -263,9 +262,9 @@ func (h *Handler) enqueueManualPair(ctx context.Context, es *database.EmbeddingS
 	}
 	if err != nil {
 		r.Outcome, r.Code, r.Error = manualOutcomeFailed, "store_error", "failed to enqueue the candidate"
-		logging.Error(ctx, "dedup manual candidate: store write failed",
+		logger.ErrorCtx(ctx, "dedup manual candidate: store write failed",
 			"book_a", logger.SanitizeLogValue(r.BookA), "book_b", logger.SanitizeLogValue(r.BookB),
-			"dry_run", dryRun, "err", logging.SanitizeErr(err))
+			"dry_run", dryRun, "err", err)
 		return
 	}
 	r.Outcome = string(res.Outcome)

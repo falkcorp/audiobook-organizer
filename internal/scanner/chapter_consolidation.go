@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.4.4
+// version: 2.4.5
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package scanner
 
@@ -18,10 +18,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // chapterKeyKind and chapterGroupKey live in internal/metadata (moved
@@ -186,7 +186,7 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 		rc := scanRunCountersFrom(ctx)
 		rc.oversizedGroups.Add(1)
 		rc.oversizedFiles.Add(int64(len(group)))
-		logging.Warn(ctx, "scanner oversized directory: same-title group refused; no book created for these files",
+		logger.WarnCtx(ctx, "scanner oversized directory: same-title group refused; no book created for these files",
 			"dir", filepath.Dir(group[0].path), "count", len(group), "key", key, "reason", why)
 	}
 
@@ -241,7 +241,7 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 				refuse(group, key, "no file's duration could be read")
 				continue
 			}
-			logging.Warn(ctx, "scanner chapter consolidation skipped: all files in group unreadable, duration unknown",
+			logger.WarnCtx(ctx, "scanner chapter consolidation skipped: all files in group unreadable, duration unknown",
 				"count", len(group), "key", key)
 			books = perFile(books, group)
 			continue
@@ -287,7 +287,7 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 			paths[i] = c.path
 		}
 		slices.SortFunc(paths, util.CompareNatural)
-		logging.Info(ctx, "scanner chapter consolidation merging files", "count", len(group), "key", key, "avg_sec_per_file", avgSec, "total_sec", totalSec)
+		logger.InfoCtx(ctx, "scanner chapter consolidation merging files", "count", len(group), "key", key, "avg_sec_per_file", avgSec, "total_sec", totalSec)
 		books = append(books, Book{
 			FilePath:        group[0].path,
 			Format:          strings.ToLower(filepath.Ext(group[0].path)),
@@ -298,7 +298,7 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 	}
 
 	if unknownDurationGroups > 0 {
-		logging.Warn(ctx, "scanner chapter consolidation: groups skipped due to unknown duration",
+		logger.WarnCtx(ctx, "scanner chapter consolidation: groups skipped due to unknown duration",
 			"unknown_duration_groups", unknownDurationGroups)
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -32,12 +32,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	logging "github.com/falkcorp/mediacore/log"
 	"log/slog"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -171,7 +171,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		}
 		var rec embRecPartial
 		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
-			logging.Warn(ctx, "emb-reencode: skip malformed row", "key", string(iter.Key()), "error", err)
+			logger.WarnCtx(ctx, "emb-reencode: skip malformed row", "key", string(iter.Key()), "error", err)
 			continue
 		}
 
@@ -202,7 +202,7 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		// v0 row: decode float32 then re-encode to v1.
 		vec := database.DecodeVectorExported(row.oldVBlob)
 		if vec == nil {
-			logging.Warn(ctx, "emb-reencode: skip empty vector blob", "key", string(row.key))
+			logger.WarnCtx(ctx, "emb-reencode: skip empty vector blob", "key", string(row.key))
 			continue
 		}
 		newBlob := database.EncodeVectorExported(vec)

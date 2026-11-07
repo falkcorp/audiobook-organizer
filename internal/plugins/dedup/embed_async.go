@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_async.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234567890
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // T018: embed_async.go is a thin wrapper that delegates to runEmbedScanMode
 // (in embed_scan.go) with async=true.
@@ -15,10 +15,10 @@ package dedup
 import (
 	"context"
 	"encoding/json"
-	logging "github.com/falkcorp/mediacore/log"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -48,7 +48,7 @@ func (p *Plugin) runEmbedAsync(ctx context.Context, _ json.RawMessage, reporter 
 	// Skip if backend is not OpenAI — the OpenAI Batch API is quota-dead now
 	// that Ollama/bge-m3 is the primary embedding backend.
 	if config.AppConfig.Embedding.BaseURL != "" || config.AppConfig.OpenAIAPIKey == "" {
-		logging.Warn(ctx, "dedup.embed-async skipped: no OpenAI backend configured (Ollama/local embedding is primary)", "base_url", config.AppConfig.Embedding.BaseURL)
+		logger.WarnCtx(ctx, "dedup.embed-async skipped: no OpenAI backend configured (Ollama/local embedding is primary)", "base_url", config.AppConfig.Embedding.BaseURL)
 		return nil
 	}
 	return p.runEmbedScanMode(ctx, true, reporter)

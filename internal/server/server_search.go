@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package server
 
@@ -24,7 +24,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 func (s *Server) SearchIndex() *search.BleveIndex {
@@ -406,7 +405,7 @@ func (s *Server) fireDedupOnImport(bookID string) {
 	}
 	if config.AppConfig.Dedup.OnImportViaScheduler && s.opRegistry != nil {
 		if err := dedup.EnqueueCheckBook(s.bgCtx, s.opRegistry, bookID); err != nil {
-			logging.Warn(s.bgCtx, "dedup-on-import: enqueue failed", "bookID", bookID, "err", err)
+			logger.WarnCtx(s.bgCtx, "dedup-on-import: enqueue failed", "bookID", bookID, "err", err)
 		}
 		return
 	}

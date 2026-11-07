@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -24,11 +24,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
-	logging "github.com/falkcorp/mediacore/log"
 )
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op. It is
@@ -393,7 +393,7 @@ func mergeAuthorsInto(
 			})
 			if merr != nil {
 				moveFailures++
-				logging.Warn(ctx, "author merge: book not moved", "book", book.ID, "from_author", mergeID, "err", merr)
+				logger.WarnCtx(ctx, "author merge: book not moved", "book", book.ID, "from_author", mergeID, "err", merr)
 				out.Errors = append(out.Errors, fmt.Sprintf("book %s: not moved off author %d: %v", book.ID, mergeID, merr))
 				continue
 			}
@@ -401,7 +401,7 @@ func mergeAuthorsInto(
 				// The credits moved but the primary write failed: the book still
 				// names the merged author, so it is not deleted.
 				moveFailures++
-				logging.Warn(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", moved.PrimaryErr)
+				logger.WarnCtx(ctx, "author merge failed to sync denormalized AuthorID on book", "book", book.ID, "err", moved.PrimaryErr)
 			}
 			for _, p := range moved.Problems {
 				out.Errors = append(out.Errors, fmt.Sprintf("book %s: %s", book.ID, p))
@@ -483,7 +483,7 @@ func (s *Server) holdAuthorMergeStandDown(ctx context.Context, opID, reason stri
 func mergeFinish(ctx context.Context, store authorMergeStore, opID string, from, keep *database.Author, out *authorMergeOutcome) bool {
 	del, err := authormerge.MergeDelete(store, opID, *from, *keep)
 	if err != nil {
-		logging.Warn(ctx, "author merge: the author is not deleted", "author", from.ID, "err", err)
+		logger.WarnCtx(ctx, "author merge: the author is not deleted", "author", from.ID, "err", err)
 		out.Errors = append(out.Errors, fmt.Sprintf("author %d NOT deleted: %v", from.ID, err))
 		return false
 	}

@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-07
 
@@ -30,7 +30,7 @@ const corePath = "github.com/falkcorp/mediacore"
 // not layered: they may import any core package and no core non-test package
 // imports them (coreTestSupport).
 //
-// R1-09 and R1-13 edit this file only to change the in-module control (03
+// R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
 // §3.5.1 item 2), never this table.
 var coreLayerOf = map[string]int{
 	// L0
@@ -169,10 +169,12 @@ func countPackageDirs(t *testing.T, root string) int {
 }
 
 // TestCoreLayering is 03 R4's guard. Its in-module control (03 §3.5.1 item 2)
-// is health -> log, the first real in-core edge, created by R1-09 when the
-// flight recorder moved into core/health and started sanitizing its log lines
-// through core/log. A PR that removes that import names the replacement edge
-// here; once the composition root exists the control is app -> kernel.
+// is metrics -> log: the metrics Provider's span exporter redacts through
+// log.Redactor (R1-32, 05-metrics §3). The first control, health -> log
+// (R1-09: the flight recorder sanitised its lines through core/log), went
+// away when R1-36 deleted log.Sanitize and the handler took over escaping. A
+// PR that removes metrics -> log names the replacement edge here; once the
+// composition root exists the control is app -> kernel.
 func TestCoreLayering(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -193,7 +195,7 @@ func TestCoreLayering(t *testing.T) {
 		DeclaredMayBeAbsent: true,
 		Named:               coreLayerOf,
 		Family:              coreFamily,
-		Control:             archtest.Edge{"health", "log"},
+		Control:             archtest.Edge{"metrics", "log"},
 		ImportFloor:         0,
 		TestSupport:         coreTestSupport,
 		FloorRatio:          1,

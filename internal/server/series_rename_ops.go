@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -26,7 +26,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	logging "github.com/falkcorp/mediacore/log"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -230,7 +229,7 @@ func (s *Server) reopenAppliedScanResults(opID string) {
 	}
 	rows, err := s.storeForWiring().GetOperationChanges(opID)
 	if err != nil {
-		logging.Warn(context.Background(), "revert: could not read the operation's ledger to reopen its scan results", "operation_id", opID, "err", err)
+		logger.WarnCtx(context.Background(), "revert: could not read the operation's ledger to reopen its scan results", "operation_id", opID, "err", err)
 		return
 	}
 	for _, c := range rows {
@@ -239,11 +238,11 @@ func (s *Server) reopenAppliedScanResults(opID string) {
 		}
 		note, derr := undo.DecodeAIScanResultApplied(c)
 		if derr != nil {
-			logging.Warn(context.Background(), "revert: unreadable scan-result note", "operation_id", opID, "change_id", c.ID, "err", derr)
+			logger.WarnCtx(context.Background(), "revert: unreadable scan-result note", "operation_id", opID, "change_id", c.ID, "err", derr)
 			continue
 		}
 		if cerr := s.aiScanStore.ClearResultApplied(note.ScanID, note.ResultID); cerr != nil {
-			logging.Warn(context.Background(), "revert: could not mark a scan result pending again",
+			logger.WarnCtx(context.Background(), "revert: could not mark a scan result pending again",
 				"operation_id", opID, "scan_id", note.ScanID, "result_id", note.ResultID, "err", cerr)
 		}
 	}

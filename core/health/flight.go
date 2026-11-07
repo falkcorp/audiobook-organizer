@@ -1,5 +1,5 @@
 // file: core/health/flight.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 77f150f0-6e2a-4983-9ab6-3b77b267821f
 // last-edited: 2026-11-07
 
@@ -61,8 +61,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	corelog "github.com/falkcorp/mediacore/log"
 )
 
 // EnvSwitch names the environment variable that turns recording off when set
@@ -193,12 +191,12 @@ type Recorder struct {
 	dropLog    map[string]time.Time
 }
 
-// logf writes one line to the recorder's logger. Sanitize keeps the behaviour
-// of the logger this recorder used before it moved to core: every line is
-// newline-escaped before it is written. It is an interim; the log handler's
-// own control-character escaping replaces it (R1-36).
+// logf writes one line to the recorder's logger. It does not escape the line
+// itself: the core logging pipeline's text and JSON handlers quote control
+// characters, so a request-controlled value cannot forge a record
+// (05-logging §3, TestHandler_EscapesControlChars).
 func (r *Recorder) logf(level slog.Level, format string, args ...any) {
-	r.log.Log(context.Background(), level, corelog.Sanitize(fmt.Sprintf(format, args...)))
+	r.log.Log(context.Background(), level, fmt.Sprintf(format, args...))
 }
 
 // closeLogged closes c and logs a failure: a close error on a read-only handle
