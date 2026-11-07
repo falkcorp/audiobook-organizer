@@ -72,9 +72,11 @@ func (oc *opContext) LogValue() slog.Value {
 		slog.String("opStatus", oc.Status),
 	}
 	if len(oc.Entities) > 0 {
-		// A map[string][]string always marshals; the error is unreachable.
-		b, _ := json.Marshal(oc.Entities)
-		attrs = append(attrs, slog.String("entities", string(b)))
+		entities := "[unencodable]" // a map[string][]string always marshals
+		if b, err := json.Marshal(oc.Entities); err == nil {
+			entities = string(b)
+		}
+		attrs = append(attrs, slog.String("entities", entities))
 	}
 	return slog.GroupValue(attrs...)
 }

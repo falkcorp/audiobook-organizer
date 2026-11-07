@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,10 +88,8 @@ func checkLocalName(name string) error {
 	if name == "" || path.IsAbs(name) || filepath.IsAbs(name) {
 		return fmt.Errorf("log: OpenRotatingFile: %q is not a local path", name)
 	}
-	for _, el := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if el == ".." {
-			return fmt.Errorf("log: OpenRotatingFile: %q has a \"..\" element", name)
-		}
+	if slices.Contains(strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }), "..") {
+		return fmt.Errorf("log: OpenRotatingFile: %q has a \"..\" element", name)
 	}
 	return nil
 }
@@ -104,8 +103,7 @@ func (f *RotatingFile) open() error {
 	}
 	st, err := fh.Stat()
 	if err != nil {
-		_ = fh.Close() // the Stat error is the one reported
-		return err
+		return errors.Join(err, fh.Close())
 	}
 	f.f, f.size = fh, st.Size()
 	return nil
@@ -214,9 +212,11 @@ func (f *RotatingFile) warn(err error) {
 	if !f.lastWarn.IsZero() && now.Sub(f.lastWarn) < rotateRetry {
 		return
 	}
-	f.lastWarn = now
-	// A failure to report a failure has nowhere left to go.
-	_, _ = fmt.Fprintf(f.stderr, "mediacore/log: rotating %q failed, still writing the current file: %q\n", f.name, err.Error())
+	// The minute's budget is spent only when the line reached stderr, so a
+	// failed report is retried on the next failure.
+	if _, werr := fmt.Fprintf(f.stderr, "mediacore/log: rotating %q failed, still writing the current file: %q\n", f.name, err.Error()); werr == nil {
+		f.lastWarn = now
+	}
 }
 
 // Close closes the live file. Later writes return os.ErrClosed; a second

@@ -187,8 +187,8 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 // nothing (and no "[REDACTED]" for an empty denied group).
 func (h *handler) nest(recAttrs []slog.Attr) []slog.Attr {
 	inner := recAttrs
-	for i := len(h.groups) - 1; i >= 0; i-- {
-		g := h.groups[i]
+	for _, g := range slices.Backward(h.groups) {
+
 		if len(g.attrs) == 0 && len(inner) == 0 {
 			continue
 		}
