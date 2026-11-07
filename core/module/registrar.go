@@ -1,5 +1,5 @@
 // file: core/module/registrar.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b007ae28-2b2a-42a1-aa5a-047aa14d3b77
 // last-edited: 2026-11-07
 
@@ -30,10 +30,11 @@ type Registrar struct {
 	http          *httpapi.Group
 	legacyAuthGin bool
 
-	mu       sync.Mutex // guards closed and problems against a late call from another goroutine
-	closed   bool
-	problems []Problem
-	rec      Registrations
+	mu         sync.Mutex // guards closed and problems against a late call from another goroutine
+	closed     bool
+	problems   []Problem
+	rec        Registrations
+	afterClose func(Problem)
 }
 
 // RegistrarConfig is what the kernel hands NewRegistrar. Kernel-only.
@@ -44,6 +45,9 @@ type RegistrarConfig struct {
 	// LegacyAuthGin is true for the one module app.Options.LegacyAuthGinUntil
 	// names: only its MountLegacy may use httpapi.LegacyAuthGin (SEC2-17).
 	LegacyAuthGin bool
+	// AfterClose, when set, receives each ProblemRegistrarClosed recorded
+	// after Close, which no Err call reads any more: the kernel logs it.
+	AfterClose func(Problem)
 }
 
 // Registrations is what one module recorded. Kernel-only: the kernel reads
@@ -65,30 +69,44 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin}
+	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin,
+		afterClose: c.AfterClose}
 }
 
-// Close ends registration and returns what was recorded. Kernel-only. Every
-// call after it records ProblemRegistrarClosed (and Err keeps reporting it).
+// Close ends registration and returns what was recorded. Kernel-only. It is
+// idempotent: every call returns the same registrations, so a module that
+// calls Close itself inside Register loses nothing (its later calls record
+// ProblemRegistrarClosed). Every call after the first records
+// ProblemRegistrarClosed, and Err keeps reporting it.
 func (r *Registrar) Close() Registrations {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
 	rec := r.rec
-	r.rec = Registrations{}
+	rec.Mounts = slices.Clone(rec.Mounts)
+	rec.AuthMethods = slices.Clone(rec.AuthMethods)
+	rec.PathRules = slices.Clone(rec.PathRules)
+	rec.Hooks = slices.Clone(rec.Hooks)
+	rec.Workers = slices.Clone(rec.Workers)
 	return rec
 }
 
 // record runs fn while open; after Close it records ProblemRegistrarClosed
-// naming call instead.
+// naming call instead, and hands it to RegistrarConfig.AfterClose.
 func (r *Registrar) record(call string, fn func()) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
-		r.problems = append(r.problems, Problem{Module: r.id, Kind: ProblemRegistrarClosed,
-			Detail: call + " called after Register returned; register everything inside Register"})
+		p := Problem{Module: r.id, Kind: ProblemRegistrarClosed,
+			Detail: call + " called after Register returned; register everything inside Register"}
+		r.problems = append(r.problems, p)
+		after := r.afterClose
+		r.mu.Unlock()
+		if after != nil {
+			after(p)
+		}
 		return
 	}
+	defer r.mu.Unlock()
 	fn()
 }
 
@@ -123,6 +141,10 @@ func (r *Registrar) HTTP() *httpapi.Group {
 func (r *Registrar) MountLegacy(m httpapi.LegacyMount) {
 	r.record("MountLegacy", func() {
 		m.Owner = string(r.id)
+		if m.Auth != httpapi.LegacyAuthCore && m.Auth != httpapi.LegacyAuthGin {
+			r.problem(ProblemLegacyAuth, "MountLegacy with Auth %d: set httpapi.LegacyAuthCore (or LegacyAuthGin for the module app.Options.LegacyAuthGinUntil names)", m.Auth)
+			return
+		}
 		if m.Auth == httpapi.LegacyAuthGin && !r.legacyAuthGin {
 			r.problem(ProblemLegacyAuth, "MountLegacy with LegacyAuthGin: only the module app.Options.LegacyAuthGinUntil names may skip core authentication; use LegacyAuthCore")
 			return

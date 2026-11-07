@@ -1,5 +1,5 @@
 // file: core/module/module_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e0a9bf1-27de-4d08-af46-624ebc5146e5
 // last-edited: 2026-11-07
 
@@ -84,8 +84,25 @@ func TestRegistrar_RecordsAndCloses(t *testing.T) {
 	if !errors.As(err, &ve) || len(ve.Problems) != 2 {
 		t.Fatalf("late calls = %v, want two problems", err)
 	}
-	if again := r.Close(); len(again.Hooks) != 0 {
-		t.Fatal("a hook registered after Close was recorded")
+	// Close is idempotent: a second Close (say, a module that called Close
+	// inside Register before the kernel's own) returns the same
+	// registrations, without the late hook.
+	if again := r.Close(); len(again.Hooks) != 1 || again.Hooks[0].Name != "batcave.signal" || len(again.Mounts) != 1 {
+		t.Fatalf("second Close = %+v, want the first Close's registrations", again)
+	}
+}
+
+// TestRegistrar_AfterCloseReported proves a late call is not silent: the
+// kernel reads Err once at P6, so RegistrarConfig.AfterClose receives each
+// ProblemRegistrarClosed recorded after Close.
+func TestRegistrar_AfterCloseReported(t *testing.T) {
+	var late []Problem
+	r := NewRegistrar(RegistrarConfig{Context: t.Context(), Deps: Deps{Module: "batcave"},
+		AfterClose: func(p Problem) { late = append(late, p) }})
+	r.Close()
+	r.Worker(Worker{Name: "late-patrol"})
+	if len(late) != 1 || late[0].Kind != ProblemRegistrarClosed || !strings.Contains(late[0].Detail, "Worker") {
+		t.Fatalf("AfterClose got %v, want one ProblemRegistrarClosed naming Worker", late)
 	}
 }
 
@@ -100,6 +117,8 @@ func TestRegistrar_Refusals(t *testing.T) {
 		"auth method foreign name": {func(r *Registrar) { r.AuthMethod(auth.MethodSpec{Method: "arkham.cowl"}) }, ErrAuthMethod},
 		"auth method bare id":      {func(r *Registrar) { r.AuthMethod(auth.MethodSpec{Method: "batcave."}) }, ErrAuthMethod},
 		"legacy gin not allowed":   {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthGin}) }, ErrLegacyAuth},
+		"legacy auth unset":        {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler()}) }, ErrLegacyAuth},
+		"legacy auth unknown":      {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthGin + 1}) }, ErrLegacyAuth},
 		"worker zero policy":       {func(r *Registrar) { r.Worker(Worker{Name: "patrol", Run: func(context.Context) error { return nil }}) }, ErrWorkerPolicy},
 		"worker without run":       {func(r *Registrar) { r.Worker(Worker{Name: "patrol", Policy: StopAppOnExit}) }, ErrInvalidRegistration},
 		"hook outside namespace":   {func(r *Registrar) { r.Hook(Hook{Name: "arkham.cells"}) }, ErrInvalidRegistration},
