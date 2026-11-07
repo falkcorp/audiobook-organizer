@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.12.2
+# version: 4.12.3
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 
 name: Production Release
 
@@ -42,7 +42,7 @@ permissions:
 jobs:
   release:
     name: Create Production Release
-    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@23ed8a466e5562678fd9eb45f39f0113518f0dd1 # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-release.yml@016cd02a4afbc2fdd84d2f08e012eff1573d7ea9 # main 2026-11-07; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       release-type: ${{ github.event.inputs.release-type }}
       prerelease: false
@@ -56,6 +56,9 @@ jobs:
       disabled-languages: 'python'
       system-packages: 'libtag1-dev'
       pre-build-script: 'cd web && npm ci && npm run build'
+      # Changelog collection pushes as the CI bot app from this repo's main-only
+      # `ci-bot` environment, which holds the app key (github-common #391).
+      bot-environment: ci-bot
       # Linters stayed off because gha-release-go's lint step did not see
       # GOEXPERIMENT=jsonv2 and go vet failed on json/v2 imports. That reason
       # is gone with Go 1.27 (json/v2 is GA and default); re-enabling is a

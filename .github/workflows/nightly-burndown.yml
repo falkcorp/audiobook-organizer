@@ -1,7 +1,7 @@
 # file: .github/workflows/nightly-burndown.yml
-# version: 2.10.1
+# version: 2.10.2
 # guid: c9367168-6274-4714-a0f2-130595ff2453
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 name: Nightly burndown
 
 
@@ -49,7 +49,7 @@ on:
 
 jobs:
   burndown:
-    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@23ed8a466e5562678fd9eb45f39f0113518f0dd1 # main 2026-11-06; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
+    uses: falkcorp/github-common/.github/workflows/reusable-burndown.yml@016cd02a4afbc2fdd84d2f08e012eff1573d7ea9 # main 2026-11-07; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       # Scheduled runs always use full mode (auto-merge ready PRs).
       # Manual dispatch respects the input selection (default: draft-only for safety).
