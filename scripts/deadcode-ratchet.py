@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
 # last-edited: 2026-11-07
 """Ratchet on production functions unreachable from every `main`.
@@ -64,6 +64,30 @@ packages are SDK surface and out of scope, as `pkg/` is. A filter naming only
 core's trees would drop every root finding, and `--prune` would then empty the
 baseline, which is the silent re-baseline this gate exists to prevent.
 
+SDK surface counts as live (core run only). Core's exported packages are not
+analysed, but they ARE callable: app.App.Handler is spec'd "for coretest and
+embedding", no main of ours calls it, and it is the only caller of
+kernel.Kernel.Handler. Reporting that as dead would contradict treating the
+surface as out of scope. So the core run has one more main besides hello's: a
+synthetic package that references every exported func, and every exported
+method of every exported type, of core's public packages (tools/deadcode/
+surface generates it). Public means not `kernel`, nothing under `internal/`,
+`examples/`, `testdata/` or `archtest`, no main package, and no *_test.go
+file; the run never uses deadcode's `-test`, so test-only code stays dead.
+References are method expressions and func values, each stored in its own
+package-level variable (no instance is constructed, and never a []any: an
+interface conversion makes the signature's types runtime types, and deadcode
+then treats every exported method they reach as live through reflection,
+which would hide Kernel.Lifecycle-style dead methods). Generic funcs and methods of generic types are instantiated with
+struct{} when every constraint is any, interface{} or comparable; any other
+constraint is SKIPPED, listed in the generated file's header comment, and what
+only that member reaches stays unreachable. The package is written into a
+scratch COPY of core/ (never the real tree): deadcode loads through
+go/packages, which reads sources from disk and ignores `-overlay` in GOFLAGS,
+so a virtual file does not load. Paths are still reported relative to the copy's
+root, which has core's layout, so normalisation below is unchanged. The root run
+has no such main, and without hello there is no core run and no scratch copy.
+
 Combining the runs. A function is unreachable from every main only if no run
 reaches it, but a run can only judge the packages it loaded: a core package
 that the root run loads and hello does not is NOT shown to be live by hello's
@@ -92,6 +116,7 @@ containing `ForTest` (test seams).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import posixpath
 import re
@@ -123,6 +148,7 @@ CORE_DIR = "core"
 CORE_FILTER = re.escape(CORE_MODULE) + r"/(internal|kernel)"
 HELLO_DIR = (CORE_DIR, "examples", "hello")
 HELLO_PATTERN = "./examples/hello/..."  # relative to core/: every hello main (cmd/hello)
+SURFACE_DIR = "zz_sdksurface"  # the synthetic main, in the scratch copy of core/ only
 MODULE_RE = re.compile(r"^module\s+(\S+)\s*$", re.M)
 
 
@@ -138,9 +164,11 @@ class RunSpec:
     """One deadcode run: where it runs (its module context) and what it loads."""
 
     name: str
-    cwd: Path
+    cwd: Path  # where the run executes; the real module dir, or a scratch copy of it
     filter: str
     patterns: tuple[str, ...]
+    base: str = ""  # the module dir relative to the repo root ("" root, "core")
+    surface: bool = False  # add the synthetic SDK-surface main (see the docstring)
 
     @property
     def args(self) -> list[str]:
@@ -162,7 +190,16 @@ def plan(root: Path) -> list[RunSpec]:
     root_filter = f"^({re.escape(root_module(root))}|{CORE_FILTER})(/|$)"
     specs = [RunSpec("root", root, root_filter, ("./...",))]
     if hello_present(root):
-        specs.append(RunSpec("core", root / CORE_DIR, f"^{CORE_FILTER}(/|$)", (HELLO_PATTERN,)))
+        specs.append(
+            RunSpec(
+                "core",
+                root / CORE_DIR,
+                f"^{CORE_FILTER}(/|$)",
+                (HELLO_PATTERN,),
+                base=CORE_DIR,
+                surface=True,
+            )
+        )
     return specs
 
 
@@ -353,22 +390,59 @@ def _run(cmd: list[str], spec: RunSpec, env: dict[str, str], what: str) -> str:
     return res.stdout
 
 
-def loaded_dirs(root: Path, spec: RunSpec, env: dict[str, str]) -> frozenset[str]:
+def loaded_dirs(spec: RunSpec, env: dict[str, str]) -> frozenset[str]:
     """Repo-relative dirs of the non-std packages the run loads: what deadcode
-    sees, via `go list -deps` with the run's cwd, patterns and env."""
+    sees, via `go list -deps` with the run's cwd, patterns and env. A scratch
+    copy has the module's layout, so spec.base re-roots it."""
     out = _run(
         ["go", "list", "-deps", "-f", "{{if not .Standard}}{{.Dir}}{{end}}", *spec.patterns],
         spec,
         env,
         "go list",
     )
-    real_root = os.path.realpath(root)
+    real_cwd = os.path.realpath(spec.cwd)
     dirs = set()
     for d in out.split():
-        rel = os.path.relpath(os.path.realpath(d), real_root)
+        rel = os.path.relpath(os.path.realpath(d), real_cwd)
         if rel != ".." and not rel.startswith(".." + os.sep):  # module cache etc. is not ours
-            dirs.add(Path(rel).as_posix())
+            dirs.add(posixpath.normpath(posixpath.join(spec.base, Path(rel).as_posix())))
     return frozenset(dirs)
+
+
+def build_surface_helper(root: Path, dest: str) -> str:
+    """Build tools/deadcode/surface (stdlib only, so it builds offline) into dest."""
+    env = {k: v for k, v in os.environ.items() if k not in ("GOOS", "GOARCH")}
+    binary = os.path.join(dest, "surface")
+    try:
+        subprocess.run(
+            ["go", "-C", str(root / "tools" / "deadcode"), "build", "-o", binary, "./surface"],
+            check=True,
+            env=env,
+            timeout=INSTALL_TIMEOUT_S,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise ToolError(
+            f"could not build tools/deadcode/surface (exit {e.returncode}): "
+            f"{(e.stderr or '').strip()[-600:]}"
+        ) from e
+    except (subprocess.TimeoutExpired, OSError) as e:
+        raise ToolError(f"could not build tools/deadcode/surface: {e}") from e
+    return binary
+
+
+def with_surface(spec: RunSpec, helper: str, scratch: str, env: dict[str, str]) -> RunSpec:
+    """The spec re-pointed at a scratch copy of its module that also holds the
+    synthetic SDK-surface main, which joins the run's patterns. The real tree
+    is only read."""
+    copy = os.path.join(scratch, spec.base or "module")
+    shutil.copytree(spec.cwd, copy, ignore=shutil.ignore_patterns(".git"))
+    copied = dataclasses.replace(
+        spec, cwd=Path(copy), patterns=(*spec.patterns, "./" + SURFACE_DIR)
+    )
+    _run([helper, "-dir", copy, "-out", os.path.join(copy, SURFACE_DIR)], copied, env, "surface")
+    return copied
 
 
 def run_deadcode(root: Path) -> list[RunResult]:
@@ -377,12 +451,14 @@ def run_deadcode(root: Path) -> list[RunResult]:
         check_binary_version(binary)
         specs = plan(root)
         env = dict(os.environ, GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
+        helper = build_surface_helper(root, tmp) if any(s.surface for s in specs) else ""
         results = []
         for spec in specs:
+            if spec.surface:
+                spec = with_surface(spec, helper, tmp, env)
             out = _run([binary, *spec.args], spec, env, "deadcode")
-            base = Path(os.path.relpath(spec.cwd, root)).as_posix()
-            dead = parse(out, "" if base == "." else base)
-            loaded = loaded_dirs(root, spec, env) if len(specs) > 1 else None
+            dead = parse(out, spec.base)
+            loaded = loaded_dirs(spec, env) if len(specs) > 1 else None
             results.append(RunResult(spec.name, dead, loaded))
         return results
 
