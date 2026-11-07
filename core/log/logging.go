@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"slices"
@@ -259,9 +260,7 @@ func New(o Options) (*Logging, error) {
 
 func copyLevels(m map[string]slog.Level) map[string]slog.Level {
 	out := make(map[string]slog.Level, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
@@ -438,8 +437,11 @@ func (l *Logging) primaryFailed(err error) {
 	if !l.lastStderrWarn.CompareAndSwap(last, now) {
 		return // another goroutine is writing this minute's line
 	}
-	// A failure to report a failure has nowhere left to go.
-	_, _ = fmt.Fprintf(l.stderr, "mediacore/log: primary output write failed, %d record(s) lost so far: %q\n", n, err.Error())
+	if _, werr := fmt.Fprintf(l.stderr, "mediacore/log: primary output write failed, %d record(s) lost so far: %q\n", n, err.Error()); werr != nil {
+		// The line did not reach stderr either: give back this minute's
+		// budget so the next failure tries again.
+		l.lastStderrWarn.CompareAndSwap(now, last)
+	}
 }
 
 // Close stops fan-out to taps, lets every tap deliver what it has queued, and
