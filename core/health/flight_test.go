@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/mediacore/coretest"
 )
 
 // Only one flight recorder may be active per process, so no test here runs in
@@ -110,7 +113,7 @@ func TestSnapshotWritesOpenableTrace(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("want 1 trace file, got %v", files)
 	}
-	if !filePattern.MatchString(files[0]) {
+	if !r.fileRe.MatchString(files[0]) {
 		t.Fatalf("file name %q does not match the snapshot pattern", files[0])
 	}
 	path := filepath.Join(r.dir, files[0])
@@ -683,4 +686,48 @@ func TestOpenRefusesSymlinkOutOfDir(t *testing.T) {
 	if list, _ := r.List(); len(list) != 0 {
 		t.Fatalf("List shows a symlink as a snapshot: %v", list)
 	}
+}
+
+func TestRecorderLogsThroughInjectedLogger(t *testing.T) {
+	capture := coretest.NewLogCapture(t)
+	r, _ := startRecorder(t, Config{Logger: capture.Logger().With("subsystem", "flight-recorder")})
+	r.Stop()
+
+	msgs := capture.Messages()
+	for _, want := range []string{"flight recorder started", "flight recorder stopped"} {
+		if !slices.ContainsFunc(msgs, func(m string) bool { return strings.HasPrefix(m, want) }) {
+			t.Fatalf("no %q line in the injected logger's records: %v", want, msgs)
+		}
+	}
+	for _, rec := range capture.Records() {
+		var sub string
+		rec.Attrs(func(a slog.Attr) bool {
+			if a.Key == "subsystem" {
+				sub = a.Value.String()
+			}
+			return true
+		})
+		if sub != "flight-recorder" {
+			t.Fatalf("record %q lost the logger's subsystem attribute (got %q)", rec.Message, sub)
+		}
+	}
+}
+
+// A line built from request-controlled text must not forge a second record: the
+// recorder escapes newlines before it writes.
+func TestRecorderLogLinesAreSanitized(t *testing.T) {
+	capture := coretest.NewLogCapture(t)
+	r := New(Config{Logger: capture.Logger()})
+	r.logf(slog.LevelWarn, "snapshot %s failed", "x\nlevel=INFO msg=forged")
+
+	msgs := capture.Messages()
+	if len(msgs) != 1 || strings.ContainsAny(msgs[0], "\r\n") {
+		t.Fatalf("want one record with no raw newline, got %q", msgs)
+	}
+}
+
+func TestNilLoggerDiscardsLines(t *testing.T) {
+	r := New(Config{})
+	r.logf(slog.LevelInfo, "nobody listens to %s", "the joker")
+	r.dropf("snapshot %s dropped", "joker")
 }
