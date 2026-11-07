@@ -1,5 +1,5 @@
 // file: core/health/flight.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 77f150f0-6e2a-4983-9ab6-3b77b267821f
 // last-edited: 2026-11-07
 
@@ -194,7 +194,10 @@ type Recorder struct {
 // logf writes one line to the recorder's logger. It does not escape the line
 // itself: the core logging pipeline's text and JSON handlers quote control
 // characters, so a request-controlled value cannot forge a record
-// (05-logging §3, TestHandler_EscapesControlChars).
+// (05-logging §3, TestHandler_EscapesControlChars). Call sites format values
+// that come from outside the recorder (error text, file names, the
+// configured directory, a panic value) with %q, so the line is safe whatever
+// handler the caller's logger has; that is formatting, not a sanitizer.
 func (r *Recorder) logf(level slog.Level, format string, args ...any) {
 	r.log.Log(context.Background(), level, fmt.Sprintf(format, args...))
 }
@@ -203,7 +206,7 @@ func (r *Recorder) logf(level slog.Level, format string, args ...any) {
 // changes no result, but it is evidence about the disk and must not vanish.
 func (r *Recorder) closeLogged(c io.Closer, what string) {
 	if err := c.Close(); err != nil {
-		r.logf(slog.LevelWarn, "close %s: %v", what, err)
+		r.logf(slog.LevelWarn, "close %q: %q", what, err)
 	}
 }
 
@@ -277,7 +280,7 @@ func (r *Recorder) Start() error {
 		return fmt.Errorf("flight recorder: start: %w", err)
 	}
 	r.recording = true
-	r.logf(slog.LevelInfo, "flight recorder started: dir=%s max_files=%d max_pinned=%d min_gap=%s", r.dir, r.maxFiles, r.maxPinned, r.minGap)
+	r.logf(slog.LevelInfo, "flight recorder started: dir=%q max_files=%d max_pinned=%d min_gap=%s", r.dir, r.maxFiles, r.maxPinned, r.minGap)
 	return nil
 }
 
@@ -393,7 +396,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	}()
 	defer func() {
 		if p := recover(); p != nil {
-			r.logf(slog.LevelWarn, "snapshot %s panicked: %v", reason, p)
+			r.logf(slog.LevelWarn, "snapshot %s panicked: %q", reason, fmt.Sprint(p))
 		}
 	}()
 
@@ -403,7 +406,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	n, err := r.writeTrace(traceTmp)
 	if err != nil {
 		_ = os.Remove(traceTmp)
-		r.logf(slog.LevelWarn, "snapshot %s failed: %v", reason, err)
+		r.logf(slog.LevelWarn, "snapshot %s failed: %q", reason, err)
 		return
 	}
 	// The goroutine dump follows the trace and is skipped when the trace
@@ -414,7 +417,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	if derr := r.writeGoroutines(dumpTmp); derr != nil {
 		_ = os.Remove(dumpTmp)
 		haveDump = false
-		r.logf(slog.LevelWarn, "goroutine dump for %s failed: %v", reason, derr)
+		r.logf(slog.LevelWarn, "goroutine dump for %s failed: %q", reason, derr)
 	}
 	if r.afterTrace != nil {
 		r.afterTrace()
@@ -431,13 +434,13 @@ func (r *Recorder) write(at time.Time, reason string) {
 	if err := os.Rename(traceTmp, final+traceSuffix); err != nil {
 		_ = os.Remove(traceTmp)
 		_ = os.Remove(dumpTmp)
-		r.logf(slog.LevelWarn, "snapshot %s failed: %v", reason, err)
+		r.logf(slog.LevelWarn, "snapshot %s failed: %q", reason, err)
 		return
 	}
 	if haveDump {
 		if err := os.Rename(dumpTmp, final+gorSuffix); err != nil {
 			_ = os.Remove(dumpTmp)
-			r.logf(slog.LevelWarn, "goroutine dump for %s not saved: %v", reason, err)
+			r.logf(slog.LevelWarn, "goroutine dump for %s not saved: %q", reason, err)
 		}
 	}
 
@@ -524,7 +527,7 @@ func (r *Recorder) writeGoroutines(path string) error {
 func (r *Recorder) rotate() {
 	pairs, err := r.pairs()
 	if err != nil {
-		r.logf(slog.LevelWarn, "rotation skipped: %v", err)
+		r.logf(slog.LevelWarn, "rotation skipped: %q", err)
 		return
 	}
 	r.mu.Lock()
@@ -538,7 +541,7 @@ func (r *Recorder) rotate() {
 	for len(unpinned) > r.maxFiles {
 		for _, name := range unpinned[0].files {
 			if err := os.Remove(filepath.Join(r.dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				r.logf(slog.LevelWarn, "could not remove old snapshot %s: %v", name, err)
+				r.logf(slog.LevelWarn, "could not remove old snapshot %q: %q", name, err)
 			}
 		}
 		unpinned = unpinned[1:]

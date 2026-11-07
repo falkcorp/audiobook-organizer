@@ -1,5 +1,5 @@
 // file: core/health/flight_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f26518cf-c820-4b1a-a14b-c616781751e9
 // last-edited: 2026-11-07
 
@@ -730,6 +730,28 @@ func TestRecorderLogLinesEscapedByHandler(t *testing.T) {
 		if got := out.String(); strings.Count(got, "\n") != 1 || strings.ContainsRune(strings.TrimSuffix(got, "\n"), '\r') {
 			t.Fatalf("format %d: want one record with no raw CR or LF, got %q", f, got)
 		}
+	}
+}
+
+// errCloser fails Close with err.
+type errCloser struct{ err error }
+
+func (c errCloser) Close() error { return c.err }
+
+// Values from outside the recorder (error text, file names) are formatted
+// with %q at the call site, so even a handler that writes the message as is
+// cannot be made to print a second line.
+func TestRecorderQuotesOutsideValues(t *testing.T) {
+	capture := coretest.NewLogCapture(t)
+	r := New(Config{Logger: capture.Logger()})
+	r.closeLogged(errCloser{err: errors.New("disk full\nlevel=INFO msg=forged")}, "joker\r.trace")
+
+	msgs := capture.Messages()
+	if len(msgs) != 1 || strings.ContainsAny(msgs[0], "\r\n") {
+		t.Fatalf("want one message with no raw CR or LF, got %q", msgs)
+	}
+	if want := `close "joker\r.trace": "disk full\nlevel=INFO msg=forged"`; msgs[0] != want {
+		t.Errorf("message = %q, want %q", msgs[0], want)
 	}
 }
 
