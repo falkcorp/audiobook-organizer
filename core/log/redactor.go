@@ -1,5 +1,5 @@
 // file: core/log/redactor.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 44521f1f-a2ba-4b3c-a385-eb582b10e892
 // last-edited: 2026-11-07
 
@@ -7,6 +7,7 @@ package log
 
 import (
 	"encoding"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -275,42 +276,68 @@ func (r *Redactor) keyDenied(key string) bool { return r.matchKey(key) != keyCle
 // KeyDenied reports whether the key rule replaces a value of kind under key
 // whole. An exact deny-list match (the whole normalised key, or its last
 // dotted segment) replaces a value of any kind. A match on a credential
-// suffix alone (prompt_tokens, cf_cookie, is_secret) does not replace a
-// scalar: a bool, a number, a duration or a time carries no credential, and
-// those keys are counts and presence flags. The span exporter uses it for
-// the attribute types that have no text.
+// suffix alone (cf_cookie, is_secret, prompt_tokens) spares:
+//
+//   - a bool or a time, which cannot carry a credential (presence flags such
+//     as cf_cookie, query_token, is_secret);
+//   - a number (int, uint, float, duration) only under a count-shaped key
+//     (countShaped: prompt_tokens, max_tokens, token_ttl); a number under
+//     any other suffix match (pin_password, user_secret) may be a numeric
+//     credential and is replaced.
+//
+// The span exporter uses it for the attribute types that have no text.
 func (r *Redactor) KeyDenied(key string, kind slog.Kind) bool {
 	switch r.matchKey(key) {
 	case keyExact:
 		return true
 	case keySuffix:
-		return !scalarKind(kind)
-	}
-	return false
-}
-
-// scalarKind reports whether a slog kind is a scalar a suffix match spares.
-func scalarKind(k slog.Kind) bool {
-	switch k {
-	case slog.KindBool, slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindDuration, slog.KindTime:
+		switch kind {
+		case slog.KindBool, slog.KindTime:
+			return false
+		case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindDuration:
+			return !countShaped(key)
+		}
 		return true
 	}
 	return false
 }
 
-// scalarReflect is scalarKind for a reflected value (an interface is looked
+// countShaped reports whether a key names a count, size, limit or lifetime
+// rather than a credential: normalised, it ends in tokens, count, len,
+// length, ttl or seconds, or the key starts with "max" and a separator or a
+// capital (max_tokens, maxTokens).
+func countShaped(key string) bool {
+	n := normKey(key)
+	for _, suf := range []string{"tokens", "count", "len", "length", "ttl", "seconds"} {
+		if strings.HasSuffix(n, suf) {
+			return true
+		}
+	}
+	if len(key) > 3 && strings.EqualFold(key[:3], "max") {
+		c := key[3]
+		return c == '_' || c == '-' || c == '.' || 'A' <= c && c <= 'Z'
+	}
+	return false
+}
+
+// reflectKind is the slog kind KeyDenied applies to a reflected value: a
+// bool, a number, or KindAny for anything else (an interface is looked
 // through).
-func scalarReflect(v reflect.Value) bool {
+func reflectKind(v reflect.Value) slog.Kind {
 	if v.Kind() == reflect.Interface && !v.IsNil() {
 		v = v.Elem()
 	}
 	switch v.Kind() {
-	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64:
-		return true
+	case reflect.Bool:
+		return slog.KindBool
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return slog.KindInt64
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return slog.KindUint64
+	case reflect.Float32, reflect.Float64:
+		return slog.KindFloat64
 	}
-	return false
+	return slog.KindAny
 }
 
 // queryDenied reports whether a query (or fragment) parameter name carries a
@@ -507,7 +534,7 @@ func logValuerType() reflect.Type { return reflect.TypeFor[slog.LogValuer]() }
 //   - map entries (any key type, keyed by its printed form) and struct fields
 //     (exported ones by json name and Go name, unexported and json:"-" ones
 //     by Go name, since the TextHandler prints those too) go through the key
-//     rule (a suffix-only match spares a scalar);
+//     rule (KeyDenied's rule for bools and numbers);
 //   - slice and array elements are walked;
 //   - a part beyond maxAnyDepth or maxAnyNodes is "[REDACTED:depth]".
 //
@@ -674,7 +701,8 @@ func keyName(key reflect.Value) string {
 // walkEntry sets m[key] to v redacted and returns what it replaced and
 // whether it changed anything. A non-zero value is "[REDACTED]" when key, or
 // alt (a struct field's Go name beside its json name), is denied for its kind
-// (a suffix-only match spares a scalar); a zero value hides nothing; an
+// (KeyDenied: a suffix-only match spares a bool, and a number under a
+// count-shaped key); a zero value hides nothing; an
 // unchanged value is kept as it was.
 func (r *Redactor) walkEntry(m map[string]any, key, alt string, v reflect.Value, depth int, budget *int) (RedactionKind, bool) {
 	if (r.deniedReflect(key, v) || alt != "" && r.deniedReflect(alt, v)) && !v.IsZero() {
@@ -691,13 +719,7 @@ func (r *Redactor) walkEntry(m map[string]any, key, alt string, v reflect.Value,
 
 // deniedReflect is KeyDenied for a reflected value.
 func (r *Redactor) deniedReflect(key string, v reflect.Value) bool {
-	switch r.matchKey(key) {
-	case keyExact:
-		return true
-	case keySuffix:
-		return !scalarReflect(v)
-	}
-	return false
+	return r.KeyDenied(key, reflectKind(v))
 }
 
 // valueOf is rv as an interface value; a value read through an unexported
@@ -1226,7 +1248,9 @@ func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 //
 // The name: back over spaces and tabs, then one quote (and a backslash
 // before it), then name characters (isNameChar, at most maxNameBytes). A
-// doubled separator ("==", "::") is not a pair.
+// doubled separator ("==", "::") is a pair only after a denied name
+// ("password==<t>", "password::<t>"), whose value follows both; after any
+// other name it is not one ("a == b").
 //
 // The value: after any whitespace (a newline too, as in YAML), in order:
 //   - text starting "[REDACTED" was already redacted: no span;
@@ -1244,9 +1268,6 @@ func (r *Redactor) scanPairsN(s string, steps *int) (string, RedactionKind) {
 // is returned.
 func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 	var none [2]int
-	if i+1 < len(s) && s[i+1] == s[i] {
-		return none, false
-	}
 	e := i
 	for e > 0 && (s[e-1] == ' ' || s[e-1] == '\t') {
 		e--
@@ -1271,6 +1292,9 @@ func (r *Redactor) pairAt(s string, i int, steps *int) ([2]int, bool) {
 		return none, false
 	}
 	v := i + 1
+	if v < len(s) && s[v] == s[i] {
+		v++
+	}
 	spaced := false
 	for v < len(s) && isSpace(s[v]) {
 		v, spaced = v+1, true
@@ -1404,15 +1428,20 @@ func authSchemes() [4]string { return [4]string{"bearer", "basic", "digest", "ne
 //
 //   - Bearer fires anywhere: the word is rare in prose and a bearer token
 //     has no shape to check.
-//   - Basic, Negotiate and Digest fire only in header context: at the start
-//     of the text, right after a quote or '[', or after an Authorization,
+//   - Basic, Negotiate and Digest need a credential-shaped value
+//     (credentialShaped). In header context (at the start of the text,
+//     right after a quote or '[', or after an Authorization,
 //     Proxy-Authorization, WWW-Authenticate or Proxy-Authenticate name and
-//     ':' or '='. The credential must also be credential-shaped: for Basic
-//     and Negotiate a token68 of at least 8 characters that is not a plain
-//     word (a capital, digit or symbol after its first letter) and ends at
-//     whitespace, ',', ';', a quote, a closer or the end; for Digest an
-//     auth-param ("username=..."). So "Basic Economics: A Citizen's Guide",
-//     "How to Negotiate Anything" and "failed to compute digest of ..." pass.
+//     ':' or '='): for Basic and Negotiate a token68 of at least 8
+//     characters that is not a plain word (a capital, digit or symbol after
+//     its first letter) and ends at whitespace, ',', ';', a quote, a closer
+//     or the end; for Digest an auth-param ("username=...") or such a token68
+//     of at least 20. In prose: for Basic a token68 that base64-decodes to
+//     "user:password" (any text holding ':'); for Negotiate and Digest such a
+//     token68 of at least 20 characters. So "Basic Economics: A Citizen's
+//     Guide", "How to Negotiate Anything", "negotiate a deal" and "failed to
+//     compute digest of ..." pass, and "sent Basic <base64 user:pass>" does
+//     not.
 func (r *Redactor) authAt(s string, i int, steps *int) ([2]int, bool) {
 	var none [2]int
 	scheme := ""
@@ -1434,19 +1463,8 @@ func (r *Redactor) authAt(s string, i int, steps *int) ([2]int, bool) {
 		return none, false
 	}
 	opener, ctx := r.authContext(s, i, steps)
-	if scheme != "bearer" {
-		if !ctx {
-			return none, false
-		}
-		shaped := false
-		if scheme == "digest" {
-			shaped = authParamAt(s, c, steps)
-		} else {
-			shaped = token68At(s, c, steps)
-		}
-		if !shaped {
-			return none, false
-		}
+	if scheme != "bearer" && !credentialShaped(s, c, scheme, ctx, steps) {
+		return none, false
 	}
 	end := lineEnd(s, c, steps)
 	if cl := closerFor(opener); cl != 0 {
@@ -1494,14 +1512,37 @@ func (r *Redactor) authContext(s string, i int, steps *int) (opener byte, ok boo
 	return 0, false
 }
 
-// token68At reports whether s[c:] starts with a Basic or Negotiate
-// credential: RFC 7235's token68 (ALPHA DIGIT - . _ ~ + /, then '='
-// padding), at least 8 characters before the padding, not a plain word
-// (some character after the first is not a lower-case letter), ending at
-// whitespace, ',', ';', a quote, a closer or the end.
-func token68At(s string, c int, steps *int) bool {
+// credentialShaped reports whether the value at s[c] after a Basic,
+// Negotiate or Digest word is a credential (see authAt).
+func credentialShaped(s string, c int, scheme string, ctx bool, steps *int) bool {
+	run, padEnd, plain, ended := token68Run(s, c, steps)
+	switch {
+	case ctx && scheme == "digest":
+		return authParamAt(s, c, steps) || ended && !plain && run-c >= minToken68Prose
+	case ctx:
+		return ended && !plain && run-c >= minToken68Header
+	case scheme == "basic":
+		return ended && basicUserPass(s[c:padEnd])
+	}
+	return ended && !plain && run-c >= minToken68Prose
+}
+
+// The token68 lengths authAt requires: in header context, and in prose for
+// Negotiate and Digest (a SPNEGO token is hundreds of characters; a word is
+// not twenty).
+const (
+	minToken68Header = 8
+	minToken68Prose  = 20
+)
+
+// token68Run reads RFC 7235's token68 at s[c] (ALPHA DIGIT - . _ ~ + /,
+// then '=' padding): run is where the characters end, padEnd where the
+// padding ends, plain whether it is a plain word (no character after the
+// first is other than a lower-case letter), and ended whether it ends at
+// whitespace, ',', ';', a quote, a closer or the end of s.
+func token68Run(s string, c int, steps *int) (run, padEnd int, plain, ended bool) {
 	j := c
-	plain := isAlpha(s[c])
+	plain = isAlpha(s[c])
 	for j < len(s) && (isAlpha(s[j]) || '0' <= s[j] && s[j] <= '9' || strings.IndexByte("-._~+/", s[j]) >= 0) {
 		if j > c && !('a' <= s[j] && s[j] <= 'z') {
 			plain = false
@@ -1509,14 +1550,30 @@ func token68At(s string, c int, steps *int) bool {
 		j++
 		*steps++
 	}
-	if j-c < 8 || plain {
-		return false
-	}
+	run = j
 	for j < len(s) && s[j] == '=' {
 		j++
 		*steps++
 	}
-	return j == len(s) || isSpace(s[j]) || s[j] == ',' || s[j] == ';' || isQuote(s[j]) || isCloser(s[j])
+	ended = j == len(s) || isSpace(s[j]) || s[j] == ',' || s[j] == ';' || isQuote(s[j]) || isCloser(s[j])
+	return run, j, plain, ended && run > c
+}
+
+// basicUserPass reports whether tok is base64 of "user:password", as a Basic
+// credential is: it decodes (padded or not) to text holding ':'. "Basic
+// Economics" does not decode; "Basic dXNlcjpwYXNz" does.
+func basicUserPass(tok string) bool {
+	if len(tok) < 4 {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(tok)
+	if err != nil {
+		b, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(tok, "="))
+		if err != nil {
+			return false
+		}
+	}
+	return strings.IndexByte(string(b), ':') >= 0
 }
 
 // authParamAt reports whether s[c:] starts with an auth-param, a token and
