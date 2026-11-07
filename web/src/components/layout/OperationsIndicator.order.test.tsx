@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.order.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e73c1b4-05af-4d28-b6c7-1f3a82d95e40
-// last-edited: 2026-09-20
+// last-edited: 2026-11-07
 
 // The bell must list the NEWEST run first.
 //
@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 

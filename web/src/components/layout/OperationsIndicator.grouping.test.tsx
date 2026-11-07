@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.grouping.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2a6e94b1-7d38-4c05-9f61-0b3e5c8a72d4
-// last-edited: 2026-09-10
+// last-edited: 2026-11-07
 
 // The bell shows GROUPED rows and counts UNGROUPED operations.
 //
@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 import { groupOperations } from '../../stores/operationGrouping';

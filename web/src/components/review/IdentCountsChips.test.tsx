@@ -1,11 +1,11 @@
 // file: web/src/components/review/IdentCountsChips.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: cb9fda36-028f-4113-b148-679501a502f3
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import { IdentCountsChips, IDENT_CHIPS, identLibraryHref } from './IdentCountsChips';
 import parity from '../../pages/__fixtures__/ident_missing_parity.json';

@@ -1,10 +1,10 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.15.0
+// version: 1.15.1
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import * as api from '../services/api';
 import { buildCacheKey, useLibraryCache } from '../stores/useLibraryCache';
 import { SortField, SortOrder } from '../types';

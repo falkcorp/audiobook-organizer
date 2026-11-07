@@ -1,10 +1,10 @@
 // file: web/src/components/versions/UnfinishedSwaps.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: f5d37b28-9f17-4cef-bd0d-f0e776f027e8
-// last-edited: 2026-10-29
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,

@@ -1,7 +1,7 @@
 // file: web/src/components/review/compare/CandidateCompareDrawer.tsx
-// version: 1.13.0
+// version: 1.13.1
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -33,7 +33,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import MergeIcon from '@mui/icons-material/MergeType';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import * as api from '../../../services/api';
 import type {
   AcoustIDCompareResponse,

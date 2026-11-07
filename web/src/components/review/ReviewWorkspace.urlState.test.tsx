@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.urlState.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: c7a05e2b-19d4-4f83-a6b0-3e8d51f9c274
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * The Review workspace's deep links: the URL seeds the screen, what you click is
@@ -16,7 +16,7 @@
 import { useEffect } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { serveReviewList } from '../../test/reviewServer';

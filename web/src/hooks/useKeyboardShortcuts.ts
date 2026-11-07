@@ -1,9 +1,10 @@
 // file: web/src/hooks/useKeyboardShortcuts.ts
-// version: 1.0.1
+// version: 1.0.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-11-07
 
 import { useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 export interface ShortcutDefinition {
   keys: string;

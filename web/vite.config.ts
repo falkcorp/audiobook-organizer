@@ -1,7 +1,7 @@
 // file: web/vite.config.ts
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-10-09
+// last-edited: 2026-11-07
 
 import { defineConfig } from 'vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
@@ -80,7 +80,7 @@ export default defineConfig({
             { name: 'mui', test: /[\\/]node_modules[\\/]@mui[\\/]/ },
             {
               name: 'vendor',
-              test: /[\\/]node_modules[\\/](react|react-dom|react-is|scheduler|react-router|react-router-dom)[\\/]/,
+              test: /[\\/]node_modules[\\/](react|react-dom|react-is|scheduler|react-router)[\\/]/,
             },
           ],
         },

@@ -1,7 +1,7 @@
 // file: web/src/components/layout/Sidebar.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: edade879-0563-463d-bc62-bd740239b04b
-// last-edited: 2026-10-15
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -24,8 +24,8 @@ import { useReviewStore } from '../../stores/useReviewStore';
 // finds the collapsed desktop button under test — do not "fix" this back to
 // `open` or the queries below become ambiguous again.
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigateSpy };
 });
 

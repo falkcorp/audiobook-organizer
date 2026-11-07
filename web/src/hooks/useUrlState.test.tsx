@@ -1,7 +1,7 @@
 // file: web/src/hooks/useUrlState.test.tsx
-// version: 2.3.0
+// version: 2.3.1
 // guid: 0c5e92d7-48ab-4f36-a1d0-6be7f3092c58
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { lazy, StrictMode, Suspense, useState } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
@@ -15,7 +15,7 @@ import {
   Routes,
   useNavigate,
   useSearchParams,
-} from 'react-router-dom';
+} from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { FlushOnNavigate } from '../components/FlushOnNavigate';
 import {

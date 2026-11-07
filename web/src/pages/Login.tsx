@@ -1,10 +1,10 @@
 // file: web/src/pages/Login.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import {
   Alert,
   Box,

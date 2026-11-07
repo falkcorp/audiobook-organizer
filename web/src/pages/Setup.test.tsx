@@ -1,7 +1,7 @@
 // file: web/src/pages/Setup.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d163e7fe-4384-4367-8b6b-dd10bafb1576
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
@@ -11,8 +11,8 @@ import { loginPageResponse } from '../test/loginRedirect';
 import Setup from './Setup';
 
 const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>();
   return { ...actual, useNavigate: () => mockNavigate };
 });
 

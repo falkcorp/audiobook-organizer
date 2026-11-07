@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.test.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7c8d9e0f-1a2b-4c5d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-06
+// last-edited: 2026-11-07
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, test, expect, beforeEach } from 'vitest';
@@ -55,7 +55,7 @@ describe('useLibraryQuery out-of-order response guard', () => {
       activeScanOp: null,
       activeOrganizeOp: null,
       setImportPaths: vi.fn(),
-      navigate: vi.fn() as unknown as ReturnType<typeof import('react-router-dom').useNavigate>,
+      navigate: vi.fn() as unknown as ReturnType<typeof import('react-router').useNavigate>,
       toast: vi.fn(),
       buildFieldFilters: () => [],
       convertBook,
@@ -111,7 +111,7 @@ function makeBaseProps(overrides: Partial<Parameters<typeof useLibraryQuery>[0]>
     activeScanOp: null,
     activeOrganizeOp: null,
     setImportPaths: vi.fn(),
-    navigate: vi.fn() as unknown as ReturnType<typeof import('react-router-dom').useNavigate>,
+    navigate: vi.fn() as unknown as ReturnType<typeof import('react-router').useNavigate>,
     toast: vi.fn(),
     buildFieldFilters: () => [],
     convertBook,

@@ -1,11 +1,11 @@
 // file: web/src/pages/BookDetail.files-history.test.tsx
-// version: 1.1.2
-// last-edited: 2026-08-19
+// version: 1.1.3
+// last-edited: 2026-11-07
 // guid: e6be4c8c-534d-44aa-bcb7-9089a8796df4
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

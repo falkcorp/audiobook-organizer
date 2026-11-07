@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.refetchStale.test.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4d91c7a3-6b28-4e50-9f13-8a26c5b407de
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // The refetch path from /review. Before this the stale chip's tooltip ended
 // "refetch to be sure", naming a remedy the workspace had no way to reach --
@@ -18,7 +18,7 @@
 // The per-row path still sends one explicit id.
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';

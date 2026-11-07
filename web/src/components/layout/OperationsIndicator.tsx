@@ -1,10 +1,10 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.14.1
+// version: 4.14.2
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Alert,
   Badge,

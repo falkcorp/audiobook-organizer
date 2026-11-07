@@ -1,10 +1,10 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
-// last-edited: 2026-10-29
+// last-edited: 2026-11-07
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { Box, Button, Collapse, Link, Typography } from '@mui/material';
 import { getOperationResult } from '../../services/api';
 import {

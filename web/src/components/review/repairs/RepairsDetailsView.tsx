@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RepairsDetailsView.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b556cac-7a63-4f88-901b-ecfe5f1bdb62
-// last-edited: 2026-11-04
+// last-edited: 2026-11-07
 
 /**
  * Details: one card per repairs row with everything known about it -- the
@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Stack, Typography } from '@mui/material';
 import * as api from '../../../services/api';
 import type { Book, BookFile, RepairRow, RepairRowMember } from '../../../services/api';

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailStatusAlerts.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4c2794b-191c-4201-a406-0ccf738b32b8
-// last-edited: 2026-08-20
+// last-edited: 2026-11-07
 
 /**
  * The duplicate alert's link, which was dead.
@@ -14,7 +14,7 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect } from 'vitest';
 import type { Book } from '../../services/api';
 import { BookDetailStatusAlerts } from './BookDetailStatusAlerts';

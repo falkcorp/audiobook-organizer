@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.queued.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: c07b41e9-5a2d-4e83-9106-8f3d2a6b7c15
-// last-edited: 2026-09-09
+// last-edited: 2026-11-07
 
 // A queued operation says how much work it is holding.
 //
@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 import { groupOperations } from '../../stores/operationGrouping';

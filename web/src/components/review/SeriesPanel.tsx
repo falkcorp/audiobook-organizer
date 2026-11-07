@@ -1,7 +1,7 @@
 // file: web/src/components/review/SeriesPanel.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: e7b3a915-2c64-4d08-b1f7-90a5c8d3e426
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 /**
  * The Authors & series lane's Series sub-view: a rail, the series group spine,
@@ -24,7 +24,7 @@
  */
 
 import { useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,

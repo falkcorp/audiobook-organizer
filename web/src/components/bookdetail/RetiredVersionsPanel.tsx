@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/RetiredVersionsPanel.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6bf6e70d-098a-4a16-b274-4894ef465062
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 import { Fragment, useEffect, useState } from 'react';
 import {
@@ -24,7 +24,7 @@ import {
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { listRetiredVersions, type RetiredVersion } from '../../services/versionApi';
 import { describeRequestError } from '../../utils/apiResponse';
 import { useCanOrganizeLibrary } from '../../hooks/useCanOrganizeLibrary';

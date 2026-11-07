@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.memo.test.tsx
-// version: 1.4.2
+// version: 1.4.3
 // guid: b7e34d19-05c2-4f8a-9d16-2a63c8fb4071
-// last-edited: 2026-10-25
+// last-edited: 2026-11-07
 //
 // One regroup hold going busy must re-render ONE row, not the whole page --
 // and the memo that achieves that must not serve stale rows.
@@ -91,7 +91,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import * as reviewPayload from '../../../lib/reviewPayload';
 import { RegroupSpine } from './RegroupSpine';

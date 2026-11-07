@@ -1,9 +1,9 @@
 // file: web/src/pages/DedupRedirect.tsx
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5c0d8e41-7a36-4b92-8f1d-3e6a9b2c4d70
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router';
 
 /**
  * Where each legacy `/dedup?tab=` value lands in the Review workspace. A tab

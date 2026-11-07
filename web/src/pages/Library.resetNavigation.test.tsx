@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.resetNavigation.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c8b1a2d-9e3f-4a7b-8c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useNavigate } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

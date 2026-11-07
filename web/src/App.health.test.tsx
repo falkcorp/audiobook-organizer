@@ -1,7 +1,7 @@
 // file: web/src/App.health.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1755fd4f-dac4-437d-94d7-ad7d7ae6ed9c
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 // The post-shutdown reconnect poll runs before any session is trusted. When the
 // Cloudflare Access session expired during the restart, /api/v1/health is
@@ -9,7 +9,7 @@
 // rather than count another failed attempt behind the reconnect overlay forever.
 
 import { act, render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';

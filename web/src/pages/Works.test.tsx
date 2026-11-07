@@ -1,14 +1,14 @@
 // file: web/src/pages/Works.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a1ce53a-f243-45d8-a45c-d3f9897179a4
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Works } from './Works';
 import * as api from '../services/api';
 import { renderWithProviders } from '../test/renderWithProviders';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getWorks: vi.fn(),

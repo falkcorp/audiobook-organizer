@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.33.1
+// version: 1.33.2
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, author and series merges, and library repairs.
@@ -54,7 +54,7 @@
 // old surfaces, which is gated on docs/port-inventory.md.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { useUrlParamWriter, useUrlStateSync } from '../../hooks/useUrlState';
 import { COMPARE_TAB_SLUGS, parseUrlId, readReviewUrl } from './reviewUrl';
 import {

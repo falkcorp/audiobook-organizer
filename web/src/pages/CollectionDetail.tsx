@@ -1,10 +1,10 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,

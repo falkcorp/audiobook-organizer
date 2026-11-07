@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.manualSearch.test.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8c04b7e2-5d13-49af-b026-3f7159ea840c
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // The manual-search escape hatch on the metadata lane.
 //
@@ -17,7 +17,7 @@
 // left the cache able to drain but never refill.
 
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';

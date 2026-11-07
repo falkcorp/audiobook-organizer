@@ -1,11 +1,11 @@
 // file: web/src/pages/Collections.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: f3330351-d6f6-4583-a859-a262bcee0c4c
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useState } from 'react';
 import { useUrlEnumParam } from '../hooks/useUrlState';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Alert,
   Box,

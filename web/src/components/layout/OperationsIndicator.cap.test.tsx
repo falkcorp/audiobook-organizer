@@ -1,14 +1,14 @@
 // file: web/src/components/layout/OperationsIndicator.cap.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1e7a92-3b58-4d06-9a2f-e8b5d0c36f17
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 // The bell's Completed list is capped at the newest 15 rows, with a link to the
 // Activity page for the rest. Running and queued rows are never capped.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 

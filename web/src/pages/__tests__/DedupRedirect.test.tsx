@@ -1,11 +1,11 @@
 // file: web/src/pages/__tests__/DedupRedirect.test.tsx
-// version: 1.0.3
+// version: 1.0.4
 // guid: 91b7d3a5-2c48-4e60-b5f9-0d1e7a8c3624
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router';
 import { DedupRedirect } from '../DedupRedirect';
 
 function Where() {

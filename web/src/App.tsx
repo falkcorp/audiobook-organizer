@@ -1,10 +1,10 @@
 // file: web/src/App.tsx
-// version: 1.33.0
+// version: 1.33.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router';
 import { Box, Backdrop, CircularProgress, Typography, Stack } from '@mui/material';
 import { MainLayout } from './components/layout/MainLayout';
 import { WelcomeWizard } from './components/wizard/WelcomeWizard';

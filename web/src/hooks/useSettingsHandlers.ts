@@ -1,10 +1,10 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.14.1
+// version: 1.14.2
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
-import { NavigateFunction } from 'react-router-dom';
+import { NavigateFunction } from 'react-router';
 import * as api from '../services/api';
 import type { SettingsState } from '../pages/Settings';
 import { useImportFolderHandlers } from './useImportFolderHandlers';

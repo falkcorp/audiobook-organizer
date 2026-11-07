@@ -1,11 +1,11 @@
 // file: web/src/main.tsx
-// version: 2.2.0
-// last-edited: 2026-11-05
+// version: 2.2.1
+// last-edited: 2026-11-07
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import App from './App';
 import { appTheme } from './theme';

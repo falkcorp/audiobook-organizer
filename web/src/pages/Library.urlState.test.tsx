@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.urlState.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a17c3e8-4d52-4f60-b8e1-27d0a5f93c14
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * Library deep links: the preset filters (fingerprints, covers, ISBN, import
@@ -12,7 +12,7 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';

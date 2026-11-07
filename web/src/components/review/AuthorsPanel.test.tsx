@@ -1,7 +1,7 @@
 // file: web/src/components/review/AuthorsPanel.test.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: e3b70c58-1d92-4a6f-8c45-7f20b9d6a184
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 /**
  * The Authors sub-view as a reviewer meets it: the hook and the panel together,
@@ -17,7 +17,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { Book } from '../../services/api';

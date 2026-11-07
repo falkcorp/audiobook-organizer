@@ -1,10 +1,10 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.8.0
+// version: 1.8.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Badge,

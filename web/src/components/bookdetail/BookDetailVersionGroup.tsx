@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 import {
   Alert,
   Box,
@@ -42,7 +42,7 @@ import {
   isFileMissing,
   isFileDiskUnknown,
 } from './bookDetailUtils';
-import { useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useNavigate, Link as RouterLink } from 'react-router';
 
 // buildVersionGroupLibraryUrl targets the same generic field-filter mechanism
 // as the (not-yet-built) narrator/publisher/genre links: version_group_id has

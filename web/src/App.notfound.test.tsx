@@ -1,11 +1,11 @@
 // file: web/src/App.notfound.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d1e8a73-2c94-4b6f-8e07-a3f9c1d4b620
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import App from './App';
 import { appTheme } from './theme';

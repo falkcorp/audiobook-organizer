@@ -1,9 +1,10 @@
 // file: web/src/components/layout/UserMenu.tsx
-// version: 1.0.3
+// version: 1.0.5
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-11-07
 
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Avatar,
   Box,

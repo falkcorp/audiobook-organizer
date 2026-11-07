@@ -1,11 +1,11 @@
 // file: web/src/pages/BookDetail.unlock.test.tsx
-// version: 1.3.2
-// last-edited: 2026-08-19
+// version: 1.3.3
+// last-edited: 2026-11-07
 // guid: 2b197bb0-4a61-49ef-8b75-1f9c6c23c84e
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 

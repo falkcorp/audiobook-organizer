@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.deleteSelection.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0a6e2d94-7b31-4c58-8f1d-5e9c3b7a2d60
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 /**
  * Library: a book deleted from its row menu leaves the selection. The
@@ -10,7 +10,7 @@
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';

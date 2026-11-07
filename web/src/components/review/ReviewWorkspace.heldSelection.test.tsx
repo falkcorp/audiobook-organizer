@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.heldSelection.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b3e5f21-7c4a-4d96-a0e2-5f1d9c7b3a84
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // A selection whose check against the current filters failed is held, and a
 // held selection must reach NO command that acts on it. The palette disables
@@ -11,7 +11,7 @@
 // rewrites files, "Search again for selected" spends provider quota.
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';

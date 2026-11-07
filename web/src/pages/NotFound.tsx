@@ -1,10 +1,10 @@
 // file: web/src/pages/NotFound.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b9d6f12-8c4e-4e07-a1d5-5f2c7b8e0a96
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 import { Box, Button, Stack, Typography } from '@mui/material';
-import { Link as RouterLink, useLocation } from 'react-router-dom';
+import { Link as RouterLink, useLocation } from 'react-router';
 
 /** Catch-all for signed-in routes: says what was requested and where to go next. */
 export function NotFound() {

@@ -1,10 +1,10 @@
 // file: web/src/components/bookdetail/BookDetailStatusAlerts.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-08-20
+// last-edited: 2026-11-07
 
 import { Alert, Box, Button, Link, Stack, Tooltip } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book } from '../../services/api';
 import { formatDateTime } from './bookDetailUtils';

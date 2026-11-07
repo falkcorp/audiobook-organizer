@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.loadError.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0ab4174b-b052-4d6c-a705-bef9c60dd751
-// last-edited: 2026-09-11
+// last-edited: 2026-11-07
 
 // The bell must show a FAILED timeline refresh as a failure, not as "No
 // operations". Until 2026-09-11 getOperationTimeline returned [] on a 500 and
@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 

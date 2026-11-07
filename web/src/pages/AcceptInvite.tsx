@@ -1,7 +1,7 @@
 // file: web/src/pages/AcceptInvite.tsx
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8e5c1a47-2d93-4b6f-a0e8-3f7b9d2c6a15
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 // Public page an invitee opens from their invitation link: /invite/:token.
 // It shows who the invitation is for and when it expires, lets them choose a
@@ -16,7 +16,7 @@
 // a valid, unexpired, unused token.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import {
   Alert,
   Box,

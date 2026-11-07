@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.memo.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5a2e9c71-3b84-4d06-9e17-8c40b2f6a35d
-// last-edited: 2026-09-01
+// last-edited: 2026-11-07
 //
 // Ticking one dupes checkbox must re-render ONE row, not the whole page --
 // and the memo that achieves that must not serve stale rows.
@@ -56,7 +56,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import * as keepDecision from '../lanes/keepDecision';
 import { DupesSpine, type DupesSpineContext } from './DupesSpine';

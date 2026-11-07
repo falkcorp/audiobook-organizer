@@ -1,14 +1,14 @@
 // file: web/src/components/review/ReviewWorkspace.ownerRejected.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4e2b2514-41c9-47c3-b42b-cec3205fd369
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // A candidate the owner rejected is never applied: the server refuses it as
 // owner_rejected whatever pin an apply button sends. The rail marks the row,
 // so the owner sees why before an apply comes back blocked.
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import * as api from '../../services/api';
 import { serveReviewList } from '../../test/reviewServer';

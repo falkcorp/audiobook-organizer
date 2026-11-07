@@ -1,7 +1,7 @@
 // file: web/src/components/review/CommandBar.tsx
-// version: 2.1.0
+// version: 2.1.1
 // guid: 9d3a7f21-5e64-4c08-b73f-2a915c8d0e47
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 //
 // The command menus: Dedup, Metadata, Authors & series, Queue.
 //
@@ -56,7 +56,7 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { useAdvancedSettings } from '../../hooks/useAdvancedSettings';
 
 /**

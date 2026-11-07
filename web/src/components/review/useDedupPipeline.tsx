@@ -1,7 +1,7 @@
 // file: web/src/components/review/useDedupPipeline.tsx
-// version: 2.2.0
+// version: 2.2.1
 // guid: 8c2e5a17-4d93-4f6b-a0e8-71b3d9c4f25e
-// last-edited: 2026-10-03
+// last-edited: 2026-11-07
 //
 // State + UI for the Dedup menu's two whole-library runs (see dedupPipeline.ts):
 // "Find all duplicates" (server op dedup.run-all) and "Force full rescan"
@@ -18,7 +18,7 @@
 // "we assumed it was safe".
 
 import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import {
   Alert,
   AlertTitle,

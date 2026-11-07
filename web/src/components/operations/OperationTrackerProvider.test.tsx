@@ -1,12 +1,12 @@
 // file: web/src/components/operations/OperationTrackerProvider.test.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d2f6b83-0a41-4c75-8e19-5b3a7c1d4e60
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { useEffect } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({

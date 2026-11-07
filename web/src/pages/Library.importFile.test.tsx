@@ -1,10 +1,10 @@
 // file: web/src/pages/Library.importFile.test.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6f4a7b0d-9c9f-4f0b-8d85-1dd9e1ffb913
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';

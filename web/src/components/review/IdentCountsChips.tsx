@@ -1,7 +1,7 @@
 // file: web/src/components/review/IdentCountsChips.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 37a831ee-09bb-4ffc-9928-cdb1e49ca3ca
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 /**
  * The identification state counts (`ident_counts` in the review summary), as
@@ -15,7 +15,7 @@
  */
 
 import { Chip, Stack, Tooltip, Typography } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import type { IdentCounts } from '../../services/api';
 
 /** One chip per `ident:` value, in the order the rail shows them. */

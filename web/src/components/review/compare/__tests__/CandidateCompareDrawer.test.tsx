@@ -1,10 +1,10 @@
 // file: web/src/components/review/compare/__tests__/CandidateCompareDrawer.test.tsx
-// version: 2.4.0
+// version: 2.4.1
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CandidateCompareDrawer } from '../CandidateCompareDrawer';
 import * as api from '../../../../services/api';

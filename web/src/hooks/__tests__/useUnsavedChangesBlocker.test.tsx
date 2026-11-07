@@ -1,10 +1,10 @@
 // file: web/src/hooks/__tests__/useUnsavedChangesBlocker.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1d7f30-92c4-4b85-8e3a-d05f1c7b2e94
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { act, renderHook } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useUnsavedChangesBlocker } from '../useUnsavedChangesBlocker';
 

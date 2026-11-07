@@ -1,11 +1,11 @@
 // file: web/src/pages/PlaylistDetail.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b8d2e61-7a39-4c05-9e1f-c6a0d3b75f28
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { buildPlaylist } from '../test/factories';
 import PlaylistDetail from './PlaylistDetail';

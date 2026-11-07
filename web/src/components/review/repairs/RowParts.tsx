@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RowParts.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 09def8d7-b23c-49be-80d7-cfdb4a959792
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * Pieces of a repairs row that every view renders the same way: its title
@@ -11,7 +11,7 @@
  */
 
 import { useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { Box, Button, Checkbox, Chip, Link, Stack, Tooltip, Typography } from '@mui/material';
 import type { RepairOutcome, RepairRow, RepairRowResult } from '../../../services/api';
 import { trialBlocksApply, type RepairsLane } from '../lanes/useRepairsLane';

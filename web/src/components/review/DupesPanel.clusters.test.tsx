@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.clusters.test.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: a3d8f167-92c4-4e0b-b5a1-6f2e8c0d4b79
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 //
 // The Clusters view through the rendered DupesPanel: the cluster spine in place
 // of the pair rows, the By-series toggle with its confirmation, and the
@@ -9,7 +9,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { DupesPanel } from './DupesPanel';

@@ -1,11 +1,11 @@
 // file: web/src/pages/Playlists.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b0c1d6e-3f4a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useState } from 'react';
 import { useUrlEnumParam } from '../hooks/useUrlState';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Box,
   Button,

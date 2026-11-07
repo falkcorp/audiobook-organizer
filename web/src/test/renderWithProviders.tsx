@@ -1,10 +1,10 @@
 // file: web/src/test/renderWithProviders.tsx
-// version: 1.2.0
-// last-edited: 2026-08-20
+// version: 1.2.1
+// last-edited: 2026-11-07
 
 import React from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import { appTheme } from '../theme';
 

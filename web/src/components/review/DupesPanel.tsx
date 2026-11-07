@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.19.0
+// version: 1.19.1
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -11,7 +11,7 @@
 // the cross-lane chrome.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { Link as RouterLink, useSearchParams } from 'react-router';
 import { useUrlParamWriter } from '../../hooks/useUrlState';
 import {
   Alert,

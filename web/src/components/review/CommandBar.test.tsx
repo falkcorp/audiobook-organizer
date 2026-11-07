@@ -1,7 +1,7 @@
 // file: web/src/components/review/CommandBar.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b9e2c41-8f07-4a3d-9c6e-0d4f7a1b8e23
-// last-edited: 2026-09-27
+// last-edited: 2026-11-07
 
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { CommandBar, type CommandMenu } from './CommandBar';
 import { useAdvancedSettings } from '../../hooks/useAdvancedSettings';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import type { ReactElement } from 'react';
 
 // The advanced hint is a router link, so the bar needs a router.

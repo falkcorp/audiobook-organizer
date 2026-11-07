@@ -1,11 +1,11 @@
 // file: web/src/pages/BookDetail.urlState.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: d2f48a61-7c35-4e90-b1a3-68e0c9d17f52
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

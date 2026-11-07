@@ -1,7 +1,7 @@
 // file: web/src/components/ReviewBanner.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3a7e2c81-9d46-4b50-8f13-6c0a5d9e2b47
-// last-edited: 2026-08-19
+// last-edited: 2026-11-07
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
@@ -12,8 +12,8 @@ import { useReviewStore } from '../stores/useReviewStore';
 // Spy on useNavigate so the click-navigates assertion is a direct call check
 // rather than route introspection.
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigateSpy };
 });
 

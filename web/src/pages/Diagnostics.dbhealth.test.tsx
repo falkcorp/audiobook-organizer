@@ -1,11 +1,11 @@
 // file: web/src/pages/Diagnostics.dbhealth.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: f8487a85-3b15-4508-bef2-89cc3d3e84c9
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Diagnostics } from './Diagnostics';
 import * as api from '../services/api';

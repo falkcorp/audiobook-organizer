@@ -1,7 +1,7 @@
 // file: web/src/pages/listPages.urlState.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: e3a60d92-81f4-47c5-b2d7-5c19f0a8e473
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 /**
  * Deep links for the two paged, server-searched list pages: Series and Authors.
@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router';
 import { ThemeProvider } from '@mui/material';
 import { appTheme } from '../theme';
 import { Series } from './Series';

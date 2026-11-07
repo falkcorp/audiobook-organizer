@@ -1,13 +1,13 @@
 // file: web/src/pages/BookDetail.rejections.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 08d30ca0-aa74-4eed-b3f2-8140090d67ca
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 // The rejection-history load goes through apiFetch: a login page answered for
 // the /api/ URL must not be parsed as data, and a real JSON answer still renders.
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { loginPageWithJsonBody } from '../test/loginRedirect';
 import { BookDetail } from './BookDetail';

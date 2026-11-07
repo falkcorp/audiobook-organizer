@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 510b281d-e333-4300-8b36-49e93cd8a7aa
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 //
 // Owner decision on #3580: with the bulk toggle on "Replace existing", EVERY
 // bulk entry point -- the action bar's buttons, a group's Apply All, and the
@@ -15,7 +15,7 @@
 // bar's "Ask before replacing again" clears it; blocked storage keeps asking.
 
 import { render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as api from '../../services/api';

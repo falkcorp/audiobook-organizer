@@ -1,10 +1,10 @@
 // file: web/src/pages/FileBrowser.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c1d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { applyOwnedParams } from '../hooks/useUrlState';
 import { Box, Button, Typography, Alert, Stack } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';

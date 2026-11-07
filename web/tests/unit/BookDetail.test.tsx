@@ -1,6 +1,7 @@
 // file: web/tests/unit/BookDetail.test.tsx
-// version: 1.3.0
+// version: 1.3.2
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
+// last-edited: 2026-11-07
 
 /**
  * Unit tests for BookDetail component
@@ -10,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { BookDetail } from '../../src/pages/BookDetail';
 import * as api from '../../src/services/api';
 
@@ -35,9 +36,9 @@ vi.mock('../../src/services/api', async () => {
 
 const navigateMock = vi.fn();
 
-// Mock react-router-dom hooks
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom');
+// Mock react-router hooks
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual('react-router');
   return {
     ...actual,
     useParams: () => ({ id: 'test-book-id' }),

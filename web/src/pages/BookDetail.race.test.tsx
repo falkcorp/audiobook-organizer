@@ -1,10 +1,10 @@
 // file: web/src/pages/BookDetail.race.test.tsx
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c1d9e2a-4f5b-4a6c-9d3e-2b8f7a1c0e6d
-// last-edited: 2026-08-19
+// last-edited: 2026-11-07
 
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';

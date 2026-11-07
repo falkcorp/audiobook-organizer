@@ -1,7 +1,7 @@
 // file: web/src/components/review/AuthorsPanel.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6d03b9f2-a4e1-4875-b3c6-0f92d8e15a47
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 /**
  * The Authors & series lane's surface: a rail, the group spine, and the lane's
@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Alert,
   Box,

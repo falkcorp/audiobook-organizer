@@ -1,10 +1,10 @@
 // file: web/src/pages/PlaylistDetail.tsx
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a5b6c4d-8e9f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 import { useCallback, useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router';
 import {
   Alert,
   Box,

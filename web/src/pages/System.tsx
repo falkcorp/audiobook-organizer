@@ -1,9 +1,9 @@
 // file: web/src/pages/System.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Box, Typography, Paper, Tabs, Tab, Button } from '@mui/material';
 import { OpenInNew as OpenInNewIcon } from '@mui/icons-material';
 import { StorageTab } from '../components/system/StorageTab';
