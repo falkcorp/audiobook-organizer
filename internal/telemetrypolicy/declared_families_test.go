@@ -1,9 +1,9 @@
-// file: internal/telemetry/contract/declared_families_test.go
-// version: 1.0.0
+// file: internal/telemetrypolicy/declared_families_test.go
+// version: 1.1.0
 // guid: c98c5717-1401-41f2-8a41-3b568da2ac3d
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
-package contract
+package telemetrypolicy
 
 import (
 	"fmt"
@@ -20,7 +20,7 @@ import (
 )
 
 // repoRoot is the module root, seen from this package's directory.
-const repoRoot = "../../.."
+const repoRoot = "../.."
 
 // scannedDirs are the trees whose non-test Go files may declare a family; the
 // same scope as the brief's constructor count.

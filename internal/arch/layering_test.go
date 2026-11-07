@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -142,7 +142,7 @@ var layerOf = map[string]int{
 	"internal/syncapi/conformance":     0, // computed: imports no module package
 	"internal/syncapi/progress":        0, // computed: imports no module package
 	"internal/telemetry":               0, // computed: imports no module package
-	"internal/telemetry/contract":      0, // computed: imports no module package
+	"internal/telemetrypolicy":         0, // computed: imports no module package (test-only; was internal/telemetry/contract)
 	"internal/testutil/durtest":        0, // computed: imports no module package
 	"internal/titleutil":               0, // table: leaf
 	"internal/tools":                   0, // computed: imports no module package
