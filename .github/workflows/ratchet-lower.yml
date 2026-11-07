@@ -35,6 +35,11 @@ jobs:
     name: Lower baselines
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Holds the CI bot app key as an environment secret (limited to the default
+    # branch), so a workflow on any other branch cannot mint the app token, which
+    # bypasses the main-branch ruleset. Declared on the job because environment
+    # secrets reach only jobs that name the environment.
+    environment: ci-bot
     # contents: read (the workflow default). The branch push and the PR are made
     # with the CI bot app token minted before the "Open PR" step.
     steps:
@@ -43,7 +48,15 @@ jobs:
         env:
           CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
           HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          # Mistake guard, not the security boundary (the environment is): fail
+          # clearly when run from a branch other than the default.
+          if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+            echo "::error::This workflow mints the CI bot app token and must run from ${DEFAULT_BRANCH}, not ${REF_NAME}."
+            exit 1
+          fi
           # No fallback to GITHUB_TOKEN or a personal token: a PR opened with
           # GITHUB_TOKEN runs no CI and could never pass the merge queue.
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
