@@ -1,7 +1,7 @@
 // file: core/log/redact_path_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 232b593d-cfbd-4e4f-9898-8ff6d47e5768
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package log
 
@@ -30,6 +30,12 @@ func TestRedactInvitePath(t *testing.T) {
 		{"resend", "/api/v1/users/invites/" + tok + "/resend", "/api/v1/users/invites/[REDACTED]/resend"},
 		{"resend trailing slash and query", "/api/v1/users/invites/" + tok + "/resend/?x=1", "/api/v1/users/invites/[REDACTED]/resend/?x=1"},
 		{"legacy unversioned resend", "/api/users/invites/" + tok + "/resend", "/api/users/invites/[REDACTED]/resend"},
+		{"core invite route", "/api/core/v1/auth/invites/" + tok, "/api/core/v1/auth/invites/[REDACTED]"},
+		{"core invite route query", "/api/core/v1/auth/invites/" + tok + "?a=b", "/api/core/v1/auth/invites/[REDACTED]?a=b"},
+		{"core invite route escaped token", "/api/core/v1/auth/invites/%74" + tok, "/api/core/v1/auth/invites/[REDACTED]"},
+		{"core invite route encoded slash", "/api/core/v1/auth/invites%2F" + tok, "/api/core/v1/auth/invites/[REDACTED]"},
+		{"core invite list", "/api/core/v1/auth/invites", "/api/core/v1/auth/invites"},
+		{"fail closed: dot walk over the core invite route", "/api/core/v1/q/../auth/invites/" + tok + "/..", "/[REDACTED]"},
 		{"escaped prefix segment", "/%69nvite/" + tok, "/%69nvite/[REDACTED]"},
 		{"doubled leading slash", "//invite/" + tok, "//invite/[REDACTED]"},
 		{"doubled slash before the token", "/invite//" + tok, "/invite//[REDACTED]"},
