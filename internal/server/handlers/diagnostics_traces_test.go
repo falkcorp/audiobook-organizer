@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_traces_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 22bc0bf7-bcbc-4384-892c-2156b00b3718
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
+	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )

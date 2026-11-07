@@ -1,9 +1,9 @@
-// file: internal/diag/flight/flight_test.go
-// version: 1.1.0
+// file: core/health/flight_test.go
+// version: 1.2.0
 // guid: f26518cf-c820-4b1a-a14b-c616781751e9
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
-package flight
+package health
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/trace"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -99,7 +100,7 @@ func snap(r *Recorder, reason string) {
 func TestSnapshotWritesOpenableTrace(t *testing.T) {
 	r, _ := startRecorder(t, Config{})
 	// Give the recorder something to hold.
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		_ = make([]byte, 1024)
 	}
 	r.Snapshot("test-openable")
@@ -174,7 +175,7 @@ func TestSnapshotRotatesToMaxFiles(t *testing.T) {
 	}
 
 	var first string
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		snap(r, "rotate")
 		if i == 0 {
 			first = traceFiles(t, r.dir)[0]
@@ -323,7 +324,7 @@ func TestSnapshotBackoffNotQuietWhileRequestsContinue(t *testing.T) {
 	snap(r, "flap") // dropped, but the reason is still being requested
 	clk.Advance(time.Minute)
 	snap(r, "flap") // second snapshot; the gap is now 10m
-	for i := 0; i < 19; i++ {
+	for range 19 {
 		clk.Advance(30 * time.Second)
 		snap(r, "flap") // a tick every 30s for 9m30s: all inside the gap
 	}
@@ -351,19 +352,14 @@ func TestFirstSnapshotPerReasonIsPinned(t *testing.T) {
 	clk.Advance(3 * time.Hour)
 	snap(r, "gamma") // over the pin cap of 2: an ordinary snapshot
 	gamma := strings.TrimSuffix(traceFiles(t, r.dir)[2], traceSuffix)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		clk.Advance(3 * time.Hour)
 		snap(r, "alpha")
 	}
 
 	files := traceFiles(t, r.dir)
 	has := func(name string) bool {
-		for _, f := range files {
-			if f == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(files, name)
 	}
 	if !has(alpha) {
 		t.Fatalf("pinned first alpha snapshot %s was rotated away: %v", alpha, files)
@@ -462,7 +458,7 @@ func TestDroppedRequestsLogRateLimited(t *testing.T) {
 	count := func() int { mu.Lock(); defer mu.Unlock(); return len(lines) }
 
 	snap(r, "noisy")
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		r.Snapshot("noisy") // rate limited, 10 requests in a burst
 	}
 	if got := count(); got != 1 {
@@ -518,7 +514,7 @@ func TestConcurrentSnapshotsDoNotBlock(t *testing.T) {
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Go(func() { r.Snapshot("burst") })
 	}
 	wg.Wait()

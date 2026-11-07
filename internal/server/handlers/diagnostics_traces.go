@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_traces.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3400e7bc-d8d4-41c4-a13a-2f173b0fb736
-// last-edited: 2026-10-14
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/gin-gonic/gin"
 )
 

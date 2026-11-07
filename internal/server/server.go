@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.114.3
+// version: 2.114.4
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-31
+// last-edited: 2026-11-07
 
 package server
 
@@ -34,7 +34,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
-	diagflight "github.com/falkcorp/audiobook-organizer/internal/diag/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/flight"
@@ -54,6 +53,7 @@ import (
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
+	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -386,7 +386,7 @@ type Server struct {
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 
-	// flight is the runtime flight recorder (internal/diag/flight): built in
+	// flight is the runtime flight recorder (core/health): built in
 	// NewServer, started in Start, stopped in Shutdown next to bgCancel. Never
 	// nil after NewServer. traceSnap is what the two watchdogs (the ops
 	// registry's strike hook and the search-index stall check) call; it is

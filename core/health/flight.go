@@ -1,9 +1,9 @@
-// file: internal/diag/flight/flight.go
-// version: 1.1.1
+// file: core/health/flight.go
+// version: 1.2.0
 // guid: 77f150f0-6e2a-4983-9ab6-3b77b267821f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
-// Package flight runs one runtime/trace.FlightRecorder for the life of the
+// Package health runs one runtime/trace.FlightRecorder for the life of the
 // server and writes its window to disk when a watchdog notices a stall.
 //
 // Two incident classes went silent before this existed: the 2026-07-05 dedup
@@ -41,24 +41,27 @@
 // or by an empty Config.Dir. List and Open stay usable on a recorder that is
 // not recording when Dir is set, so traces captured before the switch was
 // flipped can still be downloaded.
-package flight
+package health
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime/pprof"
 	"runtime/trace"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	corelog "github.com/falkcorp/mediacore/log"
 )
 
 // EnvSwitch names the environment variable that turns recording off when set
@@ -105,8 +108,6 @@ var (
 	filePattern = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}Z-[a-z0-9_-]+)(\.trace|\.goroutines\.txt)$`)
 )
 
-var flightLog = logger.New("flight-recorder")
-
 // Config configures a Recorder. Zero values take the defaults above.
 type Config struct {
 	// Dir is where snapshots are written. Empty disables recording.
@@ -131,6 +132,8 @@ type Config struct {
 	MinGap time.Duration
 	// Disabled turns recording off, as ABK_FLIGHT_RECORDER=off does.
 	Disabled bool
+	// Logger receives the recorder's log lines; nil discards them.
+	Logger *slog.Logger
 }
 
 // FileInfo describes one snapshot file in Dir.
@@ -165,6 +168,7 @@ type Recorder struct {
 	minGap    time.Duration
 	disabled  bool
 	fr        *trace.FlightRecorder
+	log       *slog.Logger
 	clock     func() time.Time // injectable for tests
 	stopWait  time.Duration    // injectable for tests
 	// dropf logs a dropped request; injectable for tests.
@@ -190,6 +194,13 @@ type Recorder struct {
 	dropLog    map[string]time.Time
 }
 
+// logf writes one sanitized line to the recorder's logger (interim, see R1-36).
+func (r *Recorder) logf(level slog.Level, format string, args ...any) {
+	r.log.Log(context.Background(), level, corelog.Sanitize(fmt.Sprintf(format, args...)))
+}
+
+func (r *Recorder) infof(format string, args ...any) { r.logf(slog.LevelInfo, format, args...) }
+
 // New builds a Recorder without starting it. Recording begins at Start, so
 // constructing one (as every test server does) costs nothing.
 func New(cfg Config) *Recorder {
@@ -200,11 +211,15 @@ func New(cfg Config) *Recorder {
 		minGap:    cfg.MinGap,
 		clock:     time.Now,
 		stopWait:  stopWait,
-		dropf:     flightLog.Info,
+		log:       cfg.Logger,
 		reasons:   make(map[string]*reasonState),
 		pinned:    make(map[string]struct{}),
 		dropLog:   make(map[string]time.Time),
 	}
+	if r.log == nil {
+		r.log = slog.New(slog.DiscardHandler)
+	}
+	r.dropf = r.infof
 	if r.maxFiles <= 0 {
 		r.maxFiles = defaultMaxFiles
 	}
@@ -252,7 +267,7 @@ func (r *Recorder) Start() error {
 		return fmt.Errorf("flight recorder: start: %w", err)
 	}
 	r.recording = true
-	flightLog.Info("flight recorder started: dir=%s max_files=%d max_pinned=%d min_gap=%s", r.dir, r.maxFiles, r.maxPinned, r.minGap)
+	r.logf(slog.LevelInfo, "flight recorder started: dir=%s max_files=%d max_pinned=%d min_gap=%s", r.dir, r.maxFiles, r.maxPinned, r.minGap)
 	return nil
 }
 
@@ -336,10 +351,8 @@ func (r *Recorder) admitLocked(reason string, now time.Time) bool {
 // noteCoveredLocked remembers reason as covered by the in-flight write. It
 // reports whether the reason was recorded. Callers hold mu.
 func (r *Recorder) noteCoveredLocked(reason string) bool {
-	for _, c := range r.covered {
-		if c == reason {
-			return true
-		}
+	if slices.Contains(r.covered, reason) {
+		return true
 	}
 	if len(r.covered) >= maxCovered {
 		return false
@@ -370,7 +383,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	}()
 	defer func() {
 		if p := recover(); p != nil {
-			flightLog.Warn("snapshot %s panicked: %v", reason, p)
+			r.logf(slog.LevelWarn, "snapshot %s panicked: %v", reason, p)
 		}
 	}()
 
@@ -380,7 +393,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	n, err := r.writeTrace(traceTmp)
 	if err != nil {
 		_ = os.Remove(traceTmp)
-		flightLog.Warn("snapshot %s failed: %v", reason, err)
+		r.logf(slog.LevelWarn, "snapshot %s failed: %v", reason, err)
 		return
 	}
 	// The goroutine dump follows the trace and is skipped when the trace
@@ -391,7 +404,7 @@ func (r *Recorder) write(at time.Time, reason string) {
 	if derr := r.writeGoroutines(dumpTmp); derr != nil {
 		_ = os.Remove(dumpTmp)
 		haveDump = false
-		flightLog.Warn("goroutine dump for %s failed: %v", reason, derr)
+		r.logf(slog.LevelWarn, "goroutine dump for %s failed: %v", reason, derr)
 	}
 	if r.afterTrace != nil {
 		r.afterTrace()
@@ -408,20 +421,20 @@ func (r *Recorder) write(at time.Time, reason string) {
 	if err := os.Rename(traceTmp, final+traceSuffix); err != nil {
 		_ = os.Remove(traceTmp)
 		_ = os.Remove(dumpTmp)
-		flightLog.Warn("snapshot %s failed: %v", reason, err)
+		r.logf(slog.LevelWarn, "snapshot %s failed: %v", reason, err)
 		return
 	}
 	if haveDump {
 		if err := os.Rename(dumpTmp, final+gorSuffix); err != nil {
 			_ = os.Remove(dumpTmp)
-			flightLog.Warn("goroutine dump for %s not saved: %v", reason, err)
+			r.logf(slog.LevelWarn, "goroutine dump for %s not saved: %v", reason, err)
 		}
 	}
 
 	// Only now is the reason rate limited: a failed write leaves it free to
 	// retry on the next strike.
 	r.recordSuccess(at, base.String(), append([]string{reason}, covered...))
-	flightLog.Info("wrote %s (%d bytes of trace, goroutine dump %t)", base.String()+traceSuffix, n, haveDump)
+	r.logf(slog.LevelInfo, "wrote %s (%d bytes of trace, goroutine dump %t)", base.String()+traceSuffix, n, haveDump)
 	r.rotate()
 }
 
@@ -501,7 +514,7 @@ func (r *Recorder) writeGoroutines(path string) error {
 func (r *Recorder) rotate() {
 	pairs, err := r.pairs()
 	if err != nil {
-		flightLog.Warn("rotation skipped: %v", err)
+		r.logf(slog.LevelWarn, "rotation skipped: %v", err)
 		return
 	}
 	r.mu.Lock()
@@ -515,7 +528,7 @@ func (r *Recorder) rotate() {
 	for len(unpinned) > r.maxFiles {
 		for _, name := range unpinned[0].files {
 			if err := os.Remove(filepath.Join(r.dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				flightLog.Warn("could not remove old snapshot %s: %v", name, err)
+				r.logf(slog.LevelWarn, "could not remove old snapshot %s: %v", name, err)
 			}
 		}
 		unpinned = unpinned[1:]
@@ -580,12 +593,12 @@ func (r *Recorder) List() ([]FileInfo, error) {
 		return nil, err
 	}
 	out := make([]FileInfo, 0, len(names))
-	for i := len(names) - 1; i >= 0; i-- {
-		info, err := os.Lstat(filepath.Join(r.dir, names[i]))
+	for _, name := range slices.Backward(names) {
+		info, err := os.Lstat(filepath.Join(r.dir, name))
 		if err != nil {
 			continue // rotated away between ReadDir and Lstat
 		}
-		out = append(out, FileInfo{Name: names[i], Size: info.Size(), ModTime: info.ModTime()})
+		out = append(out, FileInfo{Name: name, Size: info.Size(), ModTime: info.ModTime()})
 	}
 	return out, nil
 }
@@ -652,8 +665,8 @@ func (r *Recorder) Stop() {
 	select {
 	case <-done:
 		r.fr.Stop()
-		flightLog.Info("flight recorder stopped")
+		r.logf(slog.LevelInfo, "flight recorder stopped")
 	case <-time.After(r.stopWait):
-		flightLog.Warn("snapshot still writing after %s; leaving the flight recorder running for the exit", r.stopWait)
+		r.logf(slog.LevelWarn, "snapshot still writing after %s; leaving the flight recorder running for the exit", r.stopWait)
 	}
 }
