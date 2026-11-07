@@ -1,5 +1,5 @@
 // file: core/log/logging.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
 // last-edited: 2026-11-07
 
@@ -68,6 +68,10 @@ const (
 
 // rootModule is the module of Root() and Handler().
 const rootModule = "core"
+
+// primarySink is the primary output's name in Counters().Dropped; Tap refuses
+// it as a tap name.
+const primarySink = "primary"
 
 // Format is the primary output's encoding.
 type Format uint8
@@ -154,8 +158,11 @@ type Record struct {
 // map is a fresh copy: a caller never shares the pipeline's state. Counts only
 // grow for the life of the Logging, and a stopped tap's drops stay counted.
 type Counters struct {
-	// Records counts records written, by module ("core" or a module ID) and
-	// level: mediacore_log_records_total{level,module}.
+	// Records counts records that passed their level gate and entered the
+	// pipeline, by module ("core" or a module ID) and level:
+	// mediacore_log_records_total{level,module}. A record whose primary
+	// write failed is still counted here (it reached the taps) and is also
+	// counted in Dropped["primary"].
 	Records map[string]map[slog.Level]uint64
 	// Dropped counts records lost, by sink: "primary" for a failed write to
 	// the primary output, otherwise a tap's name (a full queue, or a tap
@@ -382,7 +389,7 @@ func (l *Logging) Level(scope string) slog.Level {
 func (l *Logging) Counters() Counters {
 	c := Counters{
 		Records:    map[string]map[slog.Level]uint64{},
-		Dropped:    map[string]uint64{"primary": l.primaryDrops.Load()},
+		Dropped:    map[string]uint64{primarySink: l.primaryDrops.Load()},
 		Redactions: map[string]uint64{},
 	}
 	l.records.Range(func(k, v any) bool {

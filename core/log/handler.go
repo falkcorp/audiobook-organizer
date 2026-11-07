@@ -1,5 +1,5 @@
 // file: core/log/handler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 00d59f68-e217-4796-9d74-36dcbf58a4ed
 // last-edited: 2026-11-07
 
@@ -120,9 +120,7 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	// group names). The message is redacted under the empty key: no key rule
 	// applies to it, and the text scan (URLs, paths, key=value pairs, auth
 	// schemes) does.
-	tree := make([]slog.Attr, 0, len(h.pre)+1)
-	tree = append(tree, h.pre...)
-	tree = append(tree, h.nest(recAttrs)...)
+	tree := append(slices.Clone(h.pre), h.nest(recAttrs)...)
 	body := l.redactAll(tree[:0], tree)
 	ctxRed := l.redactAll(nil, ctxAttrs(ctx))
 	msg, mk := l.redactor.StringKinds("", r.Message)
@@ -148,34 +146,30 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 		l.primaryFailed(err)
 	}
 
-	// Step 4b: the taps.
+	// Step 4b: the taps. flat is built once and never handed out: every tap
+	// gets its own clone, so a tap that reorders or edits its Attrs (on its
+	// own goroutine) cannot race with, or show through to, another tap.
 	taps := *l.taps.Load()
-	first := true
-	var attrs []slog.Attr
+	var flat []slog.Attr
+	built := false
 	for _, tp := range taps {
 		if r.Level < tp.min {
 			continue
 		}
-		if first {
-			attrs = make([]slog.Attr, 0, len(body)+len(ctxRed))
-			attrs = appendFlat(attrs, body)
-			attrs = appendFlat(attrs, ctxRed)
+		if !built {
+			flat = appendFlat(appendFlat(nil, body), ctxRed)
+			built = true
 		}
-		rec := Record{
+		tp.offer(Record{
 			Time:      t,
 			Level:     r.Level,
 			Module:    h.sc.module,
 			Subsystem: h.sc.subsystem,
 			Message:   msg,
-			Attrs:     attrs,
+			Attrs:     slices.Clone(flat),
 			TraceID:   traceID,
 			SpanID:    spanID,
-		}
-		if !first {
-			rec.Attrs = slices.Clone(attrs)
-		}
-		first = false
-		tp.offer(rec)
+		})
 	}
 	return nil
 }
@@ -192,9 +186,7 @@ func (h *handler) nest(recAttrs []slog.Attr) []slog.Attr {
 		if len(g.attrs) == 0 && len(inner) == 0 {
 			continue
 		}
-		children := make([]slog.Attr, 0, len(g.attrs)+len(inner))
-		children = append(children, g.attrs...)
-		children = append(children, inner...)
+		children := append(slices.Clone(g.attrs), inner...)
 		inner = []slog.Attr{{Key: g.name, Value: slog.GroupValue(children...)}}
 	}
 	return inner
@@ -241,18 +233,31 @@ func appendFlat(dst, attrs []slog.Attr) []slog.Attr {
 // Tap registers an asynchronous consumer of redacted records at or above min
 // (05-logging §3, §7). The tap owns one goroutine and one bounded channel of
 // queue records (at least 1); the caller never blocks: when the queue is full
-// the record is dropped and counted under name in Counters().Dropped, and a
-// summary record "N dropped" is queued ahead of the next record that fits.
+// the record is dropped. A panic in fn is recovered and is a drop too. Every
+// drop is counted under name in Counters().Dropped, and announced to the tap
+// by a summary record "N dropped": queued ahead of the next record that fits,
+// or delivered last when Close drains the tap. A summary is itself lost only
+// when its own delivery panics or stop (or Close's deadline) discards it.
 // Taps sharing a name share that counter.
 //
 // fn receives a context that is cancelled when the tap is stopped or Close's
-// deadline passes; fn should return promptly once it is. A panic in fn is
-// recovered and counted as a drop. stop is idempotent: it stops delivery
-// (records still queued are discarded), cancels fn's context and waits for
-// the goroutine to exit. It must not be called from fn. After Close, or with
-// a nil fn, Tap starts nothing and returns a no-op stop.
+// deadline passes; fn should return promptly once it is. stop is idempotent:
+// it stops delivery (records still queued are discarded, not counted as
+// drops), cancels fn's context and waits for the goroutine to exit. It must
+// not be called from fn. After Close, with a nil fn, or with the reserved name
+// "primary" (the primary output's sink in Counters().Dropped, which a tap
+// must not merge into), Tap starts nothing and returns a no-op stop; the
+// reserved name is also reported on stderr, since Tap has no error result.
 func (l *Logging) Tap(name string, min slog.Level, queue int, fn func(ctx context.Context, r Record)) (stop func()) {
 	if fn == nil {
+		return func() {}
+	}
+	if name == primarySink {
+		// The refusal is the no-op stop; the stderr line only explains it, so
+		// a failure to write that line changes nothing.
+		if _, err := fmt.Fprintf(l.stderr, "mediacore/log: Tap refused: %q is the primary output's sink name\n", name); err != nil {
+			return func() {}
+		}
 		return func() {}
 	}
 	if queue < 1 {
@@ -273,10 +278,11 @@ func (l *Logging) Tap(name string, min slog.Level, queue int, fn func(ctx contex
 		name:   name,
 		min:    min,
 		fn:     fn,
-		ch:     make(chan Record, queue),
+		ch:     make(chan queued, queue),
 		drops:  drops,
 		ctx:    ctx,
 		cancel: cancel,
+		now:    l.clock,
 		quit:   make(chan struct{}),
 		drain:  make(chan struct{}),
 		done:   make(chan struct{}),
@@ -293,12 +299,13 @@ type tap struct {
 	name    string
 	min     slog.Level
 	fn      func(ctx context.Context, r Record)
-	ch      chan Record
+	ch      chan queued
 	drops   *atomic.Uint64 // Counters().Dropped[name], shared by taps of one name
 	pending atomic.Uint64  // drops not yet reported by a summary record
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	now    func() time.Time // the Logging's clock, for the closing summary
 
 	quit      chan struct{} // closed by stop: exit without delivering the queue
 	drain     chan struct{} // closed by Close: deliver the queue, then exit
@@ -313,7 +320,7 @@ func (t *tap) offer(rec Record) {
 	if t.pending.Load() > 0 {
 		if n := t.pending.Swap(0); n > 0 {
 			select {
-			case t.ch <- t.summary(n, rec.Time):
+			case t.ch <- queued{rec: t.summary(n, rec.Time), summary: true}:
 			default:
 				t.pending.Add(n)
 				t.dropped()
@@ -322,7 +329,7 @@ func (t *tap) offer(rec Record) {
 		}
 	}
 	select {
-	case t.ch <- rec:
+	case t.ch <- queued{rec: rec}:
 	default:
 		t.dropped()
 	}
@@ -356,35 +363,47 @@ func (t *tap) run() {
 		case <-t.drain:
 			for {
 				select {
-				case rec := <-t.ch:
+				case q := <-t.ch:
 					if t.ctx.Err() != nil {
 						return
 					}
-					t.deliver(rec)
+					t.deliver(q)
 				default:
+					// The queue is empty: announce drops no later record
+					// will carry a summary for (fan-out has stopped).
+					if n := t.pending.Swap(0); n > 0 && t.ctx.Err() == nil {
+						t.deliver(queued{rec: t.summary(n, t.now()), summary: true})
+					}
 					return
 				}
 			}
-		case rec := <-t.ch:
+		case q := <-t.ch:
 			select {
 			case <-t.quit:
 				return
 			default:
 			}
-			t.deliver(rec)
+			t.deliver(q)
 		}
 	}
 }
 
-// deliver calls fn, counting a panic as a drop: a broken tap must not take
-// the process down with it.
-func (t *tap) deliver(rec Record) {
+// queued is one entry of a tap's channel; summary marks a drop summary,
+// which is not a log record, so a panic while delivering it is not a drop.
+type queued struct {
+	rec     Record
+	summary bool
+}
+
+// deliver calls fn, counting a panic on a log record as a drop (announced in
+// the next summary): a broken tap must not take the process down with it.
+func (t *tap) deliver(q queued) {
 	defer func() {
-		if recover() != nil {
-			t.drops.Add(1)
+		if recover() != nil && !q.summary {
+			t.dropped()
 		}
 	}()
-	t.fn(t.ctx, rec)
+	t.fn(t.ctx, q.rec)
 }
 
 // stop removes the tap from the fan-out, discards its queue and joins its
