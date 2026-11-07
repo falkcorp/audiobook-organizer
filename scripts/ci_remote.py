@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.2.3
+# version: 1.2.4
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
-# last-edited: 2026-11-05
+# last-edited: 2026-11-07
 
 """Run `make ci` sharded across a pool of remote runner nodes (`make ci-remote`).
 
@@ -511,11 +511,9 @@ MAKE_LEGS = (
     ("bench-check", "make --no-print-directory bench-check", 120.0),
     ("pprof-check", "make --no-print-directory pprof-check", 180.0),
     ("fmt-check", "make --no-print-directory fmt-check", 10.0),
-    (
-        "web-test",
-        "npm ci --prefix web --no-audit --no-fund && make --no-print-directory web-test",
-        240.0,
-    ),
+    # Each job runs in a fresh worktree, so web-test's web-deps prerequisite does the
+    # install through scripts/ci/build_web.sh (R1-05: no site runs `npm ci` itself).
+    ("web-test", "make --no-print-directory web-test", 240.0),
 )
 
 
