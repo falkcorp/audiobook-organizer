@@ -1,5 +1,5 @@
 # file: .github/workflows/docker-image.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: b2699763-511a-4b87-bf7f-c52dc086fdcc
 # last-edited: 2026-11-07
 
@@ -92,7 +92,7 @@ jobs:
           if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
             go=false; web=false
             while IFS= read -r f; do
-              case "$f" in web/*|.github/workflows/*) web=true ;; esac
+              case "$f" in web/*|core/web/*|scripts/ci/build_web.sh|.github/workflows/*) web=true ;; esac
               case "$f" in
                 # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
                 # must run when only the generated file changed.
