@@ -1,5 +1,5 @@
 // file: internal/logger/ctx_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f985b834-583b-49a5-95a2-df71a0e16724
 // last-edited: 2026-11-07
 
@@ -74,8 +74,10 @@ func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&ordered, nil)))
 	opCtx := corelog.WithAttrs(context.Background(), slog.String("opID", "op-real"))
 	InfoCtx(opCtx, "scan", "path", "/lib/x opID=op-forged")
-	if line := ordered.String(); strings.Index(line, " opID=op-real") > strings.Index(line, "op-forged") {
-		t.Errorf("context attrs not written before the record's: %q", line)
+	line := ordered.String()
+	opAt, forgedAt := strings.Index(line, " opID=op-real"), strings.Index(line, "op-forged")
+	if opAt < 0 || forgedAt < 0 || opAt > forgedAt {
+		t.Errorf("context attrs not written before the record's (opID at %d, record value at %d): %q", opAt, forgedAt, line)
 	}
 
 	// Below the default handler's level nothing is written.
