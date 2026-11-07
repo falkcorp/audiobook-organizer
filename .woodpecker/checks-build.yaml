@@ -1,7 +1,7 @@
 # file: .woodpecker/checks-build.yaml
 # version: 1.10.1
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 #
 # The non-linter gates of `make ci`: vet (test-short's prerequisite),
 # fmt-check, sdkguard, bench-check, pprof-check, and the web tests, each step running the
