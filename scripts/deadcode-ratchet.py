@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
-# last-edited: 2026-11-06
+# last-edited: 2026-11-07
 """Ratchet on production functions unreachable from every `main`.
 
 Runs golang.org/x/tools/cmd/deadcode (pinned) and compares the set of
@@ -40,16 +40,48 @@ the linux cgo packages and the run fails. The pin is x/tools v0.51.0 (the
 version the baseline was measured with): a version bump can change the set on
 its own and trip the ratchet as if code had changed.
 
-Mains and filter (09 §9.4 R1, MOD2-19). The program is ABO's mains (`./...` of
-the root module) plus, once core/examples/hello exists, hello's main. `-filter`
-REPLACES deadcode's default (which is the root module's own packages), so it is
-the union of the root module and core's `internal` and `kernel` trees:
-`github.com/falkcorp/mediacore/(internal|kernel)`. Core's exported packages are
-SDK surface and out of scope here, as `pkg/` is. A filter naming only core's
-trees would drop every root finding, and `--prune` would then empty the
+Mains, modules and filter (09 §9.4 R1, MOD2-19). core/ is its own Go module
+(github.com/falkcorp/mediacore, wired into the root module by a `replace`), and
+a package loads in exactly one module's context: the root module's packages and
+whatever the root imports load from the root's go.mod/go.sum; core's own
+packages (httpapi and its jsonschema-go dependency among them) load from
+core/go.mod/go.sum. A hello main loaded from the repo root therefore fails on
+core's third-party dependencies (root's go.sum has no hash for them, and `go
+mod tidy` at the root never adds one because no root package imports them), so
+the analysis is TWO deadcode runs, each in its own module context:
+
+  root run  cwd = repo root, `./...` (every ABO main). Filter: the root module
+            plus core's `internal` and `kernel` trees (what root imports).
+  core run  cwd = core/, hello's mains (`./examples/hello/...`). Filter: core's
+            `internal` and `kernel` trees. Only when core/examples/hello holds
+            Go files; without them there is one run, the root run, exactly as
+            before hello existed.
+
+`-filter` REPLACES deadcode's default (the loaded module's own packages), so
+each run names its filter explicitly, anchored:
+`github.com/falkcorp/mediacore/(internal|kernel)` for core. Core's exported
+packages are SDK surface and out of scope, as `pkg/` is. A filter naming only
+core's trees would drop every root finding, and `--prune` would then empty the
 baseline, which is the silent re-baseline this gate exists to prevent.
-There is no separate core baseline: core's identifiers (path-prefixed `core/`)
-live in the same scripts/deadcode-baseline.txt.
+
+Combining the runs. A function is unreachable from every main only if no run
+reaches it, but a run can only judge the packages it loaded: a core package
+that the root run loads and hello does not is NOT shown to be live by hello's
+silence. So the rule is, per function: it is dead iff every run that LOADED its
+package reports it unreachable (the intersection over the runs that can see
+it). A function in a package only one run loads is dead iff that run reports it.
+A package loaded by neither is invisible, as it always was. Loaded packages are
+read with `go list -deps` under the same cwd, pattern and GOOS/GOARCH/CGO pin
+as the deadcode run. Two separate analyses never share runtime types the way a
+single joint program would, so the intersection can only report MORE than a
+joint analysis would (the mains never run in one process), never less.
+
+Paths are normalised before anything else: deadcode prints file paths relative
+to its cwd, so the core run's `kernel/kernel.go` becomes `core/kernel/kernel.go`
+(repo-root-relative) before the exclusion rules and the identifier are built.
+That is what keeps core's identifiers `core/`-prefixed in the one
+scripts/deadcode-baseline.txt (there is no separate core baseline) and keeps
+the baseline format unchanged.
 
 Excluded from the set: pkg/ (public SDK, exported on purpose),
 internal/writeback/ (the iTunes writer), test files, test helper packages
@@ -61,11 +93,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 DEADCODE_TOOLS_VERSION = "v0.51.0"  # keep equal to tools/deadcode/go.mod (a test checks)
@@ -85,8 +119,10 @@ class ToolError(Exception):
 
 
 CORE_MODULE = "github.com/falkcorp/mediacore"
-CORE_FILTER = CORE_MODULE + r"/(internal|kernel)"
-HELLO_DIR = ("core", "examples", "hello")
+CORE_DIR = "core"
+CORE_FILTER = re.escape(CORE_MODULE) + r"/(internal|kernel)"
+HELLO_DIR = (CORE_DIR, "examples", "hello")
+HELLO_PATTERN = "./examples/hello/..."  # relative to core/: every hello main (cmd/hello)
 MODULE_RE = re.compile(r"^module\s+(\S+)\s*$", re.M)
 
 
@@ -97,18 +133,37 @@ def root_module(root: Path) -> str:
     return m.group(1)
 
 
-def deadcode_args(root: Path) -> list[str]:
-    """The deadcode command line (after the binary): the filter, then the mains.
+@dataclass(frozen=True)
+class RunSpec:
+    """One deadcode run: where it runs (its module context) and what it loads."""
 
-    The filter is anchored and is the union of the root module and core's
-    internal and kernel trees; hello's main joins the program when its directory
-    holds Go files."""
-    filt = f"^({re.escape(root_module(root))}|{re.escape(CORE_MODULE)}/(internal|kernel))(/|$)"
-    args = ["-filter", filt, "./..."]
+    name: str
+    cwd: Path
+    filter: str
+    patterns: tuple[str, ...]
+
+    @property
+    def args(self) -> list[str]:
+        return ["-filter", self.filter, *self.patterns]
+
+
+def hello_present(root: Path) -> bool:
+    """True once core/examples/hello holds Go files (testdata/ does not count)."""
     hello = root.joinpath(*HELLO_DIR)
-    if hello.is_dir() and any(hello.glob("*.go")):
-        args.append(CORE_MODULE + "/" + "/".join(HELLO_DIR[1:]))
-    return args
+    return hello.is_dir() and any(
+        "testdata" not in p.relative_to(hello).parts for p in hello.rglob("*.go")
+    )
+
+
+def plan(root: Path) -> list[RunSpec]:
+    """The deadcode runs, one per module context (see the module docstring).
+
+    The root run is always there. The core run exists only when hello does."""
+    root_filter = f"^({re.escape(root_module(root))}|{CORE_FILTER})(/|$)"
+    specs = [RunSpec("root", root, root_filter, ("./...",))]
+    if hello_present(root):
+        specs.append(RunSpec("core", root / CORE_DIR, f"^{CORE_FILTER}(/|$)", (HELLO_PATTERN,)))
+    return specs
 
 
 def repo_root() -> Path:
@@ -128,25 +183,68 @@ def excluded(file: str, name: str) -> bool:
     return any(part in EXCLUDED_PKG_NAMES for part in file.split("/")[:-1])
 
 
-def parse(output: str) -> set[str]:
-    """Turn deadcode's flat `file:line:col: unreachable func: Name` lines
-    into a set of `<package dir>.<Name>` identifiers, filters applied.
+def parse(output: str, base: str = "") -> dict[str, str]:
+    """Turn deadcode's flat `file:line:col: unreachable func: Name` lines into
+    `{<package dir>.<Name>: <package dir>}`, normalisation and filters applied.
+
+    `base` is the run's cwd relative to the repo root ("" for the root run,
+    "core" for the core run): deadcode prints paths relative to its cwd, and
+    they are made repo-root-relative here, before the exclusion rules and the
+    identifier see them.
 
     A non-empty line that does not match the format raises ToolError: a format
     change must not be read as "nothing is unreachable"."""
-    found: set[str] = set()
+    found: dict[str, str] = {}
     for line in output.splitlines():
         if not line.strip():
             continue
         m = LINE_RE.match(line)
         if not m:
             raise ToolError(f"unrecognised deadcode output line: {line!r}")
-        file, name = m.group("file"), m.group("name")
+        file, name = posixpath.normpath(posixpath.join(base, m.group("file"))), m.group("name")
         if excluded(file, name):
             continue
         pkg_dir = file.rsplit("/", 1)[0] if "/" in file else "."
-        found.add(f"{pkg_dir}.{name}")
+        found[f"{pkg_dir}.{name}"] = pkg_dir
     return found
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """What one run found. `dead` maps identifier to package dir. `loaded` is
+    the repo-relative package dirs the run loaded (None when it is the only run
+    and so never needs to be compared)."""
+
+    name: str
+    dead: dict[str, str]
+    loaded: frozenset[str] | None = None
+
+
+def combine(results: list[RunResult]) -> set[str]:
+    """Identifiers unreachable from every main across all runs.
+
+    An identifier is dead iff every run that loaded its package reports it. A
+    run that did not load the package cannot vouch for it either way (hello's
+    silence about a package it never imports proves nothing), so it abstains.
+    With one run there is nothing to combine."""
+    if len(results) == 1:
+        return set(results[0].dead)
+    runs: list[tuple[dict[str, str], frozenset[str]]] = []
+    for r in results:
+        if r.loaded is None:
+            raise ToolError(f"run {r.name!r}: loaded-package set missing in a multi-run analysis")
+        for ident, pkg in r.dead.items():
+            if pkg not in r.loaded:
+                # deadcode reported a function in a package `go list -deps` says
+                # the run did not load: the loaded set cannot be trusted.
+                raise ToolError(f"run {r.name!r} reported {ident} from a package it did not load")
+        runs.append((r.dead, r.loaded))
+    dead: set[str] = set()
+    for run_dead, _ in runs:
+        for ident, pkg in run_dead.items():
+            if not any(pkg in loaded and ident not in d for d, loaded in runs):
+                dead.add(ident)
+    return dead
 
 
 def read_baseline(path: Path) -> set[str]:
@@ -241,27 +339,52 @@ def check_binary_version(binary: str) -> None:
         )
 
 
-def run_deadcode(root: Path) -> str:
+def _run(cmd: list[str], spec: RunSpec, env: dict[str, str], what: str) -> str:
+    try:
+        res = subprocess.run(
+            cmd, cwd=spec.cwd, env=env, capture_output=True, text=True, timeout=RUN_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ToolError(f"{what} ({spec.name} run) timed out after {RUN_TIMEOUT_S}s") from e
+    except OSError as e:
+        raise ToolError(f"could not run {cmd[0]} ({spec.name} run): {e}") from e
+    if res.returncode != 0:
+        raise ToolError(f"{what} ({spec.name} run) exited {res.returncode}:\n{res.stderr}")
+    return res.stdout
+
+
+def loaded_dirs(root: Path, spec: RunSpec, env: dict[str, str]) -> frozenset[str]:
+    """Repo-relative dirs of the non-std packages the run loads: what deadcode
+    sees, via `go list -deps` with the run's cwd, patterns and env."""
+    out = _run(
+        ["go", "list", "-deps", "-f", "{{if not .Standard}}{{.Dir}}{{end}}", *spec.patterns],
+        spec,
+        env,
+        "go list",
+    )
+    real_root = os.path.realpath(root)
+    dirs = set()
+    for d in out.split():
+        rel = os.path.relpath(os.path.realpath(d), real_root)
+        if rel != ".." and not rel.startswith(".." + os.sep):  # module cache etc. is not ours
+            dirs.add(Path(rel).as_posix())
+    return frozenset(dirs)
+
+
+def run_deadcode(root: Path) -> list[RunResult]:
     with tempfile.TemporaryDirectory() as tmp:
         binary = find_binary() or build_from_tools_module(root, tmp)
         check_binary_version(binary)
+        specs = plan(root)
         env = dict(os.environ, GOOS="linux", GOARCH="amd64", CGO_ENABLED="0")
-        try:
-            res = subprocess.run(
-                [binary, *deadcode_args(root)],
-                cwd=root,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=RUN_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise ToolError(f"deadcode timed out after {RUN_TIMEOUT_S}s") from e
-        except OSError as e:
-            raise ToolError(f"could not run {binary}: {e}") from e
-        if res.returncode != 0:
-            raise ToolError(f"deadcode exited {res.returncode}:\n{res.stderr}")
-        return res.stdout
+        results = []
+        for spec in specs:
+            out = _run([binary, *spec.args], spec, env, "deadcode")
+            base = Path(os.path.relpath(spec.cwd, root)).as_posix()
+            dead = parse(out, "" if base == "." else base)
+            loaded = loaded_dirs(root, spec, env) if len(specs) > 1 else None
+            results.append(RunResult(spec.name, dead, loaded))
+        return results
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,14 +397,21 @@ def main(argv: list[str] | None = None) -> int:
         help="lower-only: rewrite the baseline as baseline ∩ current (never adds; bot only)",
     )
     ap.add_argument("--baseline", default="scripts/deadcode-baseline.txt")
-    ap.add_argument("--input", help="read deadcode output from this file instead of running it")
+    ap.add_argument(
+        "--input",
+        help="read ONE run's deadcode output (root-relative paths) from this file "
+        "instead of running deadcode",
+    )
     args = ap.parse_args(argv)
 
     root = repo_root()
     baseline_path = root / args.baseline
     try:
-        output = Path(args.input).read_text() if args.input else run_deadcode(root)
-        current = parse(output)
+        if args.input:
+            results = [RunResult("input", parse(Path(args.input).read_text()))]
+        else:
+            results = run_deadcode(root)
+        current = combine(results)
     except ToolError as e:
         print(f"deadcode-ratchet: ERROR (not a ratchet rise): {e}", file=sys.stderr)
         return 2

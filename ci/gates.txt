@@ -1,5 +1,5 @@
 # file: ci/gates.txt
-# version: 1.7.0
+# version: 1.7.1
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
 # last-edited: 2026-11-07
 #
@@ -30,8 +30,11 @@
 #   core-errcheck, core-interface-width  core module: core/.errcheck-baseline and
 #                                      core/.interface-width-baseline, scripts under
 #                                      core/scripts/ci/, run by `make -C core ci`
-#   deadcode-ratchet                   root, over ABO's mains (and hello's once it exists)
-#                                      with the root-plus-core-internal filter; no core baseline
+#   deadcode-ratchet                   root, as two deadcode runs in their own module contexts:
+#                                      ABO's mains from the root (root-plus-core-internal filter)
+#                                      and, once it exists, hello's mains from core/ (core
+#                                      internal+kernel filter); dead only if every run that
+#                                      loads a package reports it; one baseline, no core baseline
 #   core-pprof, core-mocks, core-coverage-floor  core halves of the root's pprof-check,
 #                                      mocks-check and coverage-check-short; "not applicable"
 #                                      or "no floor yet" lines until their subject exists

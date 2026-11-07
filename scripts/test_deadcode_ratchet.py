@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_deadcode_ratchet.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 2b8e41c7-6d09-4f3a-a5e2-90c1d7f3b648
-# last-edited: 2026-10-11
+# last-edited: 2026-11-07
 """Unit tests for scripts/deadcode-ratchet.py (stdlib unittest, no Go needed)."""
 
 import importlib.util
@@ -43,7 +43,7 @@ internal/database/mock_store.go:5:6: unreachable func: Mock
 
 class ParseTest(unittest.TestCase):
     def test_filters_and_identifiers(self):
-        self.assertEqual(dr.parse(SAMPLE), {"internal/foo.Used", "internal/foo.T.Method"})
+        self.assertEqual(set(dr.parse(SAMPLE)), {"internal/foo.Used", "internal/foo.T.Method"})
 
     def test_line_numbers_do_not_matter(self):
         moved = SAMPLE.replace(":10:6:", ":99:6:")
@@ -53,12 +53,13 @@ class ParseTest(unittest.TestCase):
 class TestDirAllowListTest(unittest.TestCase):
     def test_listed_helper_dirs_are_excluded(self):
         for d in ("aggtest", "dbtest", "vptest", "logtest"):
-            self.assertEqual(dr.parse(f"internal/x/{d}/t.go:1:6: unreachable func: F\n"), set(), d)
+            self.assertEqual(dr.parse(f"internal/x/{d}/t.go:1:6: unreachable func: F\n"), {}, d)
 
     def test_unlisted_test_suffix_dir_is_kept(self):
         # A production package that merely ends in "test" must not be dropped.
         self.assertEqual(
-            dr.parse("internal/latest/l.go:1:6: unreachable func: F\n"), {"internal/latest.F"}
+            dr.parse("internal/latest/l.go:1:6: unreachable func: F\n"),
+            {"internal/latest.F": "internal/latest"},
         )
 
     def test_every_existing_test_helper_dir_is_listed(self):
@@ -85,15 +86,15 @@ class PinTest(unittest.TestCase):
 
 class CompareTest(unittest.TestCase):
     def test_new_identifier_fails(self):
-        base = dr.parse(SAMPLE)
-        cur = dr.parse(SAMPLE + "internal/foo/d.go:1:6: unreachable func: Fresh\n")
+        base = set(dr.parse(SAMPLE))
+        cur = set(dr.parse(SAMPLE + "internal/foo/d.go:1:6: unreachable func: Fresh\n"))
         new, gone = dr.compare(cur, base)
         self.assertEqual(new, ["internal/foo.Fresh"])
         self.assertEqual(gone, [])
 
     def test_removed_identifier_passes(self):
-        base = dr.parse(SAMPLE)
-        cur = dr.parse(SAMPLE.replace("internal/foo/a.go:10:6: unreachable func: Used\n", ""))
+        base = set(dr.parse(SAMPLE))
+        cur = set(dr.parse(SAMPLE.replace("internal/foo/a.go:10:6: unreachable func: Used\n", "")))
         new, gone = dr.compare(cur, base)
         self.assertEqual(new, [])
         self.assertEqual(gone, ["internal/foo.Used"])
