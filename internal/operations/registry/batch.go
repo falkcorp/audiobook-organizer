@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-25
+// last-edited: 2026-11-07
 
 // batch.go implements M3: coalescing burst enqueues of a Batchable op type into
 // one OperationV2Row via a debounce timer.
@@ -13,7 +13,17 @@
 //	  1. Journals the subject via store.AddToBatchBucket (idempotent).
 //	  2. Arms (or re-arms) the per-op-type debounce timer.
 //
-//	Timer fire (via time.AfterFunc):
+//	The window is trailing-edge: every Add restarts it, so a flush happens
+//	BatchWindow after the LAST Add of a burst (capped at BatchMaxWait after the
+//	first). "One row per burst" therefore holds only while consecutive Adds
+//	arrive less than BatchWindow apart; a gap longer than that (a descheduled
+//	goroutine on a loaded host counts) legitimately ends the burst and the
+//	rest lands in the next row. What is guaranteed regardless of timing is that
+//	every journaled subject is dispatched exactly once across rows. Tests that
+//	need a deterministic flush point inject Options.BatchAfterFunc.
+//
+//	Timer fire (via batchManager.afterFunc, time.AfterFunc unless a test
+//	replaced it through Options.BatchAfterFunc):
 //	  1. Checks shuttingDown — bails without touching the store if true.
 //	  2. Checks the generation counter — bails if a newer Add has overtaken it.
 //	  3. Snapshot-and-release: under batchMu, copies subjects + clears in-mem
@@ -78,8 +88,8 @@ type batchBucket struct {
 	// Used to enforce BatchMaxWait.
 	firstArrival time.Time
 
-	// timer is the active debounce timer. May be nil if no window is open.
-	timer *time.Timer
+	// stopTimer cancels the active debounce timer. Nil if no window is open.
+	stopTimer func() bool
 
 	// gen is incremented every time the timer is armed. The fire closure
 	// captures its gen at arm time and bails if r.batchBuckets[opType].gen
@@ -93,6 +103,12 @@ type batchManager struct {
 	mu      sync.Mutex
 	buckets map[string]*batchBucket // opType → bucket
 
+	// afterFunc arms a debounce timer: it runs f once after d and returns a
+	// function that cancels it (reporting whether it did so before f started).
+	// time.AfterFunc unless Options.BatchAfterFunc replaced it; set once at
+	// construction and never written afterwards, so it needs no lock.
+	afterFunc func(d time.Duration, f func()) (stop func() bool)
+
 	// fireWG tracks in-flight batchFire goroutines that have passed the
 	// shuttingDown gate. Shutdown() waits on this after stopping all timers
 	// to ensure no fire goroutine can call InsertOperationV2 after the DB
@@ -102,9 +118,15 @@ type batchManager struct {
 	fireWG sync.WaitGroup
 }
 
-func newBatchManager() *batchManager {
+func newBatchManager(afterFunc func(d time.Duration, f func()) (stop func() bool)) *batchManager {
+	if afterFunc == nil {
+		afterFunc = func(d time.Duration, f func()) func() bool {
+			return time.AfterFunc(d, f).Stop
+		}
+	}
 	return &batchManager{
-		buckets: make(map[string]*batchBucket),
+		buckets:   make(map[string]*batchBucket),
+		afterFunc: afterFunc,
 	}
 }
 
@@ -154,8 +176,8 @@ func (r *Registry) batchAdd(opType string, sub database.OpSubject, bw, bmw time.
 
 	// Stop the old timer (if any) to prevent double-fire. Drain its channel
 	// only if it hadn't already fired to avoid a goroutine leak.
-	if b.timer != nil {
-		b.timer.Stop()
+	if b.stopTimer != nil {
+		b.stopTimer()
 	}
 
 	// Increment generation so previous fire closures that may have already
@@ -163,7 +185,7 @@ func (r *Registry) batchAdd(opType string, sub database.OpSubject, bw, bmw time.
 	b.gen++
 	capturedGen := b.gen
 
-	b.timer = time.AfterFunc(delay, func() {
+	b.stopTimer = r.batch.afterFunc(delay, func() {
 		r.batchFire(opType, capturedGen)
 	})
 
@@ -215,7 +237,7 @@ func (r *Registry) batchFire(opType string, capturedGen uint64) {
 	}
 	b.subjects = make(map[string]database.OpSubject)
 	b.firstArrival = time.Time{} // reset for next window
-	b.timer = nil
+	b.stopTimer = nil
 
 	r.batch.mu.Unlock()
 
@@ -409,7 +431,7 @@ func (r *Registry) batchReloadOnStart(ctx context.Context) {
 		b.firstArrival = firstArrival
 		b.gen++
 		capturedGen := b.gen
-		b.timer = time.AfterFunc(delay, func() {
+		b.stopTimer = r.batch.afterFunc(delay, func() {
 			r.batchFire(def.ID, capturedGen)
 		})
 		r.batch.mu.Unlock()
@@ -431,9 +453,9 @@ func (r *Registry) batchReloadOnStart(ctx context.Context) {
 func (r *Registry) batchStopAllTimers() {
 	r.batch.mu.Lock()
 	for _, b := range r.batch.buckets {
-		if b.timer != nil {
-			b.timer.Stop()
-			b.timer = nil
+		if b.stopTimer != nil {
+			b.stopTimer()
+			b.stopTimer = nil
 		}
 	}
 	r.batch.mu.Unlock()

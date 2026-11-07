@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.59.1
+// version: 3.60.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package registry
 
@@ -265,6 +265,14 @@ type Options struct {
 	// uses because the container builds the registry without Options.
 	OnWatchdogStrike func(kind string)
 
+	// BatchAfterFunc replaces time.AfterFunc as the arming primitive for the
+	// Batchable debounce timers: it runs f once after d and returns a function
+	// that cancels it, reporting whether it did so before f started. Nil =
+	// time.AfterFunc. Tests only: it lets a batching test fire the window
+	// explicitly instead of racing a real BatchWindow against goroutine
+	// scheduling on a loaded runner.
+	BatchAfterFunc func(d time.Duration, f func()) (stop func() bool)
+
 	// RunnerHooksForTest returns the test hooks of one v3 run (RunnerHooks),
 	// asked once per attempt by op id; nil, and every production registry,
 	// runs with none. Only pkg/ops/opstest sets it.
@@ -415,7 +423,7 @@ func NewWithOptions(store database.OpsV2Store, lg *slog.Logger, workers int, opt
 		watchdogInterval:   opts.WatchdogInterval,
 		abandonGrace:       opts.AbandonGrace,
 		sweepInterval:      opts.SweepInterval,
-		batch:              newBatchManager(),
+		batch:              newBatchManager(opts.BatchAfterFunc),
 		scanGate:           scanStandDown{holders: make(map[string]time.Time)},
 		scanStandDownLease: opts.ScanStandDownLease,
 		scanStandDownNow:   opts.ScanStandDownNow,
