@@ -1,7 +1,7 @@
 # file: .github/workflows/memory-leak-scan.yml
-# version: 2.4.1
+# version: 2.5.0
 # guid: 9f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-# last-edited: 2026-10-29
+# last-edited: 2026-11-06
 name: Memory Leak Detection
 
 on:
@@ -98,8 +98,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Report — scheduled runs only. When leaks are found, inserts a TODO.md
-  # entry on a throwaway branch and auto-merges with [skip ci] in the commit
-  # message so no further CI runs are triggered by the documentation commit.
+  # entry on a throwaway branch, opens a PR as the CI bot GitHub App and queues
+  # it for auto-merge. The PR must run the repository's required checks to
+  # enter the merge queue: PRs opened with GITHUB_TOKEN start no workflows, and
+  # a [skip ci] marker on the head commit would suppress them too, so neither
+  # is used here.
   # ---------------------------------------------------------------------------
   report:
     name: Report findings to TODO.md
@@ -109,25 +112,49 @@ jobs:
       needs.scan.outputs.has_leaks == 'true' &&
       github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
+    # contents: read (the workflow default). The branch push and the PR are made
+    # with the CI bot app token minted below.
     steps:
+      - name: Require CI bot app credentials
+        env:
+          CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+        run: |
+          # No fallback to GITHUB_TOKEN: its PR would run no CI and could never
+          # pass the merge queue.
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            exit 1
+          fi
+
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
+          # Do not persist GITHUB_TOKEN: git would send it as http.extraheader in
+          # preference to the app token in the push URL below, and the branch
+          # would be pushed as github-actions[bot].
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
 
+      - name: Mint CI bot app token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Insert findings into TODO.md and open PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           REPO: ${{ github.repository }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LEAK_COUNT: ${{ needs.scan.outputs.leak_count }}
@@ -135,14 +162,11 @@ jobs:
           DATE=$(date -u +%Y-%m-%d)
           BRANCH="auto/memory-leak-findings-${DATE}"
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
           git checkout -b "$BRANCH"
 
           # Run the scanner to insert findings into TODO.md under
           # "## ⚠️ Automated Findings" (section created if absent).
-          # [skip ci] in the commit message tells GitHub Actions not to run
-          # CI on this documentation-only merge commit.
           python3 scripts/check-memory-leaks.py \
             --todo-insert "$DATE" \
             --run-url "$RUN_URL"
@@ -157,7 +181,7 @@ jobs:
           # Write commit body to a file so multi-line text never bleeds to
           # column 0 inside the YAML block scalar.
           printf '%s\n' \
-            "chore(todo): add memory leak findings ${DATE} [skip ci]" \
+            "chore(todo): add memory leak findings ${DATE}" \
             "" \
             "${LEAK_COUNT} potential memory leak(s) detected in scheduled static scan." \
             "Run: ${RUN_URL}" \
@@ -168,7 +192,9 @@ jobs:
             > /tmp/commit-msg.txt
           git commit -F /tmp/commit-msg.txt
 
-          git push origin "$BRANCH"
+          # Push to an explicit URL carrying the app token (checkout persisted
+          # no credentials, so nothing overrides it).
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
 
           # gh pr create returns the PR URL; extract the number from it.
           # (gh pr create has no --json flag)
@@ -180,7 +206,6 @@ jobs:
             "" \
             "### What this PR does" \
             "Inserts a \`[memory-leak]\` entry under \`## ⚠️ Automated Findings\` in \`TODO.md\`." \
-            "The \`[skip ci]\` tag in the commit message prevents CI from running on merge." \
             "" \
             "### What to do next" \
             "1. Review the findings in \`TODO.md\`" \
@@ -193,7 +218,7 @@ jobs:
           PR_URL=$(gh pr create \
             --repo "$REPO" \
             --head "$BRANCH" \
-            --title "chore(todo): memory leak findings ${DATE} [skip ci]" \
+            --title "chore(todo): memory leak findings ${DATE}" \
             --body-file /tmp/pr-body.md \
             --label "automation")
           PR_NUMBER="${PR_URL##*/}"
@@ -203,4 +228,4 @@ jobs:
             --rebase \
             --auto
 
-          echo "Findings merged to main via PR #${PR_NUMBER} (commit carries [skip ci])"
+          echo "Findings queued for merge to main via PR #${PR_NUMBER}"

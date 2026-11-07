@@ -11,6 +11,10 @@
 # source (Go-constant baselines are only listed in the PR body), and
 # scripts/ci/run_gates.py --lower cannot write a higher number or add an
 # identifier to the deadcode set. Merge the PR with --rebase like any other.
+#
+# The branch push and the PR are made by the CI bot GitHub App, not by
+# GITHUB_TOKEN: pull requests opened with GITHUB_TOKEN start no workflows, so the
+# merge queue's required checks would never report and the PR could never merge.
 name: Lower Ratchet Baselines
 
 on:
@@ -31,10 +35,22 @@ jobs:
     name: Lower baselines
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
-      pull-requests: write
+    # contents: read (the workflow default). The branch push and the PR are made
+    # with the CI bot app token minted before the "Open PR" step.
     steps:
+      # First, so a missing credential fails in seconds, not after the gates.
+      - name: Require CI bot app credentials
+        env:
+          CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+        run: |
+          # No fallback to GITHUB_TOKEN or a personal token: a PR opened with
+          # GITHUB_TOKEN runs no CI and could never pass the merge queue.
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Organization variable CI_BOT_APP_CLIENT_ID and organization secret CI_BOT_APP_PRIVATE_KEY must both be visible to this repository; one or both are empty."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,12 +102,32 @@ jobs:
         continue-on-error: true
         run: python3 scripts/ci/run_gates.py --lower --report "$RUNNER_TEMP/ratchet-report.md"
 
+      # Minted here, not at the top: an installation token lives one hour and the
+      # gates above can run for most of the job's 45 minutes.
+      - name: Mint CI bot app token
+        if: ${{ !cancelled() }}
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          # permission-workflows is deliberately absent. Force-pushing the bot
+          # branch from last week's base can in principle include workflow-file
+          # changes that landed on main since; if a run is ever refused with
+          # "refusing to allow a GitHub App to create or update workflow", add
+          # `permission-workflows: write` here (and to the app) at that point.
+
       - name: Open PR if a baseline changed
         if: ${{ !cancelled() }}
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          PAT: ${{ secrets.JF_CI_GH_PAT }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The app token authenticates both `git push` (via the URL below) and
+          # `gh`. Checkout used persist-credentials: false, so nothing persisted
+          # can override the URL's token.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           REPORT: ${{ runner.temp }}/ratchet-report.md
         run: |
           set -euo pipefail
@@ -110,14 +146,7 @@ jobs:
             exit 1
           fi
 
-          # PRs opened with GITHUB_TOKEN do not trigger CI; prefer the PAT.
-          if [ -z "${PAT:-}" ]; then
-            echo "::warning::JF_CI_GH_PAT is not set; falling back to GITHUB_TOKEN. CI will not run on the bot PR, and the repo must allow Actions to create pull requests."
-          fi
-          export GH_TOKEN="${PAT:-$GITHUB_TOKEN}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
           git checkout -b "$BRANCH"
           git add .errcheck-baseline .interface-width-baseline scripts/deadcode-baseline.txt
           git commit -m "chore(ci): lower ratchet baselines"
