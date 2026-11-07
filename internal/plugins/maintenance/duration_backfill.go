@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.15.0
+// version: 2.15.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 // Package maintenance — op maintenance.duration-reextract.
 //

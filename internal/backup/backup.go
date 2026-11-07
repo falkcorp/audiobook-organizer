@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.22.3
+// version: 1.22.4
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package backup
 

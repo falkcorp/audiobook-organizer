@@ -1,7 +1,7 @@
 // file: internal/util/util_coverage_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c1d9e2a-7b5f-4e83-9a6d-2f8c0b1e5d47
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 
 package util
 

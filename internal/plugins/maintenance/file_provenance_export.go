@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 
 package maintenance
 

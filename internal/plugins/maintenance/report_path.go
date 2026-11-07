@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5591f89d-611e-4e24-83c2-e02a887bd301
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 // resolveReportPath returns where an op writes its report -- the caller's
 // explicit path when one was given, otherwise {RootDir}/.reports/<fileName> --
 // and proves that path's directory exists and is writable before returning it.
-// The logic lives in internal/libroot, shared with the legacy maintenance jobs;
+// The logic lives in core/library, shared with the legacy maintenance jobs;
 // see library.ReportPathNotify for why it fails rather than guessing, and why ops call
 // it BEFORE doing any work. A default report directory that was world-writable
 // has that bit removed by the helper (and nothing else changed) and is logged here.

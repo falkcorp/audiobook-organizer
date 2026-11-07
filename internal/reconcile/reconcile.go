@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.27.4
+// version: 1.27.5
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package reconcile
 

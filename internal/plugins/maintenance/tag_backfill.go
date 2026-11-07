@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 // Package maintenance — op maintenance.tag-backfill.
 //

@@ -1,41 +1,41 @@
 # file: .github/codeql/models/path-sanitizers.model.yml
-# version: 0.3.1
+# version: 0.3.2
 # guid: 07edd0c5-64fa-4d57-8830-fbfaa513c052
-# last-edited: 2026-10-18
+# last-edited: 2026-11-07
 
 extensions:
   - addsTo:
       pack: codeql/go-all
       extensible: barrierModel
     data:
-      # util.SafeJoin: return value is a sanitized path within root.
+      # library.SafeJoin: return value is a sanitized path within root.
       # Signature: func SafeJoin(root string, parts ...string) (string, error)
-      - ["github.com/falkcorp/audiobook-organizer/internal/util", "", false, "SafeJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "SafeJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
-      # pathvalidation.CleanAbsolutePath: validates and returns the cleaned absolute path.
+      # library.CleanAbsolutePath: validates and returns the cleaned absolute path.
       # Signature: func CleanAbsolutePath(path string) (string, error)
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
-      # pathvalidation.SecureJoin: joins root with user parts, returns sanitized path.
+      # library.SecureJoin: joins root with user parts, returns sanitized path.
       # Signature: func SecureJoin(root string, parts ...string) (string, error)
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "SecureJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "SecureJoin", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
-      # pathvalidation.SanitizeFilename: sanitizes a filename component.
+      # library.SanitizeFilename: sanitizes a filename component.
       # Signature: func SanitizeFilename(name string) string
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation", "", false, "SanitizeFilename", "", "", "ReturnValue", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "SanitizeFilename", "", "", "ReturnValue", "path-injection", "manual"]
 
-      # safepath.Join: returns a SafePath that is guaranteed to be within root.
+      # library.Join: returns a SafePath that is guaranteed to be within root.
       # Signature: func Join(root string, parts ...string) (SafePath, error)
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "", false, "Join", "", "", "ReturnValue[0]", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "Join", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
-      # safepath.SafePath.String: unwraps the validated path string.
+      # library.SafePath.String: unwraps the validated path string.
       # Signature: func (SafePath) String() string
-      - ["github.com/falkcorp/audiobook-organizer/internal/security/safepath", "SafePath", false, "String", "", "", "ReturnValue", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "SafePath", false, "String", "", "", "ReturnValue", "path-injection", "manual"]
 
   - addsTo:
       pack: codeql/go-all
       extensible: barrierGuardModel
     data:
-      # util.WithinRoot: when this returns true, Argument[0] is within a safe root.
+      # library.WithinRoot: when this returns true, Argument[0] is within a safe root.
       # Signature: func WithinRoot(path, root string) bool
-      - ["github.com/falkcorp/audiobook-organizer/internal/util", "", false, "WithinRoot", "", "", "Argument[0]", "true", "path-injection", "manual"]
+      - ["github.com/falkcorp/mediacore/library", "", false, "WithinRoot", "", "", "Argument[0]", "true", "path-injection", "manual"]

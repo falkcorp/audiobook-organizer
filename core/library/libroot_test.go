@@ -1,7 +1,7 @@
-// file: internal/libroot/libroot_test.go
-// version: 1.6.0
+// file: core/library/libroot_test.go
+// version: 1.6.1
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 package library
 
@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-
 )
 
 func TestMounted(t *testing.T) {
@@ -266,11 +265,10 @@ func TestReportPathRefusesWhenWorldWriteCannotBeRemoved(t *testing.T) {
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	prev := chmodDir
-	chmodDir = func(string, os.FileMode) error { return errors.New("operation not permitted") }
-	defer func() { chmodDir = prev }()
+	env := defaultReportEnv()
+	env.chmod = func(string, os.FileMode) error { return errors.New("operation not permitted") }
 	called := false
-	_, err := ReportPathNotify(root, "", "r.tsv", func(string, os.FileMode) { called = true })
+	_, err := reportPathNotify(root, "", "r.tsv", func(string, os.FileMode) { called = true }, env)
 	if err == nil || !strings.Contains(err.Error(), "world write could not be removed") || !strings.Contains(err.Error(), "777") {
 		t.Fatalf("a dir that cannot be changed must be refused, got %v", err)
 	}
@@ -290,10 +288,10 @@ func TestReportPathDoesNotTightenADirItDoesNotOwn(t *testing.T) {
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	restore := SetEUIDForTest(os.Geteuid() + 1)
-	defer restore()
+	env := defaultReportEnv()
+	env.euid = func() int { return os.Geteuid() + 1 }
 	called := false
-	_, err := ReportPathNotify(root, "", "r.tsv", func(string, os.FileMode) { called = true })
+	_, err := reportPathNotify(root, "", "r.tsv", func(string, os.FileMode) { called = true }, env)
 	if err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("a dir owned by another user must be refused, got %v", err)
 	}
@@ -313,9 +311,9 @@ func TestReportPathRefusesAReportsDirOwnedByAnotherUser(t *testing.T) {
 	if _, err := ReportPathNotify(root, "", "r.tsv", nil); err != nil {
 		t.Fatal(err) // creates the dir as the real user
 	}
-	restore := SetEUIDForTest(os.Geteuid() + 1)
-	defer restore()
-	if _, err := ReportPathNotify(root, "", "r.tsv", nil); err == nil || !strings.Contains(err.Error(), "not owned") {
+	env := defaultReportEnv()
+	env.euid = func() int { return os.Geteuid() + 1 }
+	if _, err := reportPathNotify(root, "", "r.tsv", nil, env); err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("a report dir owned by another user must be refused, got %v", err)
 	}
 }

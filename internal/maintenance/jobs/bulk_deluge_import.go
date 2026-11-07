@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package jobs
 

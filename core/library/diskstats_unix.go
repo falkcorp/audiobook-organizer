@@ -1,7 +1,7 @@
-// file: internal/diskstats/diskstats_unix.go
-// version: 1.0.0
+// file: core/library/diskstats_unix.go
+// version: 1.0.1
 // guid: 9f2b7c14-6d38-4a05-b1e9-3c74a80d5216
-// last-edited: 2026-08-29
+// last-edited: 2026-11-07
 
 //go:build !windows
 

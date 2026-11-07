@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.12.1
+// version: 2.12.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package server
 
