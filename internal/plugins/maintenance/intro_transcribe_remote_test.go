@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-06
 
 package maintenance
 
@@ -543,11 +543,24 @@ func TestRemotePage_SilenceRetryVerdictIsClassifiedNotDeferred(t *testing.T) {
 
 func newRemoteRun(t *testing.T, srcs int) (*Plugin, *database.PebbleStore, []string) {
 	t.Helper()
-	s := openJournalPebble(t, t.TempDir())
+	// In-memory: nothing here reopens the store, and the page-streak tests
+	// seed over a thousand books, which on disk is a thousand fsyncs.
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
+	// One directory holds every source file; a temp dir per book was the
+	// other half of the seeding cost.
+	srcDir := t.TempDir()
 	var ids []string
 	for i := range srcs {
-		b, err := s.CreateBook(&database.Book{Title: "Book " + string(rune('A'+i)), FilePath: writeSource(t, "book.m4b")})
+		src := filepath.Join(srcDir, fmt.Sprintf("book-%04d.m4b", i))
+		if err := os.WriteFile(src, []byte("not audio"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		b, err := s.CreateBook(&database.Book{Title: fmt.Sprintf("Year One %04d", i), FilePath: src})
 		if err != nil {
 			t.Fatal(err)
 		}
