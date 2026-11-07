@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-10-30
+// last-edited: 2026-11-06
 
 package absauth
 
@@ -113,12 +113,38 @@ const argonMaxMemory = 4 * argonMemory
 // concurrency test can observe how many computations overlap inside argonIDKey.
 var argonCompute = argon2.IDKey
 
+// derivations counts every argon2id derivation argonIDKey has run in this
+// process, and derivationCost sums their cost in KiB-passes (time × memory, the
+// two parameters that decide how long one takes). They only ever grow.
+// DerivationsForTest reads them.
+var derivations, derivationCost atomic.Uint64
+
 // argonIDKey is argon2.IDKey run under argonSem. Every argon2id derivation in this
 // package, hashing and verifying, goes through it.
 func argonIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
 	argonSem <- struct{}{}
 	defer func() { <-argonSem }()
+	derivations.Add(1)
+	derivationCost.Add(uint64(time) * uint64(memory))
 	return argonCompute(password, salt, time, memory, threads, keyLen)
+}
+
+// DerivationsForTest reports how many argon2id derivations this process has
+// run and their summed cost in KiB-passes (time × memory). Both only grow, so a
+// caller reads them before and after the code it measures and takes the
+// difference.
+//
+// It is a read-only test seam (the name carries ForTest, which the dead-code
+// ratchet exempts) for tests in other packages that must prove a code path
+// spends the password work it claims to: the login handlers' tests read it
+// around one failed login per path, to show that an unknown name and an account
+// without a password pay the same derivation a wrong password for a real
+// account does. Response time cannot prove that on a shared CI agent: a
+// wall-clock comparison of those logins failed at load ~29 under -race
+// (2026-11-06) while every path did identical work. It exposes counts only,
+// nothing a caller could use to change the cost.
+func DerivationsForTest() (count, kibPasses uint64) {
+	return derivations.Load(), derivationCost.Load()
 }
 
 // HashPassword hashes a new password with argon2id and returns the algorithm
