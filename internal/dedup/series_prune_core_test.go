@@ -1,7 +1,7 @@
 // file: internal/dedup/series_prune_core_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e4a47712-ccaf-464e-9213-29a55a6dbe52
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package dedup
 
@@ -134,6 +134,23 @@ func TestGroupDuplicateSeries_NormalisesAndSkipsHeld(t *testing.T) {
 	assert.Equal(t, []int{1, 2}, seriesIDs(groups[0].Members))
 	assert.Equal(t, SeriesGroupKey{Name: "series two", AuthorID: 0}, groups[1].Key)
 	assert.Equal(t, []int{5, 6}, seriesIDs(groups[1].Members), "the held row's twins still group")
+}
+
+// The read paths order series that differ only in case differently (an
+// unstable sort with no tie-break), so a group's member order must not follow
+// the input order: it feeds the repair fingerprint, and a plan and its re-plan
+// on different read paths must agree.
+func TestGroupDuplicateSeries_MemberOrderIgnoresInputOrder(t *testing.T) {
+	f := newPruneFake()
+	f.addSeries(11, "Torchwood: The Story Continues", 0, false)
+	f.addSeries(13, "torchwood: the story continues", 0, false)
+	f.addSeries(12, "TORCHWOOD: THE STORY CONTINUES", 0, false)
+	all, _ := f.GetAllSeries()
+	for _, in := range [][]database.Series{all, {all[2], all[0], all[1]}, {all[1], all[2], all[0]}} {
+		groups, _ := GroupDuplicateSeries(in)
+		require.Len(t, groups, 1)
+		assert.Equal(t, []int{11, 12, 13}, seriesIDs(groups[0].Members))
+	}
 }
 
 func seriesIDs(ss []database.Series) []int {
