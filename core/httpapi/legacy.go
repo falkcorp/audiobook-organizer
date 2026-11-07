@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
 // last-edited: 2026-11-07
 
@@ -639,8 +639,8 @@ func (r *Router) insideClaims(owner, gin string) bool {
 		if c.owner != owner {
 			continue
 		}
-		if strings.HasSuffix(c.prefix, "/") {
-			if strings.HasPrefix(lit, c.prefix) || (!wild && gin == strings.TrimSuffix(c.prefix, "/")) {
+		if before, ok := strings.CutSuffix(c.prefix, "/"); ok {
+			if strings.HasPrefix(lit, c.prefix) || (!wild && gin == before) {
 				return true
 			}
 			continue
