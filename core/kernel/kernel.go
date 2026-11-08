@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -101,8 +101,9 @@ type Config struct {
 	StorageFS storage.FS
 	// StateDir is core.paths.state_dir, absolute, resolved once from
 	// pre-boot inputs (06 §6.4.5 StateDir). Set, the kernel runs P0a, the
-	// pre-boot swap, over <StateDir>/restore/ before the store opens. "" =
-	// no swap. Describe never runs P0a.
+	// pre-boot swap, over <StateDir>/restore/ before the store opens, and
+	// New refuses it without StoragePath. "" = no swap. Describe never runs
+	// P0a.
 	StateDir string
 }
 

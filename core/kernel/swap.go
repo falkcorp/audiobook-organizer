@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -107,6 +107,12 @@ func bootClock(ctx context.Context) func() time.Time {
 // of 05-storage §5S.3.7 for the kernel's own open (decision D9): the store
 // opens with an in-flight file only for the journal P0a just took over.
 func (k *Kernel) runP0a(ctx context.Context) error {
+	if k.cfg.StoragePath == "" {
+		// A swap applies to a store (R1-21 review m10): run with none, a
+		// staged restore would start and wait at swapped, in flight, on
+		// every boot. Refused before the state directory is read.
+		return errors.New("kernel: Config.StateDir is set without Config.StoragePath; the pre-boot swap (P0a) needs the store it swaps")
+	}
 	fs := bootseam.FS(ctx)
 	build, err := k.binaryID(ctx)
 	if err != nil {
