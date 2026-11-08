@@ -1,13 +1,12 @@
 // file: internal/logger/logger.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: f47ac10b-58cc-4372-a567-0e02b2c3d479
-// last-edited: 2026-10-18
+// last-edited: 2026-11-08
 
 package logger
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 )
 
@@ -100,28 +99,6 @@ type Logger interface {
 
 // Compile-time assertion that StandardLogger fully implements Logger.
 var _ Logger = (*StandardLogger)(nil)
-
-// logToStdout formats and prints a log line to stdout using slog.
-func logToStdout(subsystem string, level Level, msg string, args ...any) {
-	formatted := sanitizeLogLine(fmt.Sprintf(msg, args...))
-	l := slog.Default()
-	msgWithSubsystem := formatted
-	if subsystem != "" {
-		msgWithSubsystem = fmt.Sprintf("%s: %s", subsystem, formatted)
-	}
-	switch level {
-	case LevelTrace, LevelDebug:
-		l.Debug(msgWithSubsystem)
-	case LevelInfo:
-		l.Info(msgWithSubsystem)
-	case LevelWarn:
-		l.Warn(msgWithSubsystem)
-	case LevelError:
-		l.Error(msgWithSubsystem)
-	default:
-		l.Info(msgWithSubsystem)
-	}
-}
 
 // contextKey is a private type used as the key for storing a slog.Logger in a context.
 type contextKey struct{}
