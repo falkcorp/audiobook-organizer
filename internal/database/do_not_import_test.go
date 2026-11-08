@@ -1,7 +1,7 @@
 // file: internal/database/do_not_import_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-03
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): TestDoNotImport_SQLite removed (SQLite store deleted).
 
@@ -18,11 +18,6 @@ func TestDoNotImport_Pebble(t *testing.T) {
 		t.Fatalf("failed to create store: %v", err)
 	}
 	defer store.Close()
-
-	// Run migrations
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("failed to run migrations: %v", err)
-	}
 
 	testDoNotImportOperations(t, store)
 }

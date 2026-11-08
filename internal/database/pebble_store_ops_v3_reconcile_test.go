@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package database
 
@@ -38,10 +38,14 @@ func countOpsCommits(t testing.TB, p *PebbleStore) (count func() int64, stop fun
 	return n.Load, stop
 }
 
-// walBytes is the WAL's logical bytes written so far: a store-wide count of
-// every committed write, hooked or not.
+// walBytes is a store-wide count of every committed write, hooked or not:
+// the WAL's logical bytes on the raw backend, the commit count on the store
+// core storage opened (which has no pebble.Metrics).
 func walBytes(t testing.TB, p *PebbleStore) uint64 {
 	t.Helper()
+	if p.db.onCore() {
+		return p.db.lr.commits.Load()
+	}
 	m, err := p.db.Metrics()
 	if err != nil {
 		t.Fatal(err)
@@ -462,21 +466,15 @@ func TestOpsV3ProgressTickWritesOnlyProgKey(t *testing.T) {
 	}
 }
 
-// batchKeys lists the user keys staged in b, in staging order.
+// batchKeys lists the user keys staged in b, in staging order. b must have
+// been built under traceBatches.
 func batchKeys(t testing.TB, b *GatedBatch) []string {
 	t.Helper()
-	r := b.b.Reader()
 	var out []string
-	for {
-		_, k, _, ok, err := r.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			return out
-		}
-		out = append(out, string(k))
+	for _, w := range stagedWrites(t, b) {
+		out = append(out, string(w.key))
 	}
+	return out
 }
 
 // TestStageRecordWritesOnlyChangedHalf pins the run record split: a change to
@@ -484,6 +482,7 @@ func batchKeys(t testing.TB, b *GatedBatch) []string {
 // opv3:run:, and no change stages nothing. (A digest of the stored values
 // cannot see an identical rewrite; the staged batch can.)
 func TestStageRecordWritesOnlyChangedHalf(t *testing.T) {
+	traceBatches(t)
 	p := newTimelineStore(t)
 	id := newRunID()
 	total := int64(10)

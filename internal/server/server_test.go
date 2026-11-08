@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.16.4
+// version: 2.16.5
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-11-08
 
@@ -132,10 +132,6 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// by-book index is trusted; boot runs this ensure before serving.
 	ensureLedgerIndexTrusted(t, store)
 	database.SetGlobalStore(store)
-
-	// Run migrations to ensure schema is up to date
-	err = database.RunMigrations(store)
-	require.NoError(t, err)
 
 	// Create server (NewServer creates hub, queue, batcher, fileIOPool internally)
 	server := newTestServer(t, store)

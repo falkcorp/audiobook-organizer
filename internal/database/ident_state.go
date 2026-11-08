@@ -1,5 +1,5 @@
 // file: internal/database/ident_state.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
 // last-edited: 2026-11-08
 
@@ -921,11 +921,13 @@ func (p *PebbleStore) stageIdentForRawCacheWrites(t *identTxn, ids []string, val
 
 // --- load, rebuild, drift ---
 
-// loadIdentIndexState runs at open. A built index (marker at the current
-// version) has its counters recounted from the membership keys and is served
-// at once. An absent marker on a store with no book and no cache row is
-// stamped as built (an empty index is a correct one). Otherwise the index
-// stays not ready until EnsureIdentIndex rebuilds it.
+// loadIdentIndexState runs at construction and writes nothing (05-storage
+// §5S.4 step 12). A built index (marker at the current version) has its
+// counters recounted from the membership keys and is served at once. An
+// absent marker on a store with no book and no cache row is left for the boot
+// repairs to stamp built (stampEmptyIdentIndex: an empty index is a correct
+// one). Otherwise the index stays not ready until EnsureIdentIndex rebuilds
+// it.
 func (p *PebbleStore) loadIdentIndexState() error {
 	ver, ok, err := p.readIdentMarker()
 	if err != nil {
@@ -938,7 +940,28 @@ func (p *PebbleStore) loadIdentIndexState() error {
 		return nil
 	}
 	empty, err := p.identSourcesEmpty()
+	if err != nil {
+		return err
+	}
+	p.identStampEmpty.Store(empty)
+	return nil
+}
+
+// stampEmptyIdentIndex is the boot repairs' half of loadIdentIndexState: on a
+// store construction found empty and unmarked, it re-checks both (the repairs
+// run before anything serves, but the check costs two seeks) and stamps the
+// empty index built, with every counter zero.
+func (p *PebbleStore) stampEmptyIdentIndex() error {
+	if !p.identStampEmpty.Load() {
+		return nil
+	}
+	if _, ok, err := p.readIdentMarker(); err != nil || ok {
+		p.identStampEmpty.Store(false)
+		return err
+	}
+	empty, err := p.identSourcesEmpty()
 	if err != nil || !empty {
+		p.identStampEmpty.Store(false)
 		return err
 	}
 	if err := p.db.Set([]byte(identBuiltKey), []byte(fmt.Sprint(identIndexVersion)), pebble.Sync); err != nil {
@@ -948,6 +971,7 @@ func (p *PebbleStore) loadIdentIndexState() error {
 	p.ident.setCounts([2][numIdentStates]int64{})
 	p.ident.ready.Store(true)
 	p.ident.mu.Unlock()
+	p.identStampEmpty.Store(false)
 	return nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_export_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 7f67b147-94c7-439f-8b61-2ea3da025abe
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package database
 
@@ -18,7 +18,7 @@ func TestPebbleSampleFromDB_RealStore(t *testing.T) {
 	}
 	defer p.Close()
 	for i := range 1000 {
-		if err := p.db.Set([]byte(fmt.Sprintf("a1test:%06d", i)), []byte("value-value-value"), nil); err != nil {
+		if err := p.db.Set([]byte(fmt.Sprintf("quick_query_cache:a1test:%06d", i)), []byte("value-value-value"), nil); err != nil {
 			t.Fatal(err)
 		}
 	}

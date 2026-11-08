@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-08
 
@@ -109,6 +109,13 @@ type FS struct{ fs vfs.FS }
 // store on it lives as long as the value and is never durable: tests only,
 // such as coretest's harness (06 §6.4.8).
 func MemFS() FS { return FS{fs: vfs.NewMem()} }
+
+// FSOf is a filesystem the caller built: a fault-injecting or stalling
+// wrapper over MemFS, for an app's tests of what its store does when the
+// disk misbehaves (ABO's close-drain and warmup tests). nil is the OS's. It
+// is never a production input: app.Options and kernel.Config still carry an
+// FS, and only tests have a reason to build one from a vfs.FS.
+func FSOf(fs vfs.FS) FS { return FS{fs: fs} }
 
 // defaults resolves the zero values. The filesystem is the first set of: o.fs
 // as defaults finds it (the in-package slot a boot seam fills, such as a

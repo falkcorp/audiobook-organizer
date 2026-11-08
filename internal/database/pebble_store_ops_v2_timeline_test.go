@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package database
 
@@ -1540,19 +1540,19 @@ func TestRawKeyEntryPointsRefuseOpRows(t *testing.T) {
 		if err := p.DeleteRaw(key); !errors.Is(err, errOpv2OpRawKey) {
 			t.Fatalf("DeleteRaw(%q) = %v, want errOpv2OpRawKey", key, err)
 		}
-		if err := p.SetRaw("unrelated:k", []byte("v")); err != nil {
+		if err := p.SetRaw("quick_query_cache:unrelated", []byte("v")); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.ApplyRawBatch([]RawWrite{{Key: "unrelated:k", Delete: true}, {Key: key, Value: []byte("{}")}}); !errors.Is(err, errOpv2OpRawKey) {
+		if err := p.ApplyRawBatch([]RawWrite{{Key: "quick_query_cache:unrelated", Delete: true}, {Key: key, Value: []byte("{}")}}); !errors.Is(err, errOpv2OpRawKey) {
 			t.Fatalf("ApplyRawBatch(%q) = %v, want errOpv2OpRawKey", key, err)
 		}
-		if v, err := p.GetRaw("unrelated:k"); err != nil || string(v) != "v" {
+		if v, err := p.GetRaw("quick_query_cache:unrelated"); err != nil || string(v) != "v" {
 			t.Fatalf("a refused ApplyRawBatch changed another key: %q %v", v, err)
 		}
-		if err := p.DeleteRawBatch([]string{"unrelated:k", key}); !errors.Is(err, errOpv2OpRawKey) {
+		if err := p.DeleteRawBatch([]string{"quick_query_cache:unrelated", key}); !errors.Is(err, errOpv2OpRawKey) {
 			t.Fatalf("DeleteRawBatch(%q) = %v, want errOpv2OpRawKey", key, err)
 		}
-		if v, err := p.GetRaw("unrelated:k"); err != nil || string(v) != "v" {
+		if v, err := p.GetRaw("quick_query_cache:unrelated"); err != nil || string(v) != "v" {
 			t.Fatalf("a refused DeleteRawBatch deleted another key: %q %v", v, err)
 		}
 		if _, closer, err := p.db.Get([]byte(key)); err == nil {

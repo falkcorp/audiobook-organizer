@@ -1,7 +1,7 @@
 // file: cmd/diagnostics_test.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 func TestTruncateString(t *testing.T) {
@@ -323,14 +325,18 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("raw close: %v", err)
 	}
+	// The projection's sidecar is the guard's input on a core build.
+	if err := os.WriteFile(database.StorageFormatSidecarPath(dbPath), fmt.Appendf(nil, "%d\n", database.SupportedStorageFormat+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Premise: the guard refuses this store.
 	if s, err := database.NewPebbleStore(dbPath); err == nil {
 		_ = s.Close()
 		t.Fatal("NewPebbleStore opened a store stamped newer than this build")
 	} else {
-		if _, ok := errors.AsType[*database.StorageFormatTooNewError](err); !ok {
-			t.Fatalf("NewPebbleStore: want *StorageFormatTooNewError, got %T: %v", err, err)
+		if _, ok := errors.AsType[*storage.LevelTooNewError](err); !ok {
+			t.Fatalf("NewPebbleStore: want *storage.LevelTooNewError, got %T: %v", err, err)
 		}
 	}
 
@@ -377,10 +383,13 @@ func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
 	}
 }
 
-// TestRunReservedPrefs_RecoversStoreWithBadStamp: a store whose stamp holds
-// garbage is refused by every open; `diagnostics reserved-prefs --delete`
-// is the recovery path. Declining the prompt changes nothing; confirming
-// deletes the row and the store opens again.
+// TestRunReservedPrefs_RecoversStoreWithBadStamp: a store whose stamp and
+// sidecar hold garbage (what a damaged HEAD store looks like) is refused by
+// every open: core storage reads the sidecar, which does not parse (R1-23;
+// HEAD's guard read the stamp row, which an R0 rollback still does).
+// `diagnostics reserved-prefs --delete` is the recovery path: it deletes the
+// stamp row and removes the sidecar. Declining the prompt changes nothing;
+// confirming repairs both and the store opens again.
 func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "bad-stamp.pebble")
 	s, err := database.NewPebbleStore(dbPath)
@@ -400,9 +409,12 @@ func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(database.StorageFormatSidecarPath(dbPath), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if s, err := database.NewPebbleStore(dbPath); err == nil {
 		_ = s.Close()
-		t.Fatal("premise: a garbage stamp must refuse the open")
+		t.Fatal("premise: a garbage sidecar must refuse the open")
 	}
 
 	// Listing is read-only and works on the refused store.
