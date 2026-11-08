@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.11
+// version: 1.29.1
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -126,6 +126,7 @@ var scanCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
@@ -211,6 +212,7 @@ var organizeCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
