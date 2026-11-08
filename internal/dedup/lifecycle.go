@@ -1,5 +1,5 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
 // last-edited: 2026-11-08
 
@@ -107,24 +107,53 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	if chromemStore, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && chromemStore != nil {
 		de.SetChromemStore(chromemStore)
 		slog.Info("[INFO] vector ANN store active for dedup Layer 2")
+		completeness, _ := chromemStore.(database.SnapshotCompleteness)
+		// A stale snapshot imported in NewServer is installed pending a
+		// reconcile (review B2). Check that BEFORE the populated check: the
+		// stale graph is not empty, so the populated branch would skip it and
+		// the store would stay incomplete for good (no reconcile, no export,
+		// every later boot stale again).
+		reconciler, _ := chromemStore.(database.SnapshotReconciler)
+		pendingReconcile := reconciler != nil && reconciler.NeedsReconcile()
 		// Check if the store is already populated (HNSW snapshot loaded before
 		// PostInit in NewServer — HNSW-CRASH-2026-06-18). Re-inserting existing
 		// keys into coder/hnsw v0.6.1 corrupts per-layer invariants and panics.
 		alreadyPopulated := false
-		if n, err := chromemStore.CountByType(ctx, "book"); err == nil && n > 0 {
+		if pendingReconcile {
+			lifecycleLog.Info("vector ANN store holds a stale snapshot; reconciling it against Pebble in the background instead of rebuilding")
+		} else if n, err := chromemStore.CountByType(ctx, "book"); err == nil && n > 0 {
 			alreadyPopulated = true
 			slog.Info("[dedup] vector ANN store already populated from snapshot, skipping hydration", "books", n)
 		}
 
-		if dedupChromemLazy() {
+		switch {
+		case dedupChromemLazy():
 			// Skip the eager hydrate. Chromem stays empty; FindSimilar in
 			// engine.go falls back to the SQLite linear-scan path via
 			// EmbeddingStore.FindSimilar (slower per-query but no upfront
 			// ~6GB heap from mirroring 42K book vectors into memory).
+			if pendingReconcile {
+				// Lazy mode never hydrated a stale snapshot: it was
+				// discarded at import and queries used the SQLite scan.
+				// Keep that; a reconcile reads every embedding row into
+				// memory, which is what lazy mode exists to avoid.
+				reconciler.DiscardForRebuild()
+			}
 			slog.Info("chromem hydrate skipped (DEDUP_CHROMEM_LAZY=true) — dedup FindSimilar will use SQLite linear-scan fallback")
-		} else if alreadyPopulated {
+		case pendingReconcile:
+			// Same bgWg discipline as the hydrate below. The store is
+			// already incomplete (the stale import left it so), so no export
+			// can slip in before the goroutine runs.
+			de.bgMu.Lock()
+			de.bgWg.Add(1)
+			de.bgMu.Unlock()
+			go func() {
+				defer de.bgWg.Done()
+				de.runANNReconcile(bgCtx, reconciler, completeness)
+			}()
+		case alreadyPopulated:
 			// Snapshot was loaded — nothing to hydrate.
-		} else {
+		default:
 			// Hydrate asynchronously on the engine's bg-context.
 			// Add(1) under bgMu BEFORE launching so Stop can't race the
 			// bgWg.Wait() call: if Stop runs first, bgCancel fires, and
@@ -143,43 +172,12 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 			// at shutdown), and in the ChromemLazy branch above (an empty
 			// graph is never exported). The snapshot-loaded branch needs
 			// nothing: Import already marked the store complete.
-			completeness, _ := chromemStore.(database.SnapshotCompleteness)
 			if completeness != nil {
 				completeness.SetComplete(false)
 			}
 			go func() {
 				defer de.bgWg.Done()
-				hCtx, cancel := context.WithTimeout(bgCtx, 30*time.Minute)
-				defer cancel()
-				stats, err := de.HydrateChromem(hCtx)
-				if err != nil {
-					slog.Warn("chromem hydrate finished with error", "err", err,
-						"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
-						"book_rows", stats.BookRows, "author_rows", stats.AuthorRows)
-					return
-				}
-				// book_rows/author_rows are the numbers to diff against the
-				// ANN store's own "truth_count" import log, and
-				// HydrateChromem's accounting line breaks the gap down by
-				// named bucket. Two caveats live on that line, not here:
-				// truth_count counts raw keys while book_rows counts rows that
-				// DECODED (book_rows_undecodable names the difference), and
-				// books_skipped equals book_rows - books_hydrated only on a
-				// run that was not cut short (incomplete=false). Before
-				// 2026-08-29 this line reported only the hydrated counts, so a
-				// 21,952-row gap between the two logs had no explanation
-				// anywhere.
-				slog.Info("chromem hydrate complete",
-					"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
-					"book_rows", stats.BookRows, "books_skipped", stats.BooksSkipped(),
-					"author_rows", stats.AuthorRows, "authors_skipped", stats.AuthorsSkipped())
-				if completeness != nil {
-					if reason := hydrateIncompleteReason(de, stats); reason != "" {
-						lifecycleLog.Warn("vector ANN store stays marked incomplete; no snapshot will be exported until it is rebuilt: %s", reason)
-					} else {
-						completeness.SetComplete(true)
-					}
-				}
+				de.runHydrate(bgCtx, completeness)
 			}()
 		}
 	}
@@ -208,6 +206,43 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	}
 
 	return nil
+}
+
+// runHydrate builds the ANN index from the Pebble embedding rows
+// (HydrateChromem) and marks the store complete when the run produced a
+// complete projection. The caller has already marked the store incomplete:
+// PostInit before it starts the goroutine, DiscardForRebuild on the reconcile
+// fallback.
+func (de *Engine) runHydrate(bgCtx context.Context, completeness database.SnapshotCompleteness) {
+	hCtx, cancel := context.WithTimeout(bgCtx, 30*time.Minute)
+	defer cancel()
+	stats, err := de.HydrateChromem(hCtx)
+	if err != nil {
+		slog.Warn("chromem hydrate finished with error", "err", err,
+			"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
+			"book_rows", stats.BookRows, "author_rows", stats.AuthorRows)
+		return
+	}
+	// book_rows/author_rows are the numbers to diff against the ANN store's
+	// own "truth_count" import log, and HydrateChromem's accounting line
+	// breaks the gap down by named bucket. Two caveats live on that line, not
+	// here: truth_count counts raw keys while book_rows counts rows that
+	// DECODED (book_rows_undecodable names the difference), and books_skipped
+	// equals book_rows - books_hydrated only on a run that was not cut short
+	// (incomplete=false). Before 2026-08-29 this line reported only the
+	// hydrated counts, so a 21,952-row gap between the two logs had no
+	// explanation anywhere.
+	slog.Info("chromem hydrate complete",
+		"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
+		"book_rows", stats.BookRows, "books_skipped", stats.BooksSkipped(),
+		"author_rows", stats.AuthorRows, "authors_skipped", stats.AuthorsSkipped())
+	if completeness != nil {
+		if reason := hydrateIncompleteReason(de, stats); reason != "" {
+			lifecycleLog.Warn("vector ANN store stays marked incomplete; no snapshot will be exported until it is rebuilt: %s", reason)
+		} else {
+			completeness.SetComplete(true)
+		}
+	}
 }
 
 // hydrateIncompleteReason returns why a HydrateChromem run that returned a nil

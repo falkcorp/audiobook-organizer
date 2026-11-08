@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_panic_safe_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d9e1a73-2c4b-4f80-a6d1-8b3e0f2c9a45
 // last-edited: 2026-11-08
 
@@ -67,6 +67,54 @@ func TestHNSWUpsert_RecoveredPanicStopsExports(t *testing.T) {
 	res, err := s.ExportIfDirty(t.TempDir(), nil)
 	if !errors.Is(err, ErrHNSWIncomplete) || res.Exported {
 		t.Fatalf("ExportIfDirty after a recovered panic = %+v, %v; want ErrHNSWIncomplete", res, err)
+	}
+	// A hydrate that finishes after the panic calls SetComplete(true); that
+	// must not re-enable exports of the damaged graph.
+	s.SetComplete(true)
+	if err := s.Export(t.TempDir()); !errors.Is(err, ErrHNSWIncomplete) {
+		t.Fatalf("SetComplete(true) re-enabled exports of a damaged graph: Export = %v", err)
+	}
+	// Replacing the graphs clears the damage.
+	s.DiscardForRebuild()
+	s.SetComplete(true)
+	if err := s.Export(t.TempDir()); err != nil {
+		t.Fatalf("after DiscardForRebuild the store can be completed again: Export = %v", err)
+	}
+}
+
+// TestHNSWReconcile_RecoveredPanicAsksForRebuild: a recovered library panic
+// while a stale snapshot is pending makes Reconcile ask for a rebuild rather
+// than mark the possibly damaged graph complete.
+func TestHNSWReconcile_RecoveredPanicAsksForRebuild(t *testing.T) {
+	ctx := context.Background()
+	src := NewHNSWEmbeddingStore(0)
+	if err := src.Upsert(ctx, "book", "alfred-pennyworth", []float32{1, 0, 0}, nil); err != nil {
+		t.Fatal(err)
+	}
+	src.SetComplete(true)
+	dir := t.TempDir()
+	if err := src.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
+		t.Fatal(err)
+	}
+	s := NewHNSWEmbeddingStore(0)
+	if err := s.ImportWithStalenessCheck(dir, func(string) (int, error) { return 2, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !s.NeedsReconcile() {
+		t.Fatal("the stale snapshot is not pending")
+	}
+	report, err := s.Reconcile(ctx, map[string][]ReconcileRow{"book": {
+		{ID: "alfred-pennyworth", Vector: []float32{1, 0, 0}, Verdict: ReconcileIndex},
+		{ID: "lucius-fox", Vector: []float32{1, 0, 0, 1}, Verdict: ReconcileIndex}, // dimension mismatch: recovered panic
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.AddErrors != 1 || report.RebuildReason == "" || report.Complete {
+		t.Fatalf("report = %+v; want one add error, a rebuild reason, and not complete", report)
+	}
+	if err := s.Export(t.TempDir()); !errors.Is(err, ErrHNSWIncomplete) {
+		t.Fatalf("a damaged reconcile must not be exported: Export = %v", err)
 	}
 }
 

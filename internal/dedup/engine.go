@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.96.4
+// version: 1.96.5
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package dedup
 
@@ -645,33 +645,24 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 			de.logHydrateAccounting(ctx, stats)
 			return stats, err
 		}
-		if len(e.Vector) == 0 {
+		verdict, book, err := de.classifyBookRow(e)
+		switch verdict {
+		case annEmptyVector:
 			stats.BooksEmptyVector++
 			continue
-		}
-		if !de.embeddingModelMatches(e.Model) {
+		case annStaleModel:
 			stats.BooksStaleModel++
 			continue
-		}
-		// GetBookByID returns (nil, nil) for a missing key and (nil, err)
-		// for a real fault — verified against PebbleStore.GetBookByID, which
-		// maps pebble.ErrNotFound to a bare nil rather than a sentinel. The
-		// two cases are counted separately: see BooksOrphaned/BooksLookupError.
-		book, err := de.bookStore.GetBookByID(e.EntityID)
-		if err != nil {
+		case annLookupError:
 			stats.BooksLookupError++
 			if stats.FirstBookLookupError == nil {
-				stats.FirstBookLookupError = fmt.Errorf("book %s: %w", e.EntityID, err)
+				stats.FirstBookLookupError = err
 			}
 			continue
-		}
-		if book == nil {
+		case annOrphaned:
 			stats.BooksOrphaned++
 			continue
-		}
-		// Skip non-primary versions — they should not participate in
-		// dedup matches and the on-disk row is stale.
-		if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+		case annNonPrimary:
 			stats.BooksNonPrimary++
 			continue
 		}
@@ -703,11 +694,11 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 			de.logHydrateAccounting(ctx, stats)
 			return stats, err
 		}
-		if len(e.Vector) == 0 {
+		switch de.classifyAuthorRow(e) {
+		case annEmptyVector:
 			stats.AuthorsEmptyVector++
 			continue
-		}
-		if !de.embeddingModelMatches(e.Model) {
+		case annStaleModel:
 			stats.AuthorsStaleModel++
 			continue
 		}
@@ -724,6 +715,65 @@ func (de *Engine) HydrateChromem(ctx context.Context) (HydrateStats, error) {
 
 	de.logHydrateAccounting(ctx, stats)
 	return stats, nil
+}
+
+// annVerdict is the hydrate rule's decision for one embedding row: whether it
+// belongs in the ANN index and, if not, which HydrateStats bucket it lands in.
+// HydrateChromem and the stale-snapshot reconcile (ann_reconcile.go) both
+// classify with classifyBookRow and classifyAuthorRow, so the two can never
+// disagree about what the index should hold.
+type annVerdict int
+
+const (
+	annIndex annVerdict = iota
+	annEmptyVector
+	annStaleModel
+	annOrphaned
+	annLookupError
+	annNonPrimary
+)
+
+// classifyBookRow applies the hydrate rules to one "book" embedding row, in
+// HydrateChromem's order: empty vector, stale model, book lookup (error, then
+// orphan), non-primary version. It returns the book for annIndex (its
+// metadata goes into the index) and the lookup error for annLookupError.
+func (de *Engine) classifyBookRow(e database.Embedding) (annVerdict, *database.Book, error) {
+	if len(e.Vector) == 0 {
+		return annEmptyVector, nil, nil
+	}
+	if !de.embeddingModelMatches(e.Model) {
+		return annStaleModel, nil, nil
+	}
+	// GetBookByID returns (nil, nil) for a missing key and (nil, err) for a
+	// real fault — verified against PebbleStore.GetBookByID, which maps
+	// pebble.ErrNotFound to a bare nil rather than a sentinel. The two cases
+	// are counted separately: see BooksOrphaned/BooksLookupError.
+	book, err := de.bookStore.GetBookByID(e.EntityID)
+	if err != nil {
+		return annLookupError, nil, fmt.Errorf("book %s: %w", e.EntityID, err)
+	}
+	if book == nil {
+		return annOrphaned, nil, nil
+	}
+	// Skip non-primary versions — they should not participate in dedup
+	// matches and the on-disk row is stale.
+	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+		return annNonPrimary, nil, nil
+	}
+	return annIndex, book, nil
+}
+
+// classifyAuthorRow applies the hydrate rules to one "author" embedding row:
+// empty vector, then stale model. There is no orphan rule; see the note on
+// HydrateStats.
+func (de *Engine) classifyAuthorRow(e database.Embedding) annVerdict {
+	if len(e.Vector) == 0 {
+		return annEmptyVector
+	}
+	if !de.embeddingModelMatches(e.Model) {
+		return annStaleModel
+	}
+	return annIndex
 }
 
 // logHydrateAccounting emits the one summary line that explains the whole gap
@@ -2872,6 +2922,17 @@ func (de *Engine) mirrorBookToChromem(ctx context.Context, book *database.Book, 
 	if len(vec) == 0 {
 		return fmt.Errorf("chromem upsert book %s: empty vector", book.ID)
 	}
+	if err := de.chromemStore.Upsert(ctx, "book", book.ID, vec, bookANNMeta(book)); err != nil {
+		logger.WarnCtx(ctx, "dedup chromem upsert book", "book", book.ID, "err", err)
+		return fmt.Errorf("chromem upsert book %s: %w", book.ID, err)
+	}
+	return nil
+}
+
+// bookANNMeta is the metadata a book carries in the ANN index. The stale
+// snapshot reconcile compares it with the snapshot's metadata, so it must stay
+// the one place this map is built.
+func bookANNMeta(book *database.Book) map[string]string {
 	primary := "true"
 	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 		primary = "false"
@@ -2885,11 +2946,7 @@ func (de *Engine) mirrorBookToChromem(ctx context.Context, book *database.Book, 
 	if seq := seriesNumberOf(book); seq != "" {
 		meta["series_sequence"] = seq
 	}
-	if err := de.chromemStore.Upsert(ctx, "book", book.ID, vec, meta); err != nil {
-		logger.WarnCtx(ctx, "dedup chromem upsert book", "book", book.ID, "err", err)
-		return fmt.Errorf("chromem upsert book %s: %w", book.ID, err)
-	}
-	return nil
+	return meta
 }
 
 // EmbedAuthor generates and stores an embedding for the given author.

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.10
+// version: 2.114.11
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -1007,7 +1007,10 @@ func NewServer(store database.Store) *Server {
 						slog.Warn("hnsw: import failed, will hydrate from PebbleDB", "err", err)
 					}
 				} else {
-					slog.Info("hnsw: loaded from on-disk snapshot", "dir", hnswDir)
+					// reconcile_pending: the snapshot was stale and the dedup
+					// engine's PostInit brings it up to date in the background.
+					slog.Info("hnsw: loaded from on-disk snapshot", "dir", hnswDir,
+						"reconcile_pending", hnswStore.NeedsReconcile())
 				}
 			}
 		}
