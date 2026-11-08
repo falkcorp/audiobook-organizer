@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 1a0a0218-f81b-4d79-8713-5286333bbe3f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -29,31 +29,35 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "dedupplugin",
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore, serviceregistry.KeyConfigUpdate},
-		Groups: []string{"plugins"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
-			if engine == nil || embStore == nil {
-				return (*Plugin)(nil), nil
-			}
-			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
-			p := New(engine, store, embStore)
-			// dedup.run-all follows its child ops by reading their rows. The
-			// production store is one object behind every narrow interface, so
-			// the same value answers GetOperationV2.
-			if r, ok := store.(opStatusReader); ok {
-				p.opStatus = r
-			} else {
-				logger.WarnCtx(context.Background(), "dedupplugin: store has no GetOperationV2; dedup.run-all will fail until it does",
-					"store_type", fmt.Sprintf("%T", store))
-			}
-			return p, nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		{
+			Name:   "dedupplugin",
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore, serviceregistry.KeyConfigUpdate},
+			Groups: []string{"plugins"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
+				embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
+				if engine == nil || embStore == nil {
+					return (*Plugin)(nil), nil
+				}
+				store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
+				p := New(engine, store, embStore)
+				// dedup.run-all follows its child ops by reading their rows. The
+				// production store is one object behind every narrow interface, so
+				// the same value answers GetOperationV2.
+				if r, ok := store.(opStatusReader); ok {
+					p.opStatus = r
+				} else {
+					logger.WarnCtx(context.Background(), "dedupplugin: store has no GetOperationV2; dedup.run-all will fail until it does",
+						"store_type", fmt.Sprintf("%T", store))
+				}
+				return p, nil
+			},
 		},
-	})
+	}
 }
 
 // PostInit self-registers this plugin's op-defs against the container's

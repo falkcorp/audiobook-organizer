@@ -1,7 +1,7 @@
 // file: internal/server/flight_recorder_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2871ad47-cc1c-48ee-a8a8-51b2ac987666
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -73,7 +73,7 @@ func TestStartErrorStopsFlightRecorder(t *testing.T) {
 	rec := diagflight.New(diagflight.Config{Dir: filepath.Join(dir, "traces")})
 	// An unbuilt container: Start fails at "container.Start", after the
 	// recorder has been started.
-	s := &Server{flight: rec, container: serviceregistry.NewContainer(), bgCtx: t.Context()}
+	s := &Server{flight: rec, container: serviceregistry.NewContainerFrom(), bgCtx: t.Context()}
 
 	require.Error(t, s.Start(ServerConfig{}))
 

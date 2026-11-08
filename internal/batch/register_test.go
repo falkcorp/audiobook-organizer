@@ -1,6 +1,6 @@
 // file: internal/batch/register_test.go
-// version: 1.1.0
-// last-edited: 2026-10-26
+// version: 1.1.1
+// last-edited: 2026-11-08
 
 package batch_test
 
@@ -16,9 +16,8 @@ import (
 )
 
 func TestBatchRegistration(t *testing.T) {
-	c := serviceregistry.NewContainer().
-		Override("store", mocks.NewMockStore(t)).
-		Include("audiobook", "batch")
+	c := serviceregistry.NewContainerFrom(batch.ServiceDefs()...).
+		Override("store", mocks.NewMockStore(t))
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

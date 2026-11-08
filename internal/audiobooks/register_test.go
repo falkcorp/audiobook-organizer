@@ -1,5 +1,6 @@
 // file: internal/audiobooks/register_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-11-08
 
 package audiobooks_test
 
@@ -12,9 +13,8 @@ import (
 )
 
 func TestAudiobookRegistration(t *testing.T) {
-	c := serviceregistry.NewContainer().
-		Override("store", mocks.NewMockStore(t)).
-		Include("audiobook")
+	c := serviceregistry.NewContainerFrom(audiobooks.ServiceDefs()...).
+		Override("store", mocks.NewMockStore(t))
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

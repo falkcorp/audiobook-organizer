@@ -1,5 +1,5 @@
 // file: internal/dedup/ann_reconcile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b41e9a6b-d62b-4ab5-97f2-4498e245117b
 // last-edited: 2026-11-08
 
@@ -150,7 +150,7 @@ func (f *annFixture) boot(t *testing.T) *database.HNSWEmbeddingStore {
 	if err := store.ImportWithStalenessCheck(f.dir, f.es.CountByType); err != nil {
 		t.Fatal(err)
 	}
-	c := serviceregistry.NewContainer().Override("chromemstore", store)
+	c := serviceregistry.NewContainerFrom().Override("chromemstore", store)
 	if err := c.Build(ctx); err != nil {
 		t.Fatal(err)
 	}

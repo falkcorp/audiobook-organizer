@@ -1,6 +1,6 @@
 // file: internal/plugin/register.go
-// version: 1.1.1
-// last-edited: 2026-08-23
+// version: 1.1.2
+// last-edited: 2026-11-08
 
 package plugin
 
@@ -8,23 +8,27 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-func init() {
-	// eventbus: shared plugin event bus. Plugins and services publish here;
-	// the bus has no external dependencies, so it's a leaf.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyEventBus,
-		Needs:  []string{},
-		Groups: []string{"core"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			return NewEventBus(), nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		// eventbus: shared plugin event bus. Plugins and services publish here;
+		// the bus has no external dependencies, so it's a leaf.
+		{
+			Name:   serviceregistry.KeyEventBus,
+			Needs:  []string{},
+			Groups: []string{"core"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				return NewEventBus(), nil
+			},
 		},
-	})
+	}
 }
 
 // GetEventBus returns the shared *EventBus from the container's "eventbus"
-// key (serviceregistry.KeyEventBus). eventbus is a "core"-group leaf
-// service with no Needs of its own (see the Register call above), so it
-// is always present once the container's core group is Included and Built.
+// key (serviceregistry.KeyEventBus). eventbus is a leaf service with no
+// Needs of its own (see ServiceDefs above), so it is always present once a
+// container built from the production list has been Built.
 //
 // This wraps serviceregistry.Get[*EventBus](c, serviceregistry.KeyEventBus)
 // (ARCH-8): the wrapped call and its panic-on-missing/undeclared-Needs
@@ -40,7 +44,7 @@ func init() {
 // registration-order behavior changed.
 //
 // This accessor cannot live in internal/serviceregistry itself: that
-// package is a dependency of this one (see the Register call above), so
+// package is a dependency of this one (see ServiceDefs above), so
 // serviceregistry importing plugin back would be an import cycle.
 func GetEventBus(c *serviceregistry.Container) *EventBus {
 	return serviceregistry.Get[*EventBus](c, serviceregistry.KeyEventBus)
