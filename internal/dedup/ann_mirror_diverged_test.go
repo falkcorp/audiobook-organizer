@@ -1,5 +1,5 @@
 // file: internal/dedup/ann_mirror_diverged_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e493295b-c503-4981-9c08-97312169a02c
 // last-edited: 2026-11-08
 
@@ -169,4 +169,58 @@ func TestEngineMirror_AFailedMirrorMarksTheGraphDiverged(t *testing.T) {
 			t.Errorf("MarkDiverged calls = %q, want none", ann.diverged)
 		}
 	})
+}
+
+// TestEngineMirror_ACachedNonPrimaryBookMarksTheGraphDiverged (R1-15 round-2
+// review, S2): a cache hit writes nothing to Pebble, so when it mirrors a
+// book the hydrate rule leaves out (a non-primary version), the graph holds a
+// row a boot would not build and nothing on the Pebble side says so. The
+// mirror must mark the graph diverged. A primary book's cache hit, and a
+// book with no primary flag at all, must not.
+func TestEngineMirror_ACachedNonPrimaryBookMarksTheGraphDiverged(t *testing.T) {
+	ctx := context.Background()
+	primary, nonPrimary := true, false
+	books := map[string]*database.Book{
+		"the-court-of-owls": {ID: "the-court-of-owls", Title: "The Court of Owls", IsPrimaryVersion: &nonPrimary},
+		"knightfall":        {ID: "knightfall", Title: "Knightfall", IsPrimaryVersion: &primary},
+		"year-one":          {ID: "year-one", Title: "Year One"},
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"the-court-of-owls", true},
+		{"knightfall", false},
+		{"year-one", false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			engine, mock, _ := setupTestEngine(t)
+			mock.GetBookByIDFunc = func(id string) (*database.Book, error) { return books[id], nil }
+			calls := 0
+			engine.embedClient = countingEmbedClient(&calls)
+			ann := &divergenceANN{}
+			engine.SetChromemStore(ann)
+
+			if _, err := engine.EmbedBooks(ctx, []string{tc.id}); err != nil {
+				t.Fatalf("fresh EmbedBooks: %v", err)
+			}
+			if len(ann.diverged) != 0 {
+				t.Fatalf("the fresh embed marked the graph diverged: %v", ann.diverged)
+			}
+			before, writes := calls, ann.writes
+			if _, err := engine.EmbedBooks(ctx, []string{tc.id}); err != nil {
+				t.Fatalf("cached EmbedBooks: %v", err)
+			}
+			if calls != before {
+				t.Fatalf("the second embed called the model; the case needs the cached path")
+			}
+			if ann.writes != writes+1 {
+				t.Fatalf("the cached embed made %d ANN writes, want 1 (the mirror)", ann.writes-writes)
+			}
+			got := len(ann.diverged) == 1 && strings.Contains(ann.diverged[0], tc.id)
+			if got != tc.want || len(ann.diverged) > 1 {
+				t.Errorf("MarkDiverged calls = %q, want a call naming %s: %v", ann.diverged, tc.id, tc.want)
+			}
+		})
+	}
 }
