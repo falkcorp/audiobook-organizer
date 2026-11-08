@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -88,6 +88,16 @@ func (k *Kernel) binaryID(ctx context.Context) (string, error) {
 	return b, nil
 }
 
+// bootClock is the boot's clock: time.Now, or the crash-matrix kit's fixed
+// clock through bootseam, so two runs of one boot make the same operations
+// (the swap's expires_at check, the store's timestamps and checkpoint names).
+func bootClock(ctx context.Context) func() time.Time {
+	if s := bootseam.From(ctx); s != nil && s.Clock != nil {
+		return s.Clock
+	}
+	return time.Now
+}
+
 // runP0a is boot phase P0a (06 §6.5.1; 05-backup §5B.3.4; 05-storage
 // §5S.3.15): the swapper resumes the swap whose in-flight file exists, else
 // applies the staged intent, before the store opens. It runs after P1 and
@@ -102,10 +112,7 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	clock := time.Now
-	if s := bootseam.From(ctx); s != nil && s.Clock != nil {
-		clock = s.Clock
-	}
+	clock := bootClock(ctx)
 	var probe restorejournal.Probe
 	if vfs.Root(fs) == vfs.Default {
 		probe = restorejournal.OSProbe()

@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -387,7 +387,7 @@ func (db *DB) Legacy(owner Owner) (LegacyRange, bool) {
 // the error says so; Close may be called again.
 func (db *DB) Close() error {
 	db.closed.Store(true)
-	return db.eng.Close(db.set.closeTimeout)
+	return db.labelled(labelClose, func() error { return db.eng.Close(db.set.closeTimeout) })
 }
 
 // commitStripes locks the stripes of the absolute keys (or all of them) in
