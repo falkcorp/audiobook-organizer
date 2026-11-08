@@ -1,5 +1,5 @@
 // file: core/storage/swap.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 965b855f-5738-408a-b043-7d62a94a43d8
 // last-edited: 2026-11-08
 
@@ -60,15 +60,17 @@ func RewriteSidecars(ctx context.Context, fs vfs.FS, dbPath string, owners []Own
 }
 
 // adoptSeams takes the crash-matrix kit's per-boot seams from ctx: its
-// filesystem (when the caller set no FS; defaults copies FS into fs) and its
-// labeller. Production boots carry none.
+// labeller, and its filesystem into o.fs, the slot defaults reads first,
+// only when the caller set no FS and nothing preset the slot, so an
+// explicit FS still wins and the caller's FS field is never rewritten.
+// Production boots carry none.
 func (o *OpenOptions) adoptSeams(ctx context.Context) {
 	s := bootseam.From(ctx)
 	if s == nil {
 		return
 	}
-	if o.FS.fs == nil && s.FS != nil {
-		o.FS = FS{fs: s.FS}
+	if o.FS.fs == nil && o.fs == nil && s.FS != nil {
+		o.fs = s.FS
 	}
 	o.seams = s
 }
