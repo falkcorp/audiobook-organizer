@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -183,9 +183,11 @@ func (k *Kernel) swapPhase(ctx context.Context, phase string, fn func() error) f
 //     in-flight file deleted (R1 has no P4d steps 2-3: machine 1's one edge
 //     opened → marker_written);
 //   - reset, after P4a's fresh install: applied (R1 has no keyring, so at
-//     the point secrets.Open would rewrite its header) and, with no reset
-//     hook in R1, hook_done after the delete entries, then the in-flight
-//     file deleted.
+//     the point secrets.Open would rewrite its header, the start of P4b);
+//   - reset, after P4b (P4d step 1, after the migration list; R1 has no
+//     P4c or P4d phase and no reset hook): the delete entries removed, then
+//     hook_done and the in-flight file deleted (COR8-4). A boot that
+//     resumes a journal at applied does only this step.
 //
 // A journal write that fails halts boot; the next boot resumes the journal.
 func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
@@ -197,10 +199,8 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
 		err = s.RestoreApplied(ctx, out.ID)
 	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
-		if err = s.ResetApplied(ctx, out.ID); err == nil {
-			err = s.ResetDone(ctx, out.ID)
-		}
-	case out.Boot == restoreswap.BootResetApplied && phase == phaseP4a:
+		err = s.ResetApplied(ctx, out.ID)
+	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		err = s.ResetDone(ctx, out.ID)
 	}
 	if err != nil {

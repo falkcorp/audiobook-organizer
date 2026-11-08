@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -128,11 +128,12 @@ const (
 	// failure (05-backup §5B.3.4 steps g, h, x).
 	BootRestore
 	// BootReset: a KindReset journal at set_aside: the store path is empty,
-	// P4a makes a fresh install, and the kernel journals applied and, with
-	// no reset hook in R1, hook_done (05-storage §5S.3.15).
+	// P4a makes a fresh install, and the kernel journals applied after it
+	// and, with no reset hook in R1, hook_done after P4b (05-storage
+	// §5S.3.15; 06 §6.5.1 P4d step 1).
 	BootReset
 	// BootResetApplied: a KindReset journal at applied: the fresh install
-	// is done and only hook_done is owed.
+	// is done and only hook_done is owed, after P4b.
 	BootResetApplied
 )
 
