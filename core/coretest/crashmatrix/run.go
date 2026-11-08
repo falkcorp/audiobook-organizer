@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // Scenario is one boot to break. Build boots the current binary in process
@@ -47,7 +50,7 @@ type Scenario struct {
 const maxBoots = 3
 
 // errnos are the error mode's returns, one run each (R10-6, DATA10-4).
-var errnos = []error{syscall.ENOSPC, syscall.EACCES}
+func errnos() []error { return []error{syscall.ENOSPC, syscall.EACCES} }
 
 // Run breaks the boot at every durable write, rename and fsync between P0a
 // and readiness in two modes: a kill, and an error return (ENOSPC, then
@@ -168,7 +171,7 @@ func (fr *fixtureRun) run(m mode) {
 		return
 	}
 	if fr.initial == "" {
-		fr.initial = zeroRows
+		fr.initial = zeroRows()
 	}
 	fr.census = fr.chain(mem, func(int) bootseamtest.Options { return bootseamtest.Options{Clones: m == modeFull} })
 	if !fr.census.ended(fr.f) {
@@ -179,9 +182,39 @@ func (fr *fixtureRun) run(m mode) {
 	if m == modeCensus {
 		return
 	}
+	if !fr.untouched() {
+		return
+	}
 	fr.matrix()
 	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs) over %d census operations in %s",
 		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.events, time.Since(start).Round(time.Millisecond))
+}
+
+// untouched adds the second legal store of a fixture with a staged or
+// in-flight swap: the one the swap would replace, as a boot leaves it when
+// the swap is rejected or swapped back (I2: the DB path holds one of the
+// two, never a mix). It boots the fixture with its swap slot removed.
+func (fr *fixtureRun) untouched() bool {
+	mem, err := load(fr.f)
+	if err != nil {
+		fr.errorf("%v", err)
+		return false
+	}
+	slot := restorejournal.Dir(fr.f.StateDir)
+	if _, err := mem.Stat(slot); errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if err := errors.Join(mem.RemoveAll(slot), syncTree(mem, string(filepath.Separator))); err != nil {
+		fr.errorf("removing the swap slot: %v", err)
+		return false
+	}
+	u := fr.chain(mem, func(int) bootseamtest.Options { return bootseamtest.Options{} })
+	if !u.ready {
+		fr.errorf("the store the swap would replace does not boot to readiness on its own: %v", u.errs())
+		return false
+	}
+	fr.legal = append(fr.legal, u.outcome)
+	return true
 }
 
 // matrix runs every kill and every error of the census, GOMAXPROCS at a
@@ -201,7 +234,7 @@ func (fr *fixtureRun) matrix() {
 			if ev.Pebble() || ev.Label == bootseamtest.LabelNone {
 				continue // decision D12; an unlabelled operation already failed the census
 			}
-			for _, errno := range errnos {
+			for _, errno := range errnos() {
 				fr.stats.errorRuns++
 				jobs = append(jobs, func() { fr.inject(b, ev, errno) })
 			}
@@ -222,7 +255,7 @@ func (fr *fixtureRun) matrix() {
 
 // kill reboots the crash clone taken before census boot b's operation.
 func (fr *fixtureRun) kill(b int, c bootseamtest.Clone) {
-	c.FS.TestingSetDiskUsage(diskUsage)
+	c.FS.TestingSetDiskUsage(diskUsage())
 	at := fmt.Sprintf("kill before boot %d's %s", b+1, describe(c.Event))
 	fr.atKillPoint(at, c.FS)
 	ch := fr.chain(c.FS, func(int) bootseamtest.Options { return bootseamtest.Options{} })
@@ -321,13 +354,14 @@ func (c chain) errs() []error {
 	return out
 }
 
-// ended reports whether the chain reached the fixture's legal end:
-// readiness, or the refusal the fixture declares.
+// ended reports whether the chain reached a legal end: readiness, or the
+// refusal the fixture declares.
 func (c chain) ended(f Fixture) bool {
-	if f.WantRefused != nil {
-		return len(c.boots) > 0 && errors.Is(c.boots[len(c.boots)-1].err, f.WantRefused)
-	}
-	return c.ready
+	return c.ready || c.refused(f)
+}
+
+func (c chain) refused(f Fixture) bool {
+	return f.Refusal != nil && len(c.boots) > 0 && errors.Is(c.boots[len(c.boots)-1].err, f.Refusal)
 }
 
 func (fr *fixtureRun) chain(mem *vfs.MemFS, opts func(boot int) bootseamtest.Options) chain {
@@ -335,8 +369,16 @@ func (fr *fixtureRun) chain(mem *vfs.MemFS, opts func(boot int) bootseamtest.Opt
 	for boot := range maxBoots {
 		o := opts(boot)
 		o.Stores = []string{fr.f.dbPath()}
-		rec := bootseamtest.New(mem, o)
+		rec := bootseamtest.New(c.mem, o)
 		err := fr.boot(rec)
+		if errors.Is(err, errPanicked) {
+			// The process died: what it leaves is a crash at that operation
+			// (PLAN §2.3; Pebble panics on a failed marker directory sync,
+			// atomicfs.Marker.Move). Its open store is abandoned, as a dead
+			// process's is; the restart sees the crash clone.
+			c.mem = c.mem.CrashClone(vfs.CrashCloneCfg{})
+			c.mem.TestingSetDiskUsage(diskUsage())
+		}
 		events := rec.Events()
 		fr.observe(events)
 		c.boots = append(c.boots, bootRun{events: events, clones: rec.Clones(), err: err})
@@ -347,20 +389,24 @@ func (fr *fixtureRun) chain(mem *vfs.MemFS, opts func(boot int) bootseamtest.Opt
 			c.ready = true
 			break
 		}
-		if fr.f.WantRefused != nil && errors.Is(err, fr.f.WantRefused) {
+		if fr.f.Refusal != nil && errors.Is(err, fr.f.Refusal) {
 			break
 		}
 	}
-	c.outcome = read(mem, fr.f)
+	c.outcome = read(c.mem, fr.f)
 	return c
 }
 
+// errPanicked: the boot panicked, which the kit treats as the process
+// dying at that point.
+var errPanicked = errors.New("crashmatrix: the boot panicked")
+
 // boot is one boot of Build over rec, to readiness and a clean stop.
 func (fr *fixtureRun) boot(rec *bootseamtest.Recorder) (err error) {
-	inj := newInjector(fr.f, rec)
+	inj := newInjector(fr.f, rec, nil)
 	defer func() {
 		if p := recover(); p != nil {
-			err = fmt.Errorf("crashmatrix: the boot panicked: %v", p)
+			err = fmt.Errorf("%w: %v", errPanicked, p)
 		}
 	}()
 	berr := fr.s.Build(fr.tb, inj)

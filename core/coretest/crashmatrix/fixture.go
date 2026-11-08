@@ -32,15 +32,12 @@ type Fixture struct {
 	Name     string // "fresh", "upgrade-pending-step", "level-step", ...
 	DBDir    string // core.storage.path, absolute; "" = <StateDir>/storage/main.pebble
 	StateDir string // core.paths.state_dir, absolute; it must exist
-	// WantRefused, when set, is the fixture's legal end: every boot of the
-	// current build refuses with an error that errors.Is it (a checkpoint
-	// restore whose migrations failed refuses the binary that failed them,
-	// DATA7-12), and I5 asserts that refusal instead of readiness.
-	WantRefused error
-	// Check, when set, asserts the fixture's own invariants on the
-	// filesystem after recovery (which store the DB path holds, which rows a
-	// checkpoint holds); fs is read-only to it.
-	Check func(fs vfs.FS) error
+	// Refusal, when set, is a legal end besides readiness: a boot of the
+	// current build that refuses with an error that errors.Is it ends the
+	// chain (a checkpoint restore whose migrations failed refuses the binary
+	// that failed them until a fixed build is installed, DATA7-12), and I5
+	// accepts it.
+	Refusal error
 }
 
 // dbPath is the store's path.
@@ -80,7 +77,9 @@ func within(dir, p string) bool {
 // diskUsage is what every in-memory filesystem of the kit reports: plenty,
 // so the checkpoint's headroom check passes (a MemFS reports none by
 // default, and a crash clone does not keep the setting).
-var diskUsage = vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40}
+func diskUsage() vfs.DiskUsage {
+	return vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40}
+}
 
 // load copies the fixture's directories into a fresh crashable MemFS under
 // the same absolute paths, every file and directory synced, so a crash
@@ -90,7 +89,7 @@ func load(f Fixture) (*vfs.MemFS, error) {
 		return nil, fmt.Errorf("crashmatrix: fixture %s: StateDir and DBDir must be absolute", f.Name)
 	}
 	mem := vfs.NewCrashableMem()
-	mem.TestingSetDiskUsage(diskUsage)
+	mem.TestingSetDiskUsage(diskUsage())
 	for _, dir := range f.roots() {
 		if err := mem.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
@@ -203,16 +202,46 @@ func (t tree) diff(after tree) []string {
 	return out
 }
 
-// Boot runs build once over f's real directories, with the kit's binary ID
-// and clock and no fault injection, to readiness: how a test writes a
-// fixture's starting store (the current build's, or a variant's).
+// Boot runs build once over f's directories, with the kit's binary ID and
+// clock and no fault injection, to readiness: how a test writes a fixture's
+// starting store (the current build's, or a variant's). It boots an
+// in-memory copy and writes it back over the real directories, even when
+// the boot fails (a failed upgrade's open checkpoint is a starting state
+// too), so the store records the in-memory filesystem's directory identity,
+// the one every run's boot sees: a store written on the real disk would
+// look relocated to them (05-storage §5S.3.7 "Store generation").
 func Boot(t testing.TB, build func(testing.TB, *Injector) error, f Fixture) error {
 	t.Helper()
-	inj := newInjector(f, nil)
-	if err := build(t, inj); err != nil {
+	mem, err := load(f)
+	if err != nil {
 		return err
 	}
-	return inj.finish(context.Background())
+	inj := newInjector(f, nil, mem)
+	berr := build(t, inj)
+	ferr := inj.finish(context.Background())
+	if err := save(mem, f); err != nil {
+		return err
+	}
+	if berr != nil {
+		return berr
+	}
+	return ferr
+}
+
+// save replaces f's real directories with their copies in mem.
+func save(mem *vfs.MemFS, f Fixture) error {
+	for _, root := range f.roots() {
+		if err := os.RemoveAll(root); err != nil {
+			return err
+		}
+		if _, err := mem.Stat(root); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if _, err := vfs.Clone(mem, vfs.Default, root, root); err != nil {
+			return fmt.Errorf("crashmatrix: fixture %s: write back %s: %w", f.Name, root, err)
+		}
+	}
+	return nil
 }
 
 // Stage stages in into f's swap slot as the kernel's stager does, under the

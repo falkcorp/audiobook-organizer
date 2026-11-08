@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-08
 
@@ -300,7 +300,7 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	st := &bootState{opts: opts}
 	db.boot = st
 	if err := db.readBoot(ctx, refs); err != nil {
-		return nil, errors.Join(err, eng.Close(opts.CloseTimeout))
+		return nil, errors.Join(err, db.labelled(labelClose, func() error { return eng.Close(opts.CloseTimeout) }))
 	}
 	return &Opened{db: db}, nil
 }
