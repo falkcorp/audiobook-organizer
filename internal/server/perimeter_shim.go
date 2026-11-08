@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -10,7 +10,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"slices"
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
@@ -108,16 +107,21 @@ func (w *perimeterWriter) decide(status int) {
 	h := w.ResponseWriter.Header()
 	if servermiddleware.BasicGateRefusesUnrouted(w.r) {
 		w.refused = true
-		// What core's answer set about its own body; stage 9's
-		// "Vary: Accept-Encoding" goes with it, stage 6's "Vary: Origin"
-		// stays (HEAD's gzip middleware ran after the gate).
+		// What core's answer set about its own body goes.
 		for _, k := range []string{"Content-Type", "Content-Length", "Content-Encoding", "Location", "Cache-Control"} {
 			h.Del(k)
 		}
-		if vary := slices.DeleteFunc(h.Values("Vary"), func(v string) bool { return v == "Accept-Encoding" }); len(vary) > 0 {
-			h["Vary"] = vary
-		} else {
-			h.Del("Vary")
+		// HEAD's gate ran after its CORS middleware and before its gzip
+		// middleware, so its 401 carried exactly CORS's Vary: Origin, set
+		// with Access-Control-Allow-Origin. Stage 9 has already run on
+		// core's answer: it added Vary: Accept-Encoding to a 301, and
+		// deleted every Vary value, Origin included, from a status of 400
+		// or more (gin-contrib/gzip's rule). So the refusal's Vary is
+		// rebuilt as HEAD's. gin's own gate 401 passes the shim untouched
+		// (gin ran), so it loses Vary: Origin under gzip (deviation 16).
+		h.Del("Vary")
+		if h.Get("Access-Control-Allow-Origin") != "" {
+			h.Set("Vary", "Origin")
 		}
 		servermiddleware.WriteBasicChallenge(w.ResponseWriter)
 		return
