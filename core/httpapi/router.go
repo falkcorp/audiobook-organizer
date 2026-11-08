@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-07
 
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel/metric"
 
@@ -22,13 +23,21 @@ import (
 )
 
 // Router is built by the kernel only (kernel/ imports it; modules never see
-// it). Its registration methods are called from the kernel's single
-// registration goroutine: they are not goroutine-safe and never panic
-// (errors are recorded and returned by Build). After Build the returned
-// handler and every RouteInfo are immutable (05-http-api §9).
+// it). The kernel registers from one goroutine, but a module reaches Handle
+// through its *Group from any goroutine, so every method is safe for
+// concurrent use (Router.mu). None panics: errors are recorded and returned
+// by Build. After Build the returned handler and every RouteInfo are
+// immutable (05-http-api §9).
 type Router struct {
-	opts   Options
-	deps   Deps
+	opts Options
+	deps Deps
+
+	// mu guards the registration state below. The kernel registers from one
+	// goroutine, but a module holds its *Group and can call Handle from a
+	// goroutine it started in Register, concurrently with the kernel's P7
+	// calls or Build (the late case errBuilt catches); every method that
+	// reads or writes this state takes mu.
+	mu     sync.Mutex
 	routes []*routeEntry
 	claims []claim
 	groups map[string]*Group
@@ -162,13 +171,15 @@ func NewRouter(opts Options, deps Deps) *Router {
 	return &Router{opts: opts, deps: deps, groups: map[string]*Group{}, public: map[string]map[string]bool{}}
 }
 
+// record keeps err for Build; r.mu is held.
 func (r *Router) record(err error) { r.errs = append(r.errs, err) }
 
 // errBuilt is a registration after Build: it is refused and logged, because
 // the handler Build returned can never serve it.
 var errBuilt = errors.New("httpapi: registration after Router.Build")
 
-// late reports, and logs at ERROR, a registration made after Build.
+// late reports, and logs at ERROR, a registration made after Build; r.mu
+// is held.
 func (r *Router) late(what string) error {
 	if !r.built {
 		return nil
@@ -181,6 +192,8 @@ func (r *Router) late(what string) error {
 }
 
 func (r *Router) add(e *routeEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.late("route "+describe(e.info)) != nil {
 		return
 	}
@@ -190,6 +203,8 @@ func (r *Router) add(e *routeEntry) {
 // ModuleGroup returns the group of module moduleID at /api/<id>/v1 and claims
 // /api/<id>/ for it. Every call for one ID returns the same group.
 func (r *Router) ModuleGroup(moduleID string) *Group {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if g, ok := r.groups[moduleID]; ok {
 		return g
 	}
@@ -209,6 +224,8 @@ func (r *Router) ModuleGroup(moduleID string) *Group {
 // CoreGroup returns core's group at Options.CoreGroupBase (/api/core/v1),
 // used only by core/internal/<capability>http (03 §3.3, COR2-19).
 func (r *Router) CoreGroup() *Group {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if g, ok := r.groups["core"]; ok {
 		return g
 	}
@@ -232,6 +249,8 @@ func (r *Router) CoreGroup() *Group {
 // (ErrPublicNotAllowed). Core's own Public routes are a reviewed golden
 // instead (TestPublicRoutesGolden) and need no entry.
 func (r *Router) AllowPublic(owner string, names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.late("AllowPublic "+owner) != nil {
 		return
 	}
@@ -277,6 +296,8 @@ func splitPattern(p string) (method, path string) {
 // the legacy error shape. Manifest routes are R1-14's: a mount whose Routes
 // yields any entry is refused (ErrLegacyManifest) until then, fail-closed.
 func (r *Router) MountLegacy(m LegacyMount) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.late("MountLegacy " + m.Owner); err != nil {
 		return err
 	}
@@ -313,6 +334,8 @@ func (r *Router) MountLegacy(m LegacyMount) error {
 // authorization and is recorded as RouteInfo{Kind: SPA, Perm: rbac.Public,
 // RateClass: RateExempt}.
 func (r *Router) SPA(h http.Handler, o SPAOptions) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.late("SPA"); err != nil {
 		return err
 	}
@@ -330,6 +353,7 @@ func (r *Router) SPA(h http.Handler, o SPAOptions) error {
 	return nil
 }
 
+// rootOwned reports a "/" owner; r.mu is held.
 func (r *Router) rootOwned() bool {
 	if r.spa != nil {
 		return true
@@ -337,7 +361,8 @@ func (r *Router) rootOwned() bool {
 	return slices.ContainsFunc(r.mounts, func(m LegacyMount) bool { return m.ServesSPA })
 }
 
-// rootOwner returns the "/" owner's handler and owner name, or nil.
+// rootOwner returns the "/" owner's handler and owner name, or nil; r.mu is
+// held.
 func (r *Router) rootOwner() (http.Handler, string) {
 	if r.spa != nil {
 		return r.spa, "core"
@@ -357,6 +382,8 @@ func (r *Router) rootOwner() (http.Handler, string) {
 // path below "/": no ".", ".." or empty segment and no wildcard, because the
 // overlap test compares claims as strings.
 func (r *Router) Claim(owner, prefix string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.late("Claim " + prefix); err != nil {
 		return err
 	}
@@ -367,7 +394,7 @@ func (r *Router) Claim(owner, prefix string) error {
 	return err
 }
 
-// claim is Claim without the recording.
+// claim is Claim without the recording; r.mu is held.
 func (r *Router) claim(owner, prefix string) error {
 	if owner == "" || !strings.HasPrefix(prefix, "/") || prefix == "/" || strings.Contains(prefix, "{") ||
 		cleanUnder(prefix, "/") != nil {
@@ -416,6 +443,13 @@ func neverNonSPA() []string { return []string{"assets", "static", "ui"} }
 // Infra pattern and every mount's TopSegments, minus every mount's SPAShared
 // and the SPA's own assets, static and ui.
 func (r *Router) NonSPASegments() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.nonSPASegments()
+}
+
+// nonSPASegments is NonSPASegments; r.mu is held.
+func (r *Router) nonSPASegments() []string {
 	set := map[string]bool{}
 	for _, s := range nonSPAStatic() {
 		set[s] = true
@@ -454,8 +488,13 @@ func (r *Router) NonSPASegments() []string {
 // segment, lower-cased and with trailing slashes ignored, is in
 // NonSPASegments. The predicate is a snapshot of the segments at call time.
 func (r *Router) NonSPA() func(*http.Request) bool {
+	return nonSPAPredicate(r.NonSPASegments())
+}
+
+// nonSPAPredicate is NonSPA over a snapshot of the segments.
+func nonSPAPredicate(segments []string) func(*http.Request) bool {
 	set := map[string]bool{}
-	for _, s := range r.NonSPASegments() {
+	for _, s := range segments {
 		set[s] = true
 	}
 	return func(req *http.Request) bool {
@@ -477,18 +516,33 @@ func firstSegment(p string) string {
 
 // Routes returns every registered route: native and infra routes in
 // registration order, then the "/" owner when one is set (Kind SPA).
+// The sequence is a snapshot taken when iteration starts, so a yield that
+// calls back into the router cannot deadlock.
 func (r *Router) Routes() iter.Seq[RouteInfo] {
 	return func(yield func(RouteInfo) bool) {
+		r.mu.Lock()
+		infos := make([]RouteInfo, 0, len(r.routes)+1)
 		for _, e := range r.routes {
-			if !yield(e.info) {
+			infos = append(infos, e.info)
+		}
+		if _, owner := r.rootOwner(); owner != "" {
+			infos = append(infos, RouteInfo{Owner: owner, Pattern: "/", Name: "spa", Perm: rbac.Public,
+				RateClass: RateExempt, Kind: RouteKindSPA})
+		}
+		r.mu.Unlock()
+		for _, ri := range infos {
+			if !yield(ri) {
 				return
 			}
 		}
-		if _, owner := r.rootOwner(); owner != "" {
-			yield(RouteInfo{Owner: owner, Pattern: "/", Name: "spa", Perm: rbac.Public,
-				RateClass: RateExempt, Kind: RouteKindSPA})
-		}
 	}
+}
+
+// routeSnapshot is the registered routes at the time of the call.
+func (r *Router) routeSnapshot() []*routeEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.routes)
 }
 
 // Build validates every registration (05-http-api §5 step 3), registers the
@@ -496,6 +550,8 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 // of every problem. Build registers inside recover(), so a ServeMux conflict
 // is ErrPatternConflict, never a panic (§4.8).
 func (r *Router) Build() (http.Handler, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.built = true
 	errs := slices.Clone(r.errs)
 	errs = append(errs, r.checkClaims()...)
@@ -532,7 +588,7 @@ func (r *Router) Build() (http.Handler, error) {
 	d := &dispatcher{
 		mux:          mux,
 		root:         root,
-		nonSPA:       r.NonSPA(),
+		nonSPA:       nonSPAPredicate(r.nonSPASegments()),
 		legacyClaims: r.legacyClaims(),
 		log:          r.deps.Log,
 	}
@@ -576,7 +632,8 @@ func wrapRoute(e *routeEntry) http.Handler {
 	})
 }
 
-// checkClaims reports every pair of overlapping claims of two owners.
+// checkClaims reports every pair of overlapping claims of two owners; r.mu
+// is held.
 func (r *Router) checkClaims() []error {
 	var errs []error
 	for i, a := range r.claims {
@@ -595,7 +652,7 @@ func (r *Router) checkClaims() []error {
 // ErrForeignScope; the delegated and legacy kinds are legacy-route only); a
 // module route's Public must be listed in its PublicRoutes
 // (ErrPublicNotAllowed); and with no auth service every non-Public route is
-// ErrNoAuthService.
+// ErrNoAuthService. r.mu is held.
 func (r *Router) checkPerm(e *routeEntry) []error {
 	ri := e.info
 	what := describe(ri)
@@ -624,7 +681,8 @@ func (r *Router) checkPerm(e *routeEntry) []error {
 	return errs
 }
 
-// legacyClaims returns the claims of every owner that has a legacy mount.
+// legacyClaims returns the claims of every owner that has a legacy mount;
+// r.mu is held.
 func (r *Router) legacyClaims() []string {
 	owners := map[string]bool{}
 	for _, m := range r.mounts {
