@@ -1,5 +1,5 @@
 // file: core/log/logging.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
 // last-edited: 2026-11-08
 
@@ -78,6 +78,11 @@ const processModule = ""
 // processKey names the process default logger in Levels keys, where its empty
 // module cannot: "process.<subsystem>" (scope).
 const processKey = "process"
+
+// ProcessLabel is how the process default logger's empty module is named
+// wherever an empty value would read as absent: the module label of
+// mediacore_log_records_total (kernel). It is processKey.
+const ProcessLabel = processKey
 
 // primarySink is the primary output's name in Counters().Dropped; Tap refuses
 // it as a tap name.
@@ -179,7 +184,7 @@ type Record struct {
 type Counters struct {
 	// Records counts records that passed their level gate and entered the
 	// pipeline, by module ("core", a module ID, or "" for the process
-	// default logger, Root) and level:
+	// default logger, Root; the metrics bridge labels "" ProcessLabel) and level:
 	// mediacore_log_records_total{level,module}. A record whose primary
 	// write failed is still counted here (it reached the taps) and is also
 	// counted in Dropped["primary"].
