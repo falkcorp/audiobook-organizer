@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-08
 
@@ -171,6 +171,9 @@ type installRecord struct {
 	Build     string    `json:"build"`
 }
 
+// epochRecord is c/storage/epoch, the store generation (§5S.3.7). DirDev and
+// DirIno are the DB directory's identity (osDirIdentity): the filesystem ID
+// statfs reports, not st_dev (the key keeps the dir_dev name), and the inode.
 type epochRecord struct {
 	Epoch  uint64    `json:"epoch"`
 	DirDev uint64    `json:"dir_dev"`

@@ -135,8 +135,9 @@ type stateFileRecord struct {
 }
 
 // checkpointRecord is <name>.json (§5S.3.12 "How"). DirDev and DirIno are
-// the DB directory's identity at the boot that took it, the identity its
-// epoch was read against: with Epoch they name the store the copy came from.
+// the DB directory's identity at the boot that took it (osDirIdentity: the
+// filesystem ID and the inode), the identity its epoch was read against: with
+// Epoch they name the store the copy came from.
 type checkpointRecord struct {
 	InstallID   string            `json:"install_id"`
 	Epoch       uint64            `json:"epoch"`
