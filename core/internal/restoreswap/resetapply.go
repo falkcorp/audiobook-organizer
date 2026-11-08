@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/resetapply.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dca1f7d5-4bfe-4d11-a0dc-0941c34a8ebd
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -79,8 +79,10 @@ func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last 
 	}
 	for _, t := range in.Targets {
 		// Nothing but this set-aside writes a target's destination in the
-		// swap's private namespace, so a second name there is a twin.
-		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, t.From, t.To, always) }); err != nil {
+		// swap's private namespace, so in the crash model a second name
+		// there is a twin (memGhost); on the real filesystem mv proves it
+		// by identity.
+		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, t.From, t.To, memGhost) }); err != nil {
 			return s.moveBack(ctx, in, err)
 		}
 		if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepMoved, From: t.From, To: t.To}); err != nil {
@@ -103,7 +105,7 @@ func (s *Swapper) moveBack(ctx context.Context, in restorejournal.Intent, cause 
 	seams := bootseam.From(ctx)
 	var errs []error
 	for _, t := range slices.Backward(in.Targets) {
-		if err := bootseam.Labelled(seams, "swap.back.mv", func() error { return mv(s.fs, t.To, t.From, always) }); err != nil {
+		if err := bootseam.Labelled(seams, "swap.back.mv", func() error { return mv(s.fs, t.To, t.From, memGhost) }); err != nil {
 			errs = append(errs, fmt.Errorf("move %s back to %s: %w", t.To, t.From, err))
 		}
 	}
