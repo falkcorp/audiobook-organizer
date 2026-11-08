@@ -108,8 +108,15 @@ type FS struct{ fs vfs.FS }
 // such as coretest's harness (06 §6.4.8).
 func MemFS() FS { return FS{fs: vfs.NewMem()} }
 
+// defaults resolves the zero values. The filesystem is the first set of: o.fs
+// as defaults finds it (the in-package slot a boot seam fills, such as a
+// fault-injecting filesystem taken from the context, which must see every
+// write), FS, and the OS's. A seam fills o.fs only when FS is zero, so an
+// explicit FS still wins over the context.
 func (o *OpenOptions) defaults() {
-	o.fs = o.FS.fs
+	if o.fs == nil {
+		o.fs = o.FS.fs
+	}
 	if o.fs == nil {
 		o.fs = vfs.Default
 	}
