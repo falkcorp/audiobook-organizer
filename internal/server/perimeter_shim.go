@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -130,11 +130,17 @@ func (w *perimeterWriter) decide(status int) {
 	}
 }
 
-// stageRefusal reports a status only a core stage writes as a refusal: 403
-// (stage 0's peer refusal, stage 7's cross-origin refusal), 413 (stage 11),
-// 425 (stage 0's 0-RTT early data), 429 (stage 10) and 500 (stage 3). The
-// shim lets these through ungated, as HEAD's peer gate and limits answered
-// before its Basic gate; every other answer core writes itself is gated.
+// stageRefusal reports a status only a core stage writes as a refusal. The
+// pass-through codes are exactly the stage refusals: stage 0's 403 (peer)
+// and 425 (0-RTT early data), stage 7's 403 (cross-origin), stage 10's 429,
+// stage 11's 413 and stage 3's 500. The shim lets these through ungated, as
+// HEAD's peer gate and limits answered before its Basic gate; every other
+// answer core writes itself is gated.
+//
+// The check is by status alone: a core-native route that answers one of
+// these codes itself (a handler's own 403 or 500) would bypass the Basic
+// gate. ABO serves no native route in R1; re-examine this before F3, or
+// before any native route ships while the shim is still in place.
 func stageRefusal(status int) bool {
 	switch status {
 	case http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusTooEarly,

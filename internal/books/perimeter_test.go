@@ -1,12 +1,11 @@
 // file: internal/books/perimeter_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c2f9a14-3e8b-4d06-b5a1-9f4e2c8d6b37
 // last-edited: 2026-11-08
 
 package books
 
 import (
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
 
@@ -57,18 +55,14 @@ func TestR1Values_PerimeterKeys(t *testing.T) {
 }
 
 // TestR1Values_TunnelConnectorsAddressOnly: HEAD trusted a connector by its
-// exact address and ignored anything else with a warning. A CIDR is dropped
-// too, because core's stage 0 would trust the whole range.
+// exact address and ignored anything else (client_trust.go warns about it).
+// A CIDR is dropped too, because core's stage 0 would trust the whole range.
 func TestR1Values_TunnelConnectorsAddressOnly(t *testing.T) {
-	logs := logtest.Capture(t, slog.LevelWarn)
 	v := r1Values(server.ServerConfig{Host: "127.0.0.1", Port: "8484"}, config.Config{
-		TunnelConnectorAddrs: "192.0.2.10, 198.51.100.0/24, fe80::5%eth0, arkham-asylum, 2001:db8::/32",
+		TunnelConnectorAddrs: "192.0.2.10, 198.51.100.0/24, fe80::5%eth0, arkham-asylum, 2001:db8::/32, 203.0.113.53",
 	})
-	if want := []string{"192.0.2.10", "fe80::5%eth0"}; !slices.Equal(v.TrustedProxies, want) {
+	if want := []string{"192.0.2.10", "fe80::5%eth0", "203.0.113.53"}; !slices.Equal(v.TrustedProxies, want) {
 		t.Fatalf("TrustedProxies = %v, want %v", v.TrustedProxies, want)
-	}
-	if out := logs.String(); !strings.Contains(out, "TUNNEL_CONNECTOR_ADDRS has 3 entries that are not IP addresses; ignored") {
-		t.Fatalf("warning = %q, want HEAD's count of 3 ignored entries", out)
 	}
 }
 
