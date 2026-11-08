@@ -1,5 +1,5 @@
 // file: internal/books/books_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3e9b14-2c6a-4f80-b5d1-8e0a4c97f2b3
 // last-edited: 2026-11-08
 
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,6 +115,38 @@ func expectedCatalog() []rbac.Permission {
 	}
 }
 
+// everyAtomScopes is the every-atom row of 05-rbac §6.1: core:admin plus
+// every native scope of the 13 rows, for HEAD's admin seed and for a key
+// whose owner holds HEAD's admin role. Any other holder of every atom gets
+// the union of the rows (unionScopes), never core:admin (05-rbac §4.6,
+// SEC-12). It and unionScopes live here until R2's identity cutover, their
+// first production caller, moves them into atoms.go: the deadcode ratchet
+// refuses production code no main reaches (seams.d/R1-15.md).
+func everyAtomScopes() []rbac.Permission {
+	var names []string
+	for _, a := range AtomTable() {
+		names = append(names, a.Name)
+	}
+	return append([]rbac.Permission{rbac.CoreAdmin}, unionScopes(names...)...)
+}
+
+// unionScopes is the native scopes of a set of atoms: the union of their
+// rows, deduplicated, in table order. An unknown atom contributes nothing.
+func unionScopes(atoms ...string) []rbac.Permission {
+	var out []rbac.Permission
+	for _, a := range AtomTable() {
+		if !slices.Contains(atoms, a.Name) {
+			continue
+		}
+		for _, s := range a.Scopes {
+			if !slices.Contains(out, s) {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 // TestAtomTable_Golden (05-rbac §12) pins the 13 rows of §6.1 and the
 // every-atom row: every route requirement is AllOf all of its row's native
 // scopes, no single-scope requirement is AuthRequired, playlists.create has
@@ -177,7 +210,7 @@ func TestAtomTable_Golden(t *testing.T) {
 		}
 	}
 
-	every := EveryAtomScopes()
+	every := everyAtomScopes()
 	if every[0] != rbac.CoreAdmin {
 		t.Errorf("the every-atom row starts with %s, want core:admin", every[0])
 	}
@@ -192,11 +225,11 @@ func TestAtomTable_Golden(t *testing.T) {
 	if !slices.Equal(every[1:], union) {
 		t.Errorf("the every-atom row = %v, want core:admin plus %v", every, union)
 	}
-	if got := UnionScopes("library.view", "library.edit_metadata", "Riddler's atom"); !slices.Equal(got,
+	if got := unionScopes("library.view", "library.edit_metadata", "Riddler's atom"); !slices.Equal(got,
 		[]rbac.Permission{"books:view", "core:tasks.view", "books:edit"}) {
-		t.Errorf("UnionScopes(library.view, library.edit_metadata, unknown) = %v", got)
+		t.Errorf("unionScopes(library.view, library.edit_metadata, unknown) = %v", got)
 	}
-	if slices.Contains(UnionScopes(order...), rbac.CoreAdmin) {
+	if slices.Contains(unionScopes(order...), rbac.CoreAdmin) {
 		t.Error("the union of every row holds core:admin; only the every-atom row may")
 	}
 }
@@ -213,10 +246,11 @@ func masterListRoutes() []string {
 }
 
 // TestManifest_SPermRoutesCarryAtomRequirement (05-http-api §12): every
-// manifest entry recorded from an s.perm(atom) route carries the atom, and
-// the atom resolves, with no catalog, to its atom-table route requirement.
-// ABS on and off. The manifest's own test (internal/server) proves which
-// chains run s.perm(atom).
+// manifest entry recorded from an s.perm(atom) route has Perm equal to its
+// atom's atom-table route requirement, built with no catalog, and every other
+// entry is unchanged. ABS on and off. It checks both the manifest
+// resolveRoutes gives Register and the routes the composed App mounted. The
+// manifest's own test (internal/server) proves which chains run s.perm(atom).
 func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 	routes := map[string]rbac.Requirement{}
 	for _, a := range AtomTable() {
@@ -224,28 +258,53 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 	}
 	for _, abs := range []bool{false, true} {
 		t.Run("abs="+strconv.FormatBool(abs), func(t *testing.T) {
+			recorded := server.LegacyRoutes(abs)
+			resolved, err := resolveRoutes(recorded)
+			if err != nil {
+				t.Fatalf("resolveRoutes: %v", err)
+			}
+			if len(resolved) != len(recorded) {
+				t.Fatalf("resolveRoutes returned %d routes for %d", len(resolved), len(recorded))
+			}
+			// want is each route's expected mounted requirement, by method
+			// and gin path.
+			want := map[string]rbac.Requirement{}
 			atoms, masterList := 0, []string{}
-			for _, lr := range server.LegacyRoutes(abs) {
+			for i, lr := range recorded {
 				key := lr.Method + " " + lr.GinPath
+				got := resolved[i]
+				if got.Method != lr.Method || got.GinPath != lr.GinPath {
+					t.Fatalf("resolveRoutes reordered: %s at %d is %s %s", key, i, got.Method, got.GinPath)
+				}
+				rest, gotRest := lr, got
+				rest.Perm, gotRest.Perm = rbac.Requirement{}, rbac.Requirement{}
+				if !reflect.DeepEqual(rest, gotRest) {
+					t.Errorf("%s: resolveRoutes changed a field other than Perm", key)
+				}
 				switch lr.Perm.Kind() {
 				case rbac.KindLegacyAtom:
 					atoms++
-					want, ok := routes[lr.Perm.Atom()]
+					w, ok := routes[lr.Perm.Atom()]
 					if !ok {
 						t.Errorf("%s names atom %q, which the atom table lacks", key, lr.Perm.Atom())
 						continue
 					}
-					got, ok := RouteRequirement(lr.Perm)
-					if !ok {
-						t.Errorf("%s: atom %s resolves to no route requirement", key, lr.Perm.Atom())
-						continue
-					}
-					if got.Kind() != rbac.KindAllOf || !slices.Equal(got.Permissions(), want.Permissions()) {
-						t.Errorf("%s resolves to %s, want the atom table's %s", key, got, want)
+					want[key] = w
+					if got.Perm.Kind() != rbac.KindAllOf || !slices.Equal(got.Perm.Permissions(), w.Permissions()) {
+						t.Errorf("%s carries %s, want the atom table's %s", key, got.Perm, w)
 					}
 				case rbac.KindAllOf:
+					want[key] = lr.Perm
 					if slices.Contains(lr.Perm.Permissions(), "core:users.manage") {
 						masterList = append(masterList, key)
+					}
+					if got.Perm.String() != lr.Perm.String() {
+						t.Errorf("%s: %s became %s", key, lr.Perm, got.Perm)
+					}
+				default:
+					want[key] = lr.Perm
+					if got.Perm.String() != lr.Perm.String() {
+						t.Errorf("%s: %s became %s", key, lr.Perm, got.Perm)
 					}
 				}
 			}
@@ -253,22 +312,57 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 				t.Errorf("only %d s.perm(atom) rows; the manifest walk is broken", atoms)
 			}
 			slices.Sort(masterList)
-			want := masterListRoutes()
-			slices.Sort(want)
-			if !slices.Equal(masterList, want) {
-				t.Errorf("routes recorded with core:users.manage but not as the atom = %v, want exactly %v", masterList, want)
+			wantMaster := masterListRoutes()
+			slices.Sort(wantMaster)
+			if !slices.Equal(masterList, wantMaster) {
+				t.Errorf("routes recorded with core:users.manage but not as the atom = %v, want exactly %v", masterList, wantMaster)
 			}
+
+			// What the composed App mounted: no legacy route still carries
+			// an atom, and each carries the requirement above.
+			c := bootComposed(t, abs, nil, nil)
+			mounted := 0
+			for ri := range c.app.Routes() {
+				if ri.Kind != httpapi.RouteKindLegacy || ri.Owner != string(ID) {
+					continue
+				}
+				mounted++
+				key := ri.Method + " " + ri.Name
+				w, ok := want[key]
+				if !ok {
+					t.Errorf("the App mounted %s, which the manifest lacks", key)
+					continue
+				}
+				if ri.Perm.Kind() == rbac.KindLegacyAtom {
+					t.Errorf("%s mounted with %s; Register did not resolve it", key, ri.Perm)
+				}
+				if ri.Perm.String() != w.String() {
+					t.Errorf("%s mounted with %s, want %s", key, ri.Perm, w)
+				}
+			}
+			if mounted != len(recorded) {
+				t.Errorf("the App mounted %d legacy routes, want the manifest's %d", mounted, len(recorded))
+			}
+			// 03 R6 over the whole booted router, the resolved requirements
+			// included.
+			archtest.RoutesHavePermissions(t, c.app.Routes())
 		})
 	}
-	if _, ok := RouteRequirement(rbac.LegacyAtom("playlists.create")); ok {
-		t.Error("playlists.create resolved to a route requirement; no route may enforce it")
-	}
-	if _, ok := RouteRequirement(rbac.LegacyAtom("Penguin's atom")); ok {
-		t.Error("an atom outside the table resolved")
-	}
-	if got, ok := RouteRequirement(rbac.AnyAuthenticated); !ok || got.Kind() != rbac.AnyAuthenticated.Kind() {
-		t.Errorf("a non-atom requirement came back as %s, %v; want it unchanged", got, ok)
-	}
+
+	t.Run("refusals", func(t *testing.T) {
+		for _, atom := range []string{"playlists.create", "Penguin's atom"} {
+			_, err := resolveRoutes([]httpapi.LegacyRoute{
+				{Method: http.MethodGet, GinPath: "/api/v1/health", Perm: rbac.AnyAuthenticated},
+				{Method: http.MethodPost, GinPath: "/api/v1/batcave", Perm: rbac.LegacyAtom(atom)},
+			})
+			if err == nil || !strings.Contains(err.Error(), "POST /api/v1/batcave") || !strings.Contains(err.Error(), atom) {
+				t.Errorf("atom %q: resolveRoutes error = %v, want one naming the route and the atom", atom, err)
+			}
+		}
+		if got, ok := RouteRequirement(rbac.AnyAuthenticated); !ok || got.Kind() != rbac.AnyAuthenticated.Kind() {
+			t.Errorf("a non-atom requirement came back as %s, %v; want it unchanged", got, ok)
+		}
+	})
 }
 
 // TestOnlyCompositionRootImportsModule (06 §6.10): in the real import graph,
