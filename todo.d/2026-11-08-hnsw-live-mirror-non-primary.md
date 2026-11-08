@@ -10,6 +10,13 @@
       Queries do not see it today: the only book query (`findSimilarBooks`) filters on
       `is_primary_version=true`. What differs is the graph's size and the reconcile's churn,
       and any future unfiltered book query would see books that come and go with the boot path.
+      **Stopgap in place (R1-15 round-2 review, S2):** `mirrorCachedBook` marks the graph
+      diverged when a cache hit mirrors a row `classifyBookRow` would skip, so that run
+      writes no clean-stop marker and the next boot reconciles. The cache hit is the only
+      mirror with no Pebble write; the fresh-embed path writes the embedding row, which the
+      verdict watch already counts. The cost: any run that re-embeds a cached non-primary
+      book (every library-wide embed run does) loses the clean-stop fast boot. The
+      recommendation below removes both the mismatch and that cost.
       **Recommendation:** make the mirror follow the hydrate rule: skip the graph upsert (and
       delete a graph entry if present) when `classifyBookRow` would not index the book, while
       still writing the Pebble embedding row. One predicate then decides graph membership for
