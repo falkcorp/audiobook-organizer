@@ -1,13 +1,11 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-08
 
 package crashmatrix
 
 import (
-	"slices"
-
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 )
 
@@ -76,18 +74,29 @@ func Rows() []Row {
 	}
 }
 
-// Uncovered is every row none of whose labels observed holds: a writer the
-// fixtures never reach (06 §6.5.1; TestBootCrashMatrixCoversEveryWriter).
-// A row counts as exercised when one of its labels is observed, since some
-// labels are reachable only by faults the kit does not make (a level step's
-// rollback runs only when its commit returns an error, and Pebble fails a
-// WAL commit fatally instead).
-func Uncovered(rows []Row, observed map[string]bool) []Row {
-	var out []Row
+// Unobserved checks every label of rows against observed, the labels the
+// fixtures' fault-free boots reach (06 §6.5.1;
+// TestBootCrashMatrixCoversEveryWriter; R1-21 review M4). Run makes every
+// operation of a fault-free boot a kill point and an error point, so a
+// label no fault-free boot reaches is a writer the matrix never breaks,
+// whatever its row's other labels. missing is every such label not in
+// allow; allow maps a label to the reason no fixture can reach it. stale is
+// every allow entry that a fixture reaches after all, or that no row lists.
+// Both are sorted.
+func Unobserved(rows []Row, observed map[string]bool, allow map[string]string) (missing, stale []string) {
+	listed := map[string]bool{}
 	for _, r := range rows {
-		if !slices.ContainsFunc(r.Labels, func(l string) bool { return observed[l] }) {
-			out = append(out, r)
+		for _, l := range r.Labels {
+			listed[l] = true
+			if !observed[l] && allow[l] == "" {
+				missing = append(missing, l)
+			}
 		}
 	}
-	return out
+	for l := range allow {
+		if observed[l] || !listed[l] {
+			stale = append(stale, l)
+		}
+	}
+	return uniqStrings(missing), uniqStrings(stale)
 }
