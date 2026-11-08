@@ -126,7 +126,7 @@ var scanCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
-		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
@@ -212,7 +212,7 @@ var organizeCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
-		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
@@ -267,6 +267,13 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("serve: %w", err)
 		}
+
+		// Lines before app.New installs the log pipeline (config, store open,
+		// migrations, the key guard, encryption init) go to standard output at
+		// log_level, as the rest of serve's output does, not to slog's stock
+		// default on standard error. The App's process install stacks on this
+		// and restores it. nil: Options reports an unknown level once, later.
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, nil)()
 
 		// Every startup step runs through one *startup.Steps, which applies
 		// the step's reviewed class from startup.Table: a Fatal step's error

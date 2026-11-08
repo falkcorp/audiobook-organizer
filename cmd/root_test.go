@@ -1,5 +1,5 @@
 // file: cmd/root_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -353,5 +355,59 @@ func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
 				t.Error("the command did not restore the previous default logger")
 			}
 		})
+	}
+}
+
+// TestServeStartupLinesGoToStdoutBeforeTheApp: serve's lines before app.New
+// installs the log pipeline (store open, migrations, key guard) go to standard
+// output at log_level, not to slog's stock default on standard error, and the
+// previous default is back when serve returns. The stubbed runApp stands in for
+// app.New: nothing installs a pipeline here, so the handler these lines meet is
+// the one serve itself installed.
+func TestServeStartupLinesGoToStdoutBeforeTheApp(t *testing.T) {
+	stubCommandDeps(t)
+	sandboxStateDir(t)
+	origConfig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = origConfig })
+	tempDir := t.TempDir()
+	config.AppConfig.DatabaseType = "sqlite"
+	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
+	config.AppConfig.RootDir = tempDir
+	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
+	config.AppConfig.LogLevel = "debug"
+
+	stubbedOpen := initializeStore
+	initializeStore = func(dbType, path string) (database.Store, error) {
+		slog.Debug("two-face debug line")
+		slog.Info("catwoman store line")
+		return stubbedOpen(dbType, path)
+	}
+	runApp = func(context.Context, database.Store, books.ServeInputs) error {
+		slog.Info("riddler app line")
+		return nil
+	}
+	prev := slog.Default()
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	runErr := serveCmd.RunE(serveCmd, nil)
+	os.Stdout = origStdout
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+
+	if runErr != nil {
+		t.Fatalf("serve failed: %v", runErr)
+	}
+	for _, want := range []string{"two-face debug line", "catwoman store line", "riddler app line"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("%q is not on standard output:\n%s", want, out)
+		}
+	}
+	if slog.Default() != prev {
+		t.Error("serve did not restore the previous default logger")
 	}
 }
