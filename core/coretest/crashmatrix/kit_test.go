@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -141,20 +142,24 @@ func TestKitFailsOnUnmatchedWriters(t *testing.T) {
 	}
 }
 
-// TestUncoveredNamesRowsNoLabelReaches: a row counts as exercised when one
-// of its labels is observed (TestBootCrashMatrixCoversEveryWriter's input).
-func TestUncoveredNamesRowsNoLabelReaches(t *testing.T) {
+// TestUnobservedNamesEveryLabel (R1-21 review M4): every label no
+// fault-free boot reaches is missing, though another label of its row is
+// reached, unless the allowlist gives a reason; an allowlist entry that is
+// reached, or that no row lists, is stale.
+func TestUnobservedNamesEveryLabel(t *testing.T) {
 	t.Parallel()
 	rows := []Row{
-		{Writer: "batcave", Labels: []string{"cave.mkdir", "cave.sync"}},
+		{Writer: "batcave", Labels: []string{"cave.mkdir", "cave.sync", "cave.rollback"}},
 		{Writer: "wayne manor", Labels: []string{"manor.write"}},
 	}
-	got := Uncovered(rows, map[string]bool{"cave.sync": true})
-	if len(got) != 1 || got[0].Writer != "wayne manor" {
-		t.Fatalf("Uncovered = %+v, want only wayne manor", got)
+	missing, stale := Unobserved(rows, map[string]bool{"cave.sync": true}, nil)
+	if !slices.Equal(missing, []string{"cave.mkdir", "cave.rollback", "manor.write"}) || len(stale) != 0 {
+		t.Fatalf("Unobserved = %v, %v; want every unreached label", missing, stale)
 	}
-	if got := Uncovered(rows, map[string]bool{"cave.mkdir": true, "manor.write": true}); len(got) != 0 {
-		t.Fatalf("Uncovered = %+v, want none", got)
+	allow := map[string]string{"cave.rollback": "only after a failed commit", "cave.sync": "reached", "arkham.gate": "no row"}
+	missing, stale = Unobserved(rows, map[string]bool{"cave.sync": true, "cave.mkdir": true, "manor.write": true}, allow)
+	if len(missing) != 0 || !slices.Equal(stale, []string{"arkham.gate", "cave.sync"}) {
+		t.Fatalf("Unobserved = %v, %v; want none missing and the reached and unlisted entries stale", missing, stale)
 	}
 }
 

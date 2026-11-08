@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/fixture.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 127402ea-7c81-40e4-a90a-159f4d64dcdc
 // last-edited: 2026-11-08
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -37,6 +38,13 @@ type Fixture struct {
 	// that failed them until a fixed build is installed, DATA7-12), and I5
 	// accepts it.
 	Refusal error
+	// Mutate, when set, changes the loaded fixture before every run, in
+	// memory only (the real fixture is never written; Boot ignores it): a
+	// starting state staging cannot make, such as an intent whose staged
+	// record a kill lost, or with KillAt a boot killed at a kill point.
+	// What it returns is synced in full and runs as the fixture; it must
+	// return a filesystem no other run shares.
+	Mutate func(*vfs.MemFS) (*vfs.MemFS, error)
 }
 
 // dbPath is the store's path.
@@ -100,7 +108,53 @@ func load(f Fixture) (*vfs.MemFS, error) {
 	if err := syncTree(mem, string(filepath.Separator)); err != nil {
 		return nil, err
 	}
+	if f.Mutate == nil {
+		return mem, nil
+	}
+	mem, err := f.Mutate(mem)
+	if err != nil {
+		return nil, fmt.Errorf("crashmatrix: fixture %s: Mutate: %w", f.Name, err)
+	}
+	mem.TestingSetDiskUsage(diskUsage())
+	if err := syncTree(mem, string(filepath.Separator)); err != nil {
+		return nil, err
+	}
 	return mem, nil
+}
+
+// KillAt is a Fixture.Mutate for f: the state a boot of build over f leaves
+// when it is killed before the nth (from 0) kill point that carries label,
+// such as a crash loop's open checkpoint for the next boot to reuse, or an
+// upgrade attempt stranded before its completion (R1-21 review M4). That
+// boot runs once, here, and fails tb when it reaches fewer such kill
+// points; every run then starts from its own copy of the crash clone.
+func KillAt(tb testing.TB, f Fixture, build func(testing.TB, *Injector) error, label string, nth int) func(*vfs.MemFS) (*vfs.MemFS, error) {
+	tb.Helper()
+	f.Mutate = nil
+	mem, err := load(f)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	rec := bootseamtest.New(mem, bootseamtest.Options{Clones: true, Stores: []string{f.dbPath()}})
+	inj := newInjector(f, rec, nil)
+	berr := build(tb, inj)
+	ferr := inj.finish(context.Background())
+	var killed *vfs.MemFS
+	n := 0
+	for _, c := range rec.Clones() {
+		if c.Event.Label != label {
+			continue
+		}
+		if n == nth {
+			killed = c.FS
+			break
+		}
+		n++
+	}
+	if killed == nil {
+		tb.Fatalf("crashmatrix: KillAt %s: the boot reached %d kill points labelled %s, not %d (boot: %v)", f.Name, n, label, nth+1, errors.Join(berr, ferr))
+	}
+	return func(*vfs.MemFS) (*vfs.MemFS, error) { return killed.CrashClone(vfs.CrashCloneCfg{}), nil }
 }
 
 // syncTree syncs every file and directory under root, root included.
@@ -205,6 +259,7 @@ func (t tree) diff(after tree) []string {
 // look relocated to them (05-storage §5S.3.7 "Store generation").
 func Boot(t testing.TB, build func(testing.TB, *Injector) error, f Fixture) error {
 	t.Helper()
+	f.Mutate = nil // Boot writes the real fixture; a mutation never reaches it
 	mem, err := load(f)
 	if err != nil {
 		return err
