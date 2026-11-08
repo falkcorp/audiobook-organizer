@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.0.2
+// version: 1.1.1
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -19,18 +19,27 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
 // An admin issues a guest's phone-app key from the Phone app keys panel, and the
-// server emails it to the guest's verified address: the admin never sees it
+// server emails it to the account's email address: the admin never sees it
 // (owner decision 2026-11-07). One action covers two cases:
 //
 //   - a guest who HAS a key record gets a new key: the old one is revoked first
 //     and its record reopened (see the ordering notes at the top of
 //     guest_service_tokens.go);
-//   - an active user with a verified address and NO record gets a first key: the
-//     record is created, exactly as accept would have (owner decision, same day).
+//   - an active, non-admin user with a trusted email address and NO record gets a
+//     first key: the record is created, exactly as accept would have (owner
+//     decision, same day). Admins and the owner never get one this way: they sign
+//     in through Cloudflare's own login (owner decision 2026-11-07, later). A
+//     record that already exists is reissued whoever holds it.
+//
+// "Trusted" is the store's rule (trustedEmailSource in internal/database): an
+// address an admin set counts, one the user typed in themselves does not. The
+// admin-facing wording therefore says "the account's email address", not
+// "verified".
 //
 // It works with INVITE_EMAIL_SERVICE_TOKEN off: that setting governs only the
 // copy mailed at accept time. It needs CF_GUEST_SERVICE_TOKENS on, the
@@ -43,6 +52,11 @@ const (
 	guestKeyBusyCode    = "GUEST_TOKEN_REISSUE_BUSY"
 	guestKeyFailedCode  = "GUEST_TOKEN_REISSUE_FAILED"
 )
+
+// guestKeyIssuingNow is the row's blocked reason while a worker holds the
+// per-user guard (after a 202 the record already reads "active", so the record
+// alone would show the button enabled and a click would 409).
+const guestKeyIssuingNow = "a key is being issued now"
 
 const (
 	// guestKeyHandlerWait is how long the handler waits for the work before it
@@ -73,6 +87,11 @@ func guestKeyBusy(msg string) *guestKeyFailure {
 }
 func guestKeyFailed(msg string) *guestKeyFailure {
 	return &guestKeyFailure{http.StatusBadGateway, guestKeyFailedCode, msg}
+}
+
+// guestKeyShutdown is an issue stopped because the server is shutting down.
+func guestKeyShutdown(msg string) *guestKeyFailure {
+	return &guestKeyFailure{http.StatusServiceUnavailable, guestKeyFailedCode, msg}
 }
 
 // guestKeyResult is a completed issue. It carries ids only.
@@ -107,8 +126,9 @@ func (s *Server) guestKeyDeploymentBlocked() string {
 }
 
 // guestKeyUserBlocked returns why u cannot be issued a key, or "": the account
-// must be active and its email verified. trustedEmailSource is unexported, so
-// the exported check is the store's verified-email lookup naming this same user.
+// must be active and its email address trusted (an admin-set address counts; one
+// the user typed in does not). trustedEmailSource is unexported, so the
+// exported check is the store's verified-email lookup naming this same user.
 func guestKeyUserBlocked(store database.UserReader, u *database.User) string {
 	if u == nil || u.Status != "active" {
 		return "the account is not active"
@@ -118,7 +138,24 @@ func guestKeyUserBlocked(store database.UserReader, u *database.User) string {
 		return "the account's email address could not be checked"
 	}
 	if v == nil || v.ID != u.ID {
-		return "the account has no verified email address; set one on the Users page first"
+		return "the account has no trusted email address (one the user typed in themselves does not count); set one on the Users page first"
+	}
+	return ""
+}
+
+// guestKeyFirstKeyBlocked returns why u cannot be issued a FIRST key, or "":
+// admins and the owner (the account whose email is OWNER_EMAIL) sign in through
+// Cloudflare's own login and have no use for a phone-app key. It does not apply
+// to a user who already has a record: reissue is unchanged for them.
+func guestKeyFirstKeyBlocked(u *database.User) string {
+	const why = "admins sign in through Cloudflare's own login and don't need a phone-app key"
+	for _, role := range u.Roles {
+		if role == auth.SeedRoleAdmin {
+			return why
+		}
+	}
+	if owner := util.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && util.NormalizeEmail(u.Email) == owner {
+		return why
 	}
 	return ""
 }
@@ -152,13 +189,23 @@ func (s *Server) checkGuestKeyIssue(userID string) (*database.User, *database.Gu
 	if rec != nil && guestTokenInFlight(rec.Status) {
 		return nil, nil, guestKeyBusy(guestKeyStuckHint)
 	}
+	if rec == nil {
+		if why := guestKeyFirstKeyBlocked(user); why != "" {
+			return nil, nil, guestKeyBlocked(why)
+		}
+	}
 	return user, rec, nil
 }
 
 // guestKeyRowBlocked is the per-row reason the panel disables its button, "" when
 // the click would be accepted. deployment is guestKeyDeploymentBlocked's answer,
-// computed once per list. rec is nil for a user with no record.
-func guestKeyRowBlocked(store database.UserReader, deployment string, u *database.User, rec *database.GuestServiceToken) string {
+// computed once per list. rec is nil for a user with no record. issuing is true
+// while a worker holds the user's per-user guard: it comes first, because the
+// stuck-record hint would send the admin to Revoke a key that is being mailed.
+func guestKeyRowBlocked(store database.UserReader, deployment string, u *database.User, rec *database.GuestServiceToken, issuing bool) string {
+	if issuing {
+		return guestKeyIssuingNow
+	}
 	if rec != nil && guestTokenInFlight(rec.Status) {
 		return guestKeyStuckHint
 	}
@@ -176,8 +223,8 @@ type guestKeyOutcome struct {
 
 // handleReissueGuestServiceToken handles
 // POST /api/v1/admin/guest-service-tokens/:userId/reissue: issue (first key) or
-// reissue (new key) a guest's phone-app key and email it to their verified
-// address. The checks run synchronously, so a refusal is an immediate 409; the
+// reissue (new key) a guest's phone-app key and email it to the account's
+// email address. The checks run synchronously, so a refusal is an immediate 409; the
 // work itself runs in the background under a per-user guard and the handler
 // waits for it for up to guestKeyHandlerWait, then answers 202 and the list
 // shows the outcome.
@@ -241,10 +288,24 @@ func (s *Server) handleReissueGuestServiceToken(c *gin.Context) {
 
 // issueGuestKey does the work for one user: revoke the old key (when there is
 // one), reopen or create the record, mint through the shared core, check the
-// account is still fine, email the key to the verified address, and audit it.
+// account is still fine, email the key to the account's address, and audit it.
 // The caller holds the per-user guard. The secret lives only in the issue
 // returned by the core and in the rendered message; it reaches no log, audit
 // entry, record or response.
+//
+// Shutdown. The whole run can take about 140 s (see guestKeyHandlerWait) and
+// shutdown waits only 30 s for bgWG before the store closes, while the revoke,
+// mint and reap run on context.WithoutCancel(parent). So parent (the server's
+// background context) is checked between the phases: before anything changes,
+// again after the old key is revoked and BEFORE the record is reopened (so a
+// stop leaves it "revoked", which Reissue can start from, never "pending",
+// which looks stuck), and after the mint and before the email (an unsent key
+// is revoked, never left "active"). RESIDUAL WINDOW: a Cloudflare call that is
+// already in flight when the process dies, or that outlives the 30 s wait, is
+// not covered: the store may close under it, so a token can be left that no
+// record names. The next Revoke of that guest reaps it by name when the record
+// is still pending or revoking (reapOrphanedMint);
+// docs/operations/cloudflare-guest-service-tokens.md says so for operators.
 func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (*guestKeyResult, *guestKeyFailure) {
 	// Re-run the checks now that the guard is held: the handler's pass was only
 	// there to refuse early.
@@ -255,6 +316,9 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 	store := s.storeForWiring()
 	tokens, _ := database.AsCapability[database.GuestServiceTokenStore](store) // checked above
 	res := &guestKeyResult{FirstKey: rec == nil}
+	if parent.Err() != nil {
+		return nil, guestKeyShutdown("The server is shutting down; nothing was changed. Try again once it is back")
+	}
 
 	if rec == nil {
 		// A first key: the record accept would have written.
@@ -269,7 +333,7 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		}
 	} else {
 		res.PreviousTokenID = rec.TokenID
-		if f := s.reopenGuestKeyRecord(parent, tokens, userID, actorID); f != nil {
+		if f := s.reopenGuestKeyRecord(parent, tokens, userID, actorID, res); f != nil {
 			return nil, f
 		}
 	}
@@ -316,6 +380,9 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		}
 		return nil, guestKeyBlocked(why + "; the new key was revoked and nothing was emailed")
 	}
+	if parent.Err() != nil {
+		return nil, s.discardUnsentGuestKeyResult(parent, userID, actorID, res, "the server was shutting down before the key was emailed")
+	}
 
 	if sendErr := s.emailGuestKey(parent, fresh, issue, !res.FirstKey); sendErr != "" {
 		revokeErr := s.discardUnsentGuestKey(parent, userID, actorID, res, "reissue email could not be sent")
@@ -327,7 +394,7 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		return nil, guestKeyFailed("No phone-app key is active for " + name + ": the email could not be sent (" + sendErr + "). Check the mail settings and try again")
 	}
 
-	details := "emailed to the guest's verified address, by admin account " + actorID
+	details := "emailed to the account's email address, by admin account " + actorID
 	summary := "a guest's phone-app key was reissued and emailed to them"
 	if res.FirstKey {
 		summary = "a first phone-app key was issued to a guest and emailed to them"
@@ -337,7 +404,7 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		extra["previous_token_id"] = res.PreviousTokenID
 	}
 	s.recordGuestTokenAuditWith(auditGuestTokenReissued, "info", userID, res.TokenID, details, summary, extra)
-	inviteAccessLog.Info("guest key issue: account %s: token %s emailed to the verified address (replaces %q, first key %v)",
+	inviteAccessLog.Info("guest key issue: account %s: token %s emailed to the account's address (replaces %q, first key %v)",
 		userID, res.TokenID, res.PreviousTokenID, res.FirstKey)
 	return res, nil
 }
@@ -346,8 +413,9 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 // pending, ready for the mint core. The revoke runs first and refuses a record
 // that is in flight (beginGuestTokenRevoke). A record that is already revoked
 // is simply reopened. The reopen is a status-checked update, so only one request
-// ever mints.
-func (s *Server) reopenGuestKeyRecord(parent context.Context, tokens database.GuestServiceTokenStore, userID, actorID string) *guestKeyFailure {
+// ever mints. When the server begins shutting down after the revoke, the record
+// is left revoked (not reopened) and the stop is audited as reissue_failed.
+func (s *Server) reopenGuestKeyRecord(parent context.Context, tokens database.GuestServiceTokenStore, userID, actorID string, res *guestKeyResult) *guestKeyFailure {
 	if err := s.revokeGuestServiceTokenOpts(parent, userID, "reissued by an admin", actorID, true); err != nil {
 		switch {
 		case errors.Is(err, errGuestTokenBusy):
@@ -355,7 +423,23 @@ func (s *Server) reopenGuestKeyRecord(parent context.Context, tokens database.Gu
 		case errors.Is(err, errGuestTokenNone):
 			return guestKeyBusy("the key record changed while the request was running; reload the list and try again")
 		}
-		return guestKeyFailed("The old key could not be confirmed deleted, so no new key was made; it may still work. Try again. (" + err.Error() + ")")
+		// The detail goes to the log only: err can be a store error, which is
+		// not admin wording. A Cloudflare failure's reason is already on the
+		// key's row (the record is revoke_failed with the detail).
+		inviteAccessLog.Warn("guest key issue: revoking the old key of account %s failed: %v", userID, logger.SanitizeLogValue(err.Error()))
+		return guestKeyFailed("The old key could not be confirmed deleted, so no new key was made; it may still work. See the key's row for the reason, then try again")
+	}
+	if parent.Err() != nil {
+		// Second shutdown check: the old key is gone, the record reads revoked,
+		// and nothing new has been started.
+		extra := map[string]any{"first_key": false}
+		if res.PreviousTokenID != "" {
+			extra["previous_token_id"] = res.PreviousTokenID
+		}
+		s.recordGuestTokenAuditWith(auditGuestTokenReissueFailed, "warn", userID, "",
+			"the server was shutting down after the old key was revoked, so no new key was made; the record is left revoked, by admin account "+actorID,
+			"a guest's key reissue stopped: the server was shutting down", extra)
+		return guestKeyShutdown("The server is shutting down. The old key is revoked and no new key was made; use Reissue again once it is back")
 	}
 	now := time.Now().UTC()
 	if _, err := tokens.UpdateGuestServiceToken(userID, func(g *database.GuestServiceToken) error {
@@ -376,7 +460,7 @@ func (s *Server) reopenGuestKeyRecord(parent context.Context, tokens database.Gu
 	return nil
 }
 
-// emailGuestKey sends the key to u's verified address and returns "" on
+// emailGuestKey sends the key to u's email address and returns "" on
 // success, or fixed wording for why not. It never returns, logs or audits the
 // message body.
 func (s *Server) emailGuestKey(parent context.Context, u *database.User, issue *guestTokenIssue, reissue bool) string {
@@ -388,7 +472,7 @@ func (s *Server) emailGuestKey(parent context.Context, u *database.User, issue *
 		return why
 	}
 	msg, err := handlers.RenderPhoneKeyEmail(handlers.PhoneKeyEmail{
-		Username: u.Username, ServerURL: strings.TrimRight(base, "/"),
+		Username: u.Username, ServerURL: base,
 		ClientID: issue.ClientID, ClientSecret: issue.ClientSecret, Reissue: reissue,
 	})
 	if err != nil {
@@ -405,11 +489,6 @@ func (s *Server) emailGuestKey(parent context.Context, u *database.User, issue *
 	return ""
 }
 
-// discardUnsentGuestKey revokes a key that was made but never reached the guest:
-// its secret is held nowhere (only a hash is stored), so it is a live credential
-// nobody has. It goes through the normal revoke path (record "revoked"), and the
-// reissue_failed audit entry names both ids. It returns the revoke's error: when
-// the revoke fails the record is "revoke_failed" and the admin retries it.
 // discardUnsentGuestKeyResult revokes a new key that will not be emailed and
 // returns the admin-facing failure, which says whether the revoke worked.
 func (s *Server) discardUnsentGuestKeyResult(parent context.Context, userID, actorID string, res *guestKeyResult, reason string) *guestKeyFailure {
@@ -419,6 +498,11 @@ func (s *Server) discardUnsentGuestKeyResult(parent context.Context, userID, act
 	return guestKeyFailed(reason + "; the new key was revoked and nothing was emailed")
 }
 
+// discardUnsentGuestKey revokes a key that was made but never reached the guest:
+// its secret is held nowhere (only a hash is stored), so it is a live credential
+// nobody has. It goes through the normal revoke path (record "revoked"), and the
+// reissue_failed audit entry names both ids. It returns the revoke's error: when
+// the revoke fails the record is "revoke_failed" and the admin retries it.
 func (s *Server) discardUnsentGuestKey(parent context.Context, userID, actorID string, res *guestKeyResult, reason string) error {
 	err := s.revokeGuestServiceToken(parent, userID, reason, actorID)
 	detail := reason + ", by admin account " + actorID

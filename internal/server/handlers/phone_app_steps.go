@@ -1,5 +1,5 @@
 // file: internal/server/handlers/phone_app_steps.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: dc8db512-0961-4e2c-a747-9c5014eb7267
 // last-edited: 2026-11-07
 
@@ -9,12 +9,13 @@
 //   - The invitation email (invite_delivery.go) says where to put a key that
 //     does not exist yet: the invitation page shows it once, after accept.
 //   - The key email (RenderPhoneKeyEmail) carries the key itself: an admin issued
-//     or reissued it, and the server mails it to the guest's verified address.
+//     or reissued it, and the server mails it to the account's email address.
 //
 // Both include the "phoneAppSteps" partial (AudioBooth on iPhone, Lissen on
 // Android). KeyInEmail says which wording to use: false points at "the two
 // values from the invitation page", true at "the two headers below" and adds
-// the line for a guest whose app still holds the old key. The partials live in
+// the line for a guest whose app still holds the old key (only when the key
+// replaces an old one: Reissue). The partials live in
 // package handlers because server imports handlers and not the reverse, and a
 // new package would need its own entry in internal/arch/layering_test.go.
 //
@@ -35,7 +36,9 @@ import (
 )
 
 // phoneAppStepsTextDef defines the "phoneAppSteps" text partial. Its data needs
-// Username, ServerURL and KeyInEmail. With KeyInEmail false the output is
+// Username, ServerURL and KeyInEmail, plus Reissue when KeyInEmail is true (the
+// invitation's data has no Reissue; `and` short-circuits, so it is never read
+// there). With KeyInEmail false the output is
 // exactly the steps the invitation email has always carried.
 const phoneAppStepsTextDef = `{{define "phoneAppSteps"}}iPhone or iPad: install AudioBooth from the App Store.
   1. Open AudioBooth, go to Servers and tap + to add a server.
@@ -51,7 +54,7 @@ Android 9 or newer: install Lissen from Google Play or F-Droid.
   2. Tap Connection, then Custom Headers. Add the two {{if .KeyInEmail}}headers below{{else}}values from the invitation
      page{{end}}: Key is the name shown, Value is the value next to it.
   3. Go back. Server URL: {{.ServerURL}}  Login: {{.Username}}
-     Password: the one you chose. Tap Connect.{{if .KeyInEmail}}
+     Password: the one you chose. Tap Connect.{{if and .KeyInEmail .Reissue}}
 
 If the app is already set up with your old key, open the same Custom Headers screen
 and replace both values with the two above.{{end}}{{end}}`
@@ -70,7 +73,7 @@ const phoneAppStepsHTMLDef = `{{define "phoneAppSteps"}}<p><strong>iPhone or iPa
 <li>Tap <strong>Connection</strong>, then <strong>Custom Headers</strong>. Add the two {{if .KeyInEmail}}headers below{{else}}values from the invitation page{{end}}: <strong>Key</strong> is the name shown, <strong>Value</strong> is the value next to it.</li>
 <li>Go back. Server URL: <code>{{.ServerURL}}</code>, Login: <strong>{{.Username}}</strong>, Password: the one you chose. Tap <strong>Connect</strong>.</li>
 </ol>
-{{if .KeyInEmail}}<p>If the app is already set up with your old key, open the same Custom Headers screen and replace both values with the two above.</p>
+{{if and .KeyInEmail .Reissue}}<p>If the app is already set up with your old key, open the same Custom Headers screen and replace both values with the two above.</p>
 {{end}}{{end}}`
 
 // The partial reads Username, ServerURL and KeyInEmail from whatever data the
@@ -177,13 +180,15 @@ var phoneKeyHTMLTmpl = htmltemplate.Must(htmltemplate.New("html").Parse(`<!docty
 </body></html>` + phoneAppStepsHTMLDef))
 
 // RenderPhoneKeyEmail builds the email that carries a guest's phone-app key.
-// The caller sets To (the guest's verified address). Templates escape every
+// The caller sets To (the account's email address). ServerURL's trailing slash
+// is trimmed here, so every caller (accept-time and admin-issued) renders the
+// same address. Templates escape every
 // value: html/template contextually, and the text part has no markup. The
 // rendered body holds the secret, so callers must not log it or put it in a
 // response.
 func RenderPhoneKeyEmail(in PhoneKeyEmail) (imail.Message, error) {
 	data := phoneKeyEmailData{
-		Username: in.Username, ServerURL: in.ServerURL, ClientID: in.ClientID,
+		Username: in.Username, ServerURL: strings.TrimRight(in.ServerURL, "/"), ClientID: in.ClientID,
 		ClientSecret: in.ClientSecret, Reissue: in.Reissue, KeyInEmail: true,
 	}
 	var text, html bytes.Buffer
