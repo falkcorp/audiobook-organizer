@@ -1,0 +1,226 @@
+# file: .github/workflows/split-readiness.yml
+# version: 1.0.0
+# guid: 9559012a-84a4-45d7-ae93-6a4d60f3f20b
+# last-edited: 2026-11-08
+
+# Nightly split-readiness fold-in (12 §12.3.11, R1-06). Measures the criteria
+# that are reports, not merge gates, and folds the result into
+# docs/plans/platform-core/split-readiness.md THROUGH A PR (never a direct push).
+#
+#   measure: `make -C core readiness` (SC1 apidiff, SC5 coverage, SC6 coredoc,
+#            SC9 govulncheck), SC3 (a second consumer module builds against
+#            core/) and SC8 (web/ builds against the packed @mediacore/*
+#            tarballs). Every script runs report-only: a criterion that is not
+#            met is recorded, not failed; the job fails only when a script
+#            crashes. It holds no secret and no write permission.
+#   fold:    downloads that artifact, rewrites the document's two marker regions
+#            (scripts/ci/fold_split_readiness.py) and, when the document changed,
+#            opens or updates ONE bot PR. The PR is opened by the CI bot GitHub
+#            App, not GITHUB_TOKEN: a PR opened with GITHUB_TOKEN starts no
+#            workflows, so the merge queue's required checks would never report.
+#
+# The two jobs are split so the job that runs the repository's scripts and
+# installs npm dependencies never has the app key in reach.
+#
+# Dropped at cutover step 6 (12 §12.8.2) with scripts/ci/core_consumer_smoke.py,
+# scripts/ci/web_build_against_tarballs.py and scripts/ci/fold_split_readiness.py.
+name: Split Readiness
+
+on:
+  schedule:
+    # Nightly 03:17 UTC, off the top of the hour.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: split-readiness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Full history and the checkpoint refs: SC1 diffs the newest checkpoints
+      # and core_ci_lib fetches them explicitly (they are refs, not tags).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Pin
+        run: echo "GOTOOLCHAIN=$(make -s -C core print-toolchain)" >> "$GITHUB_ENV"
+
+      # SC1, SC5, SC6, SC9. Exits 0 whatever the verdicts.
+      - name: make -C core readiness
+        run: make -C core readiness READINESS_OUT="$RUNNER_TEMP/readiness"
+
+      # SC3: root-side, generates a throwaway module outside the tree.
+      - name: SC3 second consumer
+        run: python3 scripts/ci/core_consumer_smoke.py --report --out "$RUNNER_TEMP/readiness-root"
+
+      # SC8: install and build core/web (build_web.sh builds the packages in
+      # their order), pack every workspace package, then build web/ against
+      # the tarballs in a temp copy.
+      - name: Pack @mediacore packages
+        run: |
+          set -euo pipefail
+          sh scripts/ci/build_web.sh deps
+          mkdir -p "$RUNNER_TEMP/pkgs"
+          npm pack --workspaces --pack-destination "$RUNNER_TEMP/pkgs" --prefix core/web
+
+      - name: SC8 web builds against the tarballs
+        run: python3 scripts/ci/web_build_against_tarballs.py --tarballs "$RUNNER_TEMP/pkgs" --report --out "$RUNNER_TEMP/readiness-root"
+
+      - name: Gather the report
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bundle/core" "$RUNNER_TEMP/bundle/root"
+          cp -R "$RUNNER_TEMP/readiness/." "$RUNNER_TEMP/bundle/core/" || true
+          cp -R "$RUNNER_TEMP/readiness-root/." "$RUNNER_TEMP/bundle/root/" || true
+
+      - name: Upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: split-readiness
+          path: ${{ runner.temp }}/bundle
+          retention-days: 30
+          if-no-files-found: error
+
+  fold:
+    name: Fold into split-readiness.md
+    needs: measure
+    # Only when every script ran (a crashed script leaves an incomplete night
+    # that must not be recorded as one).
+    if: ${{ needs.measure.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Holds the CI bot app key as an environment secret (limited to the default
+    # branch); see ratchet-lower.yml.
+    environment: ci-bot
+    steps:
+      - name: Require CI bot app credentials
+        env:
+          CLIENT_ID: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.CI_BOT_APP_PRIVATE_KEY != '' }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+            echo "::error::This workflow mints the CI bot app token and must run from ${DEFAULT_BRANCH}, not ${REF_NAME}."
+            exit 1
+          fi
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Variable CI_BOT_APP_CLIENT_ID and the ci-bot environment secret CI_BOT_APP_PRIVATE_KEY must both be visible to this job."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Download the report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: split-readiness
+          path: ${{ runner.temp }}/bundle
+
+      - name: Fold the report into the document
+        run: |
+          python3 scripts/ci/fold_split_readiness.py \
+            --report "$RUNNER_TEMP/bundle/core/readiness.json" \
+            --extra "$RUNNER_TEMP/bundle/root"
+
+      - name: Mint CI bot app token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CI_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Open or update the PR
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          BRANCH=bot/split-readiness
+          DOC=docs/plans/platform-core/split-readiness.md
+
+          if git diff --quiet; then
+            echo "::notice::The document is unchanged; no PR."
+            exit 0
+          fi
+
+          # Only the document may change; anything else is a bug in the fold.
+          bad=$(git diff --name-only | grep -vx "$DOC" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::unexpected files changed by the fold: $bad"
+            exit 1
+          fi
+
+          bash scripts/ci/set_bot_git_identity.sh "$APP_SLUG"
+          git checkout -b "$BRANCH"
+          git add "$DOC"
+          git commit -m "docs(platform-core): fold the nightly split-readiness report"
+
+          {
+            echo "Nightly fold of the split-readiness report into ${DOC} (split-readiness.yml, 12 §12.3.11)."
+            echo "Report-only: this records measurements, it gates nothing. Merge with rebase (this repo does not squash)."
+          } > "$RUNNER_TEMP/pr-body.md"
+
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          bash scripts/ci/push_bot_branch.sh "$REMOTE" "$BRANCH"
+
+          # Docs only: no changelog fragment; skip-changelog tells changelog-check.yml.
+          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/pr-body.md" \
+              --add-label skip-changelog
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "$DEFAULT_BRANCH" \
+              --title "docs(platform-core): fold the nightly split-readiness report" \
+              --body-file "$RUNNER_TEMP/pr-body.md" --label skip-changelog
+          fi
