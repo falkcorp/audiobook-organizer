@@ -1,7 +1,7 @@
 // file: internal/database/compaction_stats_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 747d69ee-99f8-4907-9b97-47bdd0b4b7ac
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package database
 
@@ -20,7 +20,13 @@ import (
 // real DB. It moved here from internal/compactprogress's tests when the
 // sampler moved into core's storage, which has its own copy of the mapping.
 func TestCollectCompactionStats_RealPebble(t *testing.T) {
-	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
+	// Automatic compactions are off so the only compaction in this test is
+	// the explicit db.Compact below. With them on, the flushes can schedule a
+	// background compaction that finishes before the `before` snapshot (or
+	// leaves db.Compact nothing to merge), making the written-bytes delta zero
+	// and the test flaky under load. Same fix as core storage's
+	// TestCompactionStats_RealPebble.
+	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem(), DisableAutomaticCompactions: true})
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	for i := range 2000 {
@@ -35,8 +41,10 @@ func TestCollectCompactionStats_RealPebble(t *testing.T) {
 	require.NoError(t, db.Flush())
 	gated := NewGatedDB(db)
 	before := CollectCompactionStats(gated)
+	require.Zero(t, before.Count, "no compaction may run before the snapshot")
 	require.NoError(t, db.Compact(context.Background(), nil, []byte{0xff}, false))
 	after := CollectCompactionStats(gated)
+	assert.Greater(t, after.Count, before.Count, "the explicit compaction must be counted")
 	assert.Greater(t, after.LiveTableSize, int64(0))
 	assert.Greater(t, after.WrittenBytes(), before.WrittenBytes(), "a compaction must show written bytes")
 	assert.Greater(t, after.BottomLevelSize, int64(0), "a full compaction lands data in the bottom level")
