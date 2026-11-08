@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.14.2 -->
+<!-- version: 1.14.3 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -741,6 +741,14 @@ type ErrUpgradeFloor struct {
 
 // ErrMigrationFailed wraps the failing step.
 type ErrMigrationFailed struct{ Step StepRef; Err error }
+
+// StepError, inside ErrMigrationFailed's Err, marks the step's own failure:
+// its Up's error, or a write it staged that storage refused
+// (ErrMigrationTooLarge). The step's bookkeeping (its applied record, a level
+// step's sidecar write, the commit) is not one, and neither is an Up that
+// returns because the boot's context ended. A KindCheckpoint restore boot
+// journals failed only for a StepError (05-backup §5B.3.4; R1-21 (f)).
+type StepError struct{ Step StepRef; Err error }
 ```
 
 Runner rules:
@@ -1740,7 +1748,7 @@ health). There is no reset-only directory or token and no precedence rule betwee
 | Failure rule (COR8-3, DATA8-1, R10-6) | **Before `set_aside_started`** (DATA10-4): a failure after the in-flight rename and before that journal record — the copy of `backup.location.json` failing, or the journal write itself — has moved nothing, so restoreswap journals `rejected`, renames `inflight.json` to `restore/<id>/rejected.json` and boots the untouched store as below. **From `set_aside_started`:** a set-aside rename that fails although staging pre-validated it (a mount, a permission or a device changed since), and a resume that cannot complete the set-aside for any reason, **always** moves every target already moved back to its source, in reverse journal order, **before** it journals `rejected` (R9-6, DATA9-4), then renames `inflight.json` to `restore/<id>/rejected.json` and boots the **untouched** store with health `degraded` (`factory_reset_failed`, naming the path and the error; 05-health). The token is set while the newest swap journal is that rejected `KindReset` journal, and clears when the next swap of any kind is staged. A move-back that fails too halts boot with the journal naming every path, as 05-backup step x does. |
 | Next boot (SEC8-5) | The store path is empty, so §5S.4 steps 3–6 make a **fresh install**: the empty store is exempt from the upgrade floor (step 3), a new `install_id`, the one fresh-install batch with every owner's applied versions and every data migration recorded (books' 1..`LegacyCap` and the cutover steps included, so neither a later floor nor the cutover ever touches it; DATA7-7), then the Seed steps in P4b, no checkpoint. Settings start at core's defaults, so `root_dir` is empty and setup is not complete, as after HEAD's reset. An operator value of an auth or Basic-gate key cannot loosen the default after the reset: for those keys the more restrictive of the operator and the stored value wins (05-config §1.3.5), so a stale `ENABLE_AUTH=false` leaves auth on (`TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn`). A crash before the batch repeats the reset boot. |
 | Journal and keyring (DATA7-17) | The swap journal stays at `set_aside` until `secrets.Open` (after the checkpoint and before the migration list, §5S.4 step 8), which the kernel tells it is the reset boot (`secrets.Options.ResetBoot`, set from the `set_aside` record), has rewritten the keyring header's `install_id`, and only then reads `applied`. At P4d step 2 the revocation journal's header names the old install, so 05-backup sets it aside and starts a new journal, re-applying nothing (§5B.3.6 step (0), DATA4-15); 05-backup rewrites `backup.location.json`. Every archive of the old install verifies as foreign (05-backup §5B.3.7). The keyring itself is **kept** (14 Q-J (a)): moving `previous/` back restores the store with every secret readable, and the keyring export stays valid. |
-| Completion: `hook_done` (COR8-4, OPS8-5) | The in-flight file is deleted at `hook_done`, never at `applied`. For `ResetStore`, and whenever no module declares a reset hook, the kernel journals `hook_done` itself right after `applied`, first removing the `delete` entries with the hook's per-entry rule below (`TestFactoryResetNativeAppCompletes`); otherwise the hook records it through `ResetRun.Done`. So no reset leaves `restore_inflight` behind except across a crash. |
+| Completion: `hook_done` (COR8-4, OPS8-5) | The in-flight file is deleted at `hook_done`, never at `applied`. For `ResetStore`, and whenever no module declares a reset hook, the kernel journals `hook_done` itself at 06 P4d step 1, after P4b's migrations (06 §6.5.1's writer-table row "P4d 1"; in release R1, which has no P4c or P4d, right after P4b), first removing the `delete` entries with the hook's per-entry rule below (`TestFactoryResetNativeAppCompletes`); otherwise the hook records it through `ResetRun.Done`. So no reset leaves `restore_inflight` behind except across a crash. |
 | The app's reset hook (`ResetFactory`; DATA7-6, SEC7-5) | HEAD's in-request file effects run in the declaring module's **reset hook**, never in the request. The kernel calls `ResetHook.Run(ctx, storage.ResetRun)` at 06 §6.5.2 Run step 2, after `applied` and before any listener, on the reset boot and on every later boot whose journal reads `applied` without `hook_done` (COR8-8). Books' hook removes the `delete` entries and the Open Library dump files in the recorded dump directory and, only when `ResetRun.DeleteLibraryFiles` is set, wipes the entries of the recorded `RootDir`. Four rules: **(1) it never fails boot**: a per-entry error is logged and audited, as HEAD warns and continues (`handler.go:571-577`), counted in the `hook_done` record (`{failed, paths}`) and reported by health as `factory_reset_cleanup_incomplete` with the count and paths (05-health; set while the newest `KindReset` journal's `hook_done` record lists failures, cleared when a later reset completes without one or the operator removes that journal); the hook re-checks the dangerous root only to skip the wipe, never to fail, and it calls `Done` once every action has been attempted, whatever failed; **(2) only a crash reruns it**: a crash before `Done` reruns it at the next boot, idempotently (deleting what is already gone is success); **(3) its runtime is bounded and exempt from the 60 s start limit**: it calls `ResetRun.ExtendStart` per batch of entries, 06 §6.5.2's per-hook `core.lifecycle.start_timeout` does not apply to it, and at `core.storage.swap.reset_hook_timeout` (§5S.7) it stops and records the entries it did not reach as failed; **(4) kept paths are skipped**: an entry that is, or contains, `<db parent>`, the state directory or a set-aside destination is never removed, so a `RootDir` that holds the store keeps the fresh store, `previous/` and the keyring; the confined state filesystem applies this rule itself (next row), so no hook can bypass it. The hook is **not undoable**. Owner question **Q-K** is decided (A-17): the wipe happens only on request. |
 | Hook confinement (R10-6, COR10-4) | The kernel builds the labelled state filesystem (`core/internal/statefs`), hands it to the hook as `ResetRun.Files` (`storage.StateFiles`), and defines its confinement here, once: it follows a path only inside the state directory, `<db parent>`, the intent's `delete` entries and the intent's `hook_paths` — books' Open Library dump directory (by default `<RootDir>/openlibrary-dumps`, `internal/metafetch/openlibrary.go:54-61,73`) and, only with `delete_library_files`, the confirmed library root — without the kernel ever parsing `hook_args`. It refuses removing a kept path of the hook's rule (4) and reports that as a skip, not a failure. Any other path is refused and lands in `hook_done`'s failure list. |
 | Rollback tooling (OPS7-11, OPS8-7) | `make rollback` and `make rollback-restore` refuse while `restore/<id>/inflight.json` exists ("boot the current build once to finish the reset"), with no override, so a rollback never lands an older build on a half-moved directory or below a hook that would wipe the library after the operator rolled back to get away from it (§5S.3.7). A pending intent blocks neither: the older build rejects it at P0a (`staged_by_build`), and `restore-offline` rejects it itself (§5S.3.12). |
@@ -1960,9 +1968,10 @@ const (
 // (R9-7). The journal is JSON Lines: each record is appended as one line
 // and fsynced before the swap goes on. A last line without
 // its newline, or one that does not decode, is a torn append that was never
-// acknowledged, and the next append overwrites it; a line before the last
-// that does not decode is corruption, and the boot halts naming the journal
-// (R1-21 D2).
+// acknowledged: a reader drops it, and the next append rewrites the journal
+// without it (temp, fsync, rename, directory fsync), so stale bytes past a
+// shorter line never survive; a line before the last that does not decode
+// is corruption, and the boot halts naming the journal (R1-21 D2, review m6).
 type Record struct {
 	At    time.Time `json:"at"`
 	Step  string    `json:"step"`
@@ -1976,6 +1985,10 @@ type Record struct {
 	// Failed ("hook_done" only): the entries the reset hook could not remove
 	// (COR8-4).
 	Failed []string `json:"failed,omitempty"`
+	// Kept ("hook_done" only): the delete entries skipped because removing
+	// them would remove a kept path (rule (4) of "The app's reset hook"):
+	// a skip, not a failure (R1-21).
+	Kept []string `json:"kept,omitempty"`
 	// InstallID ("set_aside_started" only): the old install's ID, for manual
 	// undo, also after a crash mid-set-aside (DATA9-15).
 	InstallID string `json:"install_id,omitempty"`
@@ -2344,8 +2357,8 @@ kernel.Open(storage)                                                   06 P2 —
     handles and stores, no service built yet (DATA2-24, COR3-2):
       (a) config: Store.SetSecrets over the keyring step 8 opened → Store.Attach (Load, read only):
           DB overrides become visible, so (b) finds a backup directory an admin set in Settings; on
-          a factory-reset boot the kernel journals hook_done itself right after applied when no
-          reset hook is due (§5S.3.15, DATA7-17, COR8-4)
+          a factory-reset boot the kernel journals hook_done itself here, after P4b's migrations
+          (not right after applied), when no reset hook is due (§5S.3.15, DATA7-17, COR8-4)
       (b) revocation journal (05-backup §5B.3.6): locate it from the effective core.backup.dir
           (moving it first when its recorded location differs); check its header's install_id
           against c/storage/install (a mismatch sets it aside and starts a new journal, DATA4-15);
@@ -3300,4 +3313,4 @@ Round 16 (2026-11-05): review fixes X4 (§5S.4 "Task kinds": `storagetasks` is c
 
 Owner answers (2026-11-05): D15 — §5S.3.13 and its tests: M8 has one fixed ID, `books.rewrite`, registered at F3 and kept last; the "second M8" journal rule and test cell removed (advisor S2); the R2 bullet of the migration lifecycle cites it.
 
-R1-21 (2026-11-08), the journaled swap and the crash-matrix kit: `storage.ErrRenameRefused` is restorejournal's sentinel re-exported, as `ErrSwapPending` is; `Record` states the journal's JSON Lines rule and its torn tail (D2); §5S.3.16 and the `TestBootCrashMatrix` row state that the error mode skips Pebble's own files, which are kill points only (D12).
+R1-21 (2026-11-08), the journaled swap and the crash-matrix kit: `storage.ErrRenameRefused` is restorejournal's sentinel re-exported, as `ErrSwapPending` is; `Record` states the journal's JSON Lines rule and its torn tail (D2); §5S.3.16 and the `TestBootCrashMatrix` row state that the error mode skips Pebble's own files, which are kill points only (D12). After the row's review: `StepError` in the runner's error block (decision (f)); `Record.Kept` for the delete entries the kernel's no-hook completion skips under rule (4) (M1); the torn tail is dropped by rewriting the journal (m6); the "Completion" row and P4d step 11(a) place the kernel's own `hook_done` after P4b, as 06's writer-table row "P4d 1" does (e).
