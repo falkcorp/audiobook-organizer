@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -10,21 +10,14 @@ import (
 	"fmt"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/module"
 )
-
-// storeCloseWait bounds how long serve waits, after Run returns, for books'
-// server to finish its stop before the store closes. The kernel abandons a
-// stop hook still running at the end of the shutdown budget; closing the
-// store under it would turn its remaining writes into Pebble's
-// use-after-close panic.
-const storeCloseWait = 30 * time.Second
 
 // serveLog logs the composed serve path.
 var serveLog = logger.New("serve")
@@ -75,12 +68,38 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 
 	runErr := a.Run(ctx)
 	// A Run that failed before the start hook began leaves the server
-	// unstarted, and Stopped closes only when it is released.
+	// unstarted; Release tears it down and closes Stopped before it returns.
 	books.Release(mod)
-	select {
-	case <-books.Stopped(mod):
-	case <-time.After(storeCloseWait):
-		serveLog.Error("books' server had not finished stopping after %s; closing the store anyway", storeCloseWait)
+	if !booksStopped(mod) {
+		serveLog.Error("books' stop hook was still running at the end of the shutdown budget; closing the store under it")
 	}
 	return runErr
+}
+
+// booksStopped reports whether books' server has finished its stop, without
+// waiting. When Run returns, books' StopHook has returned unless the kernel
+// abandoned it at the end of the shutdown budget (06 §6.5.2). serve then
+// closes the store at once, with no extra wait:
+//
+//   - The budget is the whole stop window (05-health §5H.4). The unit's
+//     TimeoutStopSec is 30s against the kernel's 25s default budget, so a
+//     wait after Run is cut short by SIGKILL, and the store's Close, whose
+//     first act is a WAL sync, never runs. The 30s wait that was here did
+//     exactly that (R1-15 review m2).
+//   - Closing under a running StopHook is safe. Every Pebble access holds a
+//     lease on the main store's GatedDB, and every store books opens over it
+//     (activity, embedding, AI scan) shares that DB and closes as a no-op.
+//     PebbleStore.Close refuses new leases, syncs the WAL, waits for held
+//     ones (DefaultCloseDrainTimeout), and leaves the engine open with the
+//     WAL synced if one outlives the wait. A write after that gets an error
+//     wrapping pebble.ErrClosed, never a use-after-close panic
+//     (internal/database/pebble_gate.go; TestStoreCloseUnderAbandonedStop
+//     drives it through books' own wiring).
+func booksStopped(mod module.Module) bool {
+	select {
+	case <-books.Stopped(mod):
+		return true
+	default:
+		return false
+	}
 }
