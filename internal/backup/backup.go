@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.6
+// version: 1.22.7
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -641,6 +642,39 @@ var ErrChecksumMismatch = errors.New("backup archive does not match its recorded
 // file of the requested name. The error also matches os.ErrNotExist.
 var ErrBackupNotFound = errors.New("backup not found")
 
+// ErrArchiveCarriesHNSWSnapshot is returned by PrepareRestoreIn, and by
+// Extract, for an archive with an entry in the HNSW snapshot directory.
+//
+// A backup holds one root, the database directory (addToArchive), and the
+// snapshot directory sits beside the database, not in it, so no backup this
+// program wrote has such an entry. Extracting one would write the running
+// server's graph snapshot or its clean-stop marker from a file that has no
+// reason to match the restored database; a marker written that way and left
+// by a crash before the restore handler removes it would let the next boot
+// skip the reconcile against a database the graph never saw (R1-15 round 4).
+// Refused rather than skipped: the archive is crafted or foreign, and the
+// restore says so instead of restoring the rest of it.
+var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in the HNSW snapshot directory")
+
+// hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
+// database (database.HNSWSnapshotDir, which this package does not import;
+// TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
+// handler's tests builds its entry from that function, so the two cannot
+// drift apart unnoticed).
+const hnswSnapshotDirName = "hnsw"
+
+// hnswSnapshotEntry reports whether the archive entry name extracts into the
+// HNSW snapshot directory beside the restored database, or is that directory.
+// It cleans the name the way the extraction resolves it, so "./hnsw/x" and
+// "db/../hnsw/x" count, and compares without case, for case-insensitive
+// filesystems. A name that escapes the target ("../hnsw/x") does not count:
+// the extraction refuses it as an escape.
+func hnswSnapshotEntry(name string) bool {
+	clean := path.Clean(strings.TrimLeft(filepath.ToSlash(name), "/"))
+	first, _, _ := strings.Cut(clean, "/")
+	return strings.EqualFold(first, hnswSnapshotDirName)
+}
+
 // checksumSidecarPath returns the path of the sidecar file CreateBackup writes
 // next to backupPath, holding a sha256sum(1)-formatted line.
 func checksumSidecarPath(backupPath string) string {
@@ -677,10 +711,10 @@ func writeChecksumSidecar(backupPath, checksum string) error {
 	return nil
 }
 
-// verifyChecksumSidecar re-hashes archivePath and compares it against the
-// digest recorded in sidecarPath.
+// sidecarDigest returns the digest recorded in sidecarPath for the archive
+// named name.
 //
-// Both paths must already be resolved from a directory listing (see
+// sidecarPath must already be resolved from a directory listing (see
 // PrepareRestoreIn) rather than built by joining a caller-supplied filename
 // onto a directory: CodeQL's go/path-injection query does not credit
 // library.SanitizeFilename, library.SecureJoin, filepath.Base, or a
@@ -692,32 +726,89 @@ func writeChecksumSidecar(backupPath, checksum string) error {
 // Returns ErrVerificationUnsupported if sidecarPath cannot be read (normally
 // unreachable here since PrepareRestoreIn only calls this once it has already
 // found a matching directory entry, but kept as a defensive fallback for a
-// delete-after-list race), ErrChecksumMismatch if the digests disagree, or a
-// plain error for other I/O failures reading/hashing.
-func verifyChecksumSidecar(archivePath, sidecarPath string) error {
-	name := filepath.Base(archivePath)
+// delete-after-list race), or a plain error for a sidecar that is empty or
+// malformed or cannot be read for another reason.
+func sidecarDigest(sidecarPath, name string) (string, error) {
 	raw, err := os.ReadFile(sidecarPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
+			return "", fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
 				ErrVerificationUnsupported, name)
 		}
-		return fmt.Errorf("failed to read checksum sidecar for %s: %w", name, err)
+		return "", fmt.Errorf("failed to read checksum sidecar for %s: %w", name, err)
 	}
 	fields := strings.Fields(string(raw))
 	if len(fields) == 0 {
-		return fmt.Errorf("checksum sidecar for %s is empty or malformed", name)
+		return "", fmt.Errorf("checksum sidecar for %s is empty or malformed", name)
 	}
-	expected := fields[0]
+	return fields[0], nil
+}
 
-	actual, err := calculateFileChecksum(archivePath, nil)
+// scanArchive reads the archive at archivePath once, first byte to last, and
+// returns its SHA-256 with what the entries scan found: nil, or
+// ErrArchiveCarriesHNSWSnapshot, or an error for an archive it could not read
+// to the end of its entries (a truncated or corrupt one). The digest is ""
+// only when the file itself could not be read; after a scan error it still
+// covers every byte, so a caller verifying the archive can let a checksum
+// mismatch win over what the scan found.
+//
+// One read serves both because a restore runs on archives of many gigabytes:
+// verifying and scanning separately would read the whole archive twice
+// before the extraction reads it a third time.
+func scanArchive(archivePath string) (sum string, err error) {
+	f, err := os.Open(archivePath)
 	if err != nil {
-		return fmt.Errorf("failed to compute checksum for %s: %w", name, err)
+		return "", fmt.Errorf("failed to open backup file: %w", err)
 	}
-	if !strings.EqualFold(expected, actual) {
-		return fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, name, expected, actual)
+	// A failed close counts as a failed read: no digest, so a verifying
+	// caller refuses rather than trust it. A scan error already returned
+	// takes precedence over it.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			sum, err = "", fmt.Errorf("failed to close backup file: %w", cerr)
+		}
+	}()
+
+	codec, err := SniffCodec(f)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	hash := sha256.New()
+	src := io.TeeReader(f, hash)
+	scanErr := scanEntries(codec, src)
+	// Hash what the decompressor did not read: the end of the stream, or
+	// everything after a scan error. scanEntries has closed the decompressor
+	// by now, and zstd's Close waits for the goroutine that reads its input
+	// (Decoder.Close waits on streamWg), so this is the only reader left on
+	// src and the hash takes the file's bytes in order, each once.
+	if _, err := io.Copy(io.Discard, src); err != nil {
+		return "", fmt.Errorf("failed to read backup file: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), scanErr
+}
+
+// scanEntries reads every tar header in the archive stream r, written by
+// codec, and refuses an entry in the HNSW snapshot directory. It closes the
+// decompressor before it returns (scanArchive depends on that).
+func scanEntries(codec Codec, r io.Reader) error {
+	compReader, err := codec.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
+	}
+	defer compReader.Close()
+	tarReader := tar.NewReader(compReader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+		if hnswSnapshotEntry(header.Name) {
+			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, header.Name)
+		}
+	}
 }
 
 // PreparedRestore is a backup found and, when asked, verified, ready to
@@ -726,19 +817,22 @@ type PreparedRestore struct {
 	archivePath string
 }
 
-// PrepareRestoreIn finds the backup named filename in backupDir and, with
-// verify, checks it against its checksum sidecar. It takes no target and
-// writes nothing, so every error it returns (ErrBackupNotFound,
-// ErrVerificationUnsupported, ErrChecksumMismatch, an unreadable backup
-// directory) leaves the target as it was. Extract is the step that writes,
-// and the restore handler marks the HNSW snapshot diverged between the two
-// (R1-15 round-3 review, B1-r3).
+// PrepareRestoreIn finds the backup named filename in backupDir and reads it
+// once (scanArchive): it refuses an archive with an entry in the HNSW
+// snapshot directory or one it cannot read to the end of its entries, and,
+// with verify, checks the same read against the checksum sidecar. It takes no
+// target and writes nothing, so every error it returns (ErrBackupNotFound,
+// ErrVerificationUnsupported, ErrChecksumMismatch,
+// ErrArchiveCarriesHNSWSnapshot, an unreadable backup directory or archive)
+// leaves the target as it was. Extract is the step that writes, and the
+// restore handler marks the HNSW snapshot diverged between the two (R1-15
+// round-3 review, B1-r3).
 //
 // filename is used only as a LOOKUP KEY against a directory listing, never
 // joined directly into a filesystem path: every path this function touches
 // (the archive, its checksum sidecar) is built from the *os.DirEntry the
 // os.ReadDir call itself returned, which is what breaks CodeQL's
-// go/path-injection dataflow (see verifyChecksumSidecar's doc comment for why
+// go/path-injection dataflow (see sidecarDigest's doc comment for why
 // sanitizing filename instead is not sufficient in this repo). A filename
 // containing a path separator or ".." can never match a directory entry's
 // Name() (ReadDir never returns entries with those in the name), so such
@@ -766,19 +860,36 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 	if archiveEntry == nil {
 		return nil, fmt.Errorf("%w: %q in %s: %w", ErrBackupNotFound, filename, backupDir, os.ErrNotExist)
 	}
-	archivePath := filepath.Join(backupDir, archiveEntry.Name())
+	name := archiveEntry.Name()
+	archivePath := filepath.Join(backupDir, name)
 
 	// Fail closed before touching anything on disk: see
-	// ErrVerificationUnsupported / ErrChecksumMismatch.
+	// ErrVerificationUnsupported / ErrChecksumMismatch. The sidecar is read
+	// first, so a missing or malformed one costs no read of the archive.
+	var recorded string
 	if verify {
 		if sidecarEntry == nil {
 			return nil, fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
 				ErrVerificationUnsupported, filename)
 		}
-		sidecarPath := filepath.Join(backupDir, sidecarEntry.Name())
-		if err := verifyChecksumSidecar(archivePath, sidecarPath); err != nil {
+		if recorded, err = sidecarDigest(filepath.Join(backupDir, sidecarEntry.Name()), name); err != nil {
 			return nil, err
 		}
+	}
+
+	computed, scanErr := scanArchive(archivePath)
+	if verify {
+		if computed == "" {
+			return nil, fmt.Errorf("failed to compute checksum for %s: %w", name, scanErr)
+		}
+		// A mismatch wins over what the scan found: an archive that is not
+		// the one written is reported as that, whatever it now contains.
+		if !strings.EqualFold(recorded, computed) {
+			return nil, fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, name, recorded, computed)
+		}
+	}
+	if scanErr != nil {
+		return nil, scanErr
 	}
 
 	return &PreparedRestore{archivePath: archivePath}, nil
@@ -839,6 +950,12 @@ func extractArchive(archivePath, targetPath string) error {
 		entryName := strings.TrimLeft(filepath.ToSlash(header.Name), "/")
 		if entryName == "" {
 			continue
+		}
+		// PrepareRestoreIn refused an archive with such an entry before
+		// anything was written; this catches one that changed between the
+		// two reads, and the entry is never written either way.
+		if hnswSnapshotEntry(entryName) {
+			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, header.Name)
 		}
 		// library.Join validates that the entry stays within targetPath and
 		// returns a clean path value — breaking the CodeQL taint chain.

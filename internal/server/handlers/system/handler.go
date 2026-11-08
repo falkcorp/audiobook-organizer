@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.2
+// version: 1.29.3
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -1021,7 +1021,8 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		// PrepareRestoreIn writes nothing, so a refused restore leaves the HNSW
 		// snapshot's trust alone. It distinguishes two verify=true failure
 		// shapes, both fail-closed (no extraction performed) rather than
-		// silently restoring unverified:
+		// silently restoring unverified, and one archive it refuses whatever
+		// verify says:
 		//
 		//   - ErrChecksumMismatch: the archive's current bytes disagree with
 		//     the checksum recorded when it was created -- i.e. the request
@@ -1033,13 +1034,18 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		//     (a legacy backup from before this feature), so there is nothing
 		//     to compare against. 400: the caller's request cannot be
 		//     satisfied as specified.
+		//   - ErrArchiveCarriesHNSWSnapshot: the archive has an entry in the
+		//     HNSW snapshot directory, which no real backup has (R1-15 round
+		//     4). 400, like the case above: the archive named cannot be
+		//     restored, and that is a refusal, not a server fault.
 		//
-		// Any other error (missing file, unreadable backup directory) is a
-		// 500 via httputil.InternalError.
+		// Any other error (missing file, unreadable backup directory or
+		// archive) is a 500 via httputil.InternalError.
 		switch {
 		case errors.Is(err, backup.ErrChecksumMismatch):
 			httputil.RespondWithConflict(c, err.Error())
-		case errors.Is(err, backup.ErrVerificationUnsupported):
+		case errors.Is(err, backup.ErrVerificationUnsupported),
+			errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot):
 			httputil.RespondWithBadRequest(c, err.Error())
 		default:
 			httputil.InternalError(c, "failed to restore backup", err)
@@ -1056,8 +1062,12 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// earlier stop wrote is removed by the mark itself.
 	h.markANNSnapshotDiverged()
 	// The on-disk markers are removed after the extraction, deferred so that
-	// runs whether it finished, failed partway or panicked; run after it, the
-	// removal also catches a marker the archive itself carried.
+	// runs whether it finished, failed partway or panicked. An archive entry
+	// named into the snapshot directory never gets there (PrepareRestoreIn
+	// refused it, and Extract refuses it unwritten if the archive changed
+	// since), but both read entry names, so a symlink already in the target
+	// can still route one there, and only a removal after the extraction
+	// catches that marker.
 	defer h.removeANNCleanStopMarkers(targetPath)
 	if err := prepared.Extract(targetPath); err != nil {
 		httputil.InternalError(c, "failed to restore backup", err)
@@ -1128,7 +1138,7 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	filename = library.SanitizeFilename(filename)
 
-	// DeleteBackupIn (not DeleteBackup): same reasoning as RestoreBackupIn
+	// DeleteBackupIn (not DeleteBackup): same reasoning as PrepareRestoreIn
 	// above -- filename is only ever used as a directory-listing lookup key.
 	if err := backup.DeleteBackupIn(backupConfig.BackupDir, filename); err != nil {
 		httputil.InternalError(c, "failed to delete backup", err)

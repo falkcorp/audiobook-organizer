@@ -1,6 +1,6 @@
 - [ ] **HNSW clean-stop marker: four gaps from the R1-15 reviews (round 2's N1, N2, N4, and a
-      round-3 residual)**, none a regression against main, none built yet (PR #4476 recorded
-      them; the reviewer rated the first three as nits).
+      round-4 symlink route)**, none a regression against main, none built yet (PR #4476 and
+      its successor recorded them; the reviewer rated the first three as nits).
       - **N1, crash window in the re-check.** `MarkCleanStop` stores `cleanStopLive` and then
         re-reads the verdict count; a writer adds to the count and then reads `cleanStopLive`
         (`hnsw_clean_stop.go`, `hnsw_verdict_watch.go`). The atomics are sequentially
@@ -24,10 +24,14 @@
         **Fix:** count the colon IDs in production first. With none, enforce
         `ValidateBookID` on every book-row writer so none can appear; with some, list the
         index families explicitly and count every other `book:` key.
-      - **A marker carried by a hand-made backup archive, and a crash mid-restore.** The
-        restore handler removes `hnsw/hnsw.clean-stop` beside the restored database after
-        the extraction (deferred). `addToArchive` never writes the HNSW directory, but a
-        hand-made archive could carry the marker: if the process dies after the extraction
-        wrote it and before the deferred removal, the next boot's open takes it as this
-        database's. **Fix:** have the extraction skip (or refuse) an entry named
-        `hnsw.clean-stop`, so no restore can write one.
+      - **A restore that writes a marker through a symlink in its target, and a crash.** The
+        restore refuses an archive entry named into the HNSW snapshot directory
+        (`backup.ErrArchiveCarriesHNSWSnapshot`), but the check reads names: with a symlink
+        already in the restore target that points at the snapshot directory, an entry under
+        the symlink's name lands there. The handler's deferred removal catches it, so only a
+        crash between that write and the removal leaves it for the next boot's open. Nothing
+        creates such a symlink. **Fix:** have `extractArchive` resolve each entry's parent
+        (`filepath.EvalSymlinks`) and refuse one that resolves into the snapshot directory of
+        the restored database or of the live one, which means passing both directories into
+        `Extract`. Refusing every symlink is not the fix: the database directory itself can
+        be a symlink to another disk.

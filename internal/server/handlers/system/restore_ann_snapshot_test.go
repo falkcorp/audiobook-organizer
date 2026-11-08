@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -8,6 +8,8 @@ package system_test
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -78,6 +80,9 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 		plantLive bool
 		// noBackupDir points the backup directory at one that does not exist.
 		noBackupDir bool
+		// link names a symlink beside the live database that points at its
+		// snapshot directory, made before the restore.
+		link string
 		// refused: the restore wrote nothing, so the snapshot keeps its trust
 		// and a marker planted beside the live database stays.
 		refused    bool
@@ -85,13 +90,9 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 	}{
 		{
 			// The production default: the restore overwrites the live database.
-			// The archive also carries a marker, which only a removal after the
-			// extraction catches.
-			name: "default target, the archive carries a marker",
-			entries: []tarEntry{
-				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
-				{"hnsw/hnsw.clean-stop", testCleanStopMarker},
-			},
+			name:       "default target",
+			entries:    []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}},
+			plantLive:  true,
 			wantStatus: http.StatusOK,
 		},
 		{
@@ -102,15 +103,42 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			// The extraction writes the marker, then fails on an entry that
-			// escapes the target: files are on disk although the restore
+			// The extraction writes a database file, then fails on an entry
+			// that escapes the target: files are on disk although the restore
 			// failed.
 			name: "the extraction fails partway",
 			entries: []tarEntry{
-				{"hnsw/hnsw.clean-stop", testCleanStopMarker},
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
 				{"../joker", "hahaha"},
 			},
+			plantLive:  true,
 			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			// The snapshot-directory refusal reads entry names, so a symlink
+			// already in the target can still route an entry into the
+			// directory. Only the removal after the extraction catches the
+			// marker that lands there, which is why it stays deferred.
+			name: "a symlink in the target routes an entry into the snapshot directory",
+			entries: []tarEntry{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{"wayne-manor/hnsw.clean-stop", testCleanStopMarker},
+			},
+			link:       "wayne-manor",
+			wantStatus: http.StatusOK,
+		},
+		{
+			// Round 4: a real backup never holds the snapshot directory, so
+			// an archive that does is refused before it writes anything
+			// (TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot).
+			name: "refused: the archive carries a marker",
+			entries: []tarEntry{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{"hnsw/hnsw.clean-stop", testCleanStopMarker},
+			},
+			plantLive:  true,
+			refused:    true,
+			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "refused: the backup is not there",
@@ -179,6 +207,10 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			}
 			if tc.plantLive {
 				plantMarker(t, liveDir)
+			}
+			if tc.link != "" {
+				require.NoError(t, os.MkdirAll(liveDir, 0o755))
+				require.NoError(t, os.Symlink(liveDir, filepath.Join(root, tc.link)))
 			}
 			body, err := json.Marshal(req)
 			require.NoError(t, err)
@@ -286,4 +318,65 @@ func TestRestoreBackup_MarksTheStoreBeforeTheFirstWrite(t *testing.T) {
 		assert.Contains(t, reason, "restore")
 		assert.False(t, markerPresent(t, snap), "no marker may vouch for the graph while the restore writes")
 	})
+}
+
+// TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot (R1-15 round 4,
+// the archive residual): a backup holds only the database directory, and the
+// HNSW snapshot directory sits beside it, so an archive with an entry there
+// is not a real backup. Extracting it could plant a clean-stop marker that a
+// crash mid-restore leaves vouching for a graph the restored database does
+// not match. The restore refuses it before writing anything, so the refusal
+// costs nothing: no file, no divergence mark.
+func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
+	for _, verify := range []bool{false, true} {
+		name := "unverified"
+		if verify {
+			name = "verified"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "audiobooks.pebble")
+			prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+			config.AppConfig.DatabasePath = dbPath
+			config.AppConfig.BackupDir = filepath.Join(root, "backups")
+			t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+			require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+
+			// The entry is named from database.HNSWSnapshotDir, which pins the
+			// backup package's copy of the directory name to the real one.
+			snapshotDir := database.HNSWSnapshotDir(dbPath)
+			entries := []tarEntry{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{filepath.Base(snapshotDir) + "/hnsw.clean-stop", testCleanStopMarker},
+				{"audiobooks.pebble/OPTIONS-000002", "alfred"},
+			}
+			archive := filepath.Join(config.AppConfig.BackupDir, "hush.tar")
+			writeTar(t, archive, entries)
+			if verify {
+				raw, err := os.ReadFile(archive)
+				require.NoError(t, err)
+				sum := sha256.Sum256(raw)
+				require.NoError(t, os.WriteFile(archive+".sha256", []byte(hex.EncodeToString(sum[:])+"  hush.tar\n"), 0o644))
+			}
+
+			h, _ := newTestHandler(t)
+			var reasons []string
+			h.WithANNSnapshotDivergence(func(reason string) { reasons = append(reasons, reason) })
+			body, err := json.Marshal(map[string]any{"backup_filename": "hush.tar", "verify": verify})
+			require.NoError(t, err)
+			w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+				r.POST("/backup/restore", h.RestoreBackup)
+			})
+
+			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), "HNSW")
+			assert.Empty(t, reasons, "a refused restore must not mark the store diverged")
+			for _, e := range entries {
+				_, err := os.Stat(filepath.Join(root, e.name))
+				assert.True(t, os.IsNotExist(err), "%s was written by a refused restore (stat: %v)", e.name, err)
+			}
+			_, err = os.Stat(snapshotDir)
+			assert.True(t, os.IsNotExist(err), "the refused restore created the snapshot directory (stat: %v)", err)
+		})
+	}
 }
