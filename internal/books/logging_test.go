@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -257,7 +257,10 @@ func TestActivityTap_EntriesMatchHEADAndCarryNoModule(t *testing.T) {
 		{"subsystem logger", func() {
 			logger.New("scheduler").Warn("tick %d", 7)
 		}, headLine("scheduler: tick 7")},
-		{"subsystem attribute", func() {
+		// R1's rendering of a subsystem attribute: the tap folds it into the
+		// summary as "<subsystem>: <msg>", the same text the logger.New shim
+		// writes. It is not a HEAD behaviour, so the expectation is R1's.
+		{"subsystem attribute (R1 rendering, not HEAD)", func() {
 			slog.Default().With("subsystem", "operations").Warn("run finished", "opID", "op-gotham")
 		}, headLine("operations: run finished", slog.String("opID", "op-gotham"))},
 	} {
