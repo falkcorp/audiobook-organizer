@@ -1,5 +1,5 @@
 // file: core/app/defaults.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2d0f6c4e-8b1a-4e57-9f3c-6a2b7d9e1c40
 // last-edited: 2026-11-08
 
@@ -45,8 +45,12 @@ var ErrProcessDefaultsTaken = errors.New("app: the process defaults are already 
 //     otel.SetTextMapPropagator to the App's Provider, so code that still
 //     creates instruments or spans through the globals binds to this App.
 //
-// An App built with Options.ProcessDefaults has had the logger and the error
-// handler since New, installed before its Provider (installOTelDiagnostics);
+// An App built with Options.ProcessDefaults has had the OTel logger and
+// error handler since New, installed before its Provider
+// (installOTelDiagnostics), and the slog default and the standard library log
+// bridge since before any module's Register (installSlogDefault): a service
+// built during Register that captures slog.Default() must capture the
+// pipeline, not the stock handler this call would otherwise replace after it.
 // InstallProcessDefaults adopts them and installs the rest. Otherwise it
 // installs all seven here.
 //
@@ -64,12 +68,14 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 	}
 	cur, held := otel.GetErrorHandler().(*processErrorHandler)
 	d := a.otel
+	var sd *slogDefaults
 	switch {
 	case d != nil && cur == d.handler:
 		// New's early install, still in place: adopt it, once.
 		if d.handler.complete.Load() {
 			return nil, ErrProcessDefaultsTaken
 		}
+		sd = a.slog
 	case held:
 		return nil, ErrProcessDefaultsTaken
 	default:
@@ -81,11 +87,11 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 
 	// What restore puts back. The getters are read here, in one of the two
 	// functions allowed to write them (core/app/noglobals_test.go).
-	prevSlog := slog.Default()
-	prevLogOut, prevLogFlags := stdlog.Writer(), stdlog.Flags()
+	if sd == nil {
+		sd = installSlogDefault(a.k.RootLogger(), a.stdlibHandler())
+	}
 	prevMP, prevTP, prevProp := otel.GetMeterProvider(), otel.GetTracerProvider(), otel.GetTextMapPropagator()
 
-	slog.SetDefault(a.k.RootLogger())
 	otel.SetMeterProvider(p.MeterProvider())
 	otel.SetTracerProvider(p.TracerProvider())
 	otel.SetTextMapPropagator(p.Propagator())
@@ -99,13 +105,46 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 			otel.SetMeterProvider(prevMP)
 			d.handler.complete.Store(false)
 			d.restore()
+			sd.restore()
+		})
+	}, nil
+}
+
+// stdlibHandler is the handler the standard library log bridge writes to:
+// the pipeline's adapter handler, whose records are not Record.Process.
+func (a *App) stdlibHandler() slog.Handler {
+	if lg := a.k.Logging(); lg != nil {
+		return lg.Handler()
+	}
+	return a.k.RootLogger().Handler()
+}
+
+// slogDefaults is the slog default and standard library log output one App
+// installed, and what to put back. restore is idempotent.
+type slogDefaults struct{ restore func() }
+
+// installSlogDefault makes root the process's slog default and routes the
+// standard library log to stdlib at info, with no prefix flags. root's
+// records are the process default's (Record.Process); the bridge's are an
+// adapter's, so a stray log.Print is a line in the journal and the file but
+// not an Activity row. slog.SetDefault would install the bridge over root
+// itself, which would make it a process record, so it is replaced here.
+func installSlogDefault(root *slog.Logger, stdlib slog.Handler) *slogDefaults {
+	prevSlog := slog.Default()
+	prevOut, prevFlags := stdlog.Writer(), stdlog.Flags()
+	slog.SetDefault(root)
+	stdlog.SetOutput(slog.NewLogLogger(stdlib, slog.LevelInfo).Writer())
+	stdlog.SetFlags(0)
+	var once sync.Once
+	return &slogDefaults{restore: func() {
+		once.Do(func() {
 			slog.SetDefault(prevSlog)
 			// slog.SetDefault leaves log's output alone when the restored
 			// logger is slog's own default, so it is put back explicitly.
-			stdlog.SetOutput(prevLogOut)
-			stdlog.SetFlags(prevLogFlags)
+			stdlog.SetOutput(prevOut)
+			stdlog.SetFlags(prevFlags)
 		})
-	}, nil
+	}}
 }
 
 // otelDiagnostics is the OTel SDK logger and error handler one App
