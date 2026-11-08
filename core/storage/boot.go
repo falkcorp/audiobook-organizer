@@ -763,8 +763,8 @@ func (db *DB) readEpoch(ctx context.Context) error {
 
 // chooseInstallID is step 5's choice for a non-empty marker-less store (a
 // HEAD store, or a crash between the checkpoint and the marker): the restore
-// boot's hand-over, else an open checkpoint record's of this generation, else
-// a new one.
+// boot's hand-over, else the install ID of an open checkpoint record of this
+// store (the same epoch and DB directory identity, ofStore), else a new one.
 func (db *DB) chooseInstallID() (string, error) {
 	st := db.boot
 	if st.opts.InstallID != "" {
@@ -777,7 +777,7 @@ func (db *DB) chooseInstallID() (string, error) {
 		return "", err
 	}
 	for _, r := range recs {
-		if r.rec.Epoch == st.epoch.Epoch && r.rec.open() {
+		if r.rec.ofStore(st.epoch) && r.rec.open() {
 			return r.rec.InstallID, nil
 		}
 	}

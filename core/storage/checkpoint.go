@@ -134,10 +134,14 @@ type stateFileRecord struct {
 	SHA256 string `json:"sha256"`
 }
 
-// checkpointRecord is <name>.json (§5S.3.12 "How").
+// checkpointRecord is <name>.json (§5S.3.12 "How"). DirDev and DirIno are
+// the DB directory's identity at the boot that took it, the identity its
+// epoch was read against: with Epoch they name the store the copy came from.
 type checkpointRecord struct {
 	InstallID   string            `json:"install_id"`
 	Epoch       uint64            `json:"epoch"`
+	DirDev      uint64            `json:"dir_dev"`
+	DirIno      uint64            `json:"dir_ino"`
 	FromVector  vector            `json:"from_vector"`
 	FromRelease string            `json:"from_release"`
 	JournalSeq  uint64            `json:"journal_seq"`
@@ -159,6 +163,16 @@ func (r checkpointRecord) pending() bool {
 // open reports a pending record no boot has served past: the one kind a
 // crash loop reuses.
 func (r checkpointRecord) open() bool { return r.pending() && r.ReadyAt == nil }
+
+// ofStore reports a record taken of the store in e's generation: the same
+// epoch and the same DB directory identity. A different marker-less store
+// swapped in at the path lands on the same epoch number (neither store has
+// an epoch row yet) but not on the directory's identity, so it never adopts
+// the record's install ID or reuses its checkpoint. Off unix the identity is
+// 0/0 and the match falls back to the epoch alone.
+func (r checkpointRecord) ofStore(e epochRecord) bool {
+	return r.Epoch == e.Epoch && r.DirDev == e.DirDev && r.DirIno == e.DirIno
+}
 
 // checkpointPointer is <db path>.migration-checkpoint.
 type checkpointPointer struct {
@@ -296,7 +310,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	}
 	cur := db.currentVector()
 	for _, r := range slices.Backward(recs) {
-		if r.rec.InstallID == st.installID && r.rec.Epoch == st.epoch.Epoch && r.rec.open() && r.rec.FromVector.ancestorOf(cur) {
+		if r.rec.InstallID == st.installID && r.rec.ofStore(st.epoch) && r.rec.open() && r.rec.FromVector.ancestorOf(cur) {
 			st.cpName = r.name
 			db.log.Info("storage: reusing the upgrade attempt's checkpoint", "name", r.name)
 			return db.writePointer(checkpointPointer{Name: r.name, State: "open"})
@@ -377,8 +391,8 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		return err
 	}
 	rec := checkpointRecord{
-		InstallID: st.installID, Epoch: st.epoch.Epoch, FromVector: cur, FromRelease: st.opts.FromRelease,
-		StateFiles: files, TakenAt: now, Status: "open",
+		InstallID: st.installID, Epoch: st.epoch.Epoch, DirDev: st.epoch.DirDev, DirIno: st.epoch.DirIno,
+		FromVector: cur, FromRelease: st.opts.FromRelease, StateFiles: files, TakenAt: now, Status: "open",
 	}
 	if err := db.writeRecord(name, rec); err != nil {
 		return err
@@ -586,7 +600,8 @@ func (db *DB) CheckpointName() string { return db.boot.cpName }
 // MarkReady is §5S.3.12's readiness write ("Upgrade attempt and reuse"): the
 // first boot that reaches readiness after a checkpoint was taken writes
 // ready_at = now and status served onto every open record of the live store
-// (this boot's install_id and epoch), each through WriteFileAtomic. From then
+// (this boot's install_id, epoch and DB directory identity), each through
+// WriteFileAtomic. From then
 // on the checkpoint predates writes this boot serves, so no later boot reuses
 // it: the next upgrade takes its own, and restoring this one needs
 // --accept-loss. The pointer is left alone (served is a state of the record
@@ -604,7 +619,7 @@ func (db *DB) MarkReady(now time.Time) error {
 	}
 	now = now.UTC()
 	for _, r := range recs {
-		if r.rec.InstallID != st.installID || r.rec.Epoch != st.epoch.Epoch || !r.rec.open() {
+		if r.rec.InstallID != st.installID || !r.rec.ofStore(st.epoch) || !r.rec.open() {
 			continue
 		}
 		r.rec.ReadyAt, r.rec.Status = &now, "served"
