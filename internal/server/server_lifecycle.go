@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.9
+// version: 4.67.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -36,7 +36,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
-	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -145,6 +144,19 @@ func (s *Server) startSearchIndexing() {
 	// Route the /audiobooks?search= path through Bleve.
 	if s.audiobookService != nil {
 		s.audiobookService.SetSearchIndex(s.searchIndex)
+	}
+}
+
+// SetStartExtender gives the search index service the function it calls
+// before the long step of opening the index, so the service manager extends
+// the start timeout (books passes module.Deps.ExtendStart). It does nothing
+// when the container built no searchindex. Call it before StartHook.
+func (s *Server) SetStartExtender(f func(step string)) {
+	if s.container == nil {
+		return
+	}
+	if idx, ok := serviceregistry.TryGet[*search.IndexService](s.container, "searchindex"); ok && idx != nil {
+		idx.SetStartExtender(f)
 	}
 }
 
@@ -517,19 +529,12 @@ func (s *Server) afterListen() {
 	shutdown := s.life.shutdown
 	backgroundWG := &s.life.backgroundWG
 
-	// The last Fatal step has passed and the port accepts connections: tell
-	// systemd (Type=notify) the service is started. This is deliberately
-	// NOT after the in-memory warmup (130-200 s on prod), which would turn a
-	// slow disk into a start timeout and a restart loop; /health reports
-	// `ready` for that and the deploy waits on it. A notify failure is
-	// logged, never fatal: under Type=simple there is no socket at all.
-	// sdnotify moves into core with R1-16.
-	if err := sdnotify.Ready(); err != nil {
-		lifecycleLog.Warn("systemd readiness notification failed: %v", err)
-	}
-	if err := sdnotify.Status("Serving; readiness is reported by the health endpoint"); err != nil {
-		lifecycleLog.Warn("systemd status notification failed: %v", err)
-	}
+	// READY=1 and the serving STATUS= are the kernel's (start step 8, once
+	// the listener is up), not the server's: until R1-16 this was the
+	// server's sdnotify call. The deliberate rule it kept still holds: they
+	// are NOT sent after the in-memory warmup (130-200 s on prod), which
+	// would turn a slow disk into a start timeout and a restart loop;
+	// /health reports `ready` for that and the deploy waits on it.
 
 	// The listener is started: activity entries queued on the startup path
 	// (Service.RecordDeferred) may now be written, in the background. Nothing
@@ -711,18 +716,12 @@ func (s *Server) afterListen() {
 }
 
 // beforeDrain is the stop's first steps, which R1Listener.Shutdown runs before
-// the HTTP drain (HEAD's order): tell systemd the stop has begun, stop the
-// scheduler, tickers and watchers, tell the connected clients, and end the
-// long-lived event streams so the drain does not wait on them for its whole
-// budget (/api/events, the ops v2 and v3 event streams).
+// the HTTP drain (HEAD's order): stop the scheduler, tickers and watchers,
+// tell the connected clients, and end the long-lived event streams so the
+// drain does not wait on them for its whole budget (/api/events, the ops v2
+// and v3 event streams). STOPPING=1 is the kernel's: it sends it at the first
+// stop step, before the listener drains and so before this runs.
 func (s *Server) beforeDrain() {
-	// Tell systemd the stop has begun before anything slow runs.
-	if err := sdnotify.Stopping(); err != nil {
-		lifecycleLog.Warn("systemd stopping notification failed: %v", err)
-	}
-	if err := sdnotify.Status("Shutting down"); err != nil {
-		lifecycleLog.Warn("systemd status notification failed: %v", err)
-	}
 	if s.life.shutdown != nil {
 		s.life.closeShutdown.Do(func() { close(s.life.shutdown) })
 	}

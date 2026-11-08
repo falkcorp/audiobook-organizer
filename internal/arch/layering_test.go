@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-11-08
 
@@ -128,7 +128,6 @@ var layerOf = map[string]int{
 	"internal/policy":                0, // computed: imports no module package
 	"internal/querygrammar":          0, // table: leaf
 	"internal/scanlock":              0, // computed: imports no module package
-	"internal/sdnotify":              0, // computed: imports no module package
 	"internal/security/safehttp":     0, // computed: imports no module package
 	"internal/seqnum":                0, // table: leaf
 	"internal/serverdecode":          0, // computed: imports no module package

@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -149,6 +149,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
+	// The search index opens in the start hook, a long step: it asks the
+	// service manager for start time through the kernel's Deps.ExtendStart,
+	// which also extends the hook's own start window (05-health §5H.3.4).
+	srv.SetStartExtender(r.Deps().ExtendStart)
 	// The drift check: the reviewed manifest must describe this engine
 	// exactly, and its routes must lie inside the prefixes Manifest declared
 	// (the router refuses a route outside them at P7).

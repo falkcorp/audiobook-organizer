@@ -1,7 +1,7 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/module"
 )
 
@@ -50,8 +51,8 @@ var errRunTwice = errors.New("kernel: Run called more than once")
 // ReadinessNotifier receives the supervisor's readiness signals (05-health
 // §5H.3.4): Status while not ready (STATUS=), Ready once the listeners are up
 // and startup has completed (READY=1), Stopping when shutdown begins
-// (STOPPING=1). R1-16 implements it with sdnotify (05-health §5H.10, Landing
-// R1); until then the kernel's default sends nothing. A returned error is
+// (STOPPING=1). Config.Notifier's default is systemdNotifier, which sends
+// them over NOTIFY_SOCKET (05-health §5H.10, Landing R1). A returned error is
 // logged at WARN and never stops the app: the signals are not durable.
 type ReadinessNotifier interface {
 	Ready() error
@@ -59,12 +60,25 @@ type ReadinessNotifier interface {
 	Stopping() error
 }
 
-// noopNotifier is the default ReadinessNotifier.
-type noopNotifier struct{}
+// systemdNotifier is the default ReadinessNotifier: the systemd notify
+// protocol over NOTIFY_SOCKET. Every method is a no-op returning nil when the
+// variable is unset (Type=simple, tests, a developer machine). It keeps no
+// state, so Run's goroutine and the hooks' ExtendStart calls never contend.
+type systemdNotifier struct{}
 
-func (noopNotifier) Ready() error        { return nil }
-func (noopNotifier) Status(string) error { return nil }
-func (noopNotifier) Stopping() error     { return nil }
+func (systemdNotifier) Ready() error          { return sdnotify.Ready() }
+func (systemdNotifier) Status(s string) error { return sdnotify.Status(s) }
+func (systemdNotifier) Stopping() error       { return sdnotify.Stopping() }
+
+// The STATUS= lines `systemctl status` shows once the app is up and once it
+// is stopping. They are HEAD's, byte for byte (the server sent them from
+// server_lifecycle.go until R1-16), and fixed strings only: anyone who can
+// run `systemctl status` reads them, so nothing here may carry a path, a
+// version, a count or a credential.
+const (
+	statusServing  = "Serving; readiness is reported by the health endpoint"
+	statusStopping = "Shutting down"
+)
 
 // Server is one listener as the supervisor drives it: *httpapi.Listener
 // (Config.Listen's default) or a test's stand-in.
@@ -194,6 +208,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// (8) Readiness. The readiness core and its /readyz arrive with health
 	// (F2); until then readiness is the notifier's READY=1.
 	k.signal(ctx, "ready", k.notifier.Ready())
+	k.signal(ctx, "status", k.notifier.Status(statusServing))
 	k.log.InfoContext(ctx, "kernel: ready")
 	k.lifecycle.ready.Store(true)
 
@@ -232,6 +247,7 @@ func (k *Kernel) stop(ctx context.Context, deadline time.Time, srv Server, serve
 	ws *workerSet, started []moduleHook) error {
 	var errs []error
 	k.signal(ctx, "stopping", k.notifier.Stopping())
+	k.signal(ctx, "status", k.notifier.Status(statusStopping))
 	k.log.InfoContext(ctx, "kernel: stopping", "budget", time.Until(deadline).Round(time.Millisecond).String())
 
 	drain := time.Now().Add(httpDrain)

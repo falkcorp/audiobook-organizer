@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -150,11 +151,19 @@ type Description struct {
 }
 
 // ExtendStart asks the service manager for more start time before a startup
-// step that makes real progress, for app code that runs before New. It is
-// stateless and never returns an error (05-health §5H.3.4). The write itself,
-// EXTEND_TIMEOUT_USEC over NOTIFY_SOCKET, moves into core with sdnotify
-// (R1-16); until then it does nothing, like Deps.ExtendStart.
-func ExtendStart(step string) {}
+// step that makes real progress, for app code that runs before New (a store
+// open, a migration step). It is stateless and never returns an error
+// (05-health §5H.3.4): the request is EXTEND_TIMEOUT_USEC over NOTIFY_SOCKET,
+// which moves the start deadline to at least sdnotify.StartupStepBudget from
+// now and never closer. It is a no-op without NOTIFY_SOCKET, and a failed
+// write is logged at WARN, never fatal. Call it per step, never from a timer:
+// a hung step must still be killed once its own budget runs out. Modules use
+// Deps.ExtendStart instead, which also extends the kernel's own start window.
+func ExtendStart(step string) {
+	if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
+		slog.Warn("app: systemd start-timeout extension failed", "step", step, "err", err)
+	}
+}
 
 // ResolveStateDir returns the state directory for opts by 05-config §1.7's
 // pre-boot rule: an explicit <EnvPrefix>_CORE_PATHS_STATE_DIR is used as

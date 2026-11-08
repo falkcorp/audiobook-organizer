@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -49,7 +50,7 @@ type phaseTiming struct {
 func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	k := &Kernel{cfg: c, notifier: c.Notifier, exit: c.Exit, listen: c.Listen, lifecycle: newLifecycle()}
 	if k.notifier == nil {
-		k.notifier = noopNotifier{}
+		k.notifier = systemdNotifier{}
 	}
 	if k.exit == nil {
 		k.exit = os.Exit
@@ -251,12 +252,23 @@ func (k *Kernel) moduleLog(id module.ID) *slog.Logger {
 	return k.cfg.Logger.With(log.KeyModule, string(id))
 }
 
-// extendStart is every module's Deps.ExtendStart.
-func (k *Kernel) extendStart() func(string) {
-	if k.cfg.ExtendStart != nil {
-		return k.cfg.ExtendStart
+// extendStart is module id's Deps.ExtendStart: it asks the service manager
+// for sdnotify.StartupStepBudget more start time (HEAD's semantics: the
+// deadline moves to at least that far from now, never closer). Config.
+// ExtendStart replaces that request in tests. A failed request is logged and
+// never fails startup: under Type=simple there is no socket at all.
+func (k *Kernel) extendStart(id module.ID) func(string) {
+	return func(step string) {
+		send := k.cfg.ExtendStart
+		if send == nil {
+			send = func(string) {
+				if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
+					k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
+				}
+			}
+		}
+		send(step)
 	}
-	return func(string) {}
 }
 
 // listenHTTP is Config.Listen's default, httpapi.Listen.

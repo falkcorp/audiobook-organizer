@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -60,11 +60,12 @@ type Config struct {
 	// LogOutput is where the kernel's log.Logging writes; nil = os.Stderr.
 	// Ignored when Logger is set.
 	LogOutput io.Writer
-	// Notifier receives the readiness signals; nil = no signals (R1-16 sets
-	// the sdnotify one).
+	// Notifier receives the readiness signals; nil = systemd's notify
+	// protocol over NOTIFY_SOCKET (a no-op while that is unset).
 	Notifier ReadinessNotifier
-	// ExtendStart becomes every module's Deps.ExtendStart; nil = a no-op
-	// until R1-16 moves sdnotify into core.
+	// ExtendStart replaces the request every module's Deps.ExtendStart makes
+	// to the service manager (tests); nil = EXTEND_TIMEOUT_USEC over
+	// NOTIFY_SOCKET.
 	ExtendStart func(step string)
 	// Listen opens the listener of start step (7); nil = httpapi.Listen.
 	Listen func(httpapi.ListenOptions, http.Handler, *slog.Logger) (Server, error)
@@ -372,7 +373,7 @@ func (k *Kernel) register(ctx context.Context) error {
 		}
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context: regCtx,
-			Deps: module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(),
+			Deps: module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 				RequestRestart: k.lifecycle.RequestRestart},
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
