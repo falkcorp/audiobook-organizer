@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.10
+// version: 1.28.11
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -8,8 +8,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,14 +123,6 @@ var scanCmd = &cobra.Command{
 	Short: "Scan audiobook directories",
 	Long:  `Scan audiobook directories to identify books and series.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Setup file logging
-		logFile, err := setupFileLogging()
-		if err != nil {
-			fmt.Printf("Warning: Could not setup file logging: %v\n", err)
-		} else {
-			defer logFile.Close()
-		}
-
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
@@ -218,14 +208,6 @@ var organizeCmd = &cobra.Command{
 	Short: "Run the complete organization process",
 	Long:  `Scan audiobooks, identify series, generate playlists, and update tags.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Setup file logging
-		logFile, err := setupFileLogging()
-		if err != nil {
-			fmt.Printf("Warning: Could not setup file logging: %v\n", err)
-		} else {
-			defer logFile.Close()
-		}
-
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
@@ -282,15 +264,6 @@ var serveCmd = &cobra.Command{
 		shutdownBudget, err := shutdownBudgetFromEnv(os.LookupEnv)
 		if err != nil {
 			return fmt.Errorf("serve: %w", err)
-		}
-
-		// Setup file logging (logs to both file and stdout)
-		logFile, err := setupFileLogging()
-		if err != nil {
-			fmt.Printf("Warning: Could not setup file logging: %v\n", err)
-			fmt.Println("Continuing with stdout-only logging...")
-		} else {
-			defer logFile.Close()
 		}
 
 		// Every startup step runs through one *startup.Steps, which applies
@@ -454,7 +427,7 @@ var serveCmd = &cobra.Command{
 		// degraded step of this process.
 		cfg.StartupSteps = steps
 
-		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
+		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, StateDir: stateDir, ShutdownBudget: shutdownBudget})
 	},
 }
 
@@ -691,37 +664,6 @@ func formatMetadataValue(value string) string {
 		return "(empty)"
 	}
 	return value
-}
-
-// setupFileLogging configures logging to write to both a file and stdout.
-// Creates logs directory if it doesn't exist and opens/creates a log file with timestamps.
-// Returns the log file handle which should be closed when done.
-func setupFileLogging() (*os.File, error) {
-	// Create logs directory if it doesn't exist
-	logsDir := "logs"
-	if err := os.MkdirAll(logsDir, 0775); err != nil {
-		return nil, fmt.Errorf("failed to create logs directory: %w", err)
-	}
-
-	// Create log file with timestamp
-	timestamp := time.Now().Format("2006-01-02")
-	logFile := filepath.Join(logsDir, fmt.Sprintf("audiobook-organizer-%s.log", timestamp))
-
-	// Open log file (append mode, create if doesn't exist)
-	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0664)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-
-	// Create multi-writer to write to both file and stdout
-	multiWriter := io.MultiWriter(os.Stdout, file)
-	handler := slog.NewTextHandler(multiWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(handler))
-
-	slog.Info("Audiobook Organizer Started")
-	slog.Info("log file", "path", logFile)
-
-	return file, nil
 }
 
 // allowKeyRegenEnv lets an operator proceed past guardAgainstKeyRegeneration.

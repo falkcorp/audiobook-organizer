@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -79,8 +79,6 @@ type booksModule struct {
 	srv atomic.Pointer[server.Server]
 	// registered counts Register calls (TestBooksDisabledInert).
 	registered atomic.Int32
-	// logOut is the App's log output (Options' LogOutput).
-	logOut logTee
 }
 
 // Manifest is books' static declaration. It is pure: the legacy prefixes
