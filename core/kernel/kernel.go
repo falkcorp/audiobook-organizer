@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -99,6 +99,13 @@ type Config struct {
 	// StorageFS is the filesystem P2 opens the store on; the zero value is
 	// the OS's. Tests only: coretest's harness passes storage.MemFS().
 	StorageFS storage.FS
+	// StorageClaimsShadow is core.storage.claims.mode=shadow, the emergency
+	// dial (05-storage §5S.0 D-S2): out-of-claim accesses are logged, counted
+	// and allowed instead of refused. false = strict, the default.
+	StorageClaimsShadow bool
+	// StorageStateFiles is the state-file table the pre-migration checkpoint
+	// copies (05-config §2.4; storage.OpenOptions.StateFiles).
+	StorageStateFiles []storage.StateFile
 	// StateDir is core.paths.state_dir, absolute, resolved once from
 	// pre-boot inputs (06 §6.4.5 StateDir). Set, the kernel runs P0a, the
 	// pre-boot swap, over <StateDir>/restore/ before the store opens, and
