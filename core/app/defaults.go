@@ -1,5 +1,5 @@
 // file: core/app/defaults.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d0f6c4e-8b1a-4e57-9f3c-6a2b7d9e1c40
 // last-edited: 2026-11-08
 
@@ -88,7 +88,7 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 	// What restore puts back. The getters are read here, in one of the two
 	// functions allowed to write them (core/app/noglobals_test.go).
 	if sd == nil {
-		sd = installSlogDefault(a.k.RootLogger(), a.stdlibHandler())
+		sd = installSlogDefault(a.k.RootLogger(), a.k.StdlibLogHandler())
 	}
 	prevMP, prevTP, prevProp := otel.GetMeterProvider(), otel.GetTracerProvider(), otel.GetTextMapPropagator()
 
@@ -108,15 +108,6 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 			sd.restore()
 		})
 	}, nil
-}
-
-// stdlibHandler is the handler the standard library log bridge writes to:
-// the pipeline's adapter handler, whose records are not Record.Process.
-func (a *App) stdlibHandler() slog.Handler {
-	if lg := a.k.Logging(); lg != nil {
-		return lg.Handler()
-	}
-	return a.k.RootLogger().Handler()
 }
 
 // slogDefaults is the slog default and standard library log output one App
