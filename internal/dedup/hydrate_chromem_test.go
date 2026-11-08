@@ -1,7 +1,7 @@
 // file: internal/dedup/hydrate_chromem_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-08-29
+// last-edited: 2026-11-08
 
 package dedup
 
@@ -268,7 +268,11 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	wantMirrored := append(
 		seedBooks("HYDRATED", wantHydratedPrimary, vec, "bge-m3"),
 		seedBooks("NILPRIMARY", wantHydratedNilFlag, vec, "bge-m3")...)
-	wantSkipped := seedBooks("EMPTY", wantEmptyVector, nil, "bge-m3")
+	// One empty row also carries a stale model. The empty-vector rule runs
+	// first (classifyRowVector), so that row counts as empty, not stale; with
+	// the two checks swapped, the empty and stale counts would both move.
+	wantSkipped := seedBooks("EMPTY", wantEmptyVector-1, nil, "bge-m3")
+	wantSkipped = append(wantSkipped, seedBooks("EMPTYSTALE", 1, nil, "text-embedding-3-large")...)
 	wantSkipped = append(wantSkipped, seedBooks("STALE", wantStaleModel, vec, "text-embedding-3-large")...)
 	wantSkipped = append(wantSkipped, seedBooks("ORPHAN", wantOrphaned, vec, "bge-m3")...)
 	wantSkipped = append(wantSkipped, seedBooks("LOOKUPERR", wantLookupError, vec, "bge-m3")...)
@@ -305,7 +309,7 @@ func TestHydrateChromem_AccountsForEverySkipPath(t *testing.T) {
 	}
 	emptyRows := 0
 	for _, r := range rows {
-		if strings.HasPrefix(r.EntityID, "EMPTY_") {
+		if strings.HasPrefix(r.EntityID, "EMPTY_") || strings.HasPrefix(r.EntityID, "EMPTYSTALE_") {
 			if len(r.Vector) != 0 {
 				t.Fatalf("fixture cannot observe the empty-vector bucket: %s round-tripped with %d elements", r.EntityID, len(r.Vector))
 			}
