@@ -43,7 +43,7 @@ import (
 // run after Run's start step (1) under no writer-table label yet, and the
 // R0-written fixture corpus is F2-12's; both join this matrix when core
 // labels module start hooks and the corpus lands (todo.d
-// 2026-11-08_crash_matrix_abo_start_hooks.md).
+// 2026-11-08-crash-matrix-abo-start-hooks.md).
 func TestBootCrashMatrix_ABO(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
