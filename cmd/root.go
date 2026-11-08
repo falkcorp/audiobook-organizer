@@ -6,7 +6,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,13 +17,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
-	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -99,13 +96,11 @@ var (
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
 	updateSeriesTags       = tagger.UpdateSeriesTags
-	initEncryption         = database.InitEncryption
 	loadConfigFromDB       = config.LoadConfigFromDatabase
-	syncConfigFromEnv      = config.SyncConfigFromEnv
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
 	// runApp is serve's composition root (serve_app.go): app.New(ctx, opts,
-	// books.Module(store)) and Run, after serve's pre-server steps.
+	// books.Module()) and Run.
 	runApp = runComposedApp
 )
 
@@ -293,126 +288,21 @@ var serveCmd = &cobra.Command{
 			defer logFile.Close()
 		}
 
-		// Every startup step runs through one *startup.Steps, which applies
-		// the step's reviewed class from startup.Table: a Fatal step's error
-		// is returned and stops the process before it serves; a Degraded
-		// step's error is logged, its token lands in /health's `degraded`
-		// list, and startup continues. The same value is handed to the server
-		// (cfg.StartupSteps) for the steps that run inside Start.
-		steps := startup.New().SetErrorLog(logger.New("startup").Error)
-
-		// Initialize database. Capture the returned Store so we can pass
-		// it explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT).
-		// The store is typed by inference, not `var store database.Store`:
-		// TestStoreReferenceCount ratchets named database.Store references.
-		store, storeErr := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
-		if err := steps.Run("initializeStore", func() error {
-			if storeErr != nil {
-				return fmt.Errorf("failed to initialize database: %w", storeErr)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		defer closeStore()
-
-		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
+		// The kernel opens the store at P2 (R1-23): HEAD's pre-server steps
+		// (the key guard, the encryption init, the settings load and env
+		// sync, config.Validate) run in books' Register over that store, and
+		// the secure state directory resolves in books.Options, each through
+		// the startup runner books makes (06 §6.4.3: serve runs no startup
+		// step of its own).
 
 		// The telemetry settings as HEAD's InitOTEL read them: before the
-		// stored settings and env overrides below apply. The App's Provider
+		// stored settings and env overrides apply. The App's Provider
 		// (app.New) builds the exporters from them; its Run flushes them on
 		// stop within the shutdown budget.
 		telemetryCfg := config.Snapshot()
 
-		// Initialize encryption for settings.
-		//
-		// The key lives in the secure state directory, which is a CONSTANT --
-		// not filepath.Dir(database_path), which is what it used to be. The
-		// database is expected to move between pools; the credentials are not.
-		//
-		// filepath.Dir(database_path) is still passed as a legacy location so an
-		// install whose key is still sitting next to its database keeps working
-		// across this upgrade. InitEncryption reads it there and logs where to
-		// move it; it never copies the file, and it never generates a
-		// replacement for a key it merely failed to read.
-		var stateDir string
-		if err := steps.Run("EnsureSecureStateDir", func() error {
-			var err error
-			stateDir, err = config.EnsureSecureStateDir()
-			if err != nil {
-				return fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
-		if err := steps.Run("guardAgainstKeyRegeneration", func() error {
-			return guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir)
-		}); err != nil {
-			return err
-		}
-		if err := steps.Run("initEncryption", func() error {
-			if err := initEncryption(stateDir, legacyKeyDir); err != nil {
-				return fmt.Errorf("failed to initialize encryption: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		fmt.Printf("Settings encryption initialized (state dir: %s)\n", stateDir)
-
-		// Load configuration from database (overrides defaults with persisted
-		// values). Fatal, not a warning: SaveConfigToDatabase persists the
-		// whole config struct, so a server running on defaults would write
-		// those defaults over the stored config on its first settings save.
-		if err := steps.Run("loadConfigFromDB", func() error {
-			if err := loadConfigFromDB(store); err != nil {
-				return fmt.Errorf("failed to load config from database: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		fmt.Println("Configuration loaded from database")
-		fmt.Printf("  - Root dir (organize output): %s\n", config.AppConfig.RootDir)
-		// Report only whether the key is set: even a key suffix is secret
-		// material in the startup log (CodeQL go/clear-text-logging).
-		openAIKeyState := "(not set)"
-		if config.AppConfig.OpenAIAPIKey != "" {
-			openAIKeyState = "set"
-		}
-		fmt.Printf("  - OpenAI API key: %s\n", openAIKeyState)
-
-		// Apply env var overrides (command line takes precedence over DB)
-		syncConfigFromEnv()
-
-		if err := steps.Run("config.Validate", func() error {
-			if err := config.AppConfig.Validate(); err != nil {
-				return fmt.Errorf("invalid configuration: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		// Log import path count
-		if folders, err := store.GetAllImportPaths(); err == nil {
-			fmt.Printf("  - Import paths (scan paths): %d configured\n", len(folders))
-			for _, folder := range folders {
-				fmt.Printf("    * %s (%s)\n", folder.Name, folder.Path)
-			}
-		}
-
+		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 		fmt.Println("Starting audiobook organizer web server...")
-
-		// The shared Google Books daily budget persists its count in this
-		// store for the life of the process -- attached BEFORE the server is
-		// built (books' Register, inside app.New), so no Google call made
-		// while it starts counts against an in-memory zero the attach would
-		// then discard. Process-scoped, so not inside NewServer (see
-		// AttachProviderThrottleStore).
-		server.AttachGoogleBooksBudgetStore(store)
 
 		cfg := getDefaultServerConfig()
 
@@ -444,12 +334,7 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		// The server runs its own steps (op registry gate, container start,
-		// search index, HTTP) through the same set, so /health reports every
-		// degraded step of this process.
-		cfg.StartupSteps = steps
-
-		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
 	},
 }
 
@@ -717,72 +602,4 @@ func setupFileLogging() (*os.File, error) {
 	slog.Info("log file", "path", logFile)
 
 	return file, nil
-}
-
-// allowKeyRegenEnv lets an operator proceed past guardAgainstKeyRegeneration.
-// It exists so a recoverable situation cannot become an unbootable one: if the
-// census itself is broken, or the operator has genuinely accepted the loss and
-// wants to start over, there has to be a way forward that is not "edit the
-// source". It does not get past unreadable settings rows, where it cannot help
-// and would only mint a key that later costs the stored secrets; see
-// guardAgainstKeyRegeneration.
-const allowKeyRegenEnv = "ABK_ALLOW_ENCRYPTION_KEY_REGEN"
-
-// guardAgainstKeyRegeneration refuses to start when there is no encryption key
-// anywhere AND the database already holds encrypted secrets.
-//
-// That combination is not recoverable by starting up. InitEncryption would
-// generate a fresh key, and LoadConfigFromDatabase would then fail to decrypt
-// every existing secret, re-encrypt the four it can recover from the config file
-// and DeleteSetting the rest. The secrets are gone before anyone sees a warning,
-// and the app looks healthy afterwards. Refusing to boot is the only point at
-// which the operator can still put the key file back.
-//
-// Fails CLOSED on a census error, and names the override in the message: a
-// store we cannot read is exactly the case where we must not gamble that there
-// was nothing to lose.
-//
-// Order matters. A key file found anywhere returns first, so a normal boot runs
-// no census. Otherwise the census runs BEFORE allowKeyRegenEnv is honoured,
-// because one census result is refused even with the override set: an
-// unreadable settings row (*database.UnreadableSettingsError). The override
-// cannot get past it -- loadConfigFromDB fails on the same rows next -- and
-// honouring it would let InitEncryption write a NEW key file first. Once the
-// row is repaired, the following boot would find that key, skip this guard,
-// fail to decrypt every stored secret, and LoadConfigFromDatabase would delete
-// them. So that message names the rows and the repair and does not offer the
-// override. Any other census error (I/O, iterator, close) still yields to the
-// override, which is the escape hatch it exists for.
-func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir string) error {
-	if found := database.FindEncryptionKey(stateDir, legacyKeyDir); found != "" {
-		return nil // a key exists; InitEncryption will load it, not generate one
-	}
-
-	settings, err := store.GetAllSettings()
-	if unreadable, ok := errors.AsType[*database.UnreadableSettingsError](err); ok {
-		// Refused regardless of allowKeyRegenEnv; see the doc comment.
-		return fmt.Errorf("settings row(s) %s cannot be read; %s. No encryption "+
-			"key was found in %q or %q, and whether encrypted settings exist "+
-			"cannot be checked until those rows are readable: %w",
-			unreadable.QuotedKeys(), unreadable.Remedy(), stateDir, legacyKeyDir, err)
-	}
-	if os.Getenv(allowKeyRegenEnv) != "" {
-		return nil // operator accepted the loss (or the census is broken)
-	}
-	if err != nil {
-		return fmt.Errorf("cannot determine whether encrypted settings exist, and no "+
-			"encryption key was found in %q or %q — refusing to start, because "+
-			"generating a new key would permanently discard any secrets already "+
-			"stored. Restore the key file, or set %s=1 to accept the loss: %w",
-			stateDir, legacyKeyDir, allowKeyRegenEnv, err)
-	}
-	if database.HasEncryptedSettings(settings) {
-		return fmt.Errorf("no encryption key found in %q or %q, but the database "+
-			"already holds encrypted settings — refusing to start. Starting would "+
-			"generate a new key and permanently delete every secret that is not "+
-			"also present in the config file. Put %s back, or set %s=1 to accept "+
-			"the loss and re-enter those credentials",
-			stateDir, legacyKeyDir, database.EncryptionKeyPath(stateDir), allowKeyRegenEnv)
-	}
-	return nil // first run: nothing encrypted yet, generating is correct
 }

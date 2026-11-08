@@ -1,7 +1,7 @@
 // file: internal/database/store_consumers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4e92a07-6c15-4d3e-a8f1-92d07e5c3b61
-// last-edited: 2026-10-13
+// last-edited: 2026-11-08
 
 package database
 
@@ -20,10 +20,11 @@ import (
 // source lines under internal/ and cmd/ that name the wide database.Store
 // type. This is a ratchet: it may only be lowered, by hand, in the PR that
 // lowers the count. The test fails only on a rise. 07-S3 lowered it 31 -> 28
-// (the indexedStore decorator and the wiring that built it went away); 07-M14
-// is the PR expected to lower it next. Companion of storeMethodBaseline in
-// store_width_test.go.
-const storeReferenceBaseline = 28
+// (the indexedStore decorator and the wiring that built it went away); R1-23
+// lowered it 28 -> 26 (serve no longer opens the store: the composition root
+// and the key guard stopped taking it); 07-M14 is the PR expected to lower it
+// next. Companion of storeMethodBaseline in store_width_test.go.
+const storeReferenceBaseline = 26
 
 // storeReferenceKinds classifies the files that carry a reference, so the
 // figures quoted in the 07 design decisions (D2) stay checkable. It is an aid,
@@ -50,7 +51,6 @@ var storeReferenceKinds = map[string]string{
 	"internal/plugins/maintenance/deps.go":                            "consumer",
 	"internal/server/provider_throttle_wire.go":                       "consumer",
 	"internal/server/catalog_harvest_op.go":                           "consumer",
-	"cmd/root.go":                                                     "consumer",
 	"internal/server/server.go":                                       "wiring",
 	"internal/operations/registry/register.go":                        "wiring",
 	"internal/scanner/scanner.go":                                     "wiring",

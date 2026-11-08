@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-11-08
 
@@ -852,7 +852,15 @@ func (d *GatedDB) syncWALForShutdown(stage string, deadline time.Time) error {
 	res := make(chan error, 1)
 	go func() {
 		defer d.gate.release()
-		res <- d.syncWALLeased()
+		err := d.syncWALLeased()
+		if d.lr != nil && errors.Is(err, storage.ErrClosed) {
+			// The kernel closed the core DB first (a boot that failed
+			// after books' Register: New closes core before serve's
+			// Release closes the store). Core's close synced the WAL and
+			// owns the engine, so books has nothing left to make durable.
+			err = nil
+		}
+		res <- err
 	}()
 	t := time.NewTimer(max(time.Until(deadline), 0))
 	defer t.Stop()

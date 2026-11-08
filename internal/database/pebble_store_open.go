@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-08
 
@@ -138,7 +138,7 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	if !ok {
 		return nil, errors.Join(errors.New("pebble store: core storage gave books no legacy range"), db.Close())
 	}
-	store, err := newCoreStore(lr, db.Close, true)
+	store, err := newCoreStore(lr, db.Close, warmNow)
 	if err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
@@ -155,7 +155,9 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 // handles): the store over r, books' LegacyRange from Deps.Storage, after
 // the kernel has opened, prepared and migrated the store. It writes nothing
 // (§5S.4 step 12, TestBooksConstructorWritesNothing): HEAD's open-time
-// writers run in RunBootRepairs, books' start hook. The kernel owns the core
+// writers run in RunBootRepairs, books' start hook, which also starts the
+// memdb warmup, so a boot that fails between Register and the start hooks
+// leaves no goroutine reading the store the kernel is closing. The kernel owns the core
 // DB, so the store's Close drains books' own readers and leaves the DB open;
 // the kernel closes it after every module stopped. Attach core's admin
 // surface with AttachStorageAdmin before anything administers the store.
@@ -164,7 +166,7 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 // internal/database may not import mediacore/module (internal/arch:
 // moduleAppImporters); books passes the handles' Legacy member.
 func NewBooksStore(r storage.LegacyRange) (*PebbleStore, error) {
-	return newCoreStore(r, nil, true)
+	return newCoreStore(r, nil, warmDeferred)
 }
 
 // AttachStorageAdmin hands the store core's admin surface (checkpoint,
@@ -182,16 +184,30 @@ func (p *PebbleStore) AttachStorageAdmin(a *storage.Admin) {
 // books' own store but without the memdb warmup (reads fall back to Pebble),
 // and never closed (it owns nothing).
 func newStepStore(r storage.LegacyRange) (*PebbleStore, error) {
-	return newCoreStore(r, nil, false)
+	return newCoreStore(r, nil, warmNever)
 }
+
+// warmMode is when a core store starts its memdb warmup.
+type warmMode int
+
+const (
+	// warmNever: no warmup; reads go to Pebble (a migration step's store).
+	warmNever warmMode = iota
+	// warmNow: the constructor starts it (the standalone opener, as HEAD's
+	// open did).
+	warmNow
+	// warmDeferred: RunBootRepairs starts it (books' served store); a Close
+	// before then means it never starts.
+	warmDeferred
+)
 
 // newCoreStore builds a store over books' LegacyRange. It reads and writes
 // nothing beyond the reads of construction: the journal clock seeded from
 // its key (or from a read-only journal scan), the undecodable-marker set and
-// the identification index state loaded. With warm it starts the async memdb
-// warmup, which only reads. closeStore closes the core DB the caller opened
-// (nil: the kernel owns it).
-func newCoreStore(r storage.LegacyRange, closeStore func() error, warm bool) (*PebbleStore, error) {
+// the identification index state loaded. warm says when the async memdb
+// warmup, which only reads, starts. closeStore closes the core DB the caller
+// opened (nil: the kernel owns it).
+func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode) (*PebbleStore, error) {
 	closingCtx, closingCancel := context.WithCancel(context.Background())
 	store := &PebbleStore{
 		db:            newLegacyGatedDB(r, closeStore),
@@ -217,13 +233,19 @@ func newCoreStore(r storage.LegacyRange, closeStore func() error, warm bool) (*P
 	}
 	store.initMetrics()
 	store.warmupDone = make(chan struct{})
-	if !warm {
-		close(store.warmupDone)
-		return store, nil
+	switch warm {
+	case warmNow:
+		store.warmOnce.Do(store.startMemWarmup)
+	case warmNever:
+		store.warmOnce.Do(store.skipMemWarmup)
+	case warmDeferred:
 	}
-	store.startMemWarmup()
 	return store, nil
 }
+
+// skipMemWarmup marks the warmup finished with none run: warmupDone closes
+// and reads stay on Pebble. Called only inside warmOnce.
+func (p *PebbleStore) skipMemWarmup() { close(p.warmupDone) }
 
 // startMemWarmup initializes the in-memory query layer. Warmup runs in a
 // goroutine so the server is available immediately — reads transparently
@@ -233,7 +255,8 @@ func newCoreStore(r storage.LegacyRange, closeStore func() error, warm bool) (*P
 // The goroutine iterates p.db, so Close() must cancel it and wait for it to
 // exit before closing the DB (else NewIter races the close and panics).
 // warmupDone is always non-nil so Close can wait unconditionally; it is
-// closed immediately when there is no warmup goroutine to wait for.
+// closed immediately when there is no warmup goroutine to wait for. Called
+// only inside warmOnce.
 func (p *PebbleStore) startMemWarmup() {
 	memStore, memErr := NewMemStore()
 	if memErr != nil {
@@ -307,7 +330,8 @@ func (p *PebbleStore) runOpenRepairs() error {
 // ran in InitializeStore, before books serves and before the operations
 // registry, whose boot resume acts on opv3 records. A reconcile failure is
 // logged, not returned: opv2: is still the source of truth the registry runs
-// from, and the next boot retries.
+// from, and the next boot retries. It then starts the memdb warmup of a
+// store NewBooksStore built (a no-op on any other store, or after Close).
 func (p *PebbleStore) RunBootRepairs(ctx context.Context) error {
 	if err := p.runOpenRepairs(); err != nil {
 		return err
@@ -315,6 +339,7 @@ func (p *PebbleStore) RunBootRepairs(ctx context.Context) error {
 	if _, err := p.ReconcileOpsV3WithV2(ctx); err != nil {
 		opsV3Log.Error("opv3 reconcile failed; opv3 records may be stale until each run's next write, and the next boot retries: %v", err)
 	}
+	p.warmOnce.Do(p.startMemWarmup)
 	return nil
 }
 
@@ -376,7 +401,11 @@ func (p *PebbleStore) closeStore() error {
 	// Stop the async memdb warmup before closing the DB. The warmup goroutine
 	// iterates p.db; closing the DB out from under it races warmIter's NewIter
 	// and panics ("pebble: closed" / nil-pointer deref). Cancel it and wait for
-	// it to fully exit first.
+	// it to fully exit first. A deferred warmup that never started never
+	// will: claiming warmOnce here closes warmupDone with no goroutine.
+	if p.warmupDone != nil {
+		p.warmOnce.Do(p.skipMemWarmup)
+	}
 	if p.warmupCancel != nil {
 		p.warmupCancel()
 	}

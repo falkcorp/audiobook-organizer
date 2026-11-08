@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -39,6 +39,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // freshProcessEnv names the test a child test process runs (inFreshProcess).
@@ -75,7 +76,7 @@ func inFreshProcess(t *testing.T, env ...string) (parent bool, output string) {
 }
 
 // composed is serve's composition (cmd/serve_app.go) up to Run, over a
-// fresh in-memory store: books.Module, Options, app.New,
+// fresh in-memory store core opens: books.Module, Options, app.New,
 // app.InstallProcessDefaults and Attach.
 type composed struct {
 	app   *app.App
@@ -90,9 +91,11 @@ type composed struct {
 
 // bootComposed boots the composition with the ABS surface on or off; edit,
 // when set, adjusts the config before the store opens. pre, when set, runs
-// on the store after migrations and before the module is built (a stored
-// settings blob, say). Cleanup releases the unstarted server, puts the
-// process defaults back and closes the store.
+// on books' store in Register, after core's migrations and before the
+// settings boot and the server (a stored settings blob, say). The settings
+// boot's loader and env sync are stubbed (stubSettingsLoad); a test of
+// either sets the seam back. Cleanup releases the unstarted server and the
+// store and puts the process defaults back.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
 	return bootComposedWith(t, abs, edit, pre, nil)
@@ -102,8 +105,46 @@ func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*d
 // options after books.Options builds them and before app.New.
 func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
 	t.Helper()
+	mod, opts, newLog := composedOptions(t, abs, edit, pre)
+	if opt != nil {
+		opt(&opts)
+	}
+	a, err := app.New(t.Context(), opts, mod)
+	if a != nil {
+		// Registered before Release, so it runs after it: books' store
+		// closes, then core (a no-op once Run has begun, whose stop closed
+		// both).
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = a.Close(ctx)
+		})
+	}
+	t.Cleanup(func() { Release(mod) })
+	require.NoError(t, err)
+	restore, err := app.InstallProcessDefaults(a)
+	require.NoError(t, err)
+	t.Cleanup(restore)
+	require.NoError(t, Attach(mod, a))
+	srv := mod.srv.Load()
+	require.NotNil(t, srv, "Register built no server")
+	store := mod.store.Load()
+	require.NotNil(t, store, "Register built no store")
+	return &composed{app: a, mod: mod, srv: srv, store: store, newLog: newLog}
+}
+
+// composedOptions is the composition's module and options before app.New:
+// the config (edit applied), a sandboxed state directory holding a key, the
+// settings load stubbed, books.Module and books.Options over an in-memory
+// store at the config's database path. pre and the seeded roles run in
+// Register (booksModule.beforeSettings).
+func composedOptions(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) (*booksModule, app.Options, *syncBuffer) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dir := tempDir(t)
+	// The store is in memory, but config.Validate wants the database's
+	// directory to exist, as it does on a real install.
+	require.NoError(t, os.MkdirAll(dir, 0o700))
 	c := config.Config{
 		DatabaseType: "pebble",
 		DatabasePath: filepath.Join(dir, "books.pebble"),
@@ -120,46 +161,53 @@ func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre fun
 		edit(&c)
 	}
 	withConfig(t, c)
-	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
-	require.NoError(t, err)
-	database.SetGlobalStore(store)
+	sandboxStateDir(t)
+	stubSettingsLoad(t)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)
 		scanner.SetStore(nil)
-		_ = store.Close()
 	})
-	_, _, err = auth.SeedRoles(store)
-	require.NoError(t, err)
-	if pre != nil {
-		pre(store)
-	}
 
-	mod := Module(store).(*booksModule)
+	mod := Module().(*booksModule)
+	mod.beforeSettings = func(store *database.PebbleStore) {
+		_, _, err := auth.SeedRoles(store)
+		require.NoError(t, err)
+		if pre != nil {
+			pre(store)
+		}
+	}
 	newLog := &syncBuffer{}
 	mod.logOut.stdout = newLog
 	cfg := server.GetDefaultServerConfig()
 	cfg.Host, cfg.Port = "127.0.0.1", "0"
 	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot()})
 	require.NoError(t, err)
-	if opt != nil {
-		opt(&opts)
-	}
-	a, err := app.New(t.Context(), opts, mod)
-	t.Cleanup(func() { Release(mod) })
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = a.Metrics().Shutdown(ctx)
-	})
-	restore, err := app.InstallProcessDefaults(a)
-	require.NoError(t, err)
-	t.Cleanup(restore)
-	server.AttachProviderThrottleStore(store)
-	require.NoError(t, Attach(mod, a))
-	srv := mod.srv.Load()
-	require.NotNil(t, srv, "Register built no server")
-	return &composed{app: a, mod: mod, srv: srv, store: store, newLog: newLog}
+	opts.StorageFS = storage.MemFS()
+	return mod, opts, newLog
+}
+
+// sandboxStateDir points the secure state directory at a temp dir holding an
+// encryption key: an install that has run before, so the key guard runs no
+// census, and no test touches the real /var/lib/audiobook-organizer.
+func sandboxStateDir(t *testing.T) string {
+	t.Helper()
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
+	dir := t.TempDir()
+	t.Setenv(config.SecureStateDirEnv, dir)
+	require.NoError(t, os.WriteFile(database.EncryptionKeyPath(dir), bytes.Repeat([]byte{9}, 32), 0o600))
+	return dir
+}
+
+// stubSettingsLoad stubs the settings boot's loader and env sync for the
+// test, which otherwise apply the process's viper state over the config the
+// test set. A test of the loader sets loadConfigFromDB back.
+func stubSettingsLoad(t *testing.T) {
+	t.Helper()
+	origLoad, origSync := loadConfigFromDB, syncConfigFromEnv
+	loadConfigFromDB = func(database.SettingsStore) error { return nil }
+	syncConfigFromEnv = func() {}
+	t.Cleanup(func() { loadConfigFromDB, syncConfigFromEnv = origLoad, origSync })
 }
 
 // runningApp is a composition whose App runs as serve runs it, with its
@@ -256,7 +304,7 @@ func TestR1AppConfigFromBlob(t *testing.T) {
 	c := bootComposed(t, false, nil, func(store *database.PebbleStore) {
 		blob := fmt.Sprintf(`{"api_rate_limit_per_minute":%d,"json_body_limit_mb":%d}`, rate, jsonMB)
 		require.NoError(t, store.SetSetting("config_blob", blob, "json", false))
-		// serve's pre-server step loadConfigFromDB (cmd/root.go).
+		// The settings boot's loadConfigFromDB, which this harness stubs.
 		require.NoError(t, config.LoadConfigFromDatabase(store))
 	})
 	snap := config.Snapshot()
@@ -507,7 +555,13 @@ func TestComposedApp_SystemdSignals(t *testing.T) {
 		got = append(got, string(buf[:n]))
 		return got[len(got)-1]
 	}
-	require.Equal(t, "STATUS=starting", next())
+	// Core storage's open and migrations ran inside app.New and asked for
+	// start time per step (R1-23: the kernel opens the store); those
+	// datagrams wait in the socket ahead of Run's.
+	msg := next()
+	for ; msg != "STATUS=starting"; msg = next() {
+		require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", msg, "only start-timeout extensions may precede STATUS=starting")
+	}
 	extends := 0
 	for msg := next(); msg != "READY=1"; msg = next() {
 		require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", msg, "only start-timeout extensions may precede READY=1")

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.238.0
+// version: 1.239.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-08
 
@@ -304,10 +304,15 @@ type PebbleStore struct {
 	// warmupCancel cancels the async memdb warmup goroutine; warmupDone is
 	// closed when that goroutine exits. Close() cancels and waits on these
 	// before closing the underlying Pebble DB — otherwise the warmup's db.NewIter
-	// races the close and panics ("pebble: closed" / nil-pointer deref). Set once
-	// in NewPebbleStore before the store is returned, so no mutex is needed.
+	// races the close and panics ("pebble: closed" / nil-pointer deref).
+	// warmupDone is made by the constructor; warmupCancel is set inside
+	// warmOnce, which either starts the warmup (startMemWarmup) or, when Close
+	// gets there first, closes warmupDone with no goroutine behind it. Every
+	// reader of warmupCancel runs after its own warmOnce.Do, so the Once is the
+	// synchronisation and no mutex is needed.
 	warmupCancel context.CancelFunc
 	warmupDone   chan struct{}
+	warmOnce     sync.Once
 	// warmupDuration is how long the warmup goroutine ran, in milliseconds,
 	// stored (atomically) just before warmupDone closes -- on success, failure
 	// and cancellation alike. Read it only after warmupDone is closed; see

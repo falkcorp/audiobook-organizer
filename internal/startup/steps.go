@@ -1,5 +1,5 @@
 // file: internal/startup/steps.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
 // last-edited: 2026-11-08
 
@@ -8,12 +8,14 @@
 // server up and reports a fixed token in /health's `degraded` list
 // (Degraded).
 //
-// It is a leaf package (stdlib only, layer 0 in internal/arch): most steps
-// (opening the store, telemetry, the secure state directory, the encryption
-// key, loading persisted config) run in cmd before any *server.Server exists,
-// so the table and the token set cannot live in package server. cmd builds
-// one *Steps, runs its steps through Run, and hands the same value to the
-// server through ServerConfig.StartupSteps.
+// It is a leaf package (stdlib only, layer 0 in internal/arch): several steps
+// (the secure state directory, the encryption key, loading persisted config)
+// run in books before any *server.Server exists, so the table and the token
+// set cannot live in package server. books.Options builds one *Steps (unless
+// serve hands one), runs its steps through Run, and hands the same value to
+// the server through ServerConfig.StartupSteps. Since release R1 the kernel
+// opens the store (its P2), so opening it is no row here, and cmd runs no
+// step of its own (06 §6.4.3).
 //
 // Every Run call names its step with a string literal that must be a row of
 // Table, and every row must be named by some Run call. steps_test.go enforces
@@ -74,10 +76,9 @@ const (
 
 // Table classifies every startup step, in the order startup runs them.
 //
-// Where each step lives (verified 2026-10-10):
-//   - initializeStore:             database.InitializeStore, internal/database/store.go:1501; run in cmd/root.go serveCmd
-//   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133
-//   - guardAgainstKeyRegeneration: cmd/root.go guardAgainstKeyRegeneration
+// Where each step lives (verified 2026-11-08):
+//   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133; run in books.Options
+//   - guardAgainstKeyRegeneration: internal/books/boot.go guardAgainstKeyRegeneration; run in books' Register (bootSettings)
 //   - initEncryption:              database.InitEncryption, internal/database/settings.go:109
 //   - loadConfigFromDB:            config.LoadConfigFromDatabase, internal/config/persistence.go:698
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
@@ -87,8 +88,6 @@ const (
 //   - searchindex:                 search.(*IndexService).Start, internal/search/register.go:41 (logs and leaves Index() nil)
 //   - http:                        internal/server/server_lifecycle.go (*Server).R1Listen (listenR1)
 var Table = []Step{
-	{Name: "initializeStore", Class: Fatal,
-		Reason: "nothing works without the store"},
 	{Name: "EnsureSecureStateDir", Class: Fatal,
 		Reason: "the secrets location must be sane before a key is read or written"},
 	{Name: "guardAgainstKeyRegeneration", Class: Fatal,

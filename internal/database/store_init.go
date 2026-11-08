@@ -1,5 +1,5 @@
 // file: internal/database/store_init.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7ffff60d-2915-4c59-a775-321f8367f69b
 // last-edited: 2026-11-08
 
@@ -46,14 +46,10 @@ func InitializeStore(dbType, path string) (Store, error) {
 // explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT, in flight).
 //
 // The SQLite backend was removed in fable5 TASK-022. Any dbType value other
-// than "pebble" (or empty) returns an error.
+// than "pebble" (or empty) returns an error (ValidateDatabaseType).
 func InitializeStoreWith(dbType, path string, o StandaloneOptions) (Store, error) {
-	switch dbType {
-	case "sqlite", "sqlite3":
-		return nil, fmt.Errorf("database_type %q is not supported: SQLite3 support has been removed and PebbleDB is the only database backend; set database_type to \"pebble\" (or drop --db-type %s) and point database_path at a PebbleDB directory", dbType, dbType)
-	case "pebble", "":
-	default:
-		return nil, fmt.Errorf("unsupported database type: %s (only 'pebble' is supported)", dbType)
+	if err := ValidateDatabaseType(dbType); err != nil {
+		return nil, err
 	}
 	s, err := OpenStandalone(path, o)
 	if err != nil {
@@ -68,6 +64,21 @@ func InitializeStoreWith(dbType, path string, o StandaloneOptions) (Store, error
 		opsV3Log.Error("opv3 reconcile failed; opv3 records may be stale until each run's next write, and the next boot retries: %v", err)
 	}
 	return s, nil
+}
+
+// ValidateDatabaseType refuses a database_type other than "pebble" (or
+// empty): the standalone opener checks it, and so does serve before core
+// storage opens database_path, so neither opens a store the config does not
+// name as a Pebble one.
+func ValidateDatabaseType(dbType string) error {
+	switch dbType {
+	case "pebble", "":
+		return nil
+	case "sqlite", "sqlite3":
+		return fmt.Errorf("database_type %q is not supported: SQLite3 support has been removed and PebbleDB is the only database backend; set database_type to \"pebble\" (or drop --db-type %s) and point database_path at a PebbleDB directory", dbType, dbType)
+	default:
+		return fmt.Errorf("unsupported database type: %s (only 'pebble' is supported)", dbType)
+	}
 }
 
 // CloseStore closes the global store

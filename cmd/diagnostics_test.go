@@ -383,10 +383,13 @@ func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
 	}
 }
 
-// TestRunReservedPrefs_RecoversStoreWithBadStamp: a store whose stamp holds
-// garbage is refused by every open; `diagnostics reserved-prefs --delete`
-// is the recovery path. Declining the prompt changes nothing; confirming
-// deletes the row and the store opens again.
+// TestRunReservedPrefs_RecoversStoreWithBadStamp: a store whose stamp and
+// sidecar hold garbage (what a damaged HEAD store looks like) is refused by
+// every open: core storage reads the sidecar, which does not parse (R1-23;
+// HEAD's guard read the stamp row, which an R0 rollback still does).
+// `diagnostics reserved-prefs --delete` is the recovery path: it deletes the
+// stamp row and removes the sidecar. Declining the prompt changes nothing;
+// confirming repairs both and the store opens again.
 func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "bad-stamp.pebble")
 	s, err := database.NewPebbleStore(dbPath)
@@ -406,9 +409,12 @@ func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(database.StorageFormatSidecarPath(dbPath), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if s, err := database.NewPebbleStore(dbPath); err == nil {
 		_ = s.Close()
-		t.Fatal("premise: a garbage stamp must refuse the open")
+		t.Fatal("premise: a garbage sidecar must refuse the open")
 	}
 
 	// Listing is read-only and works on the refused store.
