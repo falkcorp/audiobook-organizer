@@ -1,5 +1,5 @@
 // file: internal/server/handlers/phone_app_steps.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dc8db512-0961-4e2c-a747-9c5014eb7267
 // last-edited: 2026-11-07
 
@@ -118,6 +118,14 @@ type PhoneKeyEmail struct {
 	Reissue bool
 }
 
+// PhoneKeyEmail must redact under every fmt verb: it carries the secret. These
+// assertions pin that contract at compile time.
+var (
+	_ fmt.Stringer   = PhoneKeyEmail{}
+	_ fmt.GoStringer = PhoneKeyEmail{}
+	_ fmt.Formatter  = PhoneKeyEmail{}
+)
+
 func (p PhoneKeyEmail) redacted() string {
 	return fmt.Sprintf("PhoneKeyEmail{Reissue:%v ClientID:[redacted] ClientSecret:[redacted]}", p.Reissue)
 }
@@ -183,11 +191,12 @@ func RenderPhoneKeyEmail(in PhoneKeyEmail) (imail.Message, error) {
 		ClientSecret: in.ClientSecret, Reissue: in.Reissue, KeyInEmail: true,
 	}
 	var text, html bytes.Buffer
+	// The input is in the error for context; it prints redacted (see redacted).
 	if err := phoneKeyTextTmpl.Execute(&text, data); err != nil {
-		return imail.Message{}, err
+		return imail.Message{}, fmt.Errorf("render phone-app key email (text) for %v: %w", in, err)
 	}
 	if err := phoneKeyHTMLTmpl.Execute(&html, data); err != nil {
-		return imail.Message{}, err
+		return imail.Message{}, fmt.Errorf("render phone-app key email (html) for %v: %w", in, err)
 	}
 	subject := phoneKeySubjectFirst
 	if in.Reissue {
