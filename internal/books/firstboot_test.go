@@ -48,6 +48,14 @@ type headSeed struct {
 // rewind.
 func headStoreAt(t *testing.T, path string, extra func(*database.PebbleStore)) headSeed {
 	t.Helper()
+	return headStoreAtVersion(t, path, database.LegacyCap, extra)
+}
+
+// headStoreAtVersion is headStoreAt with books' schema at version (at most
+// LegacyCap): the records above it deleted and db_version set to it.
+func headStoreAtVersion(t *testing.T, path string, version int, extra func(*database.PebbleStore)) headSeed {
+	t.Helper()
+	require.LessOrEqual(t, version, database.LegacyCap)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	store, err := database.NewPebbleStore(path)
 	require.NoError(t, err)
@@ -71,7 +79,7 @@ func headStoreAt(t *testing.T, path string, extra func(*database.PebbleStore)) h
 	for ok := it.First(); ok; ok = it.Next() {
 		n, err := strconv.Atoi(strings.TrimPrefix(string(it.Key()), recordPrefix))
 		require.NoError(t, err, "record key %q", it.Key())
-		if n > database.LegacyCap {
+		if n > version {
 			require.NoError(t, b.Delete(append([]byte(nil), it.Key()...), nil))
 		}
 	}
@@ -82,7 +90,7 @@ func headStoreAt(t *testing.T, path string, extra func(*database.PebbleStore)) h
 	var pref database.UserPreference
 	require.NoError(t, json.Unmarshal(raw, &pref))
 	require.NoError(t, closer.Close())
-	dv, err := json.Marshal(database.DatabaseVersion{Version: database.LegacyCap, UpdatedAt: time.Now().UTC()})
+	dv, err := json.Marshal(database.DatabaseVersion{Version: version, UpdatedAt: time.Now().UTC()})
 	require.NoError(t, err)
 	v := string(dv)
 	pref.Value = &v

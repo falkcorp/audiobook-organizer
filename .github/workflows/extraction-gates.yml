@@ -1,5 +1,5 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.5.0
+# version: 1.6.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
 # last-edited: 2026-11-08
 
@@ -14,8 +14,11 @@
 #                         rules name is served (TestDeployReferencedSeriesServed),
 #                         and promtool checks and unit-tests the rules
 #                         (TestPromRules_Promtool), never skipped (R1-10)
-# Later rows add jobs here: R1-23 TestBootCrashMatrix_ABO, F2-14 and F2-15 the
-# cutover suite. Each one must be listed in the terminal job's `needs`.
+#   boot-crash-matrix-abo ABO's boot crash matrix (TestBootCrashMatrix_ABO)
+#                         and the R1 rollback check TestR0OpensR1Store, which
+#                         runs the R0 release binary (R1-23)
+# Later rows add jobs here: F2-14 and F2-15 the cutover suite. Each one must be
+# listed in the terminal job's `needs`.
 #
 # Trigger: every PR to main that touches a non-doc file, decided by the same
 # `changes` classifier as ci.yml (a skipped job reports success through its
@@ -280,12 +283,71 @@ jobs:
           fi
           grep -q -- '--- PASS: TestPromRules_Promtool' <<<"$out"
 
+  # R1-23 (05-storage §5S.10; 09 §9.4 R1 Verification, §9.10): ABO's boot
+  # crash matrix over books' storage boot, and TestR0OpensR1Store, which runs
+  # the R0 release binary over a store R1 wrote. Both skip under -short, so
+  # this job is where every PR runs them; it fails unless each test's PASS
+  # line appears (a renamed test would make -run match nothing). The R0
+  # archive is downloaded from the R0 release and checked against the
+  # checksum pinned in internal/books/r0store_test.go; it is cached here under
+  # that checksum, so a GitHub release-CDN outage (2026-11-08, see
+  # dashboard-reference) costs only the first run after a cache eviction.
+  boot-crash-matrix-abo:
+    name: boot-crash-matrix-abo
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Restore the R0 release archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/audiobook-organizer-tests/r0
+          key: r0-release-v0.223.0-acbe9e096b04d80bd1a49d8e0ecc1bf7dc8171e004ea26cf795513e881ba1e6d
+
+      - name: Boot crash matrix and R0 rollback (must not skip)
+        run: |
+          set -euo pipefail
+          tests='TestBootCrashMatrix_ABO TestBootCrashMatrix_ABOCoversEveryWriter TestR0OpensR1Store'
+          out="$(go test ./internal/books/ -run "^($(tr ' ' '|' <<<"$tests"))\$" -count=1 -v -timeout 25m 2>&1)" || { echo "$out"; exit 1; }
+          grep -E -- '^(=== RUN|--- |PASS|FAIL|ok)|run\.go:[0-9]+: crashmatrix:' <<<"$out" || true
+          for test in $tests; do
+            if ! grep -q -- "--- PASS: $test " <<<"$out"; then
+              echo "$out"
+              echo "::error::$test did not run and pass (skipped, renamed or removed?)"
+              exit 1
+            fi
+          done
+
   # The one stable required-check name. `always()` so it reports even when a
   # gate job failed or was skipped by its job-level `if:`: a skipped job is
   # success, a failed or cancelled one fails this job.
   extraction-gates:
     name: extraction-gates
-    needs: [changes, check-commits-build, dashboard-reference]
+    needs: [changes, check-commits-build, dashboard-reference, boot-crash-matrix-abo]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
