@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -423,7 +423,7 @@ func (s *Swapper) rejectInvalid(ctx context.Context, cause error) (Outcome, erro
 // freeName is dir/<base>.json, or dir/<base>-<n>.json for the first n that
 // no file holds.
 func freeName(fs vfs.FS, dir, base string) (string, error) {
-	for n := 0; n < 1000; n++ {
+	for n := range 1000 {
 		name := base + ".json"
 		if n > 0 {
 			name = fmt.Sprintf("%s-%d.json", base, n)

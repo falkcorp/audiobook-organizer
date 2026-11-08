@@ -1,5 +1,5 @@
 // file: core/storage/migrate_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 25ec79a2-2c84-47a2-8cd6-89d5026a6925
 // last-edited: 2026-11-08
 
@@ -630,11 +630,10 @@ func TestStepErrorIsOnlyTheStepsOwnFailure(t *testing.T) {
 			t.Fatal(cerr)
 		}
 		var mf *ErrMigrationFailed
-		var se *StepError
 		if !errors.As(err, &mf) || !errors.Is(err, syscall.ENOSPC) {
 			t.Fatalf("err = %v, want ErrMigrationFailed wrapping the injected ENOSPC", err)
 		}
-		if errors.As(err, &se) {
+		if _, ok := errors.AsType[*StepError](err); ok {
 			t.Fatalf("err = %v: a sidecar write is bookkeeping, not the step's own failure", err)
 		}
 	})

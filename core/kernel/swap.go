@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -236,8 +236,7 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 	}
 	k.store = nil
 	if phase == phaseP4b && out.Intent.Kind == restorejournal.KindCheckpoint {
-		var stepErr *storage.StepError
-		if !errors.As(cause, &stepErr) {
+		if _, ok := errors.AsType[*storage.StepError](cause); !ok {
 			return cause
 		}
 		if err := k.swap.s.CheckpointFailed(ctx, out.ID); err != nil {
