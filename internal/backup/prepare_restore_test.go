@@ -1,5 +1,5 @@
 // file: internal/backup/prepare_restore_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 29ed21ba-737f-4de2-844d-5681aec413d7
 // last-edited: 2026-11-08
 
@@ -50,6 +50,14 @@ func TestPrepareRestoreIn_Refusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	writePlainTar(t, filepath.Join(backupDir, "knightfall.tar"), [][2]string{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+	// Listed, with a sidecar, but it cannot be opened: a dangling symlink,
+	// which a root test run cannot read past either.
+	if err := os.Symlink(filepath.Join(backupDir, "blackgate"), filepath.Join(backupDir, "the-black-mirror.tar")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "the-black-mirror.tar.sha256"), []byte("00  the-black-mirror.tar\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name      string
@@ -57,11 +65,15 @@ func TestPrepareRestoreIn_Refusals(t *testing.T) {
 		filename  string
 		verify    bool
 		wantIs    []error
+		wantNotIs []error
 	}{
-		{"not found", backupDir, "year-one.tar", false, []error{ErrBackupNotFound, os.ErrNotExist}},
-		{"verification unsupported", backupDir, "knightfall.tar", true, []error{ErrVerificationUnsupported}},
-		{"checksum mismatch", backupDir, "hush.tar", true, []error{ErrChecksumMismatch}},
-		{"the backup directory cannot be read", filepath.Join(backupDir, "arkham"), "knightfall.tar", false, nil},
+		{"not found", backupDir, "year-one.tar", false, []error{ErrBackupNotFound, os.ErrNotExist}, nil},
+		{"verification unsupported", backupDir, "knightfall.tar", true, []error{ErrVerificationUnsupported}, nil},
+		{"checksum mismatch", backupDir, "hush.tar", true, []error{ErrChecksumMismatch}, nil},
+		{"the backup directory cannot be read", filepath.Join(backupDir, "arkham"), "knightfall.tar", false, nil, nil},
+		// The read that verifies is the read that failed: that is the error,
+		// not a mismatch against a checksum of nothing.
+		{"the archive cannot be opened", backupDir, "the-black-mirror.tar", true, []error{os.ErrNotExist}, []error{ErrChecksumMismatch}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,6 +84,11 @@ func TestPrepareRestoreIn_Refusals(t *testing.T) {
 			for _, want := range tc.wantIs {
 				if !errors.Is(err, want) {
 					t.Errorf("error %v does not match %v", err, want)
+				}
+			}
+			for _, not := range tc.wantNotIs {
+				if errors.Is(err, not) {
+					t.Errorf("error %v matches %v", err, not)
 				}
 			}
 		})
