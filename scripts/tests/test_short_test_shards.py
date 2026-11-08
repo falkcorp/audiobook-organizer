@@ -341,7 +341,11 @@ class CoreShardTest(unittest.TestCase):
         self.assertIn(f"{CORE_MOD}/auth", seen[0])
 
     def test_go_test_output_with_raw_bytes_is_decoded_not_raised(self) -> None:
-        child = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\x1f\\x8b\\xff end')"]
+        child = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'ok\\x1f\\x8b\\xff end')",
+        ]
         res = subprocess.run(child, **sts.GO_TEST_IO)
         self.assertIn("ok", res.stdout)
         self.assertIn("end", res.stdout)
