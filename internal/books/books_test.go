@@ -1,5 +1,5 @@
 // file: internal/books/books_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d3e9b14-2c6a-4f80-b5d1-8e0a4c97f2b3
 // last-edited: 2026-11-08
 
@@ -359,7 +359,7 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 				t.Errorf("atom %q: resolveRoutes error = %v, want one naming the route and the atom", atom, err)
 			}
 		}
-		if got, ok := RouteRequirement(rbac.AnyAuthenticated); !ok || got.Kind() != rbac.AnyAuthenticated.Kind() {
+		if got, ok := routeRequirement(AtomTable(), rbac.AnyAuthenticated); !ok || got.Kind() != rbac.AnyAuthenticated.Kind() {
 			t.Errorf("a non-atom requirement came back as %s, %v; want it unchanged", got, ok)
 		}
 	})
