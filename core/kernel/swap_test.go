@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -591,6 +591,69 @@ func TestP0aRejectsADeleteEntryOnTheDBFilesystem(t *testing.T) {
 	}
 	if _, err := os.Stat(aux); err != nil {
 		t.Fatalf("a rejected reset removed its delete entry: %v", err)
+	}
+}
+
+// neitherFS is a filesystem that is neither the real one nor in memory as
+// vfs.Root sees it: it writes real files through vfs.Default, and the
+// Unwrap it promotes from vfs.Default returns nil, so vfs.Root stops at it.
+type neitherFS struct{ vfs.FS }
+
+// TestBootProbeFailsClosed (R1-21 verification review): the swap's device
+// probe is the operating system's on the real filesystem, none in memory,
+// the seam's when a test sets one, and on any other filesystem one that
+// refuses every query. There a staged restore's rename pre-check (step b)
+// and a reset's delete entry (step a) are refused, so the swap is rejected
+// rather than its device checks skipped, even for a path that exists and
+// one that does not.
+func TestBootProbeFailsClosed(t *testing.T) {
+	ctx := t.Context()
+	if p := bootProbe(ctx, vfs.Default); p != restorejournal.OSProbe() {
+		t.Fatalf("real filesystem: probe %T, want the operating system's", p)
+	}
+	if p := bootProbe(ctx, vfs.NewMem()); p != nil {
+		t.Fatalf("in memory: probe %T, want none", p)
+	}
+	if p := bootProbe(ctx, errorfs.Wrap(vfs.NewMem(), errorfs.InjectorFunc(func(errorfs.Op) error { return nil }))); p != nil {
+		t.Fatalf("a wrapper over memory: probe %T, want none", p)
+	}
+	other := neitherFS{vfs.Default}
+	if root := vfs.Root(other); root == vfs.Default {
+		t.Fatal("vfs.Root sees through neitherFS; the fixture tests nothing")
+	}
+	seam := restorejournaltest.OtherDevice{Probe: restorejournal.OSProbe()}
+	if p, ok := bootProbe(bootseam.With(ctx, &bootseam.Seams{Probe: seam}), other).(restorejournaltest.OtherDevice); !ok || p.Probe != seam.Probe {
+		t.Fatalf("with a seam: probe %T, want the seam's", p)
+	}
+	p := bootProbe(ctx, other)
+	if p == nil {
+		t.Fatal("neither real nor in memory: no probe, so P0a's device checks would be skipped")
+	}
+	dir := t.TempDir()
+	cave := filepath.Join(dir, "batcave")
+	if err := os.MkdirAll(cave, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{cave, filepath.Join(dir, "absent")} {
+		if _, err := p.ItemDev(path); err == nil || errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("ItemDev(%s) = %v, want a refusal that is not ErrNotExist", path, err)
+		}
+		if _, err := p.DirDev(path); err == nil || errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("DirDev(%s) = %v, want a refusal that is not ErrNotExist", path, err)
+		}
+		if err := p.Writable(path); err == nil {
+			t.Fatalf("Writable(%s) succeeded", path)
+		}
+	}
+	db := filepath.Join(dir, "storage", "main.pebble")
+	moves := []restorejournal.Target{{From: cave, To: filepath.Join(dir, "previous", "batcave")}}
+	if err := restorejournal.Validate(p, moves); !errors.Is(err, restorejournal.ErrRenameRefused) {
+		t.Fatalf("Validate = %v, want ErrRenameRefused", err)
+	}
+	in := restorejournal.Intent{ID: "z-neither", Kind: restorejournal.KindReset, Reset: restorejournal.ResetFactory, DBPath: db,
+		Delete: []string{cave}}
+	if err := restorejournal.ValidateDelete(p, filepath.Join(dir, "state"), in, nil); !errors.Is(err, restorejournal.ErrDeleteRefused) {
+		t.Fatalf("ValidateDelete = %v, want ErrDeleteRefused", err)
 	}
 }
 
