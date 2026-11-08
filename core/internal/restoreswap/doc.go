@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/doc.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: eee335d6-866d-40e3-a22b-ad99e4920fa0
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package restoreswap is the one journaled swap (05-backup §5B.3.4,
 // 05-storage §5S.3.15, §5S.3.16 machine 1): restores of every kind and the
@@ -14,7 +14,7 @@
 // The kernel holds the Swapper: it stages through it and runs it at boot
 // phase P0a, before storage opens, then reports the restore boot's steps
 // after P2 and P4b (opened, marker_written, applied), a reset boot's after
-// P4a (applied, hook_done), or the failure exits (step x, or failed for a
+// P4a (applied) and P4b (hook_done), or the failure exits (step x, or failed for a
 // KindCheckpoint restore). storage.Admin has no staging or swap method
 // (COR8-5).
 //

@@ -1,7 +1,7 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -276,6 +276,58 @@ func TestCheckpointRestoreFailedKeepsInFlight(t *testing.T) {
 	}
 	if err := ReaderCheck(h.state, ReaderCheckAllow{FailedCheckpointEscape: true}); err != nil {
 		t.Fatalf("reader check with the failed-checkpoint escape = %v, want nil", err)
+	}
+}
+
+// TestResetHookDoneAfterMigrationList (06 §6.5.1 P4d step 1, COR8-4): a
+// reset boot with no reset hook journals applied after P4a's fresh install,
+// and removes the delete entries and journals hook_done only after the
+// migration list. A reset boot whose P4b fails leaves the journal at
+// applied, the in-flight file and the delete entries in place, and the next
+// boot finishes the reset after its own P4b.
+func TestResetHookDoneAfterMigrationList(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.config(nil)))
+	aux := filepath.Join(h.state, "batcave-index")
+	if err := os.MkdirAll(aux, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "z-reset"
+	s, err := restoreswap.New(restoreswap.Options{StateDir: h.state, BuildID: swapBuild})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: restorejournal.ResetStore, DBPath: h.db,
+		Delete: []string{aux}, StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}
+	for _, p := range []string{h.db, h.db + restorejournal.LevelsSuffix} {
+		in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(h.state, h.db, id, p)})
+	}
+	if err := s.Stage(h.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	broken := storage.Migration{Version: 2, Name: "broken", Compat: storage.Additive,
+		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }}
+	if _, err := h.boot(h.config(nil, broken)); err == nil {
+		t.Fatal("reset boot with a failing step succeeded")
+	}
+	if got := stepsOf(h.journal(id)); got[len(got)-1] != "applied" {
+		t.Fatalf("after a failed P4b the journal is %v, want it at applied", got)
+	}
+	if _, ok, err := restoreswap.InFlight(vfs.Default, h.state); err != nil || !ok {
+		t.Fatalf("in flight after a failed P4b = %v, %v; want the in-flight file kept", ok, err)
+	}
+	if _, err := os.Stat(aux); err != nil {
+		t.Fatalf("a delete entry was removed before the migration list finished: %v", err)
+	}
+	h.mustBoot(h.config(nil))
+	if got := stepsOf(h.journal(id)); got[len(got)-1] != "hook_done" {
+		t.Fatalf("after the next boot the journal is %v, want it at hook_done", got)
+	}
+	if _, ok, err := restoreswap.InFlight(vfs.Default, h.state); err != nil || ok {
+		t.Fatalf("in flight after hook_done = %v, %v", ok, err)
+	}
+	if _, err := os.Stat(aux); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the delete entry after hook_done: %v, want it removed", err)
 	}
 }
 
