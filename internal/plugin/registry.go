@@ -1,12 +1,13 @@
 // file: internal/plugin/registry.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 73ed97c1-8466-4a1b-bc07-cb81ce34c502
-// last-edited: 2026-09-02
+// last-edited: 2026-11-08
 
 package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -16,9 +17,15 @@ import (
 )
 
 // registry is the global plugin registry.
-var globalRegistry = &Registry{
-	plugins: make(map[string]Plugin),
-	enabled: make(map[string]bool),
+var globalRegistry = NewRegistry()
+
+// NewRegistry returns an empty registry. The process uses the global one
+// (Global); a test can build its own.
+func NewRegistry() *Registry {
+	return &Registry{
+		plugins: make(map[string]Plugin),
+		enabled: make(map[string]bool),
+	}
 }
 
 // Registry manages plugin lifecycle.
@@ -30,14 +37,18 @@ type Registry struct {
 }
 
 // Register adds a plugin to the global registry. Called from init().
-func Register(p Plugin) {
-	globalRegistry.mu.Lock()
-	defer globalRegistry.mu.Unlock()
-	if _, exists := globalRegistry.plugins[p.ID()]; exists {
+func Register(p Plugin) { globalRegistry.Register(p) }
+
+// Register adds p to r. A second plugin with an ID already registered is
+// skipped with a warning.
+func (r *Registry) Register(p Plugin) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.plugins[p.ID()]; exists {
 		slog.Warn("plugin already registered, skipping duplicate", "id", p.ID())
 		return
 	}
-	globalRegistry.plugins[p.ID()] = p
+	r.plugins[p.ID()] = p
 	slog.Info("plugin registered", "name", p.Name(), "id", p.ID(), "version", p.Version())
 }
 
@@ -141,22 +152,29 @@ func (r *Registry) InitAllScoped(ctx context.Context, baseDeps Deps, parentGroup
 	return nil
 }
 
-// ShutdownAll shuts down all initialized plugins in reverse order.
-func (r *Registry) ShutdownAll(ctx context.Context) {
+// ShutdownAll shuts down all initialized plugins in reverse order. Every
+// plugin is asked to shut down whatever an earlier one returned, and the
+// errors come back joined, each naming its plugin, so a caller can tell a
+// stop that did not finish (a Shutdown that ran out of ctx returns its error)
+// from one that did.
+func (r *Registry) ShutdownAll(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	var errs []error
 	for _, id := range slices.Backward(r.initOrder) {
 
 		if p, ok := r.plugins[id]; ok {
 			if err := p.Shutdown(ctx); err != nil {
 				slog.Warn("plugin shutdown error", "id", id, "err", err)
+				errs = append(errs, fmt.Errorf("%s: %w", id, err))
 			} else {
 				slog.Info("plugin shut down", "id", id)
 			}
 		}
 	}
 	r.initOrder = nil
+	return errors.Join(errs...)
 }
 
 // HealthCheckAll runs health checks on all initialized plugins.
