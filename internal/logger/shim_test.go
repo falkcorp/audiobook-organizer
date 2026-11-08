@@ -1,5 +1,5 @@
 // file: internal/logger/shim_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a14c3d7-52e9-4b60-a7f1-0c3d9e5b2a46
 // last-edited: 2026-11-08
 
