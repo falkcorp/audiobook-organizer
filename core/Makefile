@@ -1,7 +1,7 @@
 # file: core/Makefile
-# version: 1.3.0
+# version: 1.4.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # core's own Makefile (12 §12.3.11). It must run from an export of core/ alone
 # (12 SC4) and, after the split, the core repo has nothing else, so every
@@ -19,7 +19,7 @@ PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
 	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
-	generate-api-client coverage-floor embed-check test-nightly
+	generate-api-client coverage-floor embed-check test-nightly version-check script-test
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
 print-toolchain:
@@ -37,10 +37,11 @@ print-toolchain:
 ## not outlive its reason. (web-test was one until core/web arrived, R1-30.)
 ##
 ## 12 §12.3.11's full list also has vet-darwin vet-integration staticcheck
-## replace-check version-check; each joins this target in the PR that creates its
-## subject or script (the darwin and integration vets run over core from the
-## root's `make ci` already, R1-02).
-ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check openapi-check web-lint web-test coverage-floor embed-check
+## replace-check; each joins this target in the PR that creates its subject or
+## script (the darwin and integration vets run over core from the root's
+## `make ci` already, R1-02). version-check joined with R1-06, with script-test,
+## which runs the unit tests of core's own CI scripts.
+ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check openapi-check web-lint web-test coverage-floor embed-check version-check script-test
 	@echo "core ci passed"
 
 build:
@@ -162,3 +163,16 @@ coverage-floor:
 ## `make embed-check` judges core's packages against the Docker context too.
 embed-check:
 	$(PYTHON) scripts/ci/check_embed_outputs.py
+
+## version-check: version.Version is at or above the newest recorded checkpoint,
+## hello's MinCoreVersion is at or below it, and every @mediacore/* npm package
+## carries it (12 §12.4.3). Fetches refs/core-checkpoints/* from origin when the
+## tree has that remote; an export of core/ alone has none ("not applicable").
+version-check:
+	$(PYTHON) scripts/ci/check_core_version.py
+
+## script-test: the unit tests of core's own CI scripts (core/scripts/ci/test_*.py).
+## Nothing else discovers them: the root's python tests sweep scripts/ and
+## .github/workflows/scripts/ only.
+script-test:
+	$(PYTHON) -m unittest discover -s scripts/ci -p 'test_*.py'
