@@ -1,7 +1,7 @@
 // file: internal/server/plugins_init.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-08-19
+// last-edited: 2026-11-08
 
 package server
 
@@ -13,8 +13,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 
-	// Blank imports trigger each plugin's init() to register with plugin.Global().
-	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
+	// The blank import triggers the webhook plugin's init() to register with
+	// plugin.Global(). The deluge plugin has no such init(): its service def is
+	// listed in serviceDefs (registry_wire.go), which imports the package.
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins/webhook"
 )
 
