@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -70,10 +70,16 @@ func HNSWSnapshotDir(dbPath string) string {
 var hnswCleanStopClaimOff atomic.Bool
 
 // DisableHNSWCleanStopClaim stops every later store open in this process, and
-// ClaimHNSWCleanStop, from taking the HNSW clean-stop marker. An
-// operation-runner child calls it before it opens the store: the marker
-// belongs to its parent.
-func DisableHNSWCleanStopClaim() { hnswCleanStopClaimOff.Store(true) }
+// ClaimHNSWCleanStop, from taking the HNSW clean-stop marker, until restore
+// runs. An operation-runner child calls it before it opens the store, because
+// the marker belongs to its parent, and defers restore, so the switch is
+// scoped to the function that needs it rather than left on for the rest of
+// the process (R1-15 round-2 review, N5). restore puts back the setting from
+// before the call, so nested calls unwind in order.
+func DisableHNSWCleanStopClaim() (restore func()) {
+	prev := hnswCleanStopClaimOff.Swap(true)
+	return func() { hnswCleanStopClaimOff.Store(prev) }
+}
 
 // cleanStopClaim is the marker an open took from dir (an absolute, clean
 // path; cleanStopDir): rec is nil when there was none, one that did not
