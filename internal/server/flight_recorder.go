@@ -1,5 +1,5 @@
 // file: internal/server/flight_recorder.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: c64f779e-5ec5-46b3-8883-8d6f1b56bec9
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -25,15 +26,20 @@ type traceSnapshotter interface {
 // newFlightRecorder builds the server's flight recorder (not started; see
 // startFlightRecorder). Traces go to a "traces" directory beside the database,
 // the same sibling-directory rule the HNSW index uses. With no DatabasePath (most tests) the recorder is disabled.
-func newFlightRecorder() *diagflight.Recorder {
+// log is the recorder's logger; nil is slog.Default().
+func newFlightRecorder(log *slog.Logger) *diagflight.Recorder {
+	if log == nil {
+		log = logger.FromContext(context.Background())
+	}
 	var dir string
 	if config.AppConfig.DatabasePath != "" {
 		dir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "traces")
 	}
 	// The recorder formats its lines from paths and error text and relies on
 	// its logger's handler for two separate guarantees (core/health logf), both
-	// of which the App's pipeline gives because it is the process default by
-	// the time this runs (core/app installs it before any module's Register):
+	// of which the App's pipeline gives, and only when log is a logger over it:
+	// the books module passes its module logger, and a nil log is slog.Default(),
+	// which is the pipeline once core/app has installed it (before any Register):
 	//   - control characters: the pipeline's output handler is slog's text or
 	//     JSON handler, which quotes the message and every value, so a CR or LF
 	//     in a path cannot forge a second log line. This is what the removed
@@ -42,7 +48,7 @@ func newFlightRecorder() *diagflight.Recorder {
 	//     message (URL, path and key=value scans) and on every attribute (key
 	//     rule). Nothing in this package redacts, so a logger that bypasses the
 	//     pipeline has neither guarantee.
-	return diagflight.New(diagflight.Config{Dir: dir, Logger: logger.FromContext(context.Background()).With("subsystem", "flight-recorder")})
+	return diagflight.New(diagflight.Config{Dir: dir, Logger: log.With("subsystem", "flight-recorder")})
 }
 
 // startFlightRecorder starts recording. Failure is logged and ignored: tracing

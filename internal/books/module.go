@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -143,7 +143,13 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if m.store == nil {
 		return errors.New("books: Module was given no store")
 	}
-	srv := server.NewServer(m.store)
+	// The registry's and the flight recorder's logger is the module logger: it
+	// reaches the journal, the log file and the per-op log store, but its
+	// records are not Process, so the registry's per-run info lines (enqueued,
+	// dispatched, started, finished) do not each become a system Activity row.
+	// The op's own rows come from the registry's activity mirror. Passing nil
+	// would capture slog.Default(), the process logger the Activity tap feeds.
+	srv := server.NewServerWithLogger(m.store, r.Deps().Log)
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
