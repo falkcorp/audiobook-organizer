@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -9,9 +9,13 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,7 +45,9 @@ import (
 //     exemptions only, BasicGateRefusesUnrouted), then the security and CORS
 //     headers, the response compression (compresses: gin-contrib/gzip's
 //     handling, R1-15 review m5), and Alt-Svc where HEAD's late NoRoute
-//     middleware added it.
+//     middleware added it. It also writes gin's access line for such an
+//     answer (review m6), as HEAD's logger, the engine's second middleware,
+//     did for every request.
 //
 // R1-17 replaces the shim with core's perimeter stages; the parity test
 // (perimeter_shim_test.go) pins what it must keep.
@@ -65,19 +71,49 @@ func perimeterSeen() gin.HandlerFunc {
 // perimeterShim wraps next, the kernel's root handler, with HEAD's perimeter
 // for the responses core writes itself. altSvc is the Alt-Svc value HEAD
 // added at listen time when HTTP/3 is served, or "".
+//
+// accessLog is where the access line of a core-written answer goes: what
+// gin's logger writes to, gin.DefaultWriter, read here at construction as
+// gin.LoggerWithConfig reads it when the engine is built.
 func (s *Server) perimeterShim(next http.Handler, altSvc string) http.Handler {
 	engine := s.router
+	accessLog := gin.DefaultWriter
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			engine.ServeHTTP(w, r)
 			return
 		}
+		start := time.Now()
 		st := &perimeterState{}
 		r = r.WithContext(context.WithValue(r.Context(), perimeterKey{}, st))
-		pw := &perimeterWriter{ResponseWriter: w, r: r, st: st, altSvc: altSvc}
+		pw := &perimeterWriter{ResponseWriter: w, r: r, st: st, altSvc: altSvc, status: http.StatusOK}
 		next.ServeHTTP(pw, r)
 		pw.finish()
+		if !st.gin.Load() {
+			logCoreAccess(accessLog, r, pw.status, start)
+		}
 	})
+}
+
+// logCoreAccess writes gin's access line for an answer core wrote itself:
+// HEAD's gin.LoggerWithConfig line, through the same redacting formatter, so
+// ABS clients' ?token= stays masked. Its SkipPaths are event streams gin
+// serves, so none applies here. ClientIP is the peer's address, as gin's is
+// with SetTrustedProxies(nil). No colour: the engine's logger colours only a
+// terminal, and the service's output is not one.
+func logCoreAccess(out io.Writer, r *http.Request, status int, start time.Time) {
+	path := r.URL.Path
+	if raw := r.URL.RawQuery; raw != "" {
+		path += "?" + raw
+	}
+	ip, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		ip = ""
+	}
+	_, _ = fmt.Fprint(out, servermiddleware.RedactingLogFormatter(gin.LogFormatterParams{
+		Request: r, TimeStamp: time.Now(), StatusCode: status, Latency: time.Since(start),
+		ClientIP: ip, Method: r.Method, Path: path,
+	}))
 }
 
 // perimeterWriter applies the perimeter to a response core writes itself,
@@ -90,6 +126,8 @@ type perimeterWriter struct {
 	altSvc  string
 	decided bool
 	refused bool
+	// status is what the client got: core's status, or the gate's 401.
+	status int
 	// gz compresses a core-written answer below 400 for a client that
 	// accepts gzip; wrote says a body byte went through it.
 	gz    *gzip.Writer
@@ -101,11 +139,13 @@ func (w *perimeterWriter) decide(status int) {
 		return
 	}
 	w.decided = true
+	w.status = status
 	if w.st.gin.Load() {
 		return
 	}
 	h := w.ResponseWriter.Header()
 	if servermiddleware.BasicGateRefusesUnrouted(w.r) {
+		w.status = http.StatusUnauthorized
 		// HEAD's refusal carried the security and CORS headers (both ran
 		// before the gate) and nothing a later handler would have set.
 		w.refused = true

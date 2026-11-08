@@ -1,15 +1,17 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -285,5 +287,72 @@ func TestPerimeterShim_UnmatchedMethodMatchesGin(t *testing.T) {
 			}
 			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
 		})
+	}
+}
+
+// accessLineVolatile matches the two fields of gin's access line that differ
+// between two runs of the same request: the timestamp and the latency.
+var accessLineVolatile = regexp.MustCompile(`^\[GIN\] \d{4}/\d\d/\d\d - \d\d:\d\d:\d\d \|(.*?)\|\s*\S+\s*\|`)
+
+// TestPerimeterShim_AccessLogLikeHEAD (R1-15 review m6): HEAD's gin logger,
+// the engine's second middleware, wrote an access line for every request,
+// the unrouted ones included. Behind the kernel, an answer core writes itself
+// never reaches it, so the shim writes the same line: same status, client,
+// method and redacted path, the Basic refusal included. A request gin serves
+// is logged once, by gin.
+func TestPerimeterShim_AccessLogLikeHEAD(t *testing.T) {
+	var log bytes.Buffer
+	prev := gin.DefaultWriter
+	gin.DefaultWriter = &log // before the engine and the shim read it
+	t.Cleanup(func() { gin.DefaultWriter = prev })
+	f := legacyEngine(t, false, false)
+	head, r1 := perimeterStacks(t, f, "")
+
+	lines := func(h http.Handler, method, path string, header map[string]string) []string {
+		log.Reset()
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "192.0.2.9:41000"
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		var out []string
+		for _, l := range strings.Split(strings.TrimRight(log.String(), "\n"), "\n") {
+			if strings.HasPrefix(l, "[GIN] ") {
+				out = append(out, accessLineVolatile.ReplaceAllString(l, "[GIN] <time> |$1| <latency> |"))
+			}
+		}
+		return out
+	}
+	check := func(name, method, path string, header map[string]string) {
+		t.Helper()
+		h, k := lines(head, method, path, header), lines(r1, method, path, header)
+		if len(h) != 1 {
+			t.Fatalf("%s: HEAD wrote %d access lines: %q", name, len(h), h)
+		}
+		assert.Equal(t, h, k, "%s: access line", name)
+	}
+	cases := []struct{ name, method, path string }{
+		{"/api redirect, token masked", http.MethodGet, "/api/audiobooks?token=synthetic-joker-card"},
+		{"legacy 404", http.MethodGet, "/api/v1/riddler-unrouted"},
+		{"core group", http.MethodGet, "/api/core/v1/riddler"},
+		{"unmatched method", http.MethodDelete, "/api/v1/health"},
+		{"routed, logged by gin only", http.MethodGet, "/api/v1/health"},
+	}
+	for _, c := range cases {
+		check(c.name, c.method, c.path, nil)
+	}
+	if got := lines(r1, http.MethodGet, "/api/audiobooks?token=synthetic-joker-card", nil); len(got) != 1 || strings.Contains(got[0], "synthetic-joker-card") {
+		t.Errorf("the access line must mask the token: %q", got)
+	}
+
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.BasicAuthEnabled = true
+	config.AppConfig.BasicAuthUsername = "alfred"
+	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
+	for _, c := range cases {
+		check("gated: "+c.name, c.method, c.path, nil)
+		check("gated, signed in: "+c.name, c.method, c.path, map[string]string{"Authorization": basicCredentials()})
 	}
 }
