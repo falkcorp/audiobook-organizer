@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -234,8 +234,10 @@ func (k *Kernel) Routes() iter.Seq[httpapi.RouteInfo] { return k.router.Routes()
 // served registry (05-metrics §6 R1 row).
 func (k *Kernel) Provider() *metrics.Provider { return k.provider }
 
-// RootLogger is the App's root logger: Logging.Root(), or Config.Logger when
-// the kernel adopted one. InstallProcessDefaults makes it slog's default.
+// RootLogger is the App's process default logger: Logging.Root(), which
+// carries no module attribute (core's own loggers, CoreLogger, carry
+// module=core), or Config.Logger when the kernel adopted one.
+// InstallProcessDefaults makes it slog's default.
 func (k *Kernel) RootLogger() *slog.Logger {
 	if k.logging != nil {
 		return k.logging.Root()

@@ -1,7 +1,7 @@
 // file: core/log/handler.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 00d59f68-e217-4796-9d74-36dcbf58a4ed
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package log
 
@@ -133,7 +133,11 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 
 	// Step 4a: the primary output.
 	out := slog.NewRecord(t, r.Level, msg, r.PC)
-	out.AddAttrs(slog.String(KeyModule, h.sc.module))
+	// The process default logger (Root, Handler) has no module, so its
+	// records carry no module attribute; every other scope's do, first.
+	if h.sc.module != processModule {
+		out.AddAttrs(slog.String(KeyModule, h.sc.module))
+	}
 	if h.sc.subsystem != "" {
 		out.AddAttrs(slog.String(KeySubsystem, h.sc.subsystem))
 	}
