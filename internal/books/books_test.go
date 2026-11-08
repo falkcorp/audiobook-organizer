@@ -1,5 +1,5 @@
 // file: internal/books/books_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d3e9b14-2c6a-4f80-b5d1-8e0a4c97f2b3
 // last-edited: 2026-11-08
 
@@ -467,18 +467,18 @@ func TestR1Listen_NoServerUsesCoreListener(t *testing.T) {
 	}
 }
 
-// TestR1Telemetry_TracerFromEnv: with OTEL_EXPORTER_OTLP_ENDPOINT set, the
-// config serve snapshots yields R1Telemetry tracing, and after
+// TestTelemetry_TracerFromEnv: with OTEL_EXPORTER_OTLP_ENDPOINT set, the
+// config serve snapshots yields Telemetry tracing, and after
 // app.InstallProcessDefaults the global tracer provider is the App's SDK
 // provider, not the no-op one, so production traces survive the move to the
 // App's Provider.
-func TestR1Telemetry_TracerFromEnv(t *testing.T) {
+func TestTelemetry_TracerFromEnv(t *testing.T) {
 	withConfig(t, config.AppConfig)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4317")
 	config.InitConfig()
-	tel := r1Telemetry(config.Snapshot())
+	tel := telemetryFromConfig(config.Snapshot())
 	if tel.Tracing == nil || tel.Tracing.Endpoint != "http://192.0.2.1:4317" {
-		t.Fatalf("R1Telemetry.Tracing = %+v, want the env endpoint", tel.Tracing)
+		t.Fatalf("Telemetry.Tracing = %+v, want the env endpoint", tel.Tracing)
 	}
 	mod := Module(nil)
 	opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})

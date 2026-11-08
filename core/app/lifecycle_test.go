@@ -1,7 +1,7 @@
 // file: core/app/lifecycle_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e3a9c51-2f8b-4d06-b1c4-5a9e0d7f3b28
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
@@ -166,12 +166,12 @@ func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 	}
 }
 
-// TestR1Telemetry_TracingReachesProvider: Options.R1Telemetry's span exporter
+// TestTelemetry_TracingReachesProvider: Options.Telemetry's span exporter
 // reaches the kernel's Provider, so the TracerProvider InstallProcessDefaults
 // makes global is the SDK's, not the no-op one, and its OTLP push and
 // resource attributes are the app's (production tracing survives the move to
-// the App's Provider). Without R1Telemetry the TracerProvider is the no-op.
-func TestR1Telemetry_TracingReachesProvider(t *testing.T) {
+// the App's Provider). Without Telemetry the TracerProvider is the no-op.
+func TestTelemetry_TracingReachesProvider(t *testing.T) {
 	base := Options{AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{}}
 	off, err := New(t.Context(), base)
 	if err != nil {
@@ -179,11 +179,11 @@ func TestR1Telemetry_TracingReachesProvider(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = off.Metrics().Shutdown(context.Background()) })
 	if _, sdk := off.Metrics().TracerProvider().(*sdktrace.TracerProvider); sdk {
-		t.Fatal("tracing is on without R1Telemetry")
+		t.Fatal("tracing is on without Telemetry")
 	}
 
 	on := base
-	on.R1Telemetry = &R1Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"},
+	on.Telemetry = &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"},
 		Environment: "gotham-staging", InstanceID: "01JWAYNE0000000000000000"}
 	a, err := New(t.Context(), on)
 	if err != nil {
@@ -195,7 +195,7 @@ func TestR1Telemetry_TracingReachesProvider(t *testing.T) {
 		_ = a.Metrics().Shutdown(ctx)
 	})
 	if _, sdk := a.Metrics().TracerProvider().(*sdktrace.TracerProvider); !sdk {
-		t.Fatalf("TracerProvider = %T, want the SDK's with R1Telemetry.Tracing set (degraded: %v)",
+		t.Fatalf("TracerProvider = %T, want the SDK's with Telemetry.Tracing set (degraded: %v)",
 			a.Metrics().TracerProvider(), a.Metrics().Degraded())
 	}
 	if slices.Contains(a.Metrics().Degraded(), metrics.DegradedTracingDisabled) {

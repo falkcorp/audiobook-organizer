@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
@@ -110,14 +110,17 @@ type Options struct {
 	// listener carries those (R1-17). nil = httpapi.Listen. Release R1 only.
 	R1Listen func(httpapi.ListenOptions, http.Handler, *slog.Logger) (R1Server, error)
 
-	// R1Telemetry is the part of the App's metrics.Options the core.metrics
-	// and core.tracing config sections carry from F3: the OTLP metric push,
-	// the OTLP span exporter and the resource's deployment environment and
-	// instance ID. nil = the Prometheus scrape only, no tracing. ABO fills it
-	// from its effective config (OTEL_EXPORTER_OTLP_ENDPOINT and friends) so
-	// production tracing survives the move to the App's Provider. Release R1
-	// only: F3 deletes the field and the type.
-	R1Telemetry *R1Telemetry
+	// Telemetry is the part of the App's metrics.Options that the
+	// core.metrics and core.tracing config sections describe (05-metrics §7):
+	// the OTLP metric push, the OTLP span exporter and the resource's
+	// deployment environment and instance ID. nil = the Prometheus scrape
+	// only, no tracing. Core config has no such sections until F3, so the app
+	// fills it (ABO from its effective config: OTEL_EXPORTER_OTLP_ENDPOINT and
+	// friends, so production tracing survives the move to the App's
+	// Provider); from F3 core config fills it. An OTLP push or span exporter
+	// that cannot be built degrades the Provider and New goes on (05-metrics
+	// §8, as ABO's InitOTEL did).
+	Telemetry *Telemetry
 }
 
 // R1Server is one listener R1Listen opens: what the supervisor drives.
@@ -129,9 +132,9 @@ type R1Server interface {
 	Shutdown(ctx context.Context) error
 }
 
-// R1Telemetry is the release-R1-only value of Options.R1Telemetry. The
-// propagator needs no field: the App's is W3C trace context plus baggage.
-type R1Telemetry struct {
+// Telemetry is the value of Options.Telemetry. The propagator needs no
+// field: the App's is W3C trace context plus baggage.
+type Telemetry struct {
 	OTLP        *metrics.OTLPMetrics // nil = no OTLP metric push
 	Tracing     *metrics.OTLPTracing // nil = the no-op TracerProvider
 	Environment string               // deployment.environment; "" = metrics.DefaultEnvironment
