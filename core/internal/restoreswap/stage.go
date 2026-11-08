@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/stage.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f8808c55-579d-4ed5-81e1-2c5276a578b9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -24,7 +24,9 @@ import (
 // mutex), then the journal's staged record. A restore intent's Targets are
 // its placements ({From: staged item, To: live path}, decision D1) and every
 // From must exist; a KindReset intent's Targets are its set-aside pairs,
-// from the stager (R1-25's StageReset), each To its SetAsideDest.
+// from the stager (R1-25's StageReset), each To its SetAsideDest, and its
+// Delete entries pass restorejournal.ValidateDelete (absolute, no kept path,
+// off the DB's filesystem); a restore deletes nothing.
 //
 // Stage runs outside a boot (an offline command, or a request after P0a),
 // so its operations are not crash-matrix rows: a crash leaves the slot
@@ -76,8 +78,10 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 	} else if ok {
 		return restorejournal.ErrSwapPending
 	}
-	// S2: DATA-23, before anything is written.
-	if err := restorejournal.Validate(s.o.Probe, moves); err != nil {
+	// S2: DATA-23, before anything is written; and a reset's delete entries
+	// (rule (4)'s kept paths, the DB's filesystem; R1-21 review M1).
+	if err := errors.Join(restorejournal.Validate(s.o.Probe, moves),
+		restorejournal.ValidateDelete(s.o.Probe, s.o.StateDir, in, s.legacySuffixes())); err != nil {
 		return err
 	}
 	return bootseam.Labelled(bootseam.From(ctx), "swap.stage", func() error {
