@@ -351,7 +351,19 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 	if err := db.readEpoch(ctx); err != nil {
 		return err
 	}
-	if !st.marker {
+	switch {
+	case st.marker:
+	case st.fresh:
+		// An empty store is a new install. It takes no checkpoint, so it has
+		// no record to keep an ID for, and inheriting one from a record left
+		// beside it (a store set aside by a reset, or deleted by hand) would
+		// let its first upgrade adopt the old store's copy and keep that copy
+		// as its rollback (review BLOCKER-3).
+		st.installID = st.opts.InstallID
+		if st.installID == "" {
+			st.installID = newInstallID()
+		}
+	default:
 		id, err := db.chooseInstallID()
 		if err != nil {
 			return err
@@ -722,7 +734,8 @@ func (db *DB) readEpoch(ctx context.Context) error {
 	return nil
 }
 
-// chooseInstallID is step 5's choice for a marker-less store: the restore
+// chooseInstallID is step 5's choice for a non-empty marker-less store (a
+// HEAD store, or a crash between the checkpoint and the marker): the restore
 // boot's hand-over, else an open checkpoint record's of this generation, else
 // a new one.
 func (db *DB) chooseInstallID() (string, error) {

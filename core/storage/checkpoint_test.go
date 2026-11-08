@@ -53,6 +53,28 @@ func readRecord(t *testing.T, e *env, name string) checkpointRecord {
 
 func cpDir(e *env) string { return filepath.Join(filepath.Dir(e.path), ".mediacore-checkpoints") }
 
+// failingOwners is cpOwners plus a wayne step 2 that always fails: an upgrade
+// that leaves its checkpoint open.
+func failingOwners() []OwnerSpec {
+	return []OwnerSpec{
+		{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}},
+		{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
+			step(1, "cave", "cave", "1"),
+			{Version: 2, Name: "broken", Compat: Additive, Up: func(context.Context, *MigrationTx) error { return errors.New("bane broke it") }},
+		}}},
+	}
+}
+
+// fixedOwners is the build that repairs failingOwners' step 2.
+func fixedOwners() []OwnerSpec {
+	return []OwnerSpec{
+		{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}},
+		{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
+			step(1, "cave", "cave", "1"), step(2, "fixed", "fixed", "1"),
+		}}},
+	}
+}
+
 // TestCheckpointPrecedesEveryWrite (05-storage §5S.10, R2-8): on an upgrade
 // boot the checkpoint holds no c/ or m/ row the boot wrote: not the marker,
 // the ledgers, the steps or their bookkeeping.
@@ -182,13 +204,7 @@ func TestCheckpointFreeSpaceRefused(t *testing.T) {
 // boot that finally completes closes it.
 func TestCheckpointSurvivesCrashLoop(t *testing.T) {
 	fs := vfs.NewMem()
-	failing := []OwnerSpec{
-		{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}},
-		{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
-			step(1, "cave", "cave", "1"),
-			{Version: 2, Name: "broken", Compat: Additive, Up: func(context.Context, *MigrationTx) error { return errors.New("bane broke it") }},
-		}}},
-	}
+	failing := failingOwners()
 	e := headStore(t, fs, failing...)
 	var first string
 	for boot := range 5 {
@@ -215,9 +231,7 @@ func TestCheckpointSurvivesCrashLoop(t *testing.T) {
 		t.Fatalf("the reused checkpoint is not pristine: %v", got)
 	}
 	// The fixed build completes the attempt.
-	e.opts.Owners = []OwnerSpec{failing[0], {Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
-		step(1, "cave", "cave", "1"), step(2, "fixed", "fixed", "1"),
-	}}}}
+	e.opts.Owners = fixedOwners()
 	db := e.open()
 	if db.CheckpointName() != first {
 		t.Fatalf("the completing boot used %q, want %q", db.CheckpointName(), first)
@@ -313,5 +327,71 @@ func TestCheckpointDirIsTheParent(t *testing.T) {
 				t.Fatal("Open created the store before refusing")
 			}
 		})
+	}
+}
+
+// TestFreshStoreBesideOpenRecordGetsNewInstallID (review BLOCKER-3): a store
+// set aside (a reset's Stage, or main.pebble deleted by hand) leaves its
+// checkpoints behind. The empty store that replaces it is a new install: it
+// takes a new install ID, never the open record's, so its first upgrade takes
+// its own checkpoint instead of adopting the old store's copy.
+func TestFreshStoreBesideOpenRecordGetsNewInstallID(t *testing.T) {
+	fs := vfs.NewMem()
+	e := headStore(t, fs, failingOwners()...)
+	if _, err := e.tryOpen(); err == nil {
+		t.Fatal("the failing upgrade succeeded")
+	}
+	old := readPointer(t, e).Name
+	oldRec := readRecord(t, e, old)
+	if !oldRec.open() {
+		t.Fatalf("the failed attempt's record = %+v, want open", oldRec)
+	}
+	// Set the store and its sidecars aside; the checkpoints stay.
+	dir, base := filepath.Dir(e.path), filepath.Base(e.path)
+	names, err := fs.List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, base) {
+			if err := fs.RemoveAll(filepath.Join(dir, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.opts.Owners = cpOwners()
+	op, err := Open(context.Background(), e.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !op.Fresh() {
+		t.Fatal("the set-aside store did not boot as a fresh install")
+	}
+	db, err := op.Prepare(context.Background())
+	if err == nil {
+		err = db.Migrate(context.Background())
+	}
+	if err != nil {
+		_ = op.Close()
+		t.Fatal(err)
+	}
+	fresh := db.boot.installID
+	if fresh == "" || fresh == oldRec.InstallID {
+		t.Fatalf("the fresh store's install ID = %q, want a new one (the open record has %q)", fresh, oldRec.InstallID)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.opts.Owners = fixedOwners()
+	db = e.open()
+	got := db.CheckpointName()
+	if got == "" || got == old {
+		t.Fatalf("the fresh store's first upgrade used checkpoint %q, want a new one (not %q)", got, old)
+	}
+	if rec := readRecord(t, e, got); rec.InstallID != fresh {
+		t.Fatalf("the new checkpoint's install_id = %q, want %q", rec.InstallID, fresh)
+	}
+	if rec := readRecord(t, e, old); rec.InstallID != oldRec.InstallID || !rec.open() {
+		t.Fatalf("the old store's record changed: %+v", rec)
 	}
 }

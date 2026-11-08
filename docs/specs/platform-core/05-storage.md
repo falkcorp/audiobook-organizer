@@ -2266,7 +2266,10 @@ kernel.Open(storage)                                                   06 P2 —
     (unordered owners), data migrations (name grammar; Cutover only with Breaking, BootBlocking and a
     Source inside retired claims), Seed only with Additive            conflict → boot error (all listed)
   5 install marker (decided here, written at step 6):
-      empty store → FRESH INSTALL planned (also the first boot after a factory reset, §5S.3.15)
+      empty store → FRESH INSTALL planned (also the first boot after a factory reset, §5S.3.15),
+        with the install_id a restore boot hands over, else a new one, never an open record's: a
+        record beside an empty store belongs to a store set aside, and adopting its ID would make
+        that store's copy this store's rollback
       non-empty, marker absent → verify [c/, c0) and [m/, m0) empty (read only); choose the install_id:
         the one a restore boot hands over (05-backup step 8, DATA3-12), else that of an open
         checkpoint record of this store generation (DATA4-16), else a new one
