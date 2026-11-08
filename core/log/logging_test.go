@@ -1,5 +1,5 @@
 // file: core/log/logging_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b1061a80-9d8b-4729-b19f-80870f03b30f
 // last-edited: 2026-11-08
 
@@ -1034,9 +1034,10 @@ func TestWithAttrs_SubsystemMovesTheScope(t *testing.T) {
 	}
 }
 
-// TestRecord_ProcessMarksTheProcessDefault: Root, Handler and what is derived
-// from them (With, WithGroup, a subsystem attribute) deliver Record.Process,
-// and loggers asked for with Module or Scope do not.
+// TestRecord_ProcessMarksTheProcessDefault: Root, ProcessHandler and what is
+// derived from them (With, WithGroup, a subsystem attribute) deliver
+// Record.Process; loggers asked for with Module or Scope, and Handler (the
+// adapters' handler), do not.
 func TestRecord_ProcessMarksTheProcessDefault(t *testing.T) {
 	var out syncBuffer
 	l := newTestLogging(t, &out, FormatText, LevelInfo, nil)
@@ -1047,15 +1048,16 @@ func TestRecord_ProcessMarksTheProcessDefault(t *testing.T) {
 	l.Root().With("k", "v").Info("with")
 	l.Root().WithGroup("g").Info("group")
 	l.Root().With(KeySubsystem, "robin").Info("subsystem attr")
-	slog.New(l.Handler()).Info("handler")
+	slog.New(l.ProcessHandler()).Info("process handler")
+	slog.New(l.Handler()).Info("adapter handler")
 	l.Module("books").Info("module")
 	l.Scope("core", "kernel").Info("scope")
 	l.Scope("core", "kernel").With(KeySubsystem, "other").Info("scope then attr")
 	closeDrained(t, l)
 
 	want := map[string]bool{
-		"root": true, "with": true, "group": true, "subsystem attr": true, "handler": true,
-		"module": false, "scope": false, "scope then attr": false,
+		"root": true, "with": true, "group": true, "subsystem attr": true, "process handler": true,
+		"adapter handler": false, "module": false, "scope": false, "scope then attr": false,
 	}
 	got := map[string]bool{}
 	for _, r := range rec.records() {
