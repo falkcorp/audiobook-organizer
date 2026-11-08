@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/doc.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 144093b3-6f51-4e66-92f8-51a3933e7804
 // last-edited: 2026-11-08
 
@@ -34,8 +34,16 @@
 // injected error with its first reboot, are killed again before each of
 // their kill points that carries a swap label (swap.*), and each nested
 // kill is booted to readiness and checked like any other. A nested run is
-// not broken again. A fixture with a staged swap boots roughly ten to
-// thirty times as often as it would without them.
+// not broken again. Most nested kill points of a fixture leave a state
+// another already left (hello's restore-archive: 249 distinct of 5,048), and
+// a boot is a function of its filesystem (the kit's clock and binary ID are
+// fixed), so a nested clone whose directories and file bytes equal an
+// earlier one's is not booted again: the first one's report stands for
+// every kill point that left that state, and which kill point is named
+// depends on the order the runs finish. The key ignores hard-link identity,
+// which no boot writer depends on (the files a Pebble checkpoint links are
+// immutable). With the dedupe a fixture with a staged swap boots two to
+// four times as often as it would without nested kills.
 //
 // Every durable operation carries the label of the boot writer that made it
 // (internal/bootseam's regions, set at each writer's call site), and the
