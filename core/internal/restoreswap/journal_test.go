@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f7abe2b1-cca9-4e96-a595-efc4ea75e0cc
 // last-edited: 2026-11-08
 
@@ -38,8 +38,10 @@ func TestJournalAppendDropsTheTornTail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
 		b, err := io.ReadAll(f)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

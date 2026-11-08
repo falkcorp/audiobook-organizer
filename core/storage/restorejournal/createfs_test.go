@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ff1aae37-5f8d-4461-a1fe-d80e76ea662e
 // last-edited: 2026-11-08
 
@@ -20,7 +20,7 @@ import (
 // state directory that exists before any intent is staged.
 func durableDir(t *testing.T, fs *vfs.MemFS, dir string) {
 	t.Helper()
-	if err := mkdirSyncedFS(fs, dir); err != nil {
+	if err := MkdirAllSynced(fs, dir); err != nil {
 		t.Fatal(err)
 	}
 }

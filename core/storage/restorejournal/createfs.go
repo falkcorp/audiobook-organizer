@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
 // last-edited: 2026-11-08
 
@@ -66,7 +66,7 @@ func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 		return fmt.Errorf("restorejournal: intent id %q is not one path segment", in.ID)
 	}
 	dir := Dir(stateDir)
-	if err := mkdirSyncedFS(fs, dir); err != nil {
+	if err := MkdirAllSynced(fs, dir); err != nil {
 		return err
 	}
 	if ids, err := InFlightIDs(fs, stateDir); err != nil {
@@ -133,10 +133,12 @@ func takeBack(fs vfs.FS, dir, pending string, cause error) error {
 	return errors.Join(cause, tempLeft(aside, fs.Remove(aside)))
 }
 
-// mkdirSyncedFS creates dir and its missing parents (0700) through fs and
-// fsyncs the parent of every directory it created, so restore/ is in the
-// state directory before an intent is linked into it (R1-21 review m2).
-func mkdirSyncedFS(fs vfs.FS, dir string) error {
+// MkdirAllSynced creates dir and its missing parents (0700) through fs and
+// fsyncs the parent of every directory it created, so the chain survives a
+// crash before anything is linked or renamed into it: restore/ before an
+// intent (R1-21 review m2), and every directory the swap creates
+// (restoreswap).
+func MkdirAllSynced(fs vfs.FS, dir string) error {
 	var created []string
 	for d := filepath.Clean(dir); filepath.Dir(d) != d; d = filepath.Dir(d) {
 		if _, err := fs.Stat(d); err == nil {
