@@ -1,5 +1,5 @@
 // file: core/kernel/storage.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
 // last-edited: 2026-11-08
 
@@ -96,7 +96,7 @@ func (k *Kernel) openStorage(ctx context.Context) error {
 		Owners:      owners,
 		Build:       build,
 		Logger:      k.coreLog("storage"),
-		ExtendStart: k.extendStart(),
+		ExtendStart: k.extendStart(coreOwner),
 	})
 	if err != nil {
 		return fmt.Errorf("kernel: open storage (P2): %w", err)

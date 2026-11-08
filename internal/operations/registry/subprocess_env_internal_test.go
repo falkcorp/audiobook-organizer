@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess_env_internal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1d9e42-5a3b-4f68-b0e7-2d4a6c8e1f35
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 package registry
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
+	"github.com/falkcorp/mediacore/lifecycle"
 )
 
 func TestChildBaseEnv_StripsPprofAddr(t *testing.T) {
@@ -32,9 +32,8 @@ func TestChildBaseEnv_PprofNameMatchesRootPackage(t *testing.T) {
 	}
 }
 
-// A child must not inherit systemd's readiness socket: child mode opens the
-// store, which sends EXTEND_TIMEOUT_USEC, and from a non-main PID systemd
-// (NotifyAccess=main) logs a warning for every child run.
+// A child must not inherit systemd's readiness socket: from a non-main PID
+// systemd (NotifyAccess=main) logs a warning for every datagram.
 func TestChildBaseEnv_StripsNotifySocket(t *testing.T) {
 	parent := []string{"PATH=/bin", "NOTIFY_SOCKET=/run/systemd/notify", "NOTIFY_SOCKET_X=keep", "ABK_PPROF_ADDR=localhost:6060", "HOME=/h"}
 	got := childBaseEnv(parent)
@@ -44,9 +43,9 @@ func TestChildBaseEnv_StripsNotifySocket(t *testing.T) {
 	}
 }
 
-// The stripped name must be the one systemd sets and sdnotify reads.
+// The stripped name must be the one systemd sets and core's notifier reads.
 func TestChildBaseEnv_NotifySocketName(t *testing.T) {
-	if sdnotify.SocketEnv != "NOTIFY_SOCKET" {
-		t.Fatalf("sdnotify.SocketEnv = %q", sdnotify.SocketEnv)
+	if lifecycle.NotifySocketEnv != "NOTIFY_SOCKET" {
+		t.Fatalf("lifecycle.NotifySocketEnv = %q", lifecycle.NotifySocketEnv)
 	}
 }

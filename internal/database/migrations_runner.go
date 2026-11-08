@@ -1,12 +1,13 @@
 // file: internal/database/migrations_runner.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1acba7-c650-40dc-abf4-87f9cc8d5b35
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -103,7 +104,7 @@ func RunMigrations(store migrationStore) error {
 
 		// Each applied migration is real progress: give it its own start-time
 		// budget so a long run of migrations is not killed by TimeoutStartSec.
-		extendStartTimeout()
+		extendStartTimeout("migration " + strconv.Itoa(m.Version))
 		if err := m.Up(store); err != nil {
 			return fmt.Errorf("migration %d failed: %w", m.Version, err)
 		}

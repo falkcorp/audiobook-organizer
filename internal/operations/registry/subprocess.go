@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
+	"github.com/falkcorp/mediacore/lifecycle"
 )
 
 // childModeArg is the sentinel os.Args[1] value that triggers child mode.
@@ -60,14 +60,16 @@ const envPprofAddr = "ABK_PPROF_ADDR"
 // fails, logs a WARN, and a differing child could briefly expose profiling
 // data of its own).
 //
-// NOTIFY_SOCKET is systemd's readiness socket (Type=notify). Child mode opens
-// the store through InitializeStore, which sends EXTEND_TIMEOUT_USEC; from a
-// child that is a non-main PID, which NotifyAccess=main rejects with a journal
-// warning on every child run, and it says nothing true about the service.
+// NOTIFY_SOCKET (lifecycle.NotifySocketEnv) is systemd's readiness socket
+// (Type=notify). Only the main process may notify: a datagram from a child is
+// a non-main PID, which NotifyAccess=main rejects with a journal warning on
+// every child run, and it says nothing true about the service. Child mode
+// does not send any today (only serve injects the start-timeout extender into
+// the store), so this keeps it that way if a child path ever does.
 func childBaseEnv(parent []string) []string {
 	out := make([]string, 0, len(parent))
 	for _, kv := range parent {
-		if strings.HasPrefix(kv, envPprofAddr+"=") || strings.HasPrefix(kv, sdnotify.SocketEnv+"=") {
+		if strings.HasPrefix(kv, envPprofAddr+"=") || strings.HasPrefix(kv, lifecycle.NotifySocketEnv+"=") {
 			continue
 		}
 		out = append(out, kv)
