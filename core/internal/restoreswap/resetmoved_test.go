@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/resetmoved_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b1d38611-602f-4c12-beb2-452f0b65bc7c
 // last-edited: 2026-11-08
 
@@ -66,6 +66,51 @@ func TestResetJournalsEachMoveOnce(t *testing.T) {
 	writeJournal(t, f.mem, f.in.ID, recs[:first+1])
 	if got := movedFroms(boot()); !slices.Equal(got, present) {
 		t.Fatalf("after the resume, moved records for %v, want each item once: %v", got, present)
+	}
+}
+
+// TestResetResumeMovesAJournaledTargetAgain (R1-21 review M6, found by the
+// matrix's nested kills): a moved record says the item was set aside once,
+// not where it is now. A failed set-aside's move-back renames it back
+// before rejected is journaled, so a kill inside the move-back leaves the
+// record beside an item at its source (or at both names), and the resume
+// must set it aside again, never boot the original store as the reset.
+func TestResetResumeMovesAJournaledTargetAgain(t *testing.T) {
+	f := resetFixture(t, restorejournal.ResetStore, "outside")
+	db := f.in.Targets[0]
+	recs := func() []restorejournal.Record {
+		s := newSwapper(t, f.mem, testBuild, testNow)
+		if out, err := s.RunP0a(context.Background()); err != nil || out.Boot != BootReset {
+			t.Fatalf("P0a = %+v, %v; want a reset boot", out, err)
+		}
+		recs, err := s.Journal(f.in.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return recs
+	}()
+	first := slices.IndexFunc(recs, func(r restorejournal.Record) bool { return r.Step == StepMoved })
+	if first < 0 || recs[first].From != db.From {
+		t.Fatalf("journal %v: want the store's moved record first", steps(recs))
+	}
+	// The move-back of the store, then the kill: the journal ends at the
+	// store's moved record and the in-flight file stays.
+	writeJournal(t, f.mem, f.in.ID, recs[:first+1])
+	if err := f.mem.Rename(db.To, db.From); err != nil {
+		t.Fatal(err)
+	}
+	out, err := newSwapper(t, f.mem, testBuild, testNow).RunP0a(context.Background())
+	if err != nil || out.Boot != BootReset || out.Last != StepSetAside {
+		t.Fatalf("P0a = %+v, %v; want the reset resumed to set_aside", out, err)
+	}
+	if ok, err := exists(f.mem, db.From); err != nil || ok {
+		t.Fatalf("the original store is still at %s (%v): the resume trusted its moved record", db.From, err)
+	}
+	if ok, err := exists(f.mem, db.To); err != nil || !ok {
+		t.Fatalf("the original store is not set aside at %s (%v)", db.To, err)
+	}
+	if got := treeHash(t, f.mem, db.To); got != f.live {
+		t.Fatal("the set-aside store is not the original")
 	}
 }
 
