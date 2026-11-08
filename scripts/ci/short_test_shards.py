@@ -128,7 +128,6 @@ class Unit:
         return self.pkg.key if self.group == 0 else f"{self.pkg.key}#{self.group}"
 
 
-
 # How go test's output is captured. Decoded as text for the report, with
 # undecodable bytes replaced: a test that prints raw bytes (a gzip body starts
 # 0x1f 0x8b) made strict UTF-8 decoding raise UnicodeDecodeError on 2026-11-08
