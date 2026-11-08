@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.7
+// version: 4.67.8
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1640,6 +1640,25 @@ func (s *Server) markHNSWCleanStop(abandoned []string) {
 		lifecycleLog.Info("hnsw: clean-stop marker written in %s", s.hnswPersistDir)
 	default:
 		lifecycleLog.Info("hnsw: clean-stop marker not written, so the next boot reconciles the snapshot: %s", reason)
+	}
+}
+
+// markHNSWSnapshotDiverged marks the HNSW vector store diverged
+// (database.SnapshotDivergence), so this run's stop writes no clean-stop
+// marker. The system handler calls it after a backup restore, whose
+// extraction writes Pebble files behind the GatedDB the store counts writes
+// through (R1-15 round-2 review, B1). Resolved at call time: the container
+// is the one the server holds when the restore runs.
+func (s *Server) markHNSWSnapshotDiverged(reason string) {
+	if s.container == nil {
+		return
+	}
+	raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore")
+	if !ok || raw == nil {
+		return
+	}
+	if d, ok := raw.(database.SnapshotDivergence); ok {
+		d.MarkDiverged(reason)
 	}
 }
 
