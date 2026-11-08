@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
 // last-edited: 2026-11-07
 
@@ -360,7 +360,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 // detail (guestTokenUnavailableMsg is written for the guest and says nothing
 // useful to an admin). The detail is the same text the record carries for the
 // Users page. On success the issue holds the secret, which lives only there.
-func (s *Server) mintGuestTokenCore(parent context.Context, store database.Store, tokens database.GuestServiceTokenStore, user *database.User, actorID string) (issue *guestTokenIssue, adminDetail string) {
+func (s *Server) mintGuestTokenCore(parent context.Context, store database.UserReader, tokens database.GuestServiceTokenStore, user *database.User, actorID string) (issue *guestTokenIssue, adminDetail string) {
 	snap := config.Snapshot()
 	name := cfservicetoken.Name(user.ID)
 	unavailable := func(detail string) (*guestTokenIssue, string) {
@@ -832,7 +832,7 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 // issue a key to for deployment reasons is still listed, with that reason on the
 // row. Sorted by username. The verified check scans the users once per
 // candidate (user counts are small), under the store's lock.
-func (s *Server) guestTokenNoKeyViews(store database.Store, deployment string, hasRecord map[string]bool) []guestTokenView {
+func (s *Server) guestTokenNoKeyViews(store database.UserReader, deployment string, hasRecord map[string]bool) []guestTokenView {
 	if !config.Snapshot().CFGuestServiceTokens {
 		return nil
 	}
