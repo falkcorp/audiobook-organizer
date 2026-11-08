@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/chain.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 43e0ed35-4635-49ca-aaab-d5bfe2f6fa1b
 // last-edited: 2026-11-08
 
@@ -217,7 +217,7 @@ func (c *Chain) Outer(router http.Handler) http.Handler {
 	}
 	h = c.compose(c.outer(), h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.ServeHTTP(w, r.WithContext(withState(r.Context(), &State{})))
+		h.ServeHTTP(w, r.WithContext(withState(r.Context(), &State{start: time.Now()})))
 	})
 }
 
