@@ -208,8 +208,7 @@ func TestLegacyProjectionRefusesPreGuardBuild(t *testing.T) {
 	// as too new.
 	e.opts.Owners = []OwnerSpec{{Owner: "gotham", Enabled: true, Spec: Spec{Claims: projectionClaims(), LegacyGuard: g}}}
 	_, err := e.tryOpen()
-	var lt *LevelTooNewError
-	if !errors.As(err, &lt) {
+	if _, ok := errors.AsType[*LevelTooNewError](err); !ok {
 		t.Fatalf("a level-0 core build on a raised store = %v", err)
 	}
 }
