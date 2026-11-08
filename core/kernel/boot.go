@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -273,13 +273,17 @@ func (k *Kernel) moduleLog(id module.ID) *slog.Logger {
 // own steps (storage's open and checkpoint): no module hook runs under it.
 const coreOwner module.ID = "core"
 
-// extendStart is module id's Deps.ExtendStart: it asks the service manager
-// for sdnotify.StartupStepBudget more start time (HEAD's semantics: the
-// deadline moves to at least that far from now, never closer). Config.
-// ExtendStart replaces that request in tests. A failed request is logged and
-// never fails startup: under Type=simple there is no socket at all.
+// extendStart is module id's Deps.ExtendStart. It does two things with
+// sdnotify.StartupStepBudget (HEAD's semantics: the deadline moves to at least
+// that far from now, never closer). It extends the start window of id's hook
+// Start if one is running, so the kernel's own core.lifecycle.start_timeout
+// does not abandon a step that is making progress, and it asks the service
+// manager for the same time over NOTIFY_SOCKET. Config.ExtendStart replaces
+// the second in tests. A failed request is logged and never fails startup:
+// under Type=simple there is no socket at all.
 func (k *Kernel) extendStart(id module.ID) func(string) {
 	return func(step string) {
+		k.startWin.extend(id, sdnotify.StartupStepBudget)
 		send := k.cfg.ExtendStart
 		if send == nil {
 			send = func(string) {
