@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.5
+// version: 4.66.6
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -223,6 +223,45 @@ func (s *Server) closeActivityStore() {
 	lifecycleLog.Info("Activity log store closed")
 }
 
+// releaseUnstartedWait bounds how long releaseUnstarted waits for bgWG.
+const releaseUnstartedWait = 10 * time.Second
+
+// ReleaseUnstarted tears down a server NewServer built whose StartHook never
+// ran. The composition root calls it when boot fails after books' Register
+// built the server (app.New, app.InstallProcessDefaults or books.Attach
+// failing), a window HEAD did not have: it called Start right after
+// NewServer. It closes Stopped, since an unstarted server released has
+// stopped. A no-op once StartHook has begun, because its failure path and
+// StopHook own the teardown from then on. Idempotent.
+func (s *Server) ReleaseUnstarted() {
+	if s.startHookRan.Load() {
+		return
+	}
+	s.releaseUnstarted()
+	s.markStopped()
+}
+
+// releaseUnstarted is ReleaseUnstarted's teardown, in the order of StopHook's
+// tail: detach the search observer and the authority provider, cancel bgCtx
+// and wait (bounded) for the bgWG goroutines, which may still write activity,
+// then close the activity store. Every step is idempotent.
+func (s *Server) releaseUnstarted() {
+	s.releaseSearchAndAuthority()
+	if s.bgCancel != nil {
+		s.bgCancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.bgWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(releaseUnstartedWait):
+	}
+	s.closeActivityStore()
+}
+
 // startupStepsFor stores the runner Start uses for its steps, creating one
 // when cmd did not supply it (tests, child mode), and returns it.
 func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
@@ -377,6 +416,7 @@ func listenOptionsFor(cfg ServerConfig) httpapi.ListenOptions {
 // A failure flushes the deferred activity entries and stops the flight
 // recorder; the kernel then does not call StopHook.
 func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
+	s.startHookRan.Store(true)
 	// The kernel calls no stop after a failed start, so for Stopped's
 	// waiters (serve, before it closes the store) the server has stopped.
 	defer func() {

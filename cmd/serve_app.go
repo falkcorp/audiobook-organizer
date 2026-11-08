@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -49,6 +49,10 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 	if err != nil {
 		return err
 	}
+	// A failure before Run leaves the server Register built with nothing to
+	// stop it: release it before the store closes. After the start hook has
+	// begun, Release does nothing.
+	defer books.Release(mod)
 	a, err := app.New(ctx, opts, mod)
 	if err != nil {
 		return err
@@ -67,6 +71,9 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 	}
 
 	runErr := a.Run(ctx)
+	// A Run that failed before the start hook began leaves the server
+	// unstarted, and Stopped closes only when it is released.
+	books.Release(mod)
 	select {
 	case <-books.Stopped(mod):
 	case <-time.After(storeCloseWait):
