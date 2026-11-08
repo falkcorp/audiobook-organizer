@@ -1,8 +1,8 @@
 #!/bin/sh
 # file: scripts/ci/image_probe.sh
-# version: 1.0.0
+# version: 1.0.1
 # guid: 2a1411e8-5147-4bcd-981d-3d653bf58b0d
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 #
 # Probe a running audiobook-organizer container (the docker-image PR job, 09 §9.4 R1).
 #
@@ -18,8 +18,8 @@
 #                        the flag does not exist until R1-23, which sets it in docker-image.yml.
 #   PROBE_BUILD_ID       1 requires the X-App-Build response header of `/` to equal the
 #                        content of <meta name="mediacore-build"> in the served HTML
-#                        (TestBuildID_HeaderEqualsEmbeddedMeta). Off by default: the header
-#                        and the meta tag do not exist until R1-19, which sets it.
+#                        (TestBuildID_HeaderEqualsEmbeddedMeta). Off by default; R1-19
+#                        sets it to 1 in docker-image.yml.
 #
 # Exit 0 when every enabled probe passes; otherwise exit 1 after one line on
 # stderr beginning "image_probe:" that names the failure. POSIX sh, curl and
@@ -72,7 +72,7 @@ if [ "${PROBE_STORAGE_LEVELS:-0}" = "1" ]; then
 	echo "image_probe: --print-storage-levels printed JSON"
 fi
 
-# 3. Build ID: wired here, off until R1-19.
+# 3. Build ID: on in docker-image.yml since R1-19.
 if [ "${PROBE_BUILD_ID:-0}" = "1" ]; then
 	curl -fsS --max-time 10 -D "$tmp/headers" -o "$tmp/index.html" "$base/" ||
 		fail "GET $base/ failed"
