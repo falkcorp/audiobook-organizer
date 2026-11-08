@@ -1023,6 +1023,13 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 // returns nil.
 func (a *App) Run(ctx context.Context) error
 
+// Close releases what New built, for an App that is never Run (coretest's
+// harness, §6.4.8, and a command that only boots): core services' internal
+// goroutines, storage and logging, in reverse order, within the default
+// shutdown budget. Once Run has started, Run owns the shutdown and Close does
+// nothing; a Run after Close fails, and a second Close does nothing.
+func (a *App) Close(ctx context.Context) error
+
 // R1Values is the release-R1-only value Options.R1Values returns; 05-config
 // §1.12.1 defines its fields (listen address, TLS files, peer allow-list,
 // trusted proxies, rate and body limits, shutdown budget). Deleted in F3.

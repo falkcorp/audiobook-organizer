@@ -45,7 +45,19 @@ const (
 // observe it and it is not exported.
 var errRestartRequested = errors.New("kernel: restart requested")
 
-var errRunTwice = errors.New("kernel: Run called more than once")
+var errRunTwice = errors.New("kernel: Run called more than once, or after Close")
+
+// Close releases what New built, for a Kernel that will not Run (coretest's
+// harness, a command that only boots): the metrics Provider, the store and
+// logging, in closeCore's order within the default shutdown budget. Once Run
+// has started, Run owns the shutdown and Close does nothing; a Run after
+// Close returns errRunTwice, and a second Close does nothing.
+func (k *Kernel) Close(ctx context.Context) error {
+	if !k.ran.CompareAndSwap(false, true) {
+		return nil
+	}
+	return k.closeCore(ctx, time.Now().Add(defaultShutdownBudget))
+}
 
 // ReadinessNotifier receives the supervisor's readiness signals (05-health
 // §5H.3.4): Status while not ready (STATUS=), Ready once the listeners are up

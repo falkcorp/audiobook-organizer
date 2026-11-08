@@ -536,3 +536,54 @@ func (quietPebble) Errorf(string, ...any) {}
 func (quietPebble) Fatalf(format string, args ...any) {
 	panic(fmt.Sprintf(format, args...))
 }
+
+// TestCloseWithoutRun (06 §6.4.8's harness shutdown): Close releases what New
+// built for a Kernel that never runs, so its store is closed; a second Close
+// does nothing and a Run after it is refused. Once Run has started, Run owns
+// the shutdown: a Close meanwhile leaves the store open, and Run closes it
+// when it returns.
+func TestCloseWithoutRun(t *testing.T) {
+	t.Run("never-run", func(t *testing.T) {
+		var deps module.Deps
+		c := testConfig(t, storageMod("alfred", func(r *module.Registrar) error { deps = r.Deps(); return nil }))
+		c.StoragePath = tempStoragePath(t)
+		k := mustNew(t, c)
+		if err := k.Close(t.Context()); err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+		if _, err := deps.Storage.Keyspace.Get(t.Context(), []byte("cave")); !errors.Is(err, storage.ErrClosed) {
+			t.Fatalf("a read after Close = %v, want storage.ErrClosed", err)
+		}
+		if err := k.Close(t.Context()); err != nil {
+			t.Fatalf("a second Close = %v, want nil", err)
+		}
+		if err := k.Run(t.Context()); !errors.Is(err, errRunTwice) {
+			t.Fatalf("Run after Close = %v, want errRunTwice", err)
+		}
+	})
+	t.Run("while-running", func(t *testing.T) {
+		var deps module.Deps
+		rec := &recorder{}
+		c := supervised(t, rec, storageMod("alfred", func(r *module.Registrar) error { deps = r.Deps(); return nil }))
+		ready := make(chan struct{})
+		c.Notifier = readySignal{notifier: notifier{rec}, ready: ready}
+		c.StoragePath = tempStoragePath(t)
+		k := mustNew(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		<-ready
+		if err := k.Close(t.Context()); err != nil {
+			t.Fatalf("Close while running = %v, want nil", err)
+		}
+		if err := deps.Storage.Keyspace.Set(t.Context(), []byte("cave"), []byte("lit")); err != nil {
+			t.Fatalf("a write after Close while running = %v, want the store still open", err)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		if _, err := deps.Storage.Keyspace.Get(t.Context(), []byte("cave")); !errors.Is(err, storage.ErrClosed) {
+			t.Fatalf("a read after Run returned = %v, want storage.ErrClosed", err)
+		}
+	})
+}

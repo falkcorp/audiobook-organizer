@@ -1,11 +1,12 @@
 // file: core/app/storage_test.go
 // version: 1.0.0
 // guid: cd83307e-c3ce-4393-b440-9d8ba60a7afb
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,5 +55,33 @@ func TestStoragePath_Rule(t *testing.T) {
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=batcave.pebble"}
 	if _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
 		t.Fatalf("relative env path = %v, want a refusal", err)
+	}
+}
+
+// TestCloseReleasesTheStore: an App that is never Run releases the store New
+// opened when it is closed, so a second App boots the same state directory;
+// a second Close does nothing, and Run after Close fails without serving.
+func TestCloseReleasesTheStore(t *testing.T) {
+	keeper := manifestOnly{ID: "alfred", Version: "1.0.0", Storage: storage.Spec{Keyspace: true}}
+	opts := Options{AppID: "gotham", StateDir: t.TempDir(), Args: []string{}, Env: []string{}}
+	a, err := New(t.Context(), opts, keeper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("a second Close = %v, want nil", err)
+	}
+	if err := a.Run(t.Context()); err == nil {
+		t.Fatal("Run after Close served")
+	}
+	b, err := New(t.Context(), opts, keeper)
+	if err != nil {
+		t.Fatalf("a second App over the closed App's state directory: %v", err)
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

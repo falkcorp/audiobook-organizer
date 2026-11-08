@@ -1,7 +1,7 @@
 // file: core/app/app.go
 // version: 1.0.2
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package app is core's composition root (06 §6.4.5, 03 §3.3 row app): an
 // app's main builds Options and its modules and calls New, then Run. Signal
@@ -64,6 +64,14 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 // cancellation returns nil; a Stop hook's error or work abandoned at the
 // budget is returned joined with the cause of the stop.
 func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
+
+// Close releases what New built, for an App that is never Run (coretest's
+// harness, a command that only boots): the store, the metrics Provider and
+// logging. Once Run has started, Run owns the shutdown and Close does
+// nothing; a Run after Close fails, and a second Close does nothing. Added
+// to 06 §6.4.5's App with storage, the first thing New opens that must be
+// closed (R1-20).
+func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New.

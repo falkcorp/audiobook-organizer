@@ -1,7 +1,7 @@
 // file: core/coretest/harness.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package coretest is core's public test kit (06 §6.4.8): an in-process App
 // harness that boots core through app.New, a client that sends requests to
@@ -13,6 +13,7 @@
 package coretest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -33,11 +34,13 @@ const harnessAppID = "coretest"
 // Harness is an in-process App (06 §6.4.8): a temp state directory
 // (Options.StateDir), no listeners; requests go straight to App.Handler().
 //
-// At release R1 the App has no storage (the in-memory Pebble arrives with
-// R1-20's storage row), no config layer and no core authentication, and
+// At release R1 the App has no config layer and no core authentication, and
 // app.New starts no hook, worker or listener (06 §6.5.2's start order is
-// Run's, and Run opens a listener). A harness therefore boots P1 to P8 and
-// serves requests; nothing it boots runs on its own. Each harness owns its
+// Run's, and Run opens a listener). A module that declares storage (hello's
+// keyspace) gets a Pebble store under the temp state directory: on disk, not
+// 06 §6.4.8's in-memory vfs.NewMem, until app.Options can carry a
+// filesystem. A harness therefore boots P1 to P8 and serves requests; nothing
+// it boots runs on its own, and its cleanup closes the App. Each harness owns its
 // logger (a logcapture.Capture handed to the App as Options.Logger), its state
 // directory and its App: it never touches slog.Default or any other process
 // global (03 R5), so harnesses run in parallel tests.
@@ -106,13 +109,10 @@ func WithUser(name string, perms ...rbac.Permission) Option {
 // New boots core with the given options. With no WithModules option it boots
 // core with ZERO modules (gate G7). It fails the test on any boot error.
 //
-// The spec registers t.Cleanup for shutdown. At R1 there is nothing to
-// register: app.New starts no hook, worker or listener, and *app.App has no
-// method that closes what boot built. The metrics Provider P5 built stays
-// open until the App is garbage collected; it is pull-only (a Prometheus
-// registry of its own), so it holds no goroutine and touches no process
-// global. The row that gives the App a close path, or lets the harness Run
-// in process, registers the cleanup.
+// It registers t.Cleanup for shutdown (06 §6.4.8): App.Close, which closes
+// the store, the metrics Provider and logging that boot built. A cleanup
+// registered inside a synctest bubble runs inside it, so the bubble ends with
+// none of Pebble's goroutines left.
 func New(t testing.TB, opts ...Option) *Harness {
 	t.Helper()
 	h, err := Boot(t, opts...)
@@ -204,6 +204,11 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 		return nil, err
 	}
 	h.app = a
+	t.Cleanup(func() {
+		if err := a.Close(context.Background()); err != nil {
+			t.Errorf("coretest: close: %v", err)
+		}
+	})
 	return h, nil
 }
 
