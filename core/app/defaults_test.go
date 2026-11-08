@@ -1,5 +1,5 @@
 // file: core/app/defaults_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0b7c4e2a-91d3-4f58-a6e0-3c8d5f2b7a19
 // last-edited: 2026-11-08
 
@@ -308,7 +308,7 @@ func TestNew_ProcessDefaults_SDKSinkBeforeProvider(t *testing.T) {
 
 	var out syncBuffer
 	opts := Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out, Env: []string{}, ProcessDefaults: true,
-		R1Telemetry: &R1Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}}
+		Telemetry: &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}}
 	a, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)

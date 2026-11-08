@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -334,7 +334,7 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 			return srv, nil
 		}
 	}
-	if t := opts.R1Telemetry; t != nil {
+	if t := opts.Telemetry; t != nil {
 		kt := kernel.Telemetry(*t)
 		c.Telemetry = &kt
 	}
