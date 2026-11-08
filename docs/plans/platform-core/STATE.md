@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.49.0 -->
+<!-- version: 1.50.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -106,6 +106,8 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W17 | R1-16 | #4470 `4881ead74` | T3: sdnotify moved into core; READY, STOPPING and EXTEND_TIMEOUT_USEC (only while starting) from the kernel. Reviewed MERGEABLE; re-cut onto main after R1-15 (r3). Deployed 2026-11-08: the Type=notify unit reached active on READY |
 | W18 | R1-33 | #4474 `0ac2cf1dc` | T1: stop settings. Compose stop_grace_period 60s and launchd ExitTimeOut 60 against a 25 s core budget plus 10 s store drain; `ABO_CORE_SHUTDOWN_BUDGET` read at serve start (invalid value refuses to start, naming the variable). Re-cut twice (#4456, #4471) for the R1-15 wire and an R1-16 conflict. Deployed 2026-11-08 |
 | W19 | R1-34 | #4477 `c78a9f681` | T3: explicit ServiceDefs lists replace init() registration. Independent review proved production parity (identical def and resolution-order dumps, base vs head); follow-ups pinned the resolution order, made the link test require every ServiceDefs package in the list, removed the vestigial Container.Include and bannered two stale architecture docs. Re-cut for R1-15 and R1-16 (#4472 closed). Deployed 2026-11-08 |
+| W20 | R1-21 | #4480 `6dc509670` | T4: journaled restore swap (P0a) in core. Reviewed MERGEABLE; test-gap commits pin the Lstat, directory check and mode-first order, refuse device queries on an unknown filesystem and fail closed on a filesystem neither real nor in-memory. Re-cut onto main after the R1-15 conflict (#4466 closed). Not wired into the books boot yet. Deployed 2026-11-08 |
+| W21 | R1-18 | #4485 `7d7a3474c` | T3: logging stages into core (redaction, file output, metrics bridge). Deviations: `subsystem` is a log attribute, not a message prefix (grep `subsystem=db-optimize`); context attributes follow the record's own; `kernel.Config.LogDir` is separate from R1-21's StateDir. Two CI rounds folded into the introducing commits (op-context attrs on the stdout default, one `database.Store` reference, metrics contract with a new `sink` key); #4481 and #4484 closed. Deployed 2026-11-08 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -124,7 +126,7 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 24 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34).
+None for agents. R0 complete (6/6). R1: 26 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
@@ -132,13 +134,13 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
 
-W14 to W19 merged 2026-11-08: R1-37 (coretest harness), R1-20 (core storage engine, dark), R1-15 (composition root), R1-16 (sdnotify), R1-33 (stop settings) and R1-34 (explicit service registry). The remaining in-flight rows all conflict pairwise, so they merge serially:
-- R1-18 (logging stages; all review items fixed; re-cutting onto main), then
-- the R1-15 follow-up (#4476: HNSW clean-stop marker so an unclean stop always reconciles; under independent review), then
-- R1-17 (T4, perimeter into core stages; re-cut so every commit is green, #4478; delta review of the R1-15 reconciliation running).
-- R1-21 (T4, journaled swap; reviewed MERGEABLE, re-cut onto main after a conflict with R1-15) is independent of that chain.
+W14 to W21 merged 2026-11-08: R1-37 (coretest harness), R1-20 (core storage engine, dark), R1-15 (composition root), R1-16 (sdnotify), R1-33 (stop settings), R1-34 (explicit service registry), R1-21 (journaled swap) and R1-18 (logging stages). The remaining in-flight rows conflict pairwise, so they merge serially:
+- R1-17 (T4, perimeter into core stages; delta review MERGEABLE; re-cutting onto main), then
+- R1-19 (T2, build identity; draft #4482 stacked on R1-17), then
+- R1-30 (T2, core web API client; draft #4483 stacked on R1-19), then
+- the R1-15 follow-up (#4476: HNSW clean-stop marker; round-two review found one blocker, a backup restore bypassing the write gate, being fixed).
 
-Next: R1-19, then R1-30, then R1-06 after R1-17; the storage chain R1-23, then R1-25, then R1-24/R1-26, then R1-27, then R1-28 after R1-21. In plain terms: the server now starts and stops through the new framework, and the new storage engine is in the build but not switched on; nothing users see has changed.
+In parallel: R1-23 (T4, storage flip) building. Next: R1-06 after R1-30; the storage chain R1-25, then R1-24/R1-26, then R1-27, then R1-28 after R1-23; R1-31 last. Cross-seam note: whichever PR wires the P0a swap into the books boot must remove the HNSW clean-stop marker as part of the swap. In plain terms: the server now starts, stops and logs through the new framework, and the new storage engine is in the build but not switched on; nothing users see has changed, except that log lines carry `subsystem=` as a field.
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
