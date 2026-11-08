@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
 // last-edited: 2026-11-08
 
@@ -39,7 +39,8 @@ type Seams struct {
 	// Probe replaces the swap's device probe, which its rename pre-check
 	// and a reset's delete rule read at step a: a test on one filesystem
 	// models a delete entry on another. nil = restorejournal.OSProbe on the
-	// real filesystem, none in memory.
+	// real filesystem, none in memory, and one that refuses every query on
+	// any other filesystem.
 	Probe restorejournal.Probe
 	// Labels names each durable operation; nil = no labels (production).
 	Labels Labeler
