@@ -1,5 +1,5 @@
 // file: internal/books/perimeter_app_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d50ddd31-9468-4c34-9994-a64e31f28a71
 // last-edited: 2026-11-08
 
@@ -8,9 +8,7 @@ package books
 import (
 	"context"
 	"io"
-	"log/slog"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,9 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/falkcorp/mediacore/app"
-	"github.com/falkcorp/mediacore/httpapi"
 )
 
 // TestPerimeter_ThroughTheRunningApp (R1-15 review m5): internal/server's
@@ -34,39 +29,8 @@ import (
 // with gzip and a same origin, the case review m5 found different, plus a
 // routed one.
 func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
-	addrs := make(chan net.Addr, 1)
-	c := bootComposedWith(t, false, nil, nil, func(o *app.Options) {
-		listen := o.R1Listen
-		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
-			srv, err := listen(lo, h, l)
-			if err == nil {
-				addrs <- srv.Addr()
-			}
-			return srv, err
-		}
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	ran := make(chan error, 1)
-	go func() { ran <- c.app.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-ran:
-			if err != nil {
-				t.Errorf("Run: %v", err)
-			}
-		case <-time.After(60 * time.Second):
-			t.Error("Run did not return after its context was cancelled")
-		}
-	})
-	var addr net.Addr
-	select {
-	case addr = <-addrs:
-	case err := <-ran:
-		t.Fatalf("Run returned before the listener opened: %v", err)
-	case <-time.After(60 * time.Second):
-		t.Fatal("the App never opened its listener")
-	}
+	r := runComposed(t)
+	c, addr := r.composed, r.addr
 
 	client := &http.Client{
 		// The client must not ask for or undo the compression itself.
@@ -123,4 +87,62 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStop_EventStreamsEndBeforeTheDrain (R1-15 review m7): an open event
+// stream holds its connection busy, so the listener's graceful drain would
+// wait on it until core.shutdown.http_drain (10s) ran out. The stop ends the
+// streams first (R1Listener.Shutdown's pre-drain step: endStreamsOnShutdown
+// for /api/events and the v2 operations stream, closeOpsV3Streams for v3).
+// With the App running as serve runs it, each open stream must reach EOF
+// well inside the drain once Run is cancelled.
+func TestStop_EventStreamsEndBeforeTheDrain(t *testing.T) {
+	r := runComposed(t)
+	const drain = 10 * time.Second // core.shutdown.http_drain's default
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	type ended struct {
+		path string
+		at   time.Time
+		err  error
+	}
+	paths := []string{"/api/events", "/api/v1/operations/events", "/api/v3/ops/events"}
+	done := make(chan ended, len(paths))
+	for _, p := range paths {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*drain)
+		t.Cleanup(cancel)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+r.addr.String()+p, nil)
+		require.NoError(t, err)
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := client.Do(req)
+		require.NoError(t, err, "open %s", p)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "open %s", p)
+		go func() {
+			_, err := io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			done <- ended{path: p, at: time.Now(), err: err}
+		}()
+	}
+	// The streams are open and idle: none may have ended yet.
+	select {
+	case e := <-done:
+		t.Fatalf("%s ended before the stop: %v", e.path, e.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	stopAt := time.Now()
+	go func() { _ = r.stop() }()
+	for range paths {
+		select {
+		case e := <-done:
+			assert.NoError(t, e.err, "%s ended with an error rather than its end", e.path)
+			if took := e.at.Sub(stopAt); took >= drain/2 {
+				t.Errorf("%s ended %s after the stop began: the drain waited on it", e.path, took)
+			}
+		case <-time.After(2 * drain):
+			t.Fatal("an event stream never ended")
+		}
+	}
+	require.NoError(t, r.stop())
 }
