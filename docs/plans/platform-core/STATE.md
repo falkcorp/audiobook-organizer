@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.46.0 -->
+<!-- version: 1.47.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-07 -->
+<!-- last-edited: 2026-11-08 -->
 
 # Platform-core planning operation — state
 
@@ -100,6 +100,8 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W11 | R1-36 | #4445 `1f3e980dd` | T3: independent review, re-verification and delta review, last verdict 0 BLOCKER / 0 MAJOR; CodeQL fixed in code (ABO-side `SanitizeLogValue` barrier kept at flagged sites; flight recorder quotes outside values with `%q`, a recorded deviation from brief step 7); deployed 2026-11-07 16:55 |
 | W12 | R1-13 | #4450 `80077b7ea` | T4: independent review NOT MERGEABLE (1 BLOCKER: disabled modules' `/api/<id>/` and core's `/api/core/` never claimed; 3 MAJOR: shutdown budget overrun, native subtree routes, Go type names in 400 details; 10 MINOR), all fixed with tests; verification review mergeable plus a Router registration race fixed before merge; coined `Deps.RequestRestart` (owner asleep, recommended option); deadcode ratchet now runs per module and counts core's exported SDK surface as live |
 | W13 | R1-14 | #4452 `31af8a05c` | T3: independent review found 1 BLOCKER (the "/" fallback ran gin handlers the mux never admitted, e.g. `GET /files/..`), fixed with a root handler admitting only GET/HEAD "/"; staticcheck S1021 fixed; dropped from the merge queue once by a Repo Guards timeout (slow runner disk cleanup, fixed by #4454 `6abf6e9dd`); deployed 2026-11-07 22:40 |
+| W14 | R1-37 | #4458 `30906a80b` | T3: coretest in-process harness, client and `RoutesHavePermissions`. The check-commits-build move gate failed on a 73 %-similarity logcapture move, fixed by splitting a pure-move commit (`7642abc8f`) from the rewrite. The gate's per-commit fresh worktree had pushed a 33-commit PR past its timeout, fixed by #4461 `216401f74` (one reused worktree); deployed 2026-11-08 |
+| W15 | R1-20 | #4453 `77f89c4f6` | T4: core storage engine, dark. The first independent review found 4 BLOCKERs and the verification review found more, all fixed. The final round made a preset filesystem win over `OpenOptions.FS` and renamed the identity key `dir_dev` to `dir_fsid`. 48 commits. The unsharded check-commits-build hit its 30-minute cap, so #4463 `7a88eb352` split it into 4 shards. The same PR made dashboard-reference survive a GitHub release CDN outage (504s): cached tarball, retry, then a module-proxy build of promtool. Deployed 2026-11-08 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -118,13 +120,21 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 18 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14).
+None for agents. R0 complete (6/6). R1: 20 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
 W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
+
+W14 and W15 merged 2026-11-08: R1-37 (coretest harness) and R1-20 (core storage engine, dark). In progress in parallel:
+- R1-15 (T4, composition root; review fixes and CI).
+- Stacked on R1-15: R1-16 (sdnotify, reviewed MERGEABLE), R1-18 (logging stages, review fixes done), R1-34 (explicit service registry) and R1-33 (#4456, its serve wire).
+- R1-21 (T4, journaled swap; rebasing onto R1-20).
+- R1-17 (T4, perimeter, stacked on R1-16).
+
+Next: R1-19, then R1-30, then R1-06 after R1-17; the storage chain R1-23, then R1-25, then R1-24/R1-26, then R1-27, then R1-28 after R1-21. In plain terms: the new storage engine is in the build but not switched on; nothing users see has changed.
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
