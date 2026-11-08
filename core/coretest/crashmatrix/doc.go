@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/doc.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 144093b3-6f51-4e66-92f8-51a3933e7804
 // last-edited: 2026-11-08
 
@@ -25,6 +25,17 @@
 // boots in all (a boot that swaps a failed restore back exits, and the
 // restart boots the original store), and asserts the invariants of
 // 05-storage §5S.3.16 that exist at R1 (invariants.go).
+//
+// The boots after a break run recovery writers no fault-free boot reaches:
+// step x after a failed P0a, a reset's move-back, a rejected reset, the slot
+// cleanup, and every step that finds its work done by a boot whose fsync
+// failed. So those are broken too, one level deep (R1-21 review M6): the
+// first reboot after each kill, and the rest of the boot after each
+// injected error with its first reboot, are killed again before each of
+// their kill points that carries a swap label (swap.*), and each nested
+// kill is booted to readiness and checked like any other. A nested run is
+// not broken again. A fixture with a staged swap boots roughly ten to
+// thirty times as often as it would without them.
 //
 // Every durable operation carries the label of the boot writer that made it
 // (internal/bootseam's regions, set at each writer's call site), and the

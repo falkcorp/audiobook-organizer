@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseamtest/recorder.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6473c7ec-c6f5-4957-863f-62991f66eaa2
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package bootseamtest is the fault-injecting, labelling filesystem behind
 // the crash-matrix kit (coretest/crashmatrix) and the swap's own crash
@@ -83,6 +83,11 @@ type Clone struct {
 type Options struct {
 	// Clones takes a crash clone (no unsynced data) before every kill point.
 	Clones bool
+	// CloneIf takes a crash clone before each kill point it accepts, when
+	// Clones is not set: the nested kill points of a boot the matrix already
+	// broke (R1-21 review M6). It runs with the recorder locked and must not
+	// call back into it.
+	CloneIf func(ev Event) bool
 	// Fail returns the error to inject into ev, nil to let it run.
 	Fail func(ev Event) error
 	// Stores are the absolute paths of the Pebble stores the boot opens: the
@@ -194,7 +199,7 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 		r.ordinals[ev.Label]++
 	}
 	r.events = append(r.events, ev)
-	if r.opts.Clones && ev.Kill() {
+	if ev.Kill() && (r.opts.Clones || r.opts.CloneIf != nil && r.opts.CloneIf(ev)) {
 		r.clones = append(r.clones, Clone{Event: ev, FS: r.mem.CrashClone(vfs.CrashCloneCfg{})})
 	}
 	fail := r.opts.Fail
