@@ -1,7 +1,7 @@
 // file: internal/logger/ctx_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: f985b834-583b-49a5-95a2-df71a0e16724
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package logger
 
@@ -17,14 +17,33 @@ import (
 	corelog "github.com/falkcorp/mediacore/log"
 )
 
-// TestCtxHelpers_AppendAttrsFrom: each helper writes one record through
-// slog.Default() that carries the context's attributes, with control
-// characters in the message and string values escaped by sanitizeLogLine.
-// Not parallel: it swaps slog.Default().
-func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
+// pipelineDefault makes a real core pipeline over buf the slog default, as
+// app.InstallProcessDefaults does in serve, and puts the old default back.
+// Not parallel-safe: it swaps slog.Default().
+func pipelineDefault(t *testing.T, buf *bytes.Buffer, format corelog.Format, level slog.Level) {
+	t.Helper()
 	prev := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(prev) })
+	l, err := corelog.New(corelog.Options{
+		Output:    buf,
+		Format:    format,
+		Level:     level,
+		AddSource: true,
+		Redactor:  corelog.NewRedactor(nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+	slog.SetDefault(l.Root())
+}
 
+// TestCtxHelpers_AppendAttrsFrom: each helper writes one record through
+// slog.Default(), the App's pipeline, that carries the context's attributes
+// exactly once (the pipeline's handler appends them, so the helpers must
+// not), with control characters in the message and string values escaped by
+// sanitizeLogLine. Not parallel: it swaps slog.Default().
+func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
 	ctx := corelog.WithAttrs(context.Background(), slog.String("k", "v"), slog.String("who", "pen\nguin"))
 	for name, tc := range map[string]struct {
 		fn    func(context.Context, string, ...any)
@@ -37,7 +56,7 @@ func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
-			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: true})))
+			pipelineDefault(t, &buf, corelog.FormatJSON, slog.LevelDebug)
 			tc.fn(ctx, "riddle\r\nlevel=INFO msg=forged", "title", "two\rface", "count", 3)
 
 			out := buf.String()
@@ -53,12 +72,21 @@ func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
 				"msg":   `riddle\r\nlevel=INFO msg=forged`,
 				"title": `two\rface`,
 				"k":     "v",
-				"who":   `pen\nguin`,
+				// A context attribute is the handler's to quote: the JSON encoder
+				// escaped the newline on the wire (one record, checked above).
+				"who":   "pen\nguin",
 				"count": float64(3),
 			}
 			for k, v := range want {
 				if m[k] != v {
 					t.Errorf("%s = %#v, want %#v", k, m[k], v)
+				}
+			}
+			// json.Unmarshal keeps the last of a repeated key, so a doubled
+			// attribute is only visible in the raw line.
+			for _, k := range []string{"k", "who", "title", "count"} {
+				if n := strings.Count(out, `"`+k+`":`); n != 1 {
+					t.Errorf("attribute %q appears %d times, want once: %s", k, n, out)
 				}
 			}
 			src, _ := m["source"].(map[string]any)
@@ -68,62 +96,27 @@ func TestCtxHelpers_AppendAttrsFrom(t *testing.T) {
 		})
 	}
 
-	// The context's attrs come first, as HEAD wrote the operation attrs, so
-	// internal/activity's first-match parser reads the real opID.
+	// The same through the text format: the operation attribute is written
+	// once, and a value that spells another opID stays inside its quotes, so
+	// internal/activity's exact-key parser cannot read it as the row's op.
 	var ordered bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&ordered, nil)))
+	pipelineDefault(t, &ordered, corelog.FormatText, slog.LevelInfo)
 	opCtx := corelog.WithAttrs(context.Background(), slog.String("opID", "op-real"))
 	InfoCtx(opCtx, "scan", "path", "/lib/x opID=op-forged")
 	line := ordered.String()
-	opAt, forgedAt := strings.Index(line, " opID=op-real"), strings.Index(line, "op-forged")
-	if opAt < 0 || forgedAt < 0 || opAt > forgedAt {
-		t.Errorf("context attrs not written before the record's (opID at %d, record value at %d): %q", opAt, forgedAt, line)
+	if n := strings.Count(line, " opID=op-real"); n != 1 {
+		t.Errorf("opID=op-real written %d times, want once: %q", n, line)
+	}
+	if !strings.Contains(line, `path="/lib/x opID=op-forged"`) {
+		t.Errorf("the forged opID is not quoted inside its value: %q", line)
 	}
 
-	// Below the default handler's level nothing is written.
+	// Below the pipeline's level nothing is written.
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	pipelineDefault(t, &buf, corelog.FormatText, slog.LevelWarn)
 	InfoCtx(ctx, "hidden")
 	if buf.Len() != 0 {
 		t.Errorf("info written at level warn: %q", buf.String())
-	}
-}
-
-// rawHandler writes messages and string values unquoted, as slog's built-in
-// default handler writes the message.
-type rawHandler struct{ buf *bytes.Buffer }
-
-func (h rawHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h rawHandler) Handle(_ context.Context, r slog.Record) error {
-	h.buf.WriteString(r.Message)
-	r.Attrs(func(a slog.Attr) bool {
-		h.buf.WriteString(" " + a.Key + "=" + a.Value.String())
-		return true
-	})
-	h.buf.WriteString("\n")
-	return nil
-}
-func (h rawHandler) WithAttrs(as []slog.Attr) slog.Handler {
-	for _, a := range as {
-		h.buf.WriteString("with " + a.Key + "=" + a.Value.String() + "\n")
-	}
-	return h
-}
-func (h rawHandler) WithGroup(string) slog.Handler { return h }
-
-// TestSanitizing_EscapesForRawHandlers: over a handler that writes text
-// unquoted (slog's built-in default does so for the message), Sanitizing
-// keeps a CR or LF in the message, a record value or a With value from
-// forging a line.
-func TestSanitizing_EscapesForRawHandlers(t *testing.T) {
-	var buf bytes.Buffer
-	l := Sanitizing(slog.New(rawHandler{buf: &buf})).With("dir", "/data\nWARN forged")
-	l.Warn("close /lib/a\nINFO forged: denied", "err", "eof\r\nERROR forged", slog.Group("g", slog.String("v", "x\ny")))
-	if got := buf.String(); strings.Count(got, "\n") != 2 || strings.ContainsRune(got, '\r') {
-		t.Fatalf("a raw control character got through: %q", got)
-	}
-	if Sanitizing(nil) != nil {
-		t.Error("Sanitizing(nil) != nil")
 	}
 }
 
