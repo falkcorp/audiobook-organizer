@@ -1,7 +1,7 @@
 # file: Dockerfile.build-cgo
-# version: 1.2.6
+# version: 1.2.7
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 #
 # Builds a statically-linked CGO binary with native TagLib for Linux amd64/arm64.
 # Used by CI to produce downloadable release binaries.
@@ -13,10 +13,14 @@
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list).
 FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS frontend-builder
 WORKDIR /build/web
-# The one web-dependency entry point (see Dockerfile); it expects /build/scripts/ci/ and /build/web.
-COPY scripts/ci/build_web.sh ../scripts/ci/
+# The one web-dependency entry point (see Dockerfile for the four steps of 07 §7.3.2);
+# it expects /build/scripts/ci/, /build/core/web and /build/web.
+COPY scripts/ci/build_web.sh scripts/ci/ensure_core_web.sh ../scripts/ci/
+COPY core/web/ ../core/web/
 COPY web/package*.json ./
 RUN npm_config_prefer_offline=true sh ../scripts/ci/build_web.sh deps
+# The optional UI build ID, as in Dockerfile; only this stage declares it.
+ARG BUILD_ID=
 COPY web/ ./
 RUN npm run build
 

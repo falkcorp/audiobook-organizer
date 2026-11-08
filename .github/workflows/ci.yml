@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.36.0
+# version: 3.36.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -92,7 +92,7 @@ jobs:
           if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
             go=false; web=false
             while IFS= read -r f; do
-              case "$f" in web/*|core/web/*|scripts/ci/build_web.sh|.github/workflows/*) web=true ;; esac
+              case "$f" in web/*|core/web/*|scripts/ci/build_web.sh|scripts/ci/ensure_core_web.sh|.github/workflows/*) web=true ;; esac
               case "$f" in
                 # Generated from Go (tools/cmd/opsgen); the Go job's ops-check
                 # must run when only the generated file changed.
