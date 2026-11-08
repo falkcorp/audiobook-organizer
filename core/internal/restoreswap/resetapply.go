@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/resetapply.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: dca1f7d5-4bfe-4d11-a0dc-0941c34a8ebd
 // last-edited: 2026-11-08
 
@@ -95,7 +95,14 @@ func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last 
 		// swap's private namespace, so in the crash model a second name
 		// there is a twin (memGhost); on the real filesystem mv proves it
 		// by identity.
-		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, t.From, t.To, memGhost) }); err != nil {
+		// The destination's chain may be an earlier boot's, created with a
+		// failed fsync (R1-21 review M6): synced before the rename into it.
+		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error {
+			if err := s.mkdirDurable(filepath.Dir(t.To)); err != nil {
+				return err
+			}
+			return mv(s.fs, t.From, t.To, memGhost)
+		}); err != nil {
 			return s.moveBack(ctx, in, err)
 		}
 		if moved[filepath.Clean(t.From)] {

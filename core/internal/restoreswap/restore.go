@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
 // last-edited: 2026-11-08
 
@@ -189,7 +189,7 @@ func (s *Swapper) forwardSteps(ctx context.Context, in restorejournal.Intent, la
 		}
 		if err := bootseam.Labelled(seams, "swap.setaside.mkdir", func() error {
 			for _, m := range asides {
-				if err := mkdirAllSynced(s.fs, filepath.Dir(m.To)); err != nil {
+				if err := s.mkdirDurable(filepath.Dir(m.To)); err != nil {
 					return err
 				}
 			}
@@ -286,14 +286,10 @@ func (s *Swapper) continueSwapBack(ctx context.Context, in restorejournal.Intent
 		if err != nil || !ok {
 			return err
 		}
-		live := filepath.Join(s.o.StateDir, locationFile)
-		if err := s.fs.Rename(saved, live); err != nil {
-			return fmt.Errorf("restoreswap: restore %s: %w", live, err)
-		}
-		if err := syncDir(s.fs, s.o.StateDir); err != nil {
-			return err
-		}
-		return syncDir(s.fs, s.journalDir(id))
+		// renameSynced undoes the rename when the state directory's fsync
+		// fails, so a later sync of the journal directory never drops the
+		// saved copy while the live file is not yet durable.
+		return renameSynced(s.fs, saved, filepath.Join(s.o.StateDir, locationFile))
 	}); err != nil {
 		return fmt.Errorf("restoreswap: step x of %s: %w", id, err)
 	}
@@ -321,7 +317,14 @@ func (s *Swapper) continueSwapBack(ctx context.Context, in restorejournal.Intent
 				continue
 			}
 			failed := restorejournal.FailedDest(s.o.StateDir, in.DBPath, id, m.From)
-			if err := bootseam.Labelled(seams, "swap.back.mv", func() error { return mv(s.fs, m.From, failed, memGhost) }); err != nil {
+			// failed/'s chain may be an earlier x's, created with a failed
+			// fsync (R1-21 review M6): synced before the rename into it.
+			if err := bootseam.Labelled(seams, "swap.back.mv", func() error {
+				if err := s.mkdirDurable(filepath.Dir(failed)); err != nil {
+					return err
+				}
+				return mv(s.fs, m.From, failed, memGhost)
+			}); err != nil {
 				return fmt.Errorf("restoreswap: step x of %s: move %s to %s: %w", id, m.From, failed, err)
 			}
 		}

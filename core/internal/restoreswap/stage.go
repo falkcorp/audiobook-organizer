@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/stage.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: f8808c55-579d-4ed5-81e1-2c5276a578b9
 // last-edited: 2026-11-08
 
@@ -100,7 +100,7 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 		} else if ok {
 			return fmt.Errorf("restoreswap: restore/%s already exists; an intent id is never reused", in.ID)
 		}
-		if err := mkdirAllSynced(s.fs, dir); err != nil {
+		if err := s.mkdirDurable(dir); err != nil {
 			return err
 		}
 		if err := restorejournal.CreateIntentFS(s.fs, s.o.StateDir, in); errors.Is(err, restorejournal.ErrIntentUnsynced) {

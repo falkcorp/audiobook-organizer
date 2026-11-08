@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -293,6 +293,19 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 		return Outcome{}, err
 	} else if ok {
 		// Rejected, and the kill fell inside the rejection's rename.
+		// rejected.json is the rejection's durable mark: a journal that
+		// lacks the record gets it (R1-21 review M6), so the journal ends
+		// terminal whatever an earlier boot's fsync did.
+		recs, err := s.durableJournal(ctx, in.ID)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if lastStep(recs) != StepRejected {
+			if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepRejected,
+				Note: "rejected.json was in the slot without the journal's rejected record"}); err != nil {
+				return Outcome{}, err
+			}
+		}
 		if err := s.cleanupSlot(ctx, s.pendingPath()); err != nil {
 			return Outcome{}, err
 		}
@@ -342,11 +355,13 @@ func (s *Swapper) rejection(in restorejournal.Intent) string {
 // ensureStaged returns the journal, writing "staged" first when a stager's
 // create succeeded and its journal write did not (the intent is the truth).
 func (s *Swapper) ensureStaged(ctx context.Context, in restorejournal.Intent) ([]restorejournal.Record, error) {
-	recs, err := ReadJournal(s.fs, s.o.StateDir, in.ID)
+	recs, err := s.durableJournal(ctx, in.ID)
 	if err != nil || len(recs) > 0 {
 		return recs, err
 	}
-	if err := mkdirAllSynced(s.fs, s.journalDir(in.ID)); err != nil {
+	if err := bootseam.Labelled(bootseam.From(ctx), "swap.journal.staged", func() error {
+		return s.mkdirDurable(s.journalDir(in.ID))
+	}); err != nil {
 		return nil, err
 	}
 	rec := restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}
@@ -450,7 +465,7 @@ func (s *Swapper) resume(ctx context.Context, id string) (Outcome, error) {
 	if in.Kind == restorejournal.KindRewrite {
 		return Outcome{}, fmt.Errorf("%w (journal %s)", ErrRewriteNotInThisBuild, id)
 	}
-	recs, err := ReadJournal(s.fs, s.o.StateDir, id)
+	recs, err := s.durableJournal(ctx, id)
 	if err != nil {
 		return Outcome{}, err
 	}
