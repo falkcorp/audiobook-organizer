@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -110,11 +111,21 @@ func logCoreAccess(out io.Writer, r *http.Request, status int, start time.Time) 
 	if err != nil {
 		ip = ""
 	}
-	_, _ = fmt.Fprint(out, servermiddleware.RedactingLogFormatter(gin.LogFormatterParams{
+	if _, err := fmt.Fprint(out, servermiddleware.RedactingLogFormatter(gin.LogFormatterParams{
 		Request: r, TimeStamp: time.Now(), StatusCode: status, Latency: time.Since(start),
 		ClientIP: ip, Method: r.Method, Path: path,
-	}))
+	})); err != nil {
+		// Once per process, through slog's pipeline (which also reaches the
+		// Activity store), not the writer that just failed.
+		coreAccessLogFailed.Do(func() {
+			lifecycleLog.Warn("access log: writing the line for an answer core wrote failed; later failures are not reported: %v", err)
+		})
+	}
 }
+
+// coreAccessLogFailed reports the first failed access-line write only: a
+// broken output fails every request.
+var coreAccessLogFailed sync.Once
 
 // perimeterWriter applies the perimeter to a response core writes itself,
 // on its first WriteHeader or Write. It decides once. A refused request gets
@@ -198,7 +209,11 @@ func (w *perimeterWriter) finish() {
 		return
 	}
 	if w.wrote {
-		_ = w.gz.Close()
+		// The footer goes to the client; a failure means it went away
+		// mid-body, and the response is over either way.
+		if err := w.gz.Close(); err != nil {
+			lifecycleLog.Debug("perimeter: finishing a compressed answer core wrote failed: %v", err)
+		}
 	}
 	w.gz = nil
 }
@@ -233,7 +248,9 @@ func (w *perimeterWriter) Flush() {
 		return
 	}
 	if w.gz != nil {
-		_ = w.gz.Flush()
+		if err := w.gz.Flush(); err != nil {
+			return // the write to the client failed: nothing to push
+		}
 	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
