@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
-// last-edited: 2026-11-04
+// last-edited: 2026-11-08
 
 package scanner
 
@@ -56,6 +56,12 @@ func newOwnershipFixture(t *testing.T) ownershipFixture {
 	t.Helper()
 	store, cleanup := setupPebbleStore(t)
 	t.Cleanup(cleanup)
+	// The cases are written against the complete multi-row path lookup,
+	// which memdb serves. Until the warmup publishes, the ownership check
+	// falls back to the single-row path index (database.BookFileRowsAtPath),
+	// which answers one row per path, so "a soft-deleted co-owner is ignored
+	// when a live owner exists" would see only whichever row wrote last.
+	store.WaitForWarmup()
 
 	prevConfig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = prevConfig })

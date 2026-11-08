@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 
 package scanner
 
@@ -32,10 +32,7 @@ type rescanRaceStore struct {
 // reach the Pebble store behind the wrapper and fail closed with
 // ErrRetiredReaderUnavailable, which is what a decorator that has not opted in
 // is meant to get.
-func (s *rescanRaceStore) Unwrap() database.Store {
-	st, _ := s.scannerStore.(database.Store)
-	return st
-}
+func (s *rescanRaceStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
 
 func (s *rescanRaceStore) GetBookByFilePath(path string) (*database.Book, error) {
 	book, err := s.scannerStore.GetBookByFilePath(path)
@@ -146,6 +143,14 @@ type hashDupRaceStore struct {
 	once   sync.Once
 	onRead func(bookID string)
 }
+
+// Unwrap opts the wrapper into database.AsCapability for the same reason as
+// rescanRaceStore.Unwrap: the ownership lookup's warmup-window fallback and
+// the retired-version reads resolve capabilities this wrapper does not
+// implement, and must reach the Pebble store behind it however early the
+// scan lands. It only intercepts GetBookByFileHash, which no capability
+// lookup goes through.
+func (s *hashDupRaceStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
 
 func (s *hashDupRaceStore) GetBookByFileHash(hash string) (*database.Book, error) {
 	book, err := s.scannerStore.GetBookByFileHash(hash)

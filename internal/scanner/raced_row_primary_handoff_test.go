@@ -1,7 +1,7 @@
 // file: internal/scanner/raced_row_primary_handoff_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 00e57d28-b1fc-410b-8ab8-557e1e5fe233
-// last-edited: 2026-09-28
+// last-edited: 2026-11-08
 
 package scanner
 
@@ -28,6 +28,35 @@ type racedRowStore struct {
 	mu      sync.Mutex
 	lookups int
 	rowID   string
+}
+
+// Unwrap opts the wrapper into database.AsCapability, so the capability
+// reads behind saveBookToDatabase reach the Pebble store whatever the memdb
+// warmup is doing. While memdb is not serving, the ownership lookup
+// (database.BookFileRowsAtPath) falls back to BookFileByPathIncludingRetired,
+// which needs the RetiredBookFileReader capability this wrapper does not
+// implement; without Unwrap a scan that lands before warmup publishes fails
+// closed with ErrRetiredReaderUnavailable. The wrapper only intercepts
+// GetBookByFilePath, which no capability lookup goes through, so reaching
+// past it bypasses nothing the test relies on.
+func (s *racedRowStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
+
+// innerStore is what a scanner test decorator's Unwrap returns: the store it
+// wraps when that is a database.Store, or else what the wrapped layer itself
+// unwraps to. The second case is a decorator stacked on another one
+// (installRacedRow over seedHashDupRace's hashDupRaceStore), whose inner layer
+// implements only scannerStore and so is not a database.Store; returning nil
+// there would stop database.AsCapability's walk one layer short of the Pebble
+// store. Skipping that layer loses nothing: a scanner test decorator
+// implements no capability of its own.
+func innerStore(s scannerStore) database.Store {
+	if st, ok := s.(database.Store); ok {
+		return st
+	}
+	if u, ok := s.(database.StoreUnwrapper); ok {
+		return u.Unwrap()
+	}
+	return nil
 }
 
 // upsertLookupOfTarget is which GetBookByFilePath(target) call inside

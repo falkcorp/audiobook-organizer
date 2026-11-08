@@ -1,7 +1,7 @@
 // file: internal/database/pebble_gate_shutdown_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b3e5d70-2c1a-4f68-8e47-d5a0c6b1f293
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Tests for the shutdown half of the gate: the owned-engine close function,
@@ -458,19 +459,19 @@ func TestPebbleStoreClose_TimeoutPathSyncsRowsCommittedDuringDrain(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("quick_query_cache:closedrain:"), UpperBound: []byte("quick_query_cache:closedrain;")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := []byte("closedrain:committed-during-drain")
+	key := []byte("quick_query_cache:closedrain:committed-during-drain")
 	p.db.gate.setShutdownHook(func(st shutdownStage) {
 		if st != stageRefusedAndSynced {
 			return
 		}
 		// A writer that took its lease before Close began and commits now.
-		// The gate refuses a new Set, so write through the raw engine, the
-		// way that in-flight commit reaches it.
-		if err := p.db.db.Set(key, []byte("v"), pebble.NoSync); err != nil {
+		// The gate refuses a new Set, so write through books' range on the
+		// store underneath, the way that in-flight commit reaches it.
+		if err := p.db.lr.write(pebble.NoSync, func(b *storage.Batch) error { return b.Set(key, []byte("v")) }); err != nil {
 			t.Errorf("simulated in-flight commit: %v", err)
 		}
 	})
@@ -497,7 +498,7 @@ func TestPebbleStoreClose_StalledWALSyncDoesNotHangClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 8 {
-		if err := p.db.Set([]byte(fmt.Sprintf("closedrain:%03d", i)), []byte("v"), pebble.NoSync); err != nil {
+		if err := p.db.Set([]byte(fmt.Sprintf("quick_query_cache:closedrain:%03d", i)), []byte("v"), pebble.NoSync); err != nil {
 			t.Fatal(err)
 		}
 	}

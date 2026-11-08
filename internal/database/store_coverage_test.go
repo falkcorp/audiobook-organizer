@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.12.1
+// version: 2.12.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -26,7 +26,6 @@ func setupCoverageDB(t *testing.T) Store {
 	t.Helper()
 	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
-	require.NoError(t, RunMigrations(store))
 	t.Cleanup(func() { store.Close() })
 	return store
 }
@@ -342,22 +341,22 @@ func TestCoverage_KVOperations(t *testing.T) {
 	s := store.(*PebbleStore)
 
 	// SetRaw / ScanPrefix
-	err := s.SetRaw("prefix:key1", []byte("value1"))
+	err := s.SetRaw("quick_query_cache:key1", []byte("value1"))
 	require.NoError(t, err)
-	err = s.SetRaw("prefix:key2", []byte("value2"))
+	err = s.SetRaw("quick_query_cache:key2", []byte("value2"))
 	require.NoError(t, err)
-	err = s.SetRaw("other:key3", []byte("value3"))
+	err = s.SetRaw("rejected_candidate:key3", []byte("value3"))
 	require.NoError(t, err)
 
-	pairs, err := s.ScanPrefix("prefix:")
+	pairs, err := s.ScanPrefix("quick_query_cache:")
 	require.NoError(t, err)
 	assert.Len(t, pairs, 2)
 
 	// DeleteRaw
-	err = s.DeleteRaw("prefix:key1")
+	err = s.DeleteRaw("quick_query_cache:key1")
 	require.NoError(t, err)
 
-	pairs, err = s.ScanPrefix("prefix:")
+	pairs, err = s.ScanPrefix("quick_query_cache:")
 	require.NoError(t, err)
 	assert.Len(t, pairs, 1)
 }

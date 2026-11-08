@@ -1,5 +1,5 @@
 // file: main.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/cmd"
 	"github.com/falkcorp/audiobook-organizer/internal/books"
@@ -105,6 +106,24 @@ func main() {
 	os.Exit(run())
 }
 
+// fastExitArgs is os.Args as app.FastExit reads them: --print-storage-levels
+// followed only by ABO's --db flag (`--db PATH` or `--db=PATH`) is the flag
+// alone. The level vector comes from the modules' manifests and opens
+// nothing, so the path is accepted and ignored; the R1-23 brief's acceptance
+// command passes it. Any other trailing argument leaves args as they are, so
+// FastExit declines and cobra reports it.
+func fastExitArgs(args []string) []string {
+	if len(args) < 3 || args[1] != "--print-storage-levels" {
+		return args
+	}
+	switch rest := args[2:]; {
+	case len(rest) == 2 && rest[0] == "--db",
+		len(rest) == 1 && strings.HasPrefix(rest[0], "--db="):
+		return args[:2]
+	}
+	return args
+}
+
 func run() int {
 	// Set version everywhere
 	cmd.SetVersion(version)
@@ -124,10 +143,13 @@ func run() int {
 	// The deploy and rollback recipes ask a binary what it supports before
 	// restarting it (scripts/deploy-match-unit-type.sh): `--print-capabilities`
 	// prints one token per line, and `sd_notify` means the binary sends
-	// READY=1, so it may run under the Type=notify unit. The flag is core's:
-	// app.FastExit answers it. Handled before cobra for the same stdout reason
-	// as --print-storage-format.
-	if handled, err := app.FastExit(os.Args, os.Stdout); handled {
+	// READY=1, so it may run under the Type=notify unit;
+	// `--print-storage-levels` prints the storage level vector this build
+	// serves, as JSON, from the manifests of the modules serve hands app.New
+	// (05-storage §5S.3.7). The flags are core's: app.FastExit answers them.
+	// Handled before cobra for the same stdout reason as
+	// --print-storage-format.
+	if handled, err := app.FastExit(fastExitArgs(os.Args), os.Stdout, books.Module()); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

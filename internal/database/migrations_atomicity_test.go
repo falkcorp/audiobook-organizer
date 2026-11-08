@@ -1,40 +1,21 @@
 // file: internal/database/migrations_atomicity_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f60be44c-31da-4f41-84d4-11c26dcbe1c2
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package database
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 )
-
-// swapMigrationRegistry replaces the package-level migration registry for the
-// duration of one test and restores it afterwards. Safe because no test in this
-// package that touches the registry calls t.Parallel: Go resumes parallel tests
-// only after every sequential top-level test has finished.
-func swapMigrationRegistry(t *testing.T, replacement []Migration) {
-	t.Helper()
-	original := migrations
-	migrations = replacement
-	t.Cleanup(func() { migrations = original })
-}
-
-// recordMigration stores a migration record on its own, the way a previous
-// build left one behind. Tests only: the runner writes the record through
-// commitMigrationBookkeeping so it lands in the same batch as the version bump.
-func recordMigration(store migrationStore, m Migration) error {
-	payload, err := migrationRecordPayload(m)
-	if err != nil {
-		return err
-	}
-	return store.SetUserPreference(migrationRecordKey(m.Version), payload)
-}
 
 // pebbleDigest returns a byte-exact fingerprint of the entire Pebble keyspace
 // plus the number of live keys. Two digests are equal if and only if nothing in
@@ -61,99 +42,73 @@ func pebbleDigest(t *testing.T, store Store) (string, int) {
 	return hex.EncodeToString(h.Sum(nil)), keys
 }
 
-// TestMigrationReplayDoesNotRerunRecordedUp is the regression test for DB-02.
-//
-// RunMigrations used to perform three unbatched writes per migration: the
-// migration's own Up effect, the migration record, and the schema-version bump.
-// A crash after the record write but before the version write left the database
-// reporting the pre-migration version, so the next boot re-ran the SAME Up. This
-// test reconstructs exactly that persisted state — record present, version not
-// yet advanced — and asserts the runner recognises the migration as applied and
-// only advances the version.
+// TestMigrationReplayDoesNotRerunRecordedUp is the regression test for DB-02,
+// on core storage. HEAD's runner once wrote a migration's record and its
+// version bump separately, and a crash between them left the record durable
+// with the version behind, so the next boot re-ran the same Up. Books'
+// VersionSource reads that state as applied. The store here is one HEAD left
+// at version 60 with migration 61's record already durable, and a book whose
+// placeholder path migration 61 would flag if it ran: the first core boot
+// must count 61 as applied, leave the book alone, and run 62 onwards.
 func TestMigrationReplayDoesNotRerunRecordedUp(t *testing.T) {
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	upCalls := 0
-	testMigration := Migration{
-		Version:     9001,
-		Description: "DB-02 replay-safety probe",
-		Up: func(migrationStore) error {
-			upCalls++
-			return nil
-		},
-	}
-	swapMigrationRegistry(t, []Migration{testMigration})
-
-	// Persisted state left behind by a crash between the two bookkeeping
-	// writes: version still 9000, but the record for 9001 is already durable.
-	require.NoError(t, setVersion(store, 9000))
-	require.NoError(t, recordMigration(store, testMigration))
-
-	require.NoError(t, RunMigrations(store))
-
-	require.Equal(t, 0, upCalls,
-		"migration 9001 was already recorded as applied; its Up must not run again")
-
-	got, err := getCurrentVersion(store)
+	path := filepath.Join(t.TempDir(), "replay.pebble")
+	store, err := NewPebbleStore(path)
 	require.NoError(t, err)
-	require.Equal(t, 9001, got, "the version must still be advanced past the recorded migration")
-}
-
-// TestMigrationBookkeepingIsRecordedAndVersioned covers the ordinary path: an
-// unrecorded migration runs, and both bookkeeping keys land.
-func TestMigrationBookkeepingIsRecordedAndVersioned(t *testing.T) {
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	upCalls := 0
-	testMigration := Migration{
-		Version:     9002,
-		Description: "DB-02 normal-path probe",
-		Up: func(migrationStore) error {
-			upCalls++
-			return nil
-		},
-	}
-	swapMigrationRegistry(t, []Migration{testMigration})
-
-	require.NoError(t, setVersion(store, 9001))
-	require.NoError(t, RunMigrations(store))
-
-	require.Equal(t, 1, upCalls, "an unrecorded migration must run exactly once")
-
-	got, err := getCurrentVersion(store)
+	joker, err := store.CreateBook(&Book{Title: "The Killing Joke", FilePath: "/lib/{series}/The Killing Joke"})
 	require.NoError(t, err)
-	require.Equal(t, 9002, got)
+	require.NoError(t, store.Close())
+	rewindToR0(t, path, 60, 61)
 
-	rec, err := store.GetUserPreference("migration_9002")
+	store, err = NewPebbleStore(path)
 	require.NoError(t, err)
-	require.NotNil(t, rec, "the migration record must be written alongside the version")
-}
+	defer func() { require.NoError(t, store.Close()) }()
 
-// TestMigrationBookkeepingUsesTheAtomicPath proves the store RunMigrations
-// actually receives in production takes the batched branch of
-// commitMigrationBookkeeping, not the two-write fallback. Without this the fix
-// could be inert in prod and still look green.
-func TestMigrationBookkeepingUsesTheAtomicPath(t *testing.T) {
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	ps := AsPebbleStore(store)
-	require.NotNil(t, ps, "InitializeStore hands RunMigrations a *PebbleStore")
-
-	var batcher migrationBookkeepingWriter = ps
-	require.NoError(t, batcher.setPreferencesAtomic([]preferenceWrite{
-		{Key: "db02_atomic_a", Value: "a"},
-		{Key: "db02_atomic_b", Value: "b"},
-	}))
-
-	for key, want := range map[string]string{"db02_atomic_a": "a", "db02_atomic_b": "b"} {
-		pref, err := store.GetUserPreference(key)
+	got, err := store.GetBookByID(joker.ID)
+	require.NoError(t, err)
+	require.Nil(t, got.LibraryState, "migration 61 was recorded as applied; its Up must not run again")
+	v, err := getCurrentVersion(store)
+	require.NoError(t, err)
+	require.Equal(t, LatestMigrationVersion(), v, "the version must still advance past the recorded migration")
+	for n := 62; n <= LatestMigrationVersion(); n++ {
+		rec, err := store.GetUserPreference(migrationRecordKey(n))
 		require.NoError(t, err)
-		require.NotNil(t, pref, "key %s", key)
-		require.NotNil(t, pref.Value, "key %s", key)
-		require.Equal(t, want, *pref.Value, "key %s", key)
+		require.NotNil(t, rec, "migration %d must be recorded", n)
+	}
+}
+
+// TestMigrationBookkeepingIsRecordedAndVersioned covers the ordinary path: a
+// step core storage runs leaves HEAD's two rows, the migration_<n> record and
+// db_version, in HEAD's format (R0 reads them), with the fields core adds.
+func TestMigrationBookkeepingIsRecordedAndVersioned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recorded.pebble")
+	store, err := NewPebbleStore(path)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	rewindToR0(t, path, LegacyCap-1, LegacyCap-1)
+
+	store, err = NewPebbleStore(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	v, err := getCurrentVersion(store)
+	require.NoError(t, err)
+	require.Equal(t, LatestMigrationVersion(), v)
+
+	for _, n := range []int{LegacyCap, LegacyCap + 1} {
+		pref, err := store.GetUserPreference(migrationRecordKey(n))
+		require.NoError(t, err)
+		require.NotNil(t, pref, "migration %d", n)
+		require.NotNil(t, pref.Value)
+		var head MigrationRecord // HEAD's shape decodes the row
+		require.NoError(t, json.Unmarshal([]byte(*pref.Value), &head))
+		require.Equal(t, n, head.Version)
+		require.NotEmpty(t, head.Description)
+		require.False(t, head.AppliedAt.IsZero())
+		var row migrationRecordRow
+		require.NoError(t, json.Unmarshal([]byte(*pref.Value), &row))
+		require.NotEmpty(t, row.Build, "migration %d records the binary that ran it", n)
+		if n > LegacyCap {
+			require.Equal(t, storage.Additive.String(), row.Compat, "migration %d", n)
+		}
 	}
 }
 

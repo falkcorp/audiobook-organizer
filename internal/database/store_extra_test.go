@@ -1,7 +1,7 @@
 // file: internal/database/store_extra_test.go
-// version: 2.3.2
+// version: 2.3.3
 // guid: 68b2b2f9-2b8f-4f7f-9d8f-26e6306a3c8e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with PebbleStore;
 // TestSQLiteExtendedFeatures renamed to TestPebbleExtendedFeatures.
@@ -19,10 +19,6 @@ import (
 func TestStoreAdditionalCoverageSQLite(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	exerciseStoreCommon(t, store)
 }

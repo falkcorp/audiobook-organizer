@@ -1,7 +1,7 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
-// last-edited: 2026-09-12
+// last-edited: 2026-11-08
 
 package organizer
 
@@ -171,9 +171,21 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 
 	prevBudget := config.AppConfig.BackupMaxTotalBytes
 	t.Cleanup(func() { config.AppConfig.BackupMaxTotalBytes = prevBudget })
-	// Small enough that the seeded archives alone exceed it. The default budget
+	// The budget holds one seeded archive plus the new one, and not two seeds:
+	// retention (enforceRetention, before the write with the incoming size)
+	// prunes the two oldest seeds and keeps the third. The default budget
 	// (40 GiB) would prune nothing here, which is exactly the distinction.
-	config.AppConfig.BackupMaxTotalBytes = 4096
+	//
+	// The seeds are 1 MiB so the new archive's own size cannot decide the
+	// outcome. They were 2000 bytes against a 4096 budget until R1-23, which
+	// held only while a fresh store archived to ~1.5 KB; core storage's
+	// install rows and books' migration records grew it to ~9 KB, larger than
+	// the whole budget, so retention then pruned every seed and the test
+	// failed for a reason unrelated to the budget it checks. The new
+	// archive's size is asserted below the slack (seedBytes/2), so a store
+	// that grows past it fails here by name instead.
+	const seedBytes = 1 << 20
+	config.AppConfig.BackupMaxTotalBytes = seedBytes + seedBytes/2
 
 	// Three stale archives: stale so the freshness window does not short-circuit
 	// autoBackup before retention ever runs.
@@ -184,7 +196,7 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 		"audiobooks_pebble_20260803_000000.tar.gz",
 	} {
 		path := filepath.Join(backupDir, name)
-		if wErr := os.WriteFile(path, make([]byte, 2000), 0o644); wErr != nil {
+		if wErr := os.WriteFile(path, make([]byte, seedBytes), 0o644); wErr != nil {
 			t.Fatalf("seed %s: %v", name, wErr)
 		}
 		if cErr := os.Chtimes(path, old, old); cErr != nil {
@@ -205,6 +217,9 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tar.gz") {
 			archives = append(archives, e.Name())
+			if info, iErr := e.Info(); iErr == nil && info.Size() != seedBytes && info.Size() >= seedBytes/2 {
+				t.Fatalf("the new archive %s is %d bytes, past this fixture's slack of %d: raise seedBytes", e.Name(), info.Size(), seedBytes/2)
+			}
 		}
 	}
 

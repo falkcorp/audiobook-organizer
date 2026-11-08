@@ -1,5 +1,5 @@
 // file: cmd/root_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
 // last-edited: 2026-11-08
 
@@ -358,15 +358,15 @@ func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
 	}
 }
 
-// TestServeStartupLinesGoToStdoutBeforeTheApp: serve's lines before app.New
-// installs the log pipeline (store open, migrations, key guard) go to standard
-// output at log_level, not to slog's stock default on standard error, and the
-// previous default is back when serve returns. The stubbed runApp stands in for
-// app.New: nothing installs a pipeline here, so the handler these lines meet is
-// the one serve itself installed.
+// TestServeStartupLinesGoToStdoutBeforeTheApp: the lines logged before app.New
+// installs the log pipeline at P5 (the kernel's store open, checkpoint and
+// migrations at P2 to P4b, R1-23) go to standard output at log_level, not to
+// slog's stock default on standard error, and the previous default is back
+// when serve returns. The stubbed runApp stands in for app.New, and so for
+// those phases: nothing installs a pipeline here, so the handler its lines
+// meet is the one serve itself installed.
 func TestServeStartupLinesGoToStdoutBeforeTheApp(t *testing.T) {
 	stubCommandDeps(t)
-	sandboxStateDir(t)
 	origConfig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = origConfig })
 	tempDir := t.TempDir()
@@ -376,13 +376,9 @@ func TestServeStartupLinesGoToStdoutBeforeTheApp(t *testing.T) {
 	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
 	config.AppConfig.LogLevel = "debug"
 
-	stubbedOpen := initializeStore
-	initializeStore = func(dbType, path string) (database.Store, error) {
+	runApp = func(context.Context, books.ServeInputs) error {
 		slog.Debug("two-face debug line")
 		slog.Info("catwoman store line")
-		return stubbedOpen(dbType, path)
-	}
-	runApp = func(context.Context, database.Store, books.ServeInputs) error {
 		slog.Info("riddler app line")
 		return nil
 	}

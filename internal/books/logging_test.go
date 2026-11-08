@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -140,9 +140,9 @@ func TestNoSecondDefaultLogger(t *testing.T) {
 	assert.NotSame(t, log.Writer(), c.srv.ActivityLogWriter())
 }
 
-// TestFileOutputUnderStateDir: with serve's state directory the log is
-// written under it, at logs/abo.log, and the stream still gets the lines;
-// without one there is no file.
+// TestFileOutputUnderStateDir: the log is written under the secure state
+// directory books.Options resolves, at logs/abo.log, and the stream still
+// gets the lines.
 func TestFileOutputUnderStateDir(t *testing.T) {
 	state := t.TempDir()
 	c := bootComposedIn(t, false, state, nil, nil)
@@ -334,7 +334,10 @@ func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
 // module logger, whose records are not Process.
 //
 // The op below runs on the composed server's own registry, so its reporter
-// logger is built from what Register captured.
+// logger is built from what Register captured. It is NoWarmupWait: the
+// store's memdb warmup starts in the books.repairs start hook (R1-23, Register
+// commits no write), bootComposed runs no start hook, and a warmup that never
+// started holds every other op at the dispatcher's D44 gate.
 func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
 	c := bootComposed(t, false, func(cfg *config.Config) { cfg.LogLevel = "debug" }, nil)
 	reg := c.srv.OpRegistry()
@@ -346,6 +349,7 @@ func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
 		DisplayName:  "Batcave alarm",
 		Liveness:     opsregistry.LivenessManual,
 		ResumePolicy: opsregistry.ResumeDrop,
+		NoWarmupWait: true,
 		Run: func(_ context.Context, _ json.RawMessage, rep opsregistry.Reporter) error {
 			rep.Logger().Debug("batcave debug trace")
 			rep.Logger().Warn("batcave alarm raised", "wing", "east")

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.237.5
+// version: 1.239.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
@@ -209,6 +209,13 @@ type PebbleStore struct {
 	// journalClock stamps every CreatedAt and RevertedAt of the operation-change
 	// journal with a strictly increasing time (pebble_store_journal_clock.go).
 	journalClock journalClock
+	// journalClockRepair is set by a construction whose clock key was absent
+	// or malformed: the boot repairs persist the key (repairJournalClock).
+	journalClockRepair atomic.Bool
+	// identStampEmpty is set by a construction that found no identification
+	// marker on a store with no book and no cache row: the boot repairs stamp
+	// the empty index built (stampEmptyIdentIndex).
+	identStampEmpty atomic.Bool
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.
@@ -297,10 +304,15 @@ type PebbleStore struct {
 	// warmupCancel cancels the async memdb warmup goroutine; warmupDone is
 	// closed when that goroutine exits. Close() cancels and waits on these
 	// before closing the underlying Pebble DB — otherwise the warmup's db.NewIter
-	// races the close and panics ("pebble: closed" / nil-pointer deref). Set once
-	// in NewPebbleStore before the store is returned, so no mutex is needed.
+	// races the close and panics ("pebble: closed" / nil-pointer deref).
+	// warmupDone is made by the constructor; warmupCancel is set inside
+	// warmOnce, which either starts the warmup (startMemWarmup) or, when Close
+	// gets there first, closes warmupDone with no goroutine behind it. Every
+	// reader of warmupCancel runs after its own warmOnce.Do, so the Once is the
+	// synchronisation and no mutex is needed.
 	warmupCancel context.CancelFunc
 	warmupDone   chan struct{}
+	warmOnce     sync.Once
 	// warmupDuration is how long the warmup goroutine ran, in milliseconds,
 	// stored (atomically) just before warmupDone closes -- on success, failure
 	// and cancellation alike. Read it only after warmupDone is closed; see
@@ -5840,23 +5852,13 @@ func (p *PebbleStore) Reset() error {
 			return fmt.Errorf("failed to initialize counter %s: %w", counter, err)
 		}
 	}
-	// The wipe deletes the storage format stamp, and a reset store is empty,
-	// so it is restamped at the build's format in the same batch: there is no
-	// moment at which the reset store is durable without a stamp. The stamp
-	// takes preference ID 1, so the preference counter starts at 2.
-	stampRecord, err := storageFormatStampRecord(1, buildStorageFormat)
-	if err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: %w", err)
-	}
-	if err := batch.Set([]byte("counter:preference"), []byte("2"), pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: stage preference counter: %w", err)
-	}
-	if err := batch.Set([]byte("preference:"+storageFormatPreferenceKey), stampRecord, pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: stage storage format stamp: %w", err)
-	}
+	// The wipe deletes books' legacy projection rows (the storage format
+	// stamp and migration marker) with everything else, and writes none back:
+	// those rows are written only through books' LegacyGuard.Stage, by a
+	// level step (05-storage §5S.3.7), and no level is raised at R1, so the
+	// projection stays 1, which HEAD reads from a store with data and no
+	// stamp. The level stamps and sidecars are core's (c/), outside books'
+	// claims, and survive the wipe.
 	// The wipe removed every ident: row with the books and cache rows they
 	// described, so the identification index of the reset store is the empty
 	// one: stamped built in the same batch, with every counter zero (absent).
