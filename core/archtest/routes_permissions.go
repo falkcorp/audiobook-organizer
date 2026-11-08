@@ -1,5 +1,5 @@
 // file: core/archtest/routes_permissions.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d27b0d0a-e465-4741-8f11-232cb68e08f5
 // last-edited: 2026-11-07
 
@@ -39,12 +39,14 @@ import (
 //     the "/" owner, which is exactly RouteInfo{Kind: SPA, Perm: rbac.Public,
 //     RateClass: RateExempt} (§4.10).
 //
-// A RouteInfo does not say whether a Public native route was allowed to be
-// Public. That is Build's check (ErrPublicNotAllowed against the module's
-// Manifest.PublicRoutes), and core's own Public routes are the reviewed
-// golden of httpapi's TestPublicRoutesGolden; this gate accepts rbac.Public
-// on any native route. Router.Build refuses most of the other defects at
-// boot already; this gate is the archtest twin that reads what was built.
+// A RouteInfo does not say whether a Public route was allowed to be Public,
+// so this gate accepts rbac.Public on any route. For a module's native route
+// that is Build's check (ErrPublicNotAllowed against Manifest.PublicRoutes).
+// For a legacy route it is the app's own reviewed list: ABO's is
+// TestPublicRoutesGolden in internal/server/legacy_manifest_test.go, over
+// testdata/public_routes.golden. Router.Build refuses most of the other
+// defects at boot already; this gate is the archtest twin that reads what
+// was built.
 func RoutesHavePermissions(t testing.TB, routes iter.Seq[httpapi.RouteInfo]) {
 	t.Helper()
 	var findings []string
