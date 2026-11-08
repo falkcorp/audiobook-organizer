@@ -1,5 +1,5 @@
 // file: internal/books/atoms.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f821dd40-ccb5-403a-8b4e-f606f72723da
 // last-edited: 2026-11-08
 
@@ -23,7 +23,7 @@ import (
 // core:* scopes, which no module may grant and which core may not name on an
 // app's behalf. It is used in exactly two places: the gin mount's route
 // requirements, which internal/server's manifest records as
-// rbac.LegacyAtom(atom) and Register resolves through RouteRequirement before
+// rbac.LegacyAtom(atom) and Register resolves through the table before
 // MountLegacy (resolveRoutes), and the identity cutover (R2). Nothing here is
 // a grant; Build checks a resolved requirement's scopes against the catalog
 // from F4 like any other route requirement.
@@ -74,14 +74,10 @@ func AtomTable() []Atom {
 	}
 }
 
-// RouteRequirement resolves a legacy route's recorded requirement: an
-// rbac.LegacyAtom(atom) value becomes the atom's route requirement, and false
-// when the atom is not in the table or no route may enforce it. Any other
-// requirement is returned unchanged with true.
-func RouteRequirement(r rbac.Requirement) (rbac.Requirement, bool) {
-	return routeRequirement(AtomTable(), r)
-}
-
+// routeRequirement resolves a legacy route's recorded requirement against
+// table: an rbac.LegacyAtom(atom) value becomes the atom's route requirement,
+// and false when the atom is not in the table or no route may enforce it. Any
+// other requirement is returned unchanged with true.
 func routeRequirement(table []Atom, r rbac.Requirement) (rbac.Requirement, bool) {
 	if r.Kind() != rbac.KindLegacyAtom {
 		return r, true
