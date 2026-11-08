@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/fsops.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 441df42a-91a3-4c8c-ad83-3f4a17489cdf
 // last-edited: 2026-11-07
 
@@ -152,10 +152,30 @@ func existsProof(fs vfs.FS, path string) func() (bool, error) {
 	return func() (bool, error) { return exists(fs, path) }
 }
 
+// privateFile is the mode of every file the swap creates (SEC-9: state and
+// store copies, which can hold plaintext secrets, are 0600 in 0700
+// directories).
+const privateFile os.FileMode = 0o600
+
+// chmod sets mode on a file of the real filesystem before anything is
+// written to it; vfs.FS has no chmod, and an in-memory one has no modes. A
+// wrapper over the real filesystem (the crash-matrix kit's errorfs) is
+// unwrapped by vfs.Root.
+func chmod(fs vfs.FS, path string, mode os.FileMode) error {
+	if vfs.Root(fs) != vfs.Default {
+		return nil
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("restoreswap: chmod %s: %w", path, err)
+	}
+	return nil
+}
+
 // copyIfExists copies src to dst atomically (temp file + fsync, rename,
-// directory fsync) when src exists; an absent src is not an error (R10-6:
-// backup.location.json is written only from R2). A dst that exists is
-// replaced from src again.
+// directory fsync) with src's permission bits, so step x's rename of the
+// copy back restores the original file as it was, when src exists; an
+// absent src is not an error (R10-6: backup.location.json is written only
+// from R2). A dst that exists is replaced from src again.
 func copyIfExists(fs vfs.FS, src, dst string) error {
 	f, err := fs.Open(src)
 	if err != nil {
@@ -164,6 +184,13 @@ func copyIfExists(fs vfs.FS, src, dst string) error {
 		}
 		return fmt.Errorf("restoreswap: open %s: %w", src, err)
 	}
+	mode := privateFile
+	if fi, err := f.Stat(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("restoreswap: stat %s: %w", src, err)
+	} else if vfs.Root(fs) == vfs.Default {
+		mode = fi.Mode().Perm()
+	}
 	data, err := io.ReadAll(f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -171,13 +198,14 @@ func copyIfExists(fs vfs.FS, src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("restoreswap: read %s: %w", src, err)
 	}
-	return writeFileAtomic(fs, dst, data)
+	return writeFileAtomic(fs, dst, data, mode)
 }
 
-// writeFileAtomic writes data to path: a temp file in the same directory,
-// fsynced, renamed over path, the directory fsynced. data is not used after
-// the write (a vfs.File may take ownership of the buffer).
-func writeFileAtomic(fs vfs.FS, path string, data []byte) error {
+// writeFileAtomic writes data to path with mode (set on the temp file before
+// any byte is written): a temp file in the same directory, fsynced, renamed
+// over path, the directory fsynced. data is not used after the write (a
+// vfs.File may take ownership of the buffer).
+func writeFileAtomic(fs vfs.FS, path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := mkdirAllSynced(fs, dir); err != nil {
 		return err
@@ -190,6 +218,9 @@ func writeFileAtomic(fs vfs.FS, path string, data []byte) error {
 	f, err := fs.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return fmt.Errorf("restoreswap: create %s: %w", tmp, err)
+	}
+	if err := chmod(fs, tmp, mode); err != nil {
+		return errors.Join(err, f.Close(), fs.Remove(tmp))
 	}
 	_, werr := f.Write(data)
 	serr := f.Sync()

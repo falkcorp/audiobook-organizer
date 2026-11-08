@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
 // last-edited: 2026-11-07
 
@@ -38,7 +38,7 @@ func (s *Swapper) mark(ctx context.Context, id, name string) error {
 		if err != nil || ok {
 			return err
 		}
-		return writeFileAtomic(s.fs, s.markPath(id, name), nil)
+		return writeFileAtomic(s.fs, s.markPath(id, name), nil, privateFile)
 	})
 }
 
