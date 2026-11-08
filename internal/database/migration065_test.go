@@ -1,7 +1,7 @@
 // file: internal/database/migration065_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 package database
 
@@ -290,27 +290,20 @@ func TestMigration065Batches(t *testing.T) {
 	}
 }
 
-func TestMigration065DownKeepsKeys(t *testing.T) {
+// TestMigration065RerunRewritesNothing: Up run again over the records it
+// built (a replay after a lost version bump) rewrites no opv3: key and keeps
+// one run per opv2 row.
+func TestMigration065RerunRewritesNothing(t *testing.T) {
 	p := newTimelineStore(t)
 	rows, _ := everyV2StatusRows(time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC))
 	seedV2Rows(t, p, rows)
 	if err := migration065Up(p); err != nil {
 		t.Fatal(err)
 	}
-	if err := setVersion(p, 65); err != nil {
-		t.Fatal(err)
-	}
 	before := v3Digest(t, p, "opv3:")
-	if err := migration065Down(p); err != nil {
-		t.Fatal(err)
+	if len(timelineKeys(t, p, opv3RunPrefix)) != len(rows) {
+		t.Fatalf("Up built %d runs for %d opv2 rows", len(timelineKeys(t, p, opv3RunPrefix)), len(rows))
 	}
-	if v, err := getCurrentVersion(p); err != nil || v != 64 {
-		t.Fatalf("version after Down = %d, %v; want 64", v, err)
-	}
-	if v3Digest(t, p, "opv3:") != before || len(timelineKeys(t, p, opv3RunPrefix)) != len(rows) {
-		t.Fatal("Down touched opv3: keys")
-	}
-	// Up again (a roll forward) reuses them: nothing is rewritten.
 	if err := migration065Up(p); err != nil {
 		t.Fatal(err)
 	}
