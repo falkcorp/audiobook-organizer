@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -274,6 +274,19 @@ func (k *Kernel) RootLogger() *slog.Logger {
 		return k.cfg.Logger
 	}
 	return slog.New(slog.DiscardHandler)
+}
+
+// StdlibLogHandler is the handler the standard library log bridge writes to:
+// the pipeline's adapter handler (Logging.Handler()), whose records are not
+// Record.Process, so a third-party library's log.Print line is never an
+// Activity row. With an adopted Config.Logger it is that logger's handler. The
+// one place this choice is made: boot's ProcessLogging hook and
+// app.InstallProcessDefaults both take it from here.
+func (k *Kernel) StdlibLogHandler() slog.Handler {
+	if k.logging != nil {
+		return k.logging.Handler()
+	}
+	return k.RootLogger().Handler()
 }
 
 // Logging is the App's log pipeline, for the taps and the process defaults
