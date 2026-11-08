@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.13.5 -->
+<!-- version: 1.13.6 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # 05 — HTTP API framework (`core/httpapi`)
 
@@ -573,8 +573,8 @@ union of `httpapi.ReservedSegments()` (`api`, `v<digits>`, `livez`, `readyz`, `m
 `auth`, `events`, `assets`, `static`, `ui`, §3.5), `ui.ReservedSegments` (shell routes, 07; a static
 function that lands in R1 with `module`, ahead of the rest of `ui`, so the equality test below
 holds from R1, FE3-8),
-`rbac.ReservedNamespaces()` (`core`, `custom`) and the app's two root-segment inputs
-(`app.Options.ReservedAPINamespaces`, `LegacyMount.TopSegments`, §3.5); a test asserts that the three
+`rbac.ReservedNamespaces()` (`core`, `custom`), `log.ReservedModuleIDs()` (`process`) and the app's two root-segment inputs
+(`app.Options.ReservedAPINamespaces`, `LegacyMount.TopSegments`, §3.5); a test asserts that the four
 owner lists together equal 03's row exactly.
 
 ### 4.2 Middleware chain (core-owned, fixed order)

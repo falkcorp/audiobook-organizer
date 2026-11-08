@@ -1,5 +1,5 @@
 // file: core/log/logging_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: b1061a80-9d8b-4729-b19f-80870f03b30f
 // last-edited: 2026-11-08
 
@@ -979,6 +979,21 @@ func TestRoot_ProcessDefaultCarriesNoModule(t *testing.T) {
 	recs := rec.records()
 	if len(recs) != 3 || recs[0].Module != "" || recs[1].Module != "" || recs[2].Module != "core" {
 		t.Errorf("tap modules = %v; want \"\", \"\", core", recs)
+	}
+}
+
+// TestReservedModuleIDs: "process" is reserved as a module ID because the
+// process default logger's Levels keys are "process.<subsystem>", and a module
+// of that ID would share them. A fresh slice per call; the metrics label of the
+// empty process module is the same word.
+func TestReservedModuleIDs(t *testing.T) {
+	got := ReservedModuleIDs()
+	if !slices.Equal(got, []string{"process"}) || ProcessLabel != "process" {
+		t.Fatalf("ReservedModuleIDs() = %v, ProcessLabel = %q, want [process]", got, ProcessLabel)
+	}
+	got[0] = "batcave"
+	if ReservedModuleIDs()[0] != "process" {
+		t.Fatal("ReservedModuleIDs shares its backing array between calls")
 	}
 }
 
