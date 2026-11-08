@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -33,10 +33,11 @@ import (
 //     directory recorded the current gen, and the graph is complete,
 //     undamaged, not diverged (MarkDiverged: a write it refused, or a mirror
 //     the dedup engine reports failed) and not pending a reconcile;
-//   - the Pebble side: no write since the store opened touched a key the
-//     reconcile's verdict reads (hnsw_verdict_watch.go), which covers writes
-//     that never reach the graph, such as a merge that flips a book's primary
-//     flag or a cleanup op that deletes embedding rows.
+//   - the Pebble side: a database is bound (BindTruthSource) and no write
+//     since it opened touched a key the reconcile's verdict reads
+//     (hnsw_verdict_watch.go), which covers writes that never reach the
+//     graph, such as a merge that flips a book's primary flag or a cleanup op
+//     that deletes embedding rows.
 //
 // The marker records the embedding model the reconcile classified rows
 // against, and a boot that classifies against another model reconciles. A
@@ -305,8 +306,10 @@ func (s *HNSWEmbeddingStore) bumpGenLocked() {
 //     happened before it, or when the marker records another model;
 //   - such a write made while this process's marker is on disk removes it.
 //
-// An unbound store (nil, "") vouches for the graph alone, as before the
-// binding existed. db may be nil to bind only the model.
+// A store with no database bound (db nil) cannot count those writes, so it
+// vouches for nothing: MarkCleanStop refuses, and the import treats any marker
+// as one that does not vouch (R1-15 round-2 review, S5). db may be nil to bind
+// only the model.
 func (s *HNSWEmbeddingStore) BindTruthSource(db *GatedDB, model string) {
 	s.mu.Lock()
 	s.truthDB, s.model = db, model
@@ -335,11 +338,8 @@ func (s *HNSWEmbeddingStore) onPebbleVerdictWrite() {
 }
 
 // pebbleVerdictWritesLocked returns the bound database's verdict writes since
-// it opened, 0 when unbound. The caller holds s.mu.
+// it opened. The caller holds s.mu and has checked that a database is bound.
 func (s *HNSWEmbeddingStore) pebbleVerdictWritesLocked() int64 {
-	if s.truthDB == nil {
-		return 0
-	}
 	return s.truthDB.verdict.count()
 }
 
@@ -357,8 +357,8 @@ func (s *HNSWEmbeddingStore) pebbleVerdictWritesLocked() int64 {
 // for the shutdown budget, or failed, with nothing changed since the last
 // successful one (a failed export leaves the previous snapshot in place). It
 // knows Pebble still matches when the bound database (BindTruthSource) took
-// no verdict write since it opened. Otherwise nothing is written and reason
-// says why. A later write to the graph, or a later verdict write to Pebble,
+// no verdict write since it opened; with no database bound it cannot know.
+// Otherwise nothing is written and reason says why. A later write to the graph, or a later verdict write to Pebble,
 // removes the marker.
 //
 // The marker records the bound embedding model, and it and its directory are
@@ -381,6 +381,8 @@ func (s *HNSWEmbeddingStore) MarkCleanStop(dir string) (written bool, reason str
 		return false, "this process wrote no snapshot of the graph to " + dir + " and loaded none from it", nil
 	case s.gen != s.exportedGen:
 		return false, "the graph changed after its last snapshot was written", nil
+	case s.truthDB == nil:
+		return false, "no Pebble database is bound to the store, so nothing counted the writes the graph could have missed", nil
 	}
 	if n := s.pebbleVerdictWritesLocked(); n > 0 {
 		return false, pebbleVerdictWritesReason(n), nil
@@ -477,6 +479,8 @@ func (s *HNSWEmbeddingStore) cleanStopStaleReasonLocked(rec *cleanStopRecord, di
 		return "no clean-stop marker in " + dir + ": the previous process did not stop cleanly, or its stop could not vouch that the snapshot matched Pebble"
 	case rec.Model != s.model:
 		return fmt.Sprintf("the clean-stop marker in %s records embedding model %q, and this process classifies rows against %q", dir, rec.Model, s.model)
+	case s.truthDB == nil:
+		return "no Pebble database is bound to the store, so nothing counted the writes made before the snapshot import"
 	}
 	if n := s.pebbleVerdictWritesLocked(); n > 0 {
 		return pebbleVerdictWritesReason(n) + " before the snapshot import"
