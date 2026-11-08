@@ -1,5 +1,5 @@
 // file: internal/server/stophook_budget_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 877b968e-c9c6-4cac-b2e9-06bc892394d0
 // last-edited: 2026-11-08
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -114,6 +115,17 @@ func TestStopWithin_ReportsWhetherTheStepFinished(t *testing.T) {
 type failingStopper struct{}
 
 func (failingStopper) Stop(context.Context) error { return errors.New("simulated stop failure") }
+
+// timedOutPlugin is a plugin whose Shutdown ran out of its context.
+type timedOutPlugin struct{}
+
+func (timedOutPlugin) ID() string                              { return "arkham-notifier" }
+func (timedOutPlugin) Name() string                            { return "Arkham notifier" }
+func (timedOutPlugin) Version() string                         { return "1.0.0" }
+func (timedOutPlugin) Capabilities() []plugin.Capability       { return nil }
+func (timedOutPlugin) Init(context.Context, plugin.Deps) error { return nil }
+func (timedOutPlugin) Shutdown(context.Context) error          { return context.DeadlineExceeded }
+func (timedOutPlugin) HealthCheck() error                      { return nil }
 
 // stopHookCleanStopServer is a minimal Server whose container holds a
 // complete HNSW store with one book, persisting to a temp directory. add
@@ -235,6 +247,15 @@ func TestStopHook_NoCleanStopMarkerAfterAnAbandonedStep(t *testing.T) {
 		}},
 		{name: "scheduler tasks", set: func(t *testing.T, s *Server, release chan struct{}) {
 			s.life.backgroundWG.Go(func() { <-release })
+		}},
+		{name: "plugins", set: func(t *testing.T, s *Server, _ chan struct{}) {
+			r := plugin.NewRegistry()
+			r.Register(timedOutPlugin{})
+			r.Enable(timedOutPlugin{}.ID())
+			if err := r.InitAll(context.Background(), plugin.Deps{}); err != nil {
+				t.Fatal(err)
+			}
+			s.pluginRegistry = r
 		}},
 	}
 	for _, tc := range cases {

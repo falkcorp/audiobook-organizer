@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.8
+// version: 4.67.9
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -938,10 +938,13 @@ func (s *Server) StopHook(ctx context.Context) error {
 		}
 	}
 
-	// Shut down all plugins before closing stores
+	// Shut down all plugins before closing stores. A plugin whose Shutdown
+	// failed, a timeout on ctx included, did not finish stopping.
 	if s.pluginRegistry != nil {
 		slog.Info("Shutting down plugins...")
-		s.pluginRegistry.ShutdownAll(ctx)
+		if err := s.pluginRegistry.ShutdownAll(ctx); err != nil {
+			abandoned = append(abandoned, "plugins ("+strings.ReplaceAll(err.Error(), "\n", "; ")+")")
+		}
 	}
 
 	// Detach from the store and from credit resolution only now that every
