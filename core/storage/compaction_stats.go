@@ -61,6 +61,14 @@ func (s CompactionStats) WrittenBytes() uint64 {
 	return s.CompletedBytes + uint64(in)
 }
 
+// Stats is the counter snapshot of the compaction progress reporter
+// (compact_progress.go: Step, RunStep, Moved; ABO's internal/compactprogress
+// merged into storage, 04 §8.5 R1). An alias, so Admin.CompactionStats can be
+// handed straight to Step.Stats. A full-keyspace Compact is one blocking call
+// with no callback; the reporter samples these counters on a ticker while it
+// runs and turns them into operator-readable progress lines.
+type Stats = CompactionStats
+
 // compactionStatsFromMetrics maps one Metrics sample to CompactionStats.
 func compactionStatsFromMetrics(m *cpebble.Metrics) CompactionStats {
 	s := CompactionStats{

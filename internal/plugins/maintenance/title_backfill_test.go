@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.5
+// version: 1.56.6
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -313,11 +312,11 @@ func (d fakeDeps) InvalidateAuthorsCache()                     {}
 func (d fakeDeps) InvalidateSeriesCache()                      {}
 func (d fakeDeps) OptimizeAIScanStore(_ context.Context) error { return nil }
 func (d fakeDeps) OptimizeOLStore(_ context.Context) error     { return nil }
-func (d fakeDeps) AIScanStoreCompactionStats() (compactprogress.Stats, bool) {
-	return compactprogress.Stats{}, false
+func (d fakeDeps) AIScanStoreCompactionStats() (database.CompactionStats, bool) {
+	return database.CompactionStats{}, false
 }
-func (d fakeDeps) OLStoreCompactionStats() (compactprogress.Stats, bool) {
-	return compactprogress.Stats{}, false
+func (d fakeDeps) OLStoreCompactionStats() (database.CompactionStats, bool) {
+	return database.CompactionStats{}, false
 }
 func (d fakeDeps) PruneOldLogs(_ context.Context, _ int, _ func(string, int, int)) (int, error) {
 	return 0, nil

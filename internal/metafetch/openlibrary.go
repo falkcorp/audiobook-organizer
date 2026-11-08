@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 package metafetch
 
@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
@@ -126,13 +125,13 @@ func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
 // the delete-OL-data and factory-reset handlers hold while they close the
 // store and nil it. Reading svc.olStore without it raced those handlers, and
 // sampling a closed *pebble.DB is not safe. ok is false when there is no
-// store; the returned Stats is then marked Absent so compactprogress.Moved
+// store; the returned stats are then marked Absent so storage.Moved
 // never reads the store disappearing as "debt fell".
-func (svc *OpenLibraryService) CompactionStats() (stats compactprogress.Stats, ok bool) {
+func (svc *OpenLibraryService) CompactionStats() (stats database.CompactionStats, ok bool) {
 	svc.Mu.Lock()
 	defer svc.Mu.Unlock()
 	if svc.olStore == nil {
-		return compactprogress.Stats{Absent: true}, false
+		return database.CompactionStats{Absent: true}, false
 	}
 	return svc.olStore.CompactionStats(), true
 }

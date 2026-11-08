@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.103.3
+// version: 1.103.4
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-11-06
+// last-edited: 2026-11-07
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -893,10 +892,10 @@ type StoreOptimizer interface {
 	// AIScanStoreCompactionStats samples the AI scan store's own PebbleDB for
 	// db-optimize's progress lines. ok is false when there is no AI scan
 	// store or it shares the main database (its Optimize is then a no-op).
-	AIScanStoreCompactionStats() (stats compactprogress.Stats, ok bool)
+	AIScanStoreCompactionStats() (stats database.CompactionStats, ok bool)
 	// OLStoreCompactionStats samples the OpenLibrary cache's PebbleDB. ok is
 	// false when the cache is not wired.
-	OLStoreCompactionStats() (stats compactprogress.Stats, ok bool)
+	OLStoreCompactionStats() (stats database.CompactionStats, ok bool)
 }
 
 // CapabilityProbes reports which optional subsystems are wired.

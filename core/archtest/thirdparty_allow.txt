@@ -56,3 +56,7 @@ github.com/klauspost/compress/zstd
 # Its vfs package is the filesystem seam of the engine, the sidecars and the
 # checkpoint (tests use vfs.NewMem and vfs.NewCrashableMem, §5S.6).
 github.com/cockroachdb/pebble/v2
+# R1-20, tests only (13 §13.5.2 "tests only"): the compaction progress
+# reporter's tests, moved with it from ABO's internal/compactprogress, at the
+# root's version.
+github.com/stretchr/testify

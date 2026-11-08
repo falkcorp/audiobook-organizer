@@ -1,18 +1,19 @@
 // file: internal/database/compaction_stats.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e3014758-0b25-4fcb-8a87-c8b158b6be42
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 package database
 
 import "github.com/cockroachdb/pebble/v2"
 
-// The compaction-stats type lives HERE, not in internal/compactprogress, so
-// the dependency points from the progress sampler to the store and never the
-// other way: internal/database is in the plugin SDK's dependency closure
-// (make sdkguard), and the sampler package has no business being in it.
-// The main store, the AI-scan store and the OpenLibrary cache all produce
-// this type; compactprogress.Stats is an alias of it.
+// The compaction-stats type lives HERE as well as in core's storage
+// (storage.CompactionStats, field for field the same), so internal/database,
+// which is in the plugin SDK's dependency closure (make sdkguard), never
+// imports the progress sampler. The main store, the AI-scan store and the
+// OpenLibrary cache all produce this type; db-optimize converts it to
+// storage.Stats, the sampler's input, with a struct conversion until R1-23
+// re-homes these stores onto core.
 
 // CompactionStats is a point-in-time read of a Pebble database's compaction
 // and LSM counters. Every field comes straight from pebble.Metrics; nothing

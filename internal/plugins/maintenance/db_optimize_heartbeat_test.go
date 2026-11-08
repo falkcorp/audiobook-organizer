@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_optimize_heartbeat_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b27f0a4-91c3-4de8-8a05-3c7e1b94d260
-// last-edited: 2026-10-02
+// last-edited: 2026-11-07
 
 // maintenance.db-optimize could not finish on a real database.
 //
@@ -28,9 +28,11 @@
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,4 +204,28 @@ func TestOptimizeMainWithHeartbeat_ReturnsImmediatelyWhenCompactionIsFast(t *tes
 	assert.Less(t, time.Since(start), 5*time.Second,
 		"completion must be selected on directly, not gated behind the tick")
 	assert.Zero(t, rep.count(), "a compaction that never ticked reports nothing")
+}
+
+// TestCompactLog_KeepsTheSubsystemLine: the step lines core's RunStep writes
+// through compactLog still reach the default logger as "db-optimize: <line>",
+// as the sampler's package logger wrote them before it moved into core, with
+// a '%' in the line left alone and attributes appended. Not parallel: it
+// swaps slog's default logger.
+func TestCompactLog_KeepsTheSubsystemLine(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	compactLog().Info("Compacting main database (1/3): done in 2s; 100% of the cowl")
+	compactLog().With("store", "batcave").Error("Compacting OpenLibrary cache (3/3): failed after 1s: boom")
+	out := buf.String()
+	for _, want := range []string{
+		`level=INFO msg="db-optimize: Compacting main database (1/3): done in 2s; 100% of the cowl"`,
+		`level=ERROR msg="db-optimize: Compacting OpenLibrary cache (3/3): failed after 1s: boom store=\"batcave\""`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default logger output lacks %s:\n%s", want, out)
+		}
+	}
 }

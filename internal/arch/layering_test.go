@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-11-07
 
@@ -174,7 +174,6 @@ var layerOf = map[string]int{
 	"internal/boilerplate":              3, // computed: max of imports=0, floored at 3
 	"internal/bookfiles":                3, // computed: max of imports=2, floored at 3
 	"internal/bookfileaudio":            3, // computed: max of imports=3, floored at 3
-	"internal/compactprogress":          3, // computed: max of imports=2, floored at 3
 	"internal/covers":                   3, // computed: max of imports=0, floored at 3
 	"internal/database/dbtest":          3, // computed: max of imports=2, floored at 3
 	"internal/database/mocks":           3, // computed: max of imports=2, floored at 3
