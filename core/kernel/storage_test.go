@@ -586,4 +586,40 @@ func TestCloseWithoutRun(t *testing.T) {
 			t.Fatalf("a read after Run returned = %v, want storage.ErrClosed", err)
 		}
 	})
+	// A late Stop still open holds closeCore until the deadline, which makes
+	// the budget Close used observable: the configured one, not core's
+	// default (verification review NIT).
+	t.Run("configured-budget", func(t *testing.T) {
+		const budget = 1500 * time.Millisecond
+		c := testConfig(t, storageMod("alfred", nil))
+		c.StoragePath = tempStoragePath(t)
+		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: budget} }
+		k := mustNew(t, c)
+		k.lateMu.Lock()
+		k.lateStops = append(k.lateStops, make(chan struct{}))
+		k.lateMu.Unlock()
+		begin := time.Now()
+		if err := k.Close(t.Context()); err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+		if took := time.Since(begin); took < budget || took > budget+5*time.Second {
+			t.Fatalf("Close took %s, want the configured budget %s (the default is %s)", took, budget, defaultShutdownBudget)
+		}
+	})
+	t.Run("negative-budget", func(t *testing.T) {
+		capture := logcapture.New(t)
+		c := testConfig(t, storageMod("alfred", nil))
+		c.Logger = capture.Logger()
+		c.StoragePath = tempStoragePath(t)
+		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: -time.Second} }
+		k := mustNew(t, c)
+		if err := k.Close(t.Context()); err != nil {
+			t.Fatalf("Close with a negative budget = %v, want nil: the close still runs", err)
+		}
+		if !slices.ContainsFunc(capture.Records(), func(r slog.Record) bool {
+			return r.Level == slog.LevelWarn && strings.Contains(r.Message, "default shutdown budget")
+		}) {
+			t.Fatalf("no WARN for the negative budget: %v", capture.Messages())
+		}
+	})
 }
