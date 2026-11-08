@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.14.2 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
-<!-- last-edited: 2026-11-07 -->
+<!-- last-edited: 2026-11-08 -->
 
 # 06 — App SDK: `module`, `kernel`, `app`, `coretest`
 
@@ -1713,6 +1713,7 @@ the same PR; a durable write in this range that is not listed is a defect.
 | P4d 3 (R1) | the kernel, on a restore boot of a build with no restore hooks | machine 1's one edge `opened → marker_written` (DATA9-5) with no store row (no `c/backup/` row exists in R1); journal `applied`; `inflight.json` removed | swap journal |
 | P4d 4 | `auth.BootWrites` (from R2's identity flip) | `_system`, key-expiry stamps, the bootstrap token (and its file, through the labelled state filesystem that `auth.RestoreDeps` receives instead of an `*os.Root`, COR10-7), the optional start-up key | — |
 | P7 | registration consumers | seed-role rows and default grants; task definition snapshots `c/tasks/def/<kind>` | — |
+| Run 0 (before step 1) | the kernel (`(*DB).MarkServed`, 05-storage §5S.3.12) | `ready_at` and status `served` on every open checkpoint record of the live store, each through temp file + fsync + rename + directory fsync; nothing on a store with no open record | checkpoint record (05-storage §5S.3.12) |
 | Run 2 | books' start hooks | 05-storage §5S.9.3's repairs; in R1 HEAD's `ReconcileOpsV3WithV2`, `ReconcileVerifiedEmails` and `seedRolesAndTokens` (including HEAD's `.bootstrap-token` and `.readonly-key` files, which `internal/server/bootstrap.go:121,166` @748fd787a writes with `os.WriteFile` and which go through the labelled state filesystem, so the kit labels them; COR10-7) and HEAD's settings load with its key-file write (`internal/database/settings.go:149` @748fd787a) | — |
 | Run 2 (R3+) | books' start-hook step `legacy-file-cleanup` (05-config §1.12.2; CONFORM-4, DATA-16, IMPL-7), crash labels `books.legacy-file-cleanup.encryption_key` and `books.legacy-file-cleanup.library_bleve` | the deletion of HEAD's `.encryption_key` at the path 05-config §2.4's state-file table resolves (HEAD's fallback included) and of HEAD's `library.bleve` directory, through the labelled state filesystem; idempotent (an absent file is done); while `secrets_keyring_not_exported` is raised it deletes `library.bleve` and skips only `.encryption_key` (05-storage §5S.3.8), retrying the key at the next boot, and it logs that the off-host `.encryption_key` is from now on the only copy | — (idempotent) |
 | Run 2 (reset boot, first) | books' reset hook (`ResetHook.Run`) | the deletions (the `delete` entries, the Open Library data and, only with `delete_library_files`, the library root's entries) through `ResetRun.Files`, bounded by the state directory, `<db parent>`, the `delete` entries and the intent's `hook_paths` (R10-6, COR10-4), and `ResetRun.Done`'s `hook_done` (`inflight.json` deleted) | swap journal |
@@ -1775,7 +1776,12 @@ the same PR; a durable write in this range that is not listed is a defect.
 This section is the **one** statement of start/stop order. 05-events and 05-tasks reference it
 instead of restating it (COR-8).
 
-Start order: (1) core background services (metrics, realtime hub); (2) on a boot whose reset journal
+Start order: (0) the served write: every open pre-migration checkpoint record of the live store gets
+`ready_at` and status `served` (05-storage §5S.3.12 "Upgrade attempt and reuse"), before any module
+code that can write runs (Register writes nothing, 05-storage §5S.4 step 12, so step (2)'s reset hook
+and module hooks are the first). A boot that writes from a hook and dies before readiness has still
+served past the checkpoint, so the next upgrade takes its own; a failure to write it stops `Run`
+before anything has started; (1) core background services (metrics, realtime hub); (2) on a boot whose reset journal
 reads `applied` without `hook_done`, first the declaring module's `ResetHook.Run` with the intent's
 `storage.ResetRun` (§6.5.1 P0a; 05-storage §5S.3.15); then module hooks, modules in ID order, hooks of
 one module in registration order; (3) module workers; (3a) the core components that

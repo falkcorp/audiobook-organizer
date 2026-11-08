@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint_test.go
 // version: 1.0.0
 // guid: 77194a40-fc27-4829-9543-097e945b3bdd
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -474,7 +474,7 @@ func TestSwappedStoreDoesNotInheritOpenRecord(t *testing.T) {
 // TestSecondUpgradeTakesFreshCheckpoint (05-storage §5S.3.12, DATA3-1;
 // review BLOCKER-1): only a crash loop reuses a checkpoint. A completed
 // attempt's is never reused, and neither is a failed attempt's once a boot
-// has served the store since: the previous binary serves, MarkReady writes
+// has served the store since: the previous binary serves, MarkServed writes
 // ready_at, and the fixed build takes its own checkpoint, so a rollback to
 // it keeps the writes made while rolled back.
 func TestSecondUpgradeTakesFreshCheckpoint(t *testing.T) {
@@ -507,7 +507,7 @@ func TestSecondUpgradeTakesFreshCheckpoint(t *testing.T) {
 			t.Fatalf("the previous binary took checkpoint %q", db.CheckpointName())
 		}
 		ready := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-		if err := db.MarkReady(ready); err != nil {
+		if err := db.MarkServed(ready); err != nil {
 			t.Fatal(err)
 		}
 		ks, _ := db.Keyspace("wayne")
@@ -522,11 +522,11 @@ func TestSecondUpgradeTakesFreshCheckpoint(t *testing.T) {
 			t.Fatalf("pointer = %+v, want %s open (served is not a pointer state)", p, first)
 		}
 		// A second call changes nothing.
-		if err := db.MarkReady(ready.Add(time.Hour)); err != nil {
+		if err := db.MarkServed(ready.Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		if again := readRecord(t, e, first); !again.ReadyAt.Equal(ready) {
-			t.Fatalf("a second MarkReady moved ready_at to %s", again.ReadyAt)
+			t.Fatalf("a second MarkServed moved ready_at to %s", again.ReadyAt)
 		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
