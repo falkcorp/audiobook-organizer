@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
 // last-edited: 2026-11-07
 
@@ -232,6 +232,8 @@ func legacyManifestRows() []legacyRow {
 	return []legacyRow{
 		{http.MethodPost, "/api/authorize", pABS, fABSOnly},
 		{http.MethodGet, "/api/authors/:id", pABS, fABSOnly},
+		{http.MethodGet, "/api/authors/:id/image", pABS, fABSOnly},
+		{http.MethodHead, "/api/authors/:id/image", pABS, fABSOnly},
 		{http.MethodPost, "/api/collections", pABS, fABSOnly},
 		{http.MethodDelete, "/api/collections/:id", pABS, fABSOnly},
 		{http.MethodGet, "/api/collections/:id", pABS, fABSOnly},
@@ -251,6 +253,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/items/:id/file/:ino/download", pABS, fABSOnly},
 		{http.MethodHead, "/api/items/:id/file/:ino/download", pABS, fABSOnly},
 		{http.MethodPost, "/api/items/:id/play", pABS, fABSOnly},
+		{http.MethodPost, "/api/items/batch/get", pABS, fABSOnly},
 		{http.MethodGet, "/api/libraries", pABS, fABSOnly},
 		{http.MethodGet, "/api/libraries/:libraryId", pABS, fABSOnly},
 		{http.MethodGet, "/api/libraries/:libraryId/authors", pABS, fABSOnly},
@@ -263,6 +266,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/libraries/:libraryId/recent-episodes", pABS, fABSOnly},
 		{http.MethodGet, "/api/libraries/:libraryId/search", pABS, fABSOnly},
 		{http.MethodGet, "/api/libraries/:libraryId/series", pABS, fABSOnly},
+		{http.MethodGet, "/api/libraries/:libraryId/stats", pABS, fABSOnly},
 		{http.MethodGet, "/api/me", pABS, fABSOnly},
 		{http.MethodGet, "/api/me/bookmarks/:id", pABS, fABSOnly},
 		{http.MethodPatch, "/api/me/item/:id/bookmark", pABS, fABSOnly},
