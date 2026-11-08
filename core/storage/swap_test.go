@@ -1,7 +1,7 @@
 // file: core/storage/swap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 197248f8-64e9-44a3-a076-184d522f03ae
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -63,6 +63,33 @@ func (l *labelLog) Enter(label string) func() {
 // TestOpenAdoptsBootSeams: storage.Open takes the crash-matrix kit's
 // filesystem and labeller from its context, and a fresh install's writers
 // carry their writer-table labels.
+// TestExplicitFSWinsOverTheSeam: a caller's OpenOptions.FS wins over the
+// boot seam's filesystem, which fills in only when the caller set none:
+// OpenOptions.FS, then the seam's filesystem, then vfs.Default (adoptSeams
+// over R1-20's defaults(), 8741ec2bf).
+func TestExplicitFSWinsOverTheSeam(t *testing.T) {
+	explicit, seam := vfs.NewMem(), vfs.NewMem()
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: seam})
+	path := "/batcave/storage/main.pebble"
+	op, err := Open(ctx, OpenOptions{Path: path, FS: FS{fs: explicit}, Build: "batcomputer-1", Owners: []OwnerSpec{{Owner: "wayne", Enabled: true, Spec: wayneSpec()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := op.Prepare(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(db.Migrate(ctx), db.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := explicit.Stat(path); err != nil {
+		t.Fatalf("the store is not on the caller's filesystem: %v", err)
+	}
+	if _, err := seam.Stat(path); err == nil {
+		t.Fatal("the store went to the seam's filesystem over the caller's")
+	}
+}
+
 func TestOpenAdoptsBootSeams(t *testing.T) {
 	fs := vfs.NewMem()
 	labels := &labelLog{}
