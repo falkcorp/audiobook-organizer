@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
 // last-edited: 2026-11-08
 
@@ -218,11 +218,17 @@ func TestServiceDefs_BuildsHEADSet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			defs := serviceDefs(tc.databasePathSet)
 			seen := map[string]bool{}
+			var dups []string
 			for _, d := range defs {
 				if seen[d.Name] {
-					t.Errorf("serviceDefs lists %q twice", d.Name)
+					dups = append(dups, d.Name)
 				}
 				seen[d.Name] = true
+			}
+			// NewContainerFrom panics on a duplicate, which would take the whole
+			// internal/server test binary down; fail this test instead.
+			if len(dups) > 0 {
+				t.Fatalf("serviceDefs lists %q more than once", dups)
 			}
 			c := serviceregistry.NewContainerFrom(defs...).
 				Override("store", struct{}{}).
