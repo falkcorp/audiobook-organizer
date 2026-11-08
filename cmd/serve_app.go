@@ -1,7 +1,7 @@
 // file: cmd/serve_app.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -96,11 +96,16 @@ func closeUnrunApp(a *app.App) {
 // hook, stopped after it, has then closed books' store, and the kernel the
 // core DB, with no extra wait:
 //
-//   - The budget is the whole stop window (05-health §5H.4). The unit's
-//     TimeoutStopSec is 30s against the kernel's 25s default budget, so a
-//     wait for the server would be cut short by SIGKILL before the store's
-//     Close, whose first act is a WAL sync, ran. The 30s wait serve had did
-//     exactly that (R1-15 review m2).
+//   - The budget is the whole stop window (05-health §5H.4): the
+//     supervisor's stop timeout is sized against it, and time spent after
+//     Run is outside it. Under systemd that timeout is the unit's
+//     TimeoutStopSec, which the committed unit leaves unset, so the deploy
+//     drop-in's value (deploy/local.conf.example) or systemd's
+//     DefaultTimeoutStopSec applies; Docker and launchd have settings of
+//     their own. A wait for the server spends time no stop setting reserves
+//     for it, and a SIGKILL inside it lands before the store's Close, whose
+//     first act is a WAL sync. The 30s wait serve had added 30s to that
+//     unreserved time (R1-15 review m2).
 //   - Closing under a running StopHook is safe. Every Pebble access holds a
 //     lease on books' GatedDB, and every store books opens over it
 //     (activity, embedding, AI scan) shares that DB and closes as a no-op.
