@@ -1,10 +1,13 @@
 // file: internal/plugin/registry_test.go
-// version: 1.0.0
+// version: 1.0.1
+// guid: 35cc0160-9d7a-48b8-84bc-6b13d3bc916b
+// last-edited: 2026-11-08
 
 package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -23,6 +26,7 @@ type testPlugin struct {
 	initErr    error
 	healthErr  error
 	shutOrder  *[]string // tracks shutdown ordering
+	shutErr    error
 }
 
 func (p *testPlugin) ID() string                           { return p.id }
@@ -35,7 +39,7 @@ func (p *testPlugin) Shutdown(_ context.Context) error {
 	if p.shutOrder != nil {
 		*p.shutOrder = append(*p.shutOrder, p.id)
 	}
-	return nil
+	return p.shutErr
 }
 func (p *testPlugin) HealthCheck() error { return p.healthErr }
 
@@ -43,12 +47,7 @@ func newTestPlugin(id string, caps ...Capability) *testPlugin {
 	return &testPlugin{id: id, name: id, version: "1.0.0", caps: caps}
 }
 
-func freshRegistry() *Registry {
-	return &Registry{
-		plugins: make(map[string]Plugin),
-		enabled: make(map[string]bool),
-	}
-}
+func freshRegistry() *Registry { return NewRegistry() }
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := freshRegistry()
@@ -141,12 +140,39 @@ func TestRegistry_ShutdownAllReverseOrder(t *testing.T) {
 	r.plugins[p3.ID()] = p3
 	r.initOrder = []string{"first", "second", "third"}
 
-	r.ShutdownAll(context.Background())
+	require.NoError(t, r.ShutdownAll(context.Background()))
 
 	assert.Equal(t, []string{"third", "second", "first"}, order)
 	assert.True(t, p1.shutCalled)
 	assert.True(t, p2.shutCalled)
 	assert.True(t, p3.shutCalled)
+}
+
+// TestRegistry_ShutdownAllReturnsEveryFailure (R1-15 round-2 review, S3): the
+// server's stop counts a plugin that did not shut down as an unfinished step,
+// so ShutdownAll reports each failure by plugin and still shuts down the rest.
+func TestRegistry_ShutdownAllReturnsEveryFailure(t *testing.T) {
+	r := NewRegistry()
+	scarecrow := newTestPlugin("scarecrow")
+	scarecrow.shutErr = context.DeadlineExceeded
+	riddler := newTestPlugin("riddler")
+	penguin := newTestPlugin("penguin")
+	penguin.shutErr = errors.New("umbrella stuck")
+	for _, p := range []*testPlugin{scarecrow, riddler, penguin} {
+		r.Register(p)
+		r.Enable(p.ID())
+	}
+	require.NoError(t, r.InitAll(context.Background(), Deps{}))
+
+	err := r.ShutdownAll(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "scarecrow: ")
+	assert.Contains(t, err.Error(), "penguin: umbrella stuck")
+	assert.NotContains(t, err.Error(), "riddler")
+	assert.True(t, scarecrow.shutCalled)
+	assert.True(t, riddler.shutCalled)
+	assert.True(t, penguin.shutCalled)
 }
 
 func TestRegistry_ByCapability(t *testing.T) {
