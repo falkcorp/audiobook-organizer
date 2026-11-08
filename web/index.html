@@ -1,14 +1,16 @@
 <!doctype html>
 <!-- file: web/index.html -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9d4f2c81-5e73-4a60-b8c9-1f37a5e0d2b4 -->
-<!-- last-edited: 2026-08-20 -->
+<!-- last-edited: 2026-11-08 -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Audiobook Organizer - Manage your audiobook library" />
+    <!-- The UI build ID. `vite build` rewrites content (build-id.ts, 07 §7.6.3); under `vite serve` it stays dev, which never triggers the stale-build reload rule. Keep the double quotes and the name before content: the server and the image probe both parse this tag. -->
+    <meta name="mediacore-build" content="dev" />
     <title>Audiobook Organizer</title>
     <script>
       // Set the colour scheme before the first paint. Without this the document
