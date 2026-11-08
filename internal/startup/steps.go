@@ -1,7 +1,7 @@
 // file: internal/startup/steps.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
-// last-edited: 2026-10-16
+// last-edited: 2026-11-08
 
 // Package startup holds the one reviewed table that says, for every step of
 // server startup, whether its failure stops the process (Fatal) or leaves the
@@ -69,30 +69,26 @@ type Step struct {
 // Token values reported in /health's `degraded` list. Fixed strings, never
 // error text: /health is unauthenticated.
 const (
-	TokenMetricsDisabled = "metrics_disabled"
-	TokenSearchIndex     = "search_index"
+	TokenSearchIndex = "search_index"
 )
 
 // Table classifies every startup step, in the order startup runs them.
 //
 // Where each step lives (verified 2026-10-10):
 //   - initializeStore:             database.InitializeStore, internal/database/store.go:1501; run in cmd/root.go serveCmd
-//   - InitOTEL:                    telemetry.InitOTEL, internal/telemetry/telemetry.go:42 (tracing is already non-fatal inside it)
 //   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133
 //   - guardAgainstKeyRegeneration: cmd/root.go guardAgainstKeyRegeneration
 //   - initEncryption:              database.InitEncryption, internal/database/settings.go:109
 //   - loadConfigFromDB:            config.LoadConfigFromDatabase, internal/config/persistence.go:698
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
 //   - opRegistrationGate:          internal/server/server_lifecycle.go (*Server).opRegistrationGate
-//   - container.Start:             internal/server/server_lifecycle.go (*Server).Start
+//   - container.Start:             internal/server/server_lifecycle.go (*Server).StartHook
 //   - opCatalogGate:               internal/server/server_lifecycle.go (*Server).opCatalogGate (05-PR7)
 //   - searchindex:                 search.(*IndexService).Start, internal/search/register.go:41 (logs and leaves Index() nil)
-//   - http:                        internal/server/server_lifecycle.go (*Server).configureAndStartHTTP
+//   - http:                        internal/server/server_lifecycle.go (*Server).R1Listen (listenR1)
 var Table = []Step{
 	{Name: "initializeStore", Class: Fatal,
 		Reason: "nothing works without the store"},
-	{Name: "InitOTEL", Class: Degraded, Token: TokenMetricsDisabled,
-		Reason: "observability must not take the library down; only the metrics half can fail here, tracing already degrades inside InitOTEL"},
 	{Name: "EnsureSecureStateDir", Class: Fatal,
 		Reason: "the secrets location must be sane before a key is read or written"},
 	{Name: "guardAgainstKeyRegeneration", Class: Fatal,

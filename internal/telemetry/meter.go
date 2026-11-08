@@ -1,7 +1,7 @@
 // file: internal/telemetry/meter.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3e198161-ea71-41ea-aec3-4900357db30b
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package telemetry
 
@@ -19,7 +19,7 @@ const ScopePrefix = "audiobook-organizer/"
 // Meter returns the meter for a package. name is the Go package path suffix
 // ("aidispatch", "operations/registry", "plugins/deluge"); the scope is
 // "audiobook-organizer/<name>" and is NOT exported as a label (scope labels
-// are off, see initMetrics), so it only identifies the instrument in OTLP
+// are off in core's Provider), so it only identifies the instrument in OTLP
 // consumers.
 //
 // Instrument naming (enforced by TestInstrumentNames in
@@ -48,8 +48,8 @@ func Meter(name string) metric.Meter {
 func MeterFrom(mp metric.MeterProvider, name string) metric.Meter { return meterFrom(mp, name) }
 
 // meterFrom is Meter against an explicit provider. Tests use it with a private
-// provider: calling otel.SetMeterProvider in a test binary binds the global
-// delegate to that provider for the rest of the process.
+// provider: installing a meter provider globally in a test binary binds the
+// global delegate to that provider for the rest of the process.
 func meterFrom(mp metric.MeterProvider, name string) metric.Meter {
 	return mp.Meter(ScopePrefix+name, metric.WithInstrumentationVersion(Version()))
 }
@@ -65,7 +65,7 @@ var (
 // SetVersion records the version the binary was stamped with at link time
 // (main.version, set by -ldflags "-X main.version=..."). Every build path sets
 // only main.version, so main.go hands it over here; a telemetry-local ldflags
-// variable would never be populated. Call it before InitOTEL.
+// variable would never be populated. Call it before app.New builds the Provider.
 func SetVersion(v string) {
 	versionMu.Lock()
 	fallbackVersion = v

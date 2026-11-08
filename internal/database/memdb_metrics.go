@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metrics.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b0f6c1e-2a47-4d8e-9c35-7e1a4b9d2f60
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package database
 
@@ -34,9 +34,10 @@ const (
 // pass a private provider and never touch the process-global one (the global
 // delegate binds to the first SetMeterProvider only, which made a shared,
 // once-built instrument unusable across tests). Production passes
-// otel.GetMeterProvider(): telemetry.InitOTEL installs the real provider after
-// the first store may already exist, and the global provider hands out
-// delegating instruments that begin recording as soon as it is installed.
+// otel.GetMeterProvider(): app.InstallProcessDefaults installs the real provider
+// after app.New, by which time the first store may already exist, and the global
+// provider hands out delegating instruments that begin recording as soon as it
+// is installed.
 // Returns nil on error; recording on a nil counter is a no-op.
 func newMemdbFallbackCounter(mp metric.MeterProvider) metric.Int64Counter {
 	c, err := telemetry.MeterFrom(mp, "database").Int64Counter(
