@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e9d797ab-e187-456c-b23a-12fae047e7b9
 // last-edited: 2026-11-07
 
@@ -20,7 +20,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -263,7 +263,7 @@ func TestStopTimeoutAbandons(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				rec := &recorder{}
 				release := make(chan struct{})
-				capture := coretest.NewLogCapture(t)
+				capture := logcapture.NewLogCapture(t)
 				joker := mod("joker", func(r *module.Registrar) error {
 					r.Hook(module.Hook{Name: "joker.laugh", Stop: func(context.Context) error {
 						rec.add("stop:joker.laugh")
@@ -587,7 +587,7 @@ func TestStartRollback_HungStartCapped(t *testing.T) {
 func TestRequestRestart_BeforeReadyIgnored(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := &recorder{}
-		capture := coretest.NewLogCapture(t)
+		capture := logcapture.NewLogCapture(t)
 		var deps module.Deps
 		lucius := mod("lucius", func(r *module.Registrar) error {
 			deps = r.Deps()

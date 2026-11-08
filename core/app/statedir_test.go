@@ -1,5 +1,5 @@
 // file: core/app/statedir_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a20ef66a-e2f7-4b90-854b-a8192ad08ee6
 // last-edited: 2026-11-07
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 )
 
 func TestResolveStateDir_Rule(t *testing.T) {
@@ -57,7 +57,7 @@ func TestResolveStateDir_Env(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	opts := Options{AppID: "hello", StateDir: filepath.Join(blocker, "state"), Logger: capture.Logger()}
 
 	// An explicit value is used, and created 0700.

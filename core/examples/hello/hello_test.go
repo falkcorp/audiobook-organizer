@@ -1,5 +1,5 @@
 // file: core/examples/hello/hello_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9824ef03-77bf-470b-bc4d-e48e03ef10d5
 // last-edited: 2026-11-07
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/app"
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/examples/hello"
 )
 
@@ -25,7 +25,7 @@ import (
 // seed migration, settings and /api/core/v1/modules are added by the rows
 // that land storage, tasks, config and modulehttp.
 func TestHelloEndToEnd(t *testing.T) {
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	a, err := app.New(t.Context(), app.Options{
 		AppID:    "hello",
 		Logger:   capture.Logger(),
@@ -77,7 +77,7 @@ func TestHelloEndToEnd(t *testing.T) {
 }
 
 // listening waits for the kernel's "listening" record and returns its addr.
-func listening(t *testing.T, c *coretest.LogCapture, done <-chan error) string {
+func listening(t *testing.T, c *logcapture.LogCapture, done <-chan error) string {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {

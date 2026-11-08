@@ -1,9 +1,9 @@
-// file: core/coretest/logcapture_test.go
-// version: 1.0.0
+// file: core/coretest/logcapture/logcapture_test.go
+// version: 1.1.0
 // guid: 04b9335e-790b-47be-8262-702ff011f5ff
 // last-edited: 2026-11-07
 
-package coretest
+package logcapture
 
 import (
 	"log/slog"

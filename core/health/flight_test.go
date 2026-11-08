@@ -1,5 +1,5 @@
 // file: core/health/flight_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: f26518cf-c820-4b1a-a14b-c616781751e9
 // last-edited: 2026-11-07
 
@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	corelog "github.com/falkcorp/mediacore/log"
 )
 
@@ -690,7 +690,7 @@ func TestOpenRefusesSymlinkOutOfDir(t *testing.T) {
 }
 
 func TestRecorderLogsThroughInjectedLogger(t *testing.T) {
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	r, _ := startRecorder(t, Config{Logger: capture.Logger().With("subsystem", "flight-recorder")})
 	r.Stop()
 
@@ -742,7 +742,7 @@ func (c errCloser) Close() error { return c.err }
 // with %q at the call site, so even a handler that writes the message as is
 // cannot be made to print a second line.
 func TestRecorderQuotesOutsideValues(t *testing.T) {
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	r := New(Config{Logger: capture.Logger()})
 	r.closeLogged(errCloser{err: errors.New("disk full\nlevel=INFO msg=forged")}, "joker\r.trace")
 
