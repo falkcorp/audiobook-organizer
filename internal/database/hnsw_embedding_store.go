@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.7
+// version: 1.8.8
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -110,6 +110,14 @@ type HNSWEmbeddingStore struct {
 	// (a snapshot install or DiscardForRebuild) clears it. Guarded by mu.
 	damaged bool
 
+	// diverged records why the graph missed a write Pebble took: an Upsert it
+	// refused (checkVector, a reserved metadata key), or a mirror failure the
+	// caller reported (MarkDiverged). MarkCleanStop refuses while it is set,
+	// and it is never cleared in the process: a later rebuild would fix the
+	// graph, but the marker is worth one reconcile at most. "" when none.
+	// Guarded by mu.
+	diverged string
+
 	// pendingReconcile reports that a stale or unverifiable snapshot was
 	// installed: the graph serves queries, but it is incomplete until
 	// Reconcile has brought it up to date with the Pebble rows (see
@@ -198,12 +206,19 @@ func (s *HNSWEmbeddingStore) graphFor(entityType string) *hnsw.Graph[string] {
 }
 
 // Upsert stores or replaces an entity's vector + metadata.
+//
+// A refused write (checkVector, a reserved metadata key) leaves the graph
+// without a vector the caller wrote to Pebble first, so it also marks the
+// store diverged and its clean-stop marker stops vouching (MarkDiverged).
 func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID string, vec []float32, meta map[string]string) error {
 	if err := s.checkVector("hnsw upsert", entityID, vec); err != nil {
+		s.MarkDiverged(err.Error())
 		return err
 	}
 	if _, reserved := meta[hnswTombstoneKey]; reserved {
-		return fmt.Errorf("hnsw upsert %s: metadata key %q is reserved", entityID, hnswTombstoneKey)
+		err := fmt.Errorf("hnsw upsert %s: metadata key %q is reserved", entityID, hnswTombstoneKey)
+		s.MarkDiverged(err.Error())
+		return err
 	}
 
 	s.mu.Lock()
@@ -251,6 +266,26 @@ func (s *HNSWEmbeddingStore) checkVector(op, entityID string, vec []float32) err
 		return fmt.Errorf("%s %s: zero-magnitude vector", op, entityID)
 	}
 	return nil
+}
+
+// SnapshotDivergence is implemented by a VectorANNStore whose clean-stop
+// marker must not vouch for a graph that missed a write Pebble took
+// (HNSWEmbeddingStore). The dedup engine reports each failed mirror through it.
+type SnapshotDivergence interface{ MarkDiverged(reason string) }
+
+// MarkDiverged records that the graph missed a write Pebble took (reason says
+// which), like markDamaged does for a recovered panic but without stopping
+// exports: the snapshot is still worth loading, it just needs the reconcile.
+// MarkCleanStop refuses from then on, and a marker this process already wrote
+// is removed.
+func (s *HNSWEmbeddingStore) MarkDiverged(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.diverged == "" {
+		hnswLog.Warn("hnsw: the graph missed a write that Pebble holds, so the next boot reconciles the snapshot: %s", reason)
+		s.diverged = reason
+	}
+	s.dropCleanStopLocked("the graph missed a write that Pebble holds")
 }
 
 // markDamaged records that a recovered library panic may have left the graph
@@ -1132,4 +1167,5 @@ func readSnapshotTruth(dir, entityType string) (snapshotTruth, error) {
 var (
 	_ VectorANNStore       = (*HNSWEmbeddingStore)(nil)
 	_ SnapshotCompleteness = (*HNSWEmbeddingStore)(nil)
+	_ SnapshotDivergence   = (*HNSWEmbeddingStore)(nil)
 )
