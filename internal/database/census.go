@@ -1,7 +1,7 @@
 // file: internal/database/census.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package database
 
@@ -40,7 +40,10 @@ const (
 const (
 	censusNoteKeyDefinition = "estimated census: keys = sstable entries minus deletions; overwritten versions not yet compacted count once each; per-family figures are apportioned by span bytes within shared tables (error_bound_keys bounds the error); exact per-family counts are in last_exact, written by the maintenance.db-census-exact op"
 	censusNoteMemdbCold     = "memdb not warm: retired and signal counts unavailable"
-	censusNoteHiddenSystem  = "some system records live inside other families and are counted there: settings-backed markers under setting: (repairs_last_*_op:, *_index_v1_done flags), the _system user's records under pref:_system: (broken out below it by sub-prefix), and global preferences under preference:"
+	// censusNoteCoreNoEstimate replaces the estimate on the store core
+	// storage opened (R1-23): sstable properties have no core equivalent.
+	censusNoteCoreNoEstimate = "no estimated family figures: the store is opened by core storage, which does not expose sstable properties; the per-family counts are the last exact census (last_exact), from the maintenance.db-census-exact op, until the census mechanism moves into core"
+	censusNoteHiddenSystem   = "some system records live inside other families and are counted there: settings-backed markers under setting: (repairs_last_*_op:, *_index_v1_done flags), the _system user's records under pref:_system: (broken out below it by sub-prefix), and global preferences under preference:"
 
 	censusCacheTTL = 5 * time.Minute
 	// censusColdCacheTTL caches a census taken while memdb is still cold
@@ -389,6 +392,18 @@ func (p *PebbleStore) computeDBCensus(ctx context.Context) (_ *DBCensus, err err
 	defer recoverPebbleClosed("DBCensus", &err)
 	start := time.Now()
 
+	if p.db.onCore() {
+		out := &DBCensus{
+			Kind:               CensusKindEstimated,
+			GeneratedAt:        start,
+			FamilyFiguresBasis: CensusFamilyFiguresBasis,
+			Notes:              []string{censusNoteCoreNoEstimate, censusNoteHiddenSystem},
+		}
+		p.censusMemdb(out)
+		out.DurationMS = time.Since(start).Milliseconds()
+		return out, nil
+	}
+
 	// EstimateDiskUsage is documented to panic with ErrClosed on a closed DB,
 	// which recoverPebbleClosed turns into an error. Probe it first so a
 	// closed store fails here, before SSTables can return stale metadata.
@@ -435,11 +450,20 @@ func (p *PebbleStore) censusMaybeFlush(now time.Time) (string, error) {
 	// gauge — it is arena capacity (256 KiB on a fresh store, 4 MiB once the
 	// memtables have grown), not bytes in use, so it passes any threshold
 	// below that capacity whether or not anything was written.
-	m, err := p.db.Metrics()
-	if err != nil {
-		return "", fmt.Errorf("census flush check: %w", err)
+	var mt uint64
+	if p.db.onCore() {
+		es, err := p.db.coreEngineSample()
+		if err != nil {
+			return "", fmt.Errorf("census flush check: %w", err)
+		}
+		mt = uint64(es.WALBytes)
+	} else {
+		m, err := p.db.Metrics()
+		if err != nil {
+			return "", fmt.Errorf("census flush check: %w", err)
+		}
+		mt = m.WAL.Size
 	}
-	mt := m.WAL.Size
 	if mt < censusFlushMinMemtable {
 		return fmt.Sprintf("memtable not flushed: only %d bytes of writes are unflushed; those writes are not in the figures", mt), nil
 	}

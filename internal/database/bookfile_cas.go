@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
-// last-edited: 2026-11-04
+// last-edited: 2026-11-08
 
 package database
 
@@ -467,8 +467,8 @@ func (s *PebbleStore) commitBookFileSweepChunk(chunk []sweepRowRef, stage sweepR
 	rows := append([]sweepRowRef(nil), chunk...)
 	// Staging a row is a pure function of its bytes (stagers have no stage-time
 	// side effects; a row's counters run in applied, after the commit), so a row
-	// whose bytes did not change is staged once, into a batch of its own, and each
-	// round copies that into the round's batch (GatedBatch.Apply). Without this a
+	// whose bytes did not change is staged once, into a recording batch of its own,
+	// and each round replays that into the round's batch (GatedBatch.Apply). Without this a
 	// round refused over one row re-decoded, re-encoded and re-staged all 64: for
 	// fingerprinted rows, 64 unmarshals and marshals of multi-KB values per round,
 	// under sustained churn on a single row up to maxStageRetries rounds. A row
@@ -494,7 +494,7 @@ func (s *PebbleStore) commitBookFileSweepChunk(chunk []sweepRowRef, stage sweepR
 		for _, r := range rows {
 			st := staged[string(r.key)]
 			if st == nil {
-				sub := s.db.NewBatch()
+				sub := s.db.newRecordingBatch()
 				fn, wrote, serr := stage(sub, r)
 				if serr != nil {
 					_ = sub.Close()
