@@ -1,7 +1,7 @@
 // file: core/httpapi/dispatch_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 10f67bda-3d92-4798-b55c-741cfba03165
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package httpapi
 
@@ -38,13 +38,19 @@ func TestProblem_ShapeGolden(t *testing.T) {
 	h := mustBuild(t, r)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/batcave/v1/gadgets/joker-gas", nil)
-	req = req.WithContext(context.WithValue(req.Context(), requestIDKey{}, "req-0001"))
+	// An inbound X-Request-ID is kept as client_request_id, never as the ID
+	// (stage 1): the problem carries the ID stage 1 assigned and echoed.
+	req.Header.Set("X-Request-ID", "req-0001")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	id := rec.Header().Get("X-Request-ID")
+	if len(id) != 26 {
+		t.Fatalf("X-Request-ID = %q, want a ULID", id)
+	}
 
-	const want = `{"type":"https://mediacore.dev/problems/not_found","title":"Not Found","status":404,` +
+	want := `{"type":"https://mediacore.dev/problems/not_found","title":"Not Found","status":404,` +
 		`"detail":"gadget \"joker-gas\" not found","instance":"/api/batcave/v1/gadgets/joker-gas",` +
-		`"code":"not_found","request_id":"req-0001"}` + "\n"
+		`"code":"not_found","request_id":"` + id + `"}` + "\n"
 	if rec.Code != http.StatusNotFound || rec.Body.String() != want {
 		t.Fatalf("got %d\n%s\nwant 404\n%s", rec.Code, rec.Body.String(), want)
 	}

@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -217,8 +217,12 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// (3) Module workers. Steps (3a) to (6) arrive with storage, health,
 	// events and tasks.
 	ws := k.startWorkers(ctx)
-	// (7) Listeners: R1Values once (05-config §1.12.1), then the listener.
+	// (7) Listeners: R1Values once (05-config §1.12.1), the perimeter
+	// values handed to the router, then the listener.
 	v, err := k.r1Values()
+	if err == nil {
+		err = k.setPerimeter(v, k.cfg.R1Values != nil)
+	}
 	budget, berr := shutdownBudget(v)
 	var srv Server
 	// A second owner of a family refused since New (an instrument created

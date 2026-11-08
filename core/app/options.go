@@ -155,6 +155,7 @@ type R1Values struct {
 	TLSCertFile, TLSKeyFile      string        // HEAD's --tls-cert, --tls-key
 	PeerAllowlist                []string      // ALLOWED_PEER_CIDRS → core.http.peer_allowlist
 	TrustedProxies               []string      // TUNNEL_CONNECTOR_ADDRS → core.http.trusted_proxies
+	ClientIPHeader               string        // the header TrustedProxies set (ABO: CF-Connecting-IP) → core.http.client_ip_header
 	RateLimitEnabled             bool          // enable_rate_limit → core.http.rate_limit.enabled
 	RateLimitPerMinute           int           // api_rate_limit_per_minute → core.http.rate_limit.per_minute
 	JSONMaxBytes, UploadMaxBytes int64         // json_body_limit_mb, upload_body_limit_mb (MiB → bytes)

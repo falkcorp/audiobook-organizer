@@ -1,17 +1,17 @@
 // file: core/httpapi/dispatch.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 6a494f53-6f15-4cca-bfe7-f575ea6913a4
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package httpapi
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"path"
 	"strings"
-	"sync/atomic"
+
+	"github.com/falkcorp/mediacore/internal/httpmw"
 )
 
 // dispatcher wraps the ServeMux with 05-http-api §4.3, §4.8 and §4.10: an
@@ -21,16 +21,21 @@ import (
 // mux's plain-text body, an unmatched path under a legacy owner's claim gets
 // 404 in the legacy shape whatever its method (HEAD's gin has no 405), a
 // legacy mount's Redirects answer the unmatched paths they cover, and the "/"
-// owner receives only what NonSPA lets through.
+// owner receives only what NonSPA lets through. Each answer it writes
+// itself records its owner's policy first (stage 5's CSP): core's for a
+// problem, the legacy mount's for a legacy-shape 404 or a legacy redirect.
 type dispatcher struct {
-	mux          *http.ServeMux
-	root         http.Handler // the "/" owner, or nil
-	nonSPA       func(*http.Request) bool
-	legacyClaims []string
+	mux            *http.ServeMux
+	root           http.Handler // the "/" owner, or nil
+	nonSPA         func(*http.Request) bool
+	legacyClaims   []claim
+	legacyPolicies map[string]*httpmw.Policy // by mount owner
 	// redirect is the legacy mounts' Redirects consult (legacy.go), nil when
-	// no mount has one.
-	redirect func(*http.Request) (location string, covered bool)
-	log      *slog.Logger
+	// no mount has one; redirectPolicy is that mount's policy.
+	redirect       func(*http.Request) (location string, covered bool)
+	redirectPolicy *httpmw.Policy
+	chain          *httpmw.Chain
+	log            *slog.Logger
 }
 
 func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +44,7 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// An unclean /api/ path is a problem 404; any other goes to the "/"
 		// owner unchanged, whose own normalisation decides (§4.8).
 		if d.root == nil || firstSegment(path.Clean("/"+r.URL.Path)) == "api" {
+			d.chain.Owned(r, nil)
 			writeProblem(ctx, w, r, Problem{Status: http.StatusNotFound, Code: "not_found"}, nil, d.log)
 			return
 		}
@@ -58,7 +64,8 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pattern == "" {
 		status, allow = capture(h, r)
 	}
-	if status == http.StatusMethodNotAllowed && !d.underLegacyClaim(r.URL.Path) && (d.root == nil || d.nonSPA(r)) {
+	if status == http.StatusMethodNotAllowed && d.legacyOwner(r.URL.Path) == "" && (d.root == nil || d.nonSPA(r)) {
+		d.chain.Owned(r, nil)
 		hdr := http.Header{}
 		if allow != "" {
 			hdr.Set("Allow", allow)
@@ -71,6 +78,7 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// (05-http-api §4.9 item 3): a 301, or 404 in the legacy shape for a
 		// request the rule excludes.
 		if loc, covered := d.redirect(r); covered {
+			d.chain.Owned(r, d.redirectPolicy)
 			if loc != "" {
 				http.Redirect(w, r, loc, http.StatusMovedPermanently)
 				return
@@ -86,10 +94,12 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.root.ServeHTTP(w, r)
 		return
 	}
-	if d.underLegacyClaim(r.URL.Path) {
+	if owner := d.legacyOwner(r.URL.Path); owner != "" {
+		d.chain.Owned(r, d.legacyPolicies[owner])
 		writeLegacyNotFound(ctx, w, d.log)
 		return
 	}
+	d.chain.Owned(r, nil)
 	writeProblem(ctx, w, r, Problem{Status: http.StatusNotFound, Code: "not_found"}, nil, d.log)
 }
 
@@ -109,13 +119,14 @@ func slashRedirect(pattern string, r *http.Request) bool {
 		strings.Count(p, "/") == strings.Count(pat, "/")-1
 }
 
-func (d *dispatcher) underLegacyClaim(p string) bool {
+// legacyOwner is the legacy mount owner whose claim covers p, "" for none.
+func (d *dispatcher) legacyOwner(p string) string {
 	for _, c := range d.legacyClaims {
-		if p == strings.TrimSuffix(c, "/") || (strings.HasSuffix(c, "/") && strings.HasPrefix(p, c)) || p == c {
-			return true
+		if p == strings.TrimSuffix(c.prefix, "/") || (strings.HasSuffix(c.prefix, "/") && strings.HasPrefix(p, c.prefix)) || p == c.prefix {
+			return c.owner
 		}
 	}
-	return false
+	return ""
 }
 
 // isClean reports a path ServeMux would not redirect: path.Clean leaves it
@@ -157,32 +168,4 @@ func (r *recorder) WriteHeader(s int) {
 func (r *recorder) Write(b []byte) (int, error) {
 	r.WriteHeader(http.StatusOK)
 	return len(b), nil
-}
-
-// routeCarrier is the per-request carrier stage 2 owns (05-http-api §4.2
-// stage 2): Build's root handler puts it in the context before the mux, each
-// route wrapper writes its pattern into it, and the root reads it after the
-// handler returned, so a stage in between that clones the request
-// (r.WithContext) cannot lose it. R1-17 moves it into core/internal/httpmw
-// with the real stage 2.
-type routeCarrier struct{ route atomic.Pointer[string] }
-
-func (c *routeCarrier) set(p string) { c.route.Store(&p) }
-
-func (c *routeCarrier) get() string {
-	if p := c.route.Load(); p != nil {
-		return *p
-	}
-	return ""
-}
-
-type carrierKey struct{}
-
-func withCarrier(ctx context.Context, c *routeCarrier) context.Context {
-	return context.WithValue(ctx, carrierKey{}, c)
-}
-
-func carrierFrom(ctx context.Context) *routeCarrier {
-	c, _ := ctx.Value(carrierKey{}).(*routeCarrier)
-	return c
 }

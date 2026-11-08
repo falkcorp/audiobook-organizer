@@ -1,23 +1,29 @@
 // file: core/httpapi/router.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/falkcorp/mediacore/internal/httpmw"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -49,24 +55,67 @@ type Router struct {
 	built  bool        // set by Build: a registration after it could never be served
 	legacy legacyState // legacy.go: manifests, admissions and built infos (R1-14)
 
-	// stage is a test seam standing in for the perimeter stages between
-	// stage 2 and the mux (R1-17's chain takes its place); observe receives
-	// the route carrier's value after the handler returned, which stage 2
-	// will record (05-http-api §4.2 stage 2).
+	// chain is the perimeter of the last Build (05-http-api §4.2,
+	// core/internal/httpmw); SetPerimeter swaps its settings.
+	chain *httpmw.Chain
+
+	// stage is a test seam: a stage between stage 2 and the mux, inside
+	// stage 9 (TestStage2_RouteSurvivesRequestClone); observe receives the
+	// route stage 2 recorded after the handler returned; trace receives
+	// each stage's number as it starts (TestChain_OrderGolden).
 	stage   func(http.Handler) http.Handler
 	observe func(route string)
+	trace   func(stage int)
 }
 
-// Options configure a Router. Fields with no consumer before R1-17's
-// perimeter (TrustedProxies, ClientIPHeader, CORS, Limits) arrive with it.
+// Options configure a Router. The perimeter fields (PeerAllowlist,
+// TrustedProxies, ClientIPHeader, CORS, Limits) can change after Build
+// through SetPerimeter: in release R1 the kernel sets them once, from
+// app.Options.R1Values, before the first listener opens (05-config
+// §1.12.1).
 type Options struct {
 	CoreGroupBase string // "/api/core/v1" when empty
-	OpenAPI       OpenAPIOptions
+	// PeerAllowlist is stage 0's allow-list (core.http.peer_allowlist):
+	// empty accepts any peer; loopback and TrustedProxies are always
+	// admitted.
+	PeerAllowlist  []TrustedPeer
+	TrustedProxies []TrustedPeer // client-IP header believed only from these; always admitted by stage 0 (SEC-18)
+	ClientIPHeader string        // "" = RemoteAddr only; e.g. "X-Forwarded-For" or a CDN header
+	CORS           CORSOptions   // allowed origins; also the trusted origins of stage 7
+	Limits         LimitOptions
+	OpenAPI        OpenAPIOptions
 	// ServerName is server.address on every series and span stage 2 records:
 	// a constant, never the request's Host (MOD10-2). The kernel fills it from
 	// app.Options.ServiceName (06 §6.4.5), the value it also passes as
 	// metrics.Options.ServiceName (ABO: "audiobook-organizer"; default: AppID).
 	ServerName string
+}
+
+// TrustedPeer is a prefix or a single address that may carry an IPv6 zone
+// (netip.Prefix cannot): ABO's TUNNEL_CONNECTOR_ADDRS allows zoned link-local
+// connector addresses. Zone matching keeps client_trust.go's semantics: a
+// configured zone is resolved to the interface's name, and a zoned entry
+// matches only a peer on that interface.
+type TrustedPeer struct {
+	Prefix netip.Prefix // valid when Addr is zero
+	Addr   netip.Addr   // may carry a zone
+}
+
+// CORSOptions are stage 6's allow-list (core.http.cors.allowed_origins),
+// which stage 7 also trusts. Same-origin requests are always allowed.
+type CORSOptions struct {
+	AllowedOrigins []string // "https://ui.example.test"; no path
+}
+
+// LimitOptions are stages 10 and 11 (core.http.rate_limit.*,
+// core.http.body.*). A zero number is core's default (§10).
+type LimitOptions struct {
+	RateLimitEnabled    bool
+	RateLimitPerMinute  int   // 100
+	RateLimitBurst      int   // max(per_minute/5, 10)
+	RateLimitMaxClients int   // 10000; read at Build only
+	JSONMaxBytes        int64 // 1 MiB
+	UploadMaxBytes      int64 // 10 MiB
 }
 
 // OpenAPIOptions are the document-wide values of Router.OpenAPI.
@@ -86,7 +135,14 @@ type OpenAPIOptions struct {
 type Deps struct {
 	Log           *slog.Logger
 	Metrics       *metrics.Scope       // "<namespace>.http": core's own http families (§11)
-	MeterProvider metric.MeterProvider // the App's Provider.MeterProvider(); stage 2's instruments (R1-17)
+	MeterProvider metric.MeterProvider // the App's Provider.MeterProvider(); stage 2's three semconv instruments on its "httpapi" meter
+	// TracerProvider and Propagator are the App's (metrics.Provider):
+	// stage 2's server spans and the inbound trace context. nil = no spans.
+	TracerProvider trace.TracerProvider
+	Propagator     propagation.TextMapPropagator
+	// Redactor is the kernel's one log.Redactor (05-logging): stage 2's
+	// span URL attributes and stage 4's access log. nil = a default one.
+	Redactor *log.Redactor
 }
 
 // RouteKind is the kind of a registered route.
@@ -172,6 +228,60 @@ func NewRouter(opts Options, deps Deps) *Router {
 	return &Router{opts: opts, deps: deps, groups: map[string]*Group{}, public: map[string]map[string]bool{}}
 }
 
+// SetPerimeter replaces the perimeter values of o (PeerAllowlist,
+// TrustedProxies, ClientIPHeader, CORS and Limits; the other fields are
+// ignored) on the router and on the handler of its last Build. Requests
+// see the old or the new values, never a mix (05-http-api §9). The kernel
+// calls it at 06 §6.5.2 start step (7), before the first listener opens,
+// with the values app.Options.R1Values returned (05-config §1.12.1). An
+// unusable entry is left out, logged and returned joined; the rest apply.
+func (r *Router) SetPerimeter(o Options) error {
+	r.mu.Lock()
+	r.opts.PeerAllowlist, r.opts.TrustedProxies = slices.Clone(o.PeerAllowlist), slices.Clone(o.TrustedProxies)
+	r.opts.ClientIPHeader, r.opts.Limits = o.ClientIPHeader, o.Limits
+	r.opts.CORS = CORSOptions{AllowedOrigins: slices.Clone(o.CORS.AllowedOrigins)}
+	chain := r.chain
+	r.mu.Unlock()
+	if chain == nil {
+		_, errs := perimeterSettings(o)
+		return errs
+	}
+	s, _ := perimeterSettings(o)
+	return chain.Set(s)
+}
+
+// perimeterSettings converts o's perimeter fields for httpmw.
+func perimeterSettings(o Options) (httpmw.Settings, error) {
+	peers := func(in []TrustedPeer) []httpmw.Peer {
+		out := make([]httpmw.Peer, 0, len(in))
+		for _, p := range in {
+			out = append(out, httpmw.Peer{Prefix: p.Prefix, Addr: p.Addr})
+		}
+		return out
+	}
+	return httpmw.Settings{
+		PeerAllowlist:  peers(o.PeerAllowlist),
+		TrustedProxies: peers(o.TrustedProxies),
+		ClientIPHeader: o.ClientIPHeader,
+		AllowedOrigins: slices.Clone(o.CORS.AllowedOrigins),
+		RateLimit:      o.Limits.RateLimitEnabled,
+		PerMinute:      o.Limits.RateLimitPerMinute,
+		Burst:          o.Limits.RateLimitBurst,
+		MaxClients:     o.Limits.RateLimitMaxClients,
+		JSONMaxBytes:   o.Limits.JSONMaxBytes,
+		UploadMaxBytes: o.Limits.UploadMaxBytes,
+	}, nil
+}
+
+// ClientAddrFrom returns the client address stage 0 resolved for this request
+// (peer, or the trusted proxy's client-IP header) and whether it was
+// attributed through a trusted proxy. From R1 the legacy gin limiters read
+// it instead of re-deriving it (§8.1, SEC2-19). Outside a request the chain
+// served it returns the zero Addr and false.
+func ClientAddrFrom(ctx context.Context) (addr netip.Addr, attributed bool) {
+	return httpmw.ClientAddr(ctx)
+}
+
 // record keeps err for Build; r.mu is held.
 func (r *Router) record(err error) { r.errs = append(r.errs, err) }
 
@@ -247,8 +357,12 @@ func (r *Router) CoreGroup() *Group {
 // AllowPublic records the names of owner's native routes that may use
 // rbac.Public: the module's Manifest.PublicRoutes, handed over by the kernel
 // (06 §6.4.2, COR3-3). Build refuses rbac.Public on any other module route
-// (ErrPublicNotAllowed). Core's own Public routes are a reviewed golden
-// instead (TestPublicRoutesGolden) and need no entry.
+// (ErrPublicNotAllowed). Core's own routes need no entry, and no golden
+// lists them: archtest.RoutesHavePermissions only checks that each route has
+// an admissible requirement, and an app's reviewed list (ABO's
+// TestPublicRoutesGolden, internal/server/legacy_manifest_test.go) covers
+// its legacy manifest only, so a core Public route is reviewed in the PR
+// that adds it.
 func (r *Router) AllowPublic(owner string, names ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -517,6 +631,7 @@ func (r *Router) Build() (http.Handler, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.built = true
+	r.chain = r.newChain()
 	errs := slices.Clone(r.errs)
 	errs = append(errs, r.checkClaims()...)
 	mux := http.NewServeMux()
@@ -541,7 +656,7 @@ func (r *Router) Build() (http.Handler, error) {
 		if len(e.errs) > 0 || e.handler == nil {
 			continue
 		}
-		if err := register(mux, key, wrapRoute(e)); err != nil {
+		if err := register(mux, key, r.wrapRoute(e)); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -551,25 +666,129 @@ func (r *Router) Build() (http.Handler, error) {
 	}
 	root := r.rootHandler()
 	d := &dispatcher{
-		mux:          mux,
-		root:         root,
-		nonSPA:       nonSPAPredicate(r.nonSPASegments()),
-		legacyClaims: r.legacyClaims(),
-		redirect:     r.legacyRedirect(),
-		log:          r.deps.Log,
+		mux:            mux,
+		root:           root,
+		nonSPA:         nonSPAPredicate(r.nonSPASegments()),
+		legacyClaims:   r.legacyClaims(),
+		legacyPolicies: r.legacyPolicies(),
+		redirect:       r.legacyRedirect(),
+		redirectPolicy: r.redirectPolicy(),
+		chain:          r.chain,
+		log:            r.deps.Log,
 	}
-	var next http.Handler = d
-	if r.stage != nil {
-		next = r.stage(next)
+	return r.chain.Outer(d), nil
+}
+
+// newChain builds the perimeter for this Build from the router's options and
+// dependencies (05-http-api §4.2); r.mu is held. An instrument that cannot
+// be created or a perimeter entry that cannot be used is logged: the chain
+// serves without it.
+func (r *Router) newChain() *httpmw.Chain {
+	s, _ := perimeterSettings(r.opts)
+	logger := r.deps.Log
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
-	observe := r.observe
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		c := &routeCarrier{}
-		next.ServeHTTP(w, req.WithContext(withCarrier(req.Context(), c)))
-		if observe != nil {
-			observe(c.get())
+	d := httpmw.Deps{
+		Log:        logger,
+		Redactor:   r.deps.Redactor,
+		Metrics:    r.deps.Metrics,
+		Propagator: r.deps.Propagator,
+		ServerName: r.opts.ServerName,
+		Problem: func(w http.ResponseWriter, req *http.Request, status int, code string, h http.Header) {
+			writeProblem(req.Context(), w, req, Problem{Status: status, Code: code}, h, logger)
+		},
+		BuildID: r.buildID(),
+		Observe: r.observe,
+		Trace:   r.trace,
+		Inner:   r.stage,
+		OwnerOf: r.ownerOf(),
+	}
+	if r.deps.MeterProvider != nil {
+		d.Meter = r.deps.MeterProvider.Meter("httpapi")
+	}
+	if r.deps.TracerProvider != nil {
+		d.Tracer = r.deps.TracerProvider.Tracer("httpapi")
+	}
+	c, err := httpmw.New(d, s)
+	if err != nil {
+		logger.Warn("httpapi: perimeter built with problems", "error", err)
+	}
+	return c
+}
+
+// buildID is stage 5's X-App-Build: the UI build ID of the bundle the "/"
+// owner serves, before the shell flip the mount's LegacyMount.BuildID
+// (FE3-2, FE4-1); "" (written "dev") otherwise. r.mu is held.
+func (r *Router) buildID() string {
+	for _, m := range r.mounts {
+		if m.ServesSPA {
+			return m.BuildID
 		}
-	}), nil
+	}
+	return ""
+}
+
+// ownerOf names the owner whose claim covers a request's path, "core" for
+// none: the owner label of a refusal before routing (stage 7). r.mu is held.
+func (r *Router) ownerOf() func(*http.Request) string {
+	claims := slices.Clone(r.claims)
+	rootOwner := ""
+	if _, owner := r.rootOwner(); owner != "" {
+		rootOwner = owner
+	}
+	return func(req *http.Request) string {
+		p := req.URL.Path
+		for _, c := range claims {
+			if p == strings.TrimSuffix(c.prefix, "/") || (strings.HasSuffix(c.prefix, "/") && strings.HasPrefix(p, c.prefix)) || p == c.prefix {
+				return c.owner
+			}
+		}
+		if rootOwner != "" && firstSegment(p) != "api" {
+			return rootOwner
+		}
+		return "core"
+	}
+}
+
+// mountPolicy is the response policy of a legacy mount's answers (stage 5's
+// DefaultCSP and Reporting-Endpoints, stage 9's NoCompress).
+func mountPolicy(m LegacyMount, noCompress bool) *httpmw.Policy {
+	return &httpmw.Policy{Owner: m.Owner, CSP: m.DefaultCSP, CSPReport: m.CSPReport, NoCompress: noCompress}
+}
+
+// legacyPolicies maps each legacy mount's owner to its policy; r.mu is held.
+func (r *Router) legacyPolicies() map[string]*httpmw.Policy {
+	out := map[string]*httpmw.Policy{}
+	for _, m := range r.mounts {
+		out[m.Owner] = mountPolicy(m, false)
+	}
+	return out
+}
+
+// redirectPolicy is the policy of the mount whose Redirects the dispatcher
+// answers; r.mu is held.
+func (r *Router) redirectPolicy() *httpmw.Policy {
+	for _, m := range r.mounts {
+		if len(m.Redirects) > 0 {
+			return mountPolicy(m, false)
+		}
+	}
+	return nil
+}
+
+// rateClassName is the RateClass as stage 10 names its buckets and the
+// rate_limited counter's class label.
+func rateClassName(c RateClass) string {
+	switch c {
+	case RateDefault:
+		return "default"
+	case RateAuth:
+		return "auth"
+	case RateExpensive:
+		return "expensive"
+	}
+	return "exempt"
 }
 
 // register adds one pattern to mux, turning ServeMux's panic (two
@@ -584,18 +803,19 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 	return nil
 }
 
-// wrapRoute writes the route's pattern (method and host stripped) into the
-// request's route carrier before the route's own handler runs (05-http-api
-// §4.2 stage 2), so stage 2 reads it after the handler returns even when a
-// stage in between cloned the request.
-func wrapRoute(e *routeEntry) http.Handler {
-	pattern, h := e.info.Pattern, e.handler
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if c := carrierFrom(req.Context()); c != nil {
-			c.set(pattern)
-		}
-		h.ServeHTTP(w, req)
-	})
+// wrapRoute is a native or infra route's wrapper: it records the route's
+// pattern (method and host stripped) and owner in the request's State before
+// stages 10-11 and the handler run (05-http-api §4.2 stage 2), so stage 2
+// reads it after the handler returns even when a stage in between cloned the
+// request. /metrics is never compressed (stage 9: promhttp gzips itself).
+// r.mu is held.
+func (r *Router) wrapRoute(e *routeEntry) http.Handler {
+	return r.chain.Route(httpmw.RouteSpec{
+		Pattern: e.info.Pattern,
+		Policy:  &httpmw.Policy{Owner: e.info.Owner, NoCompress: e.info.Kind == RouteKindInfra && e.info.Pattern == "/metrics"},
+		Class:   rateClassName(e.info.RateClass),
+		MaxBody: e.route.MaxBody,
+	}, e.handler)
 }
 
 // checkClaims reports every pair of overlapping claims of two owners; r.mu
@@ -649,15 +869,15 @@ func (r *Router) checkPerm(e *routeEntry) []error {
 
 // legacyClaims returns the claims of every owner that has a legacy mount;
 // r.mu is held.
-func (r *Router) legacyClaims() []string {
+func (r *Router) legacyClaims() []claim {
 	owners := map[string]bool{}
 	for _, m := range r.mounts {
 		owners[m.Owner] = true
 	}
-	var out []string
+	var out []claim
 	for _, c := range r.claims {
 		if owners[c.owner] {
-			out = append(out, c.prefix)
+			out = append(out, c)
 		}
 	}
 	return out
