@@ -1,5 +1,5 @@
 // file: core/storage/swap_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 197248f8-64e9-44a3-a076-184d522f03ae
 // last-edited: 2026-11-08
 
@@ -87,6 +87,34 @@ func TestExplicitFSWinsOverTheSeam(t *testing.T) {
 	}
 	if _, err := seam.Stat(path); err == nil {
 		t.Fatal("the store went to the seam's filesystem over the caller's")
+	}
+}
+
+// TestSeamFillsOnlyTheInPackageSlot: adoptSeams puts the seam's filesystem
+// in o.fs, the slot defaults reads first, and only when the caller set no
+// FS and nothing preset the slot; the caller's FS field is never rewritten.
+func TestSeamFillsOnlyTheInPackageSlot(t *testing.T) {
+	seam, explicit, preset := vfs.NewMem(), vfs.NewMem(), vfs.NewMem()
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: seam})
+	for _, tc := range []struct {
+		name   string
+		opts   OpenOptions
+		wantFS vfs.FS // o.FS.fs after adoptSeams
+		want   vfs.FS // the filesystem after defaults
+	}{
+		{"no FS", OpenOptions{}, nil, seam},
+		{"an explicit FS", OpenOptions{FS: FS{fs: explicit}}, explicit, explicit},
+		{"a preset slot", OpenOptions{fs: preset}, nil, preset},
+	} {
+		o := tc.opts
+		o.adoptSeams(ctx)
+		if o.FS.fs != tc.wantFS {
+			t.Errorf("%s: adoptSeams rewrote the caller's FS", tc.name)
+		}
+		o.defaults()
+		if o.fs != tc.want {
+			t.Errorf("%s: the boot opens on the wrong filesystem", tc.name)
+		}
 	}
 }
 
