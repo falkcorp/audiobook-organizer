@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-07
 
@@ -66,8 +66,8 @@ type specGroup struct {
 //
 // A package whose blocks import a core package that does not exist yet waits
 // for it, and so does every package that imports it; the test names each one
-// and why. At release R1 that is every block of 06 (they need config, storage
-// and tasks), so the 06 subtest skips with that list, and the control
+// and why. At release R1 that is every block of 06 (they need config and
+// tasks), so the 06 subtest skips with that list, and the control
 // snapshots below prove the harness compiles, boots, catches a compile error,
 // catches a refusal and plans a skip. A package joins the build on its own
 // the day its last core import lands.
@@ -95,10 +95,10 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		}
 		// The waiting set is pinned, so the skip below cannot hide a block
 		// that waits for a new reason (a typo in an import, a package the
-		// spec renamed). A row that lands config, storage or tasks shrinks
-		// it here, in the same PR.
+		// spec renamed). A row that lands config or tasks shrinks it here,
+		// in the same PR.
 		wantWaiting := map[string]string{
-			"examples/hello":           "no Go file yet in core/config, core/storage, core/tasks",
+			"examples/hello":           "no Go file yet in core/config, core/tasks",
 			"examples/hello/cmd/hello": "imports core/examples/hello, which waits too",
 		}
 		if !maps.Equal(waiting, wantWaiting) {
@@ -284,7 +284,7 @@ func declaresNew(f *ast.File) bool {
 }
 
 // hasGoFiles reports a directory holding a non-test .go file: a package. A
-// directory alone is not one (core/storage holds only storage/keys today).
+// directory that holds only subpackages is not one.
 func hasGoFiles(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
