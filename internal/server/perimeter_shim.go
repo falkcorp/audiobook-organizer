@@ -1,7 +1,7 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -154,7 +154,7 @@ func (w *perimeterWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // sample route) asserts it on the writer without a check. Where the
 // underlying writer has none (HTTP/3), the request's context stands in.
 func (w *perimeterWriter) CloseNotify() <-chan bool {
-	//nolint:staticcheck // SA1019: gin's Stream still calls CloseNotify.
+	//lint:ignore SA1019 gin's Stream still calls CloseNotify
 	if cn, ok := w.ResponseWriter.(http.CloseNotifier); ok {
 		return cn.CloseNotify()
 	}
