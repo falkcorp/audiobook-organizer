@@ -507,7 +507,7 @@ Guidance (normative for core keyspaces, recommended for module keyspaces):
 // settings blob, R2's one cutover key that stays read-write because M2
 // rewrites it and M6 deletes it (§5S.9.1 row 7).
 type Claim struct {
-	Prefix        string    // e.g. "item:"; ends in a separator byte (':' '/' '_' '.') or is listed in BareAllow
+	Prefix        string    // e.g. "item:"; ends in a separator byte (':' '/' '_' '.'), else validation fails (so no prefix is only 0xff bytes)
 	Key           string    // exact single key, e.g. "item_counter"
 	Except        []string  // CROSS-OWNER carve-outs only: sub-prefixes or exact keys claimed by exactly one other owner
 	Mode          ClaimMode // zero rejected
@@ -2786,6 +2786,7 @@ credentials.
 | `TestReadinessMarksCheckpointServed` (kernel) | the previous build booting after a failed upgrade has written `ready_at` by the time it sends READY=1; a record it cannot write stops the app before READY=1 |
 | `TestSwapBackCheckpointNeverReused` | after a failed restore swaps back, no checkpoint the restored store took is reused or named (DATA3-1) |
 | `TestDeferredStepTakesFreshCheckpoint` | a boot whose only pending step belongs to a disabled owner takes no checkpoint; the boot that finally runs it takes a fresh one (OPS3-14) |
+| `TestClaimPrefixShape` | a claim prefix that does not end in a separator byte, or is only 0xff bytes, fails boot with every problem listed; an exact `Key` needs no separator |
 | `TestStepCannotCommitOutsideItsBatch` | inside a step, a batch (plain, indexed, of a `Sub`, of the `LegacyRange`), a `Sequence` and a `Snapshot` of the step's handles are refused, and the failed step leaves no row behind |
 | `TestStrandedAttemptCompletedNextBoot` | a kill between step 9's batch and the checkpoint's completion (`hooks.beforeComplete`): the next boot runs nothing, completes the record and the pointer and clears `c/storage/attempt`; a later upgrade takes its own checkpoint; a key whose record is already completed, or gone, is only cleared |
 | `TestPartialCheckpointSwept` | a checkpoint directory without a record is swept at boot and never reused, and the sweep removes nothing outside the checkpoint grammar (DATA3-22) |

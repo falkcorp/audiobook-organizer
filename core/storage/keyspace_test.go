@@ -464,3 +464,35 @@ func TestScanValueErrorYieldsNoNilValue(t *testing.T) {
 		}
 	}
 }
+
+// TestClaimPrefixShape (05-storage §5S.3.4 Claim.Prefix; review MINOR-4): a
+// claim prefix ends in a separator byte, so "joker" cannot quietly claim
+// "jokerized:"; a prefix of only 0xff bytes has no PrefixEnd, so its span
+// would be broken. Both fail boot, every problem listed. An exact Key needs
+// no separator.
+func TestClaimPrefixShape(t *testing.T) {
+	e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: []Claim{
+		{Prefix: "joker", Mode: ClaimReadWrite},
+		{Prefix: "\xff\xff", Mode: ClaimReadOnly},
+		{Prefix: "arkham-", Mode: ClaimReadWrite},
+	}}})
+	_, err := e.tryOpen()
+	if err == nil {
+		t.Fatal("bare and all-0xff claim prefixes were accepted")
+	}
+	for _, want := range []string{`"joker"`, `"\xff\xff"`, `"arkham-"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %s", err, want)
+		}
+	}
+	for _, sep := range []string{":", "/", "_", "."} {
+		ok := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: []Claim{
+			{Prefix: "joker" + sep, Mode: ClaimReadWrite},
+			{Key: "joker_counter", Mode: ClaimReadWrite, Serialized: true},
+			{Key: "penguin", Mode: ClaimReadWrite},
+		}}})
+		if _, err := ok.tryOpen(); err != nil {
+			t.Errorf("prefix %q with a separator: %v", "joker"+sep, err)
+		}
+	}
+}
