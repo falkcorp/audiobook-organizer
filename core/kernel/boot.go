@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-07
 
@@ -120,6 +120,9 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	if err := k.buildLogging(describe); err != nil {
 		return err
 	}
+	// Before any module code runs, so a restart request refused before
+	// readiness is logged (Lifecycle.RequestRestart).
+	k.lifecycle.log = k.log
 	ids := make([]string, 0, len(k.entries))
 	for _, e := range k.entries {
 		ids = append(ids, string(e.man.ID))

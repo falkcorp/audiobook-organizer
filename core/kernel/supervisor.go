@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-07
 
@@ -9,11 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/httpapi"
@@ -32,7 +34,8 @@ const (
 	// gets once the budget is spent, so buffered records still reach their
 	// outputs. It is the one step with a floor: Stop hooks reached after the
 	// deadline get none (stopHooks), so a stop overruns the budget by at most
-	// this much.
+	// this much. It is also the longest a start rollback waits for an
+	// abandoned Start (awaitLateStart).
 	lateStopFloor = time.Second
 )
 
@@ -79,6 +82,8 @@ type Lifecycle struct {
 	once      sync.Once
 	reason    string
 	requested chan struct{}
+	ready     atomic.Bool  // set by Run at start step 8 (readiness)
+	log       *slog.Logger // the kernel's log, set at P5 before any module code
 }
 
 func newLifecycle() *Lifecycle { return &Lifecycle{requested: make(chan struct{})} }
@@ -88,7 +93,18 @@ func newLifecycle() *Lifecycle { return &Lifecycle{requested: make(chan struct{}
 // core.lifecycle.restart_exit_code (75), so the unit's Restart=on-failure
 // brings the service back; never exit 0, which would leave a staged swap
 // untaken. The first request's reason wins; later ones are no-ops.
+//
+// A request before the app is ready (start step 8) is logged at ERROR and
+// ignored, and does not use up the first-reason slot: a module that asks
+// from Register, a hook's Start or a worker's first moments would otherwise
+// restart the app in a loop, every boot asking again.
 func (l *Lifecycle) RequestRestart(reason string) {
+	if !l.ready.Load() {
+		if l.log != nil {
+			l.log.Error("kernel: restart requested before the app was ready; ignored", "reason", reason)
+		}
+		return
+	}
 	l.once.Do(func() {
 		l.reason = reason
 		close(l.requested)
@@ -132,11 +148,11 @@ func (k *Kernel) Run(ctx context.Context) error {
 	if err != nil {
 		// R1Values (and core.shutdown.budget with it) is read at start step
 		// 7, after the hooks, so a start failure rolls back within core's
-		// default budget. A hook whose Start was abandoned is the newest:
-		// it is stopped first, if its Start returns nil in time.
+		// default budget. A hook whose Start was abandoned has not started:
+		// the rollback waits for it only briefly (awaitLateStart).
 		deadline := time.Now().Add(defaultShutdownBudget)
-		return errors.Join(err, k.stopLateStart(ctx, late, deadline), k.stopHooks(ctx, started, deadline),
-			k.closeCore(ctx, deadline))
+		started = append(started, k.awaitLateStart(ctx, late, deadline)...)
+		return errors.Join(err, k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	}
 	// (3) Module workers. Steps (3a) to (6) arrive with storage, health,
 	// events and tasks.
@@ -172,6 +188,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// (F2); until then readiness is the notifier's READY=1.
 	k.signal(ctx, "ready", k.notifier.Ready())
 	k.log.InfoContext(ctx, "kernel: ready")
+	k.lifecycle.ready.Store(true)
 
 	var cause error
 	serveDone, restart := false, false
@@ -268,26 +285,36 @@ func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, *lateStart, erro
 	return started, nil, nil
 }
 
-// stopLateStart waits until deadline for an abandoned Start's result: a
-// Start that returned nil started its hook, so its Stop runs (within the
-// same deadline) before the hooks started earlier. A Start still running at
-// the deadline is abandoned with an ERROR; if it returns nil later, a
-// background goroutine calls its Stop with an expired ctx, unawaited.
-func (k *Kernel) stopLateStart(ctx context.Context, late *lateStart, deadline time.Time) error {
+// awaitLateStart handles the hook whose Start was abandoned, and returns it
+// when it turned out started, to be appended to the started hooks. A hook is
+// started once its Start has returned nil (06 §6.5.1's "every already-started
+// hook is stopped in reverse order" reads serviceregistry.Container.Start,
+// which adds a service to its started list only then), and the budget is for
+// the started hooks' own Stops (05-health §5H.4). So the rollback waits for
+// the abandoned Start only until min(deadline, now+lateStopFloor): a Start
+// that returned nil by then is the newest started hook, so it is stopped
+// first; one still running is left with an ERROR, the earlier hooks get the
+// remaining budget with a live ctx, and if it returns nil later a background
+// goroutine calls its Stop.
+func (k *Kernel) awaitLateStart(ctx context.Context, late *lateStart, deadline time.Time) []moduleHook {
 	if late == nil {
 		return nil
 	}
 	h := late.hook
-	ok, startErr := waitUntil(late.result, deadline)
+	wait := time.Now().Add(lateStopFloor)
+	if deadline.Before(wait) {
+		wait = deadline
+	}
+	ok, startErr := waitUntil(late.result, wait)
 	switch {
 	case !ok:
-		k.log.ErrorContext(ctx, "kernel: abandoned hook start still running at the shutdown budget", "module", h.module, "hook", h.hook.Name)
+		k.log.ErrorContext(ctx, "kernel: abandoned hook start still running; the rollback goes on, and its Stop runs if the Start returns nil",
+			"module", h.module, "hook", h.hook.Name)
 		k.stopInBackground(ctx, []moduleHook{h}, deadline, late.result)
-		return fmt.Errorf("kernel: hook %s start still running at the shutdown budget: %w", h.hook.Name, context.DeadlineExceeded)
-	case startErr != nil || h.hook.Stop == nil:
-		return nil // it never started, or there is nothing to stop
+	case startErr == nil:
+		return []moduleHook{h}
 	}
-	return k.stopHooks(ctx, []moduleHook{h}, deadline)
+	return nil
 }
 
 // stopHooks stops started hooks in exact reverse order, each within the
@@ -335,9 +362,10 @@ func (k *Kernel) stopHooks(ctx context.Context, started []moduleHook, deadline t
 }
 
 // stopInBackground calls each hook's Stop in order from one goroutine with a
-// ctx already past deadline, unawaited. With started set, it first waits for
-// that abandoned Start's result and stops only if it was nil. A Stop's
-// error or panic is logged; the primary log output outlives closeCore.
+// ctx that ends at deadline (already past it for the hooks stopHooks hands
+// over), unawaited. With started set, it first waits for that abandoned
+// Start's result and stops only if it was nil. A Stop's error or panic is
+// logged; the primary log output outlives closeCore.
 func (k *Kernel) stopInBackground(ctx context.Context, hooks []moduleHook, deadline time.Time, started <-chan error) {
 	lctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	go func() {

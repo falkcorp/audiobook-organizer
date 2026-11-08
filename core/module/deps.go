@@ -1,5 +1,5 @@
 // file: core/module/deps.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
 // last-edited: 2026-11-07
 
@@ -35,6 +35,10 @@ type Deps struct {
 	// (75), so the service manager starts it again. The first reason wins;
 	// later calls do nothing. Call it after staging work the next boot
 	// applies (a restore, a reset), never to recover from an error.
+	//
+	// A call before the app is ready (start step 8: from Register, a hook's
+	// Start, or a worker before readiness) is logged at ERROR and ignored:
+	// honouring it would restart the app in a loop, every boot asking again.
 	RequestRestart func(reason string)
 }
 
