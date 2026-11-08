@@ -1,5 +1,5 @@
 // file: core/httpapi/route_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: cb942937-3f29-482d-8361-0af61a978c2c
 // last-edited: 2026-11-07
 
@@ -298,8 +298,8 @@ func TestHandle_RouteShape(t *testing.T) {
 		rt   Route
 		want error
 	}{
-		"lowercase method":  {Route{Method: "get", Path: "/a", Name: "a", Perm: rbac.Public}, ErrSchema},
-		"name not camel":    {Route{Method: http.MethodGet, Path: "/a", Name: "get_a", Perm: rbac.Public}, ErrSchema},
+		"lowercase method":  {Route{Method: "get", Path: "/a", Name: "a", Perm: rbac.Public}, ErrRouteShape},
+		"name not camel":    {Route{Method: http.MethodGet, Path: "/a", Name: "get_a", Perm: rbac.Public}, ErrRouteShape},
 		"dot-dot in path":   {Route{Method: http.MethodGet, Path: "/../arkham", Name: "a", Perm: rbac.Public}, ErrOutsideClaim},
 		"empty segment":     {Route{Method: http.MethodGet, Path: "//a", Name: "a", Perm: rbac.Public}, ErrOutsideClaim},
 		"path without root": {Route{Method: http.MethodGet, Path: "a", Name: "a", Perm: rbac.Public}, ErrOutsideClaim},
@@ -384,8 +384,8 @@ func TestHandle_TrailingSlashRefused(t *testing.T) {
 	for _, p := range []string{"/gadgets/", "/"} {
 		r, g := newRouter(t, "listGadgets")
 		Handle(g, Route{Method: http.MethodGet, Path: p, Name: "listGadgets", Perm: rbac.Public}, noop)
-		if _, err := r.Build(); !errors.Is(err, ErrSchema) || !strings.Contains(err.Error(), "subtree") {
-			t.Errorf("path %q: Build = %v, want ErrSchema naming the subtree", p, err)
+		if _, err := r.Build(); !errors.Is(err, ErrRouteShape) || errors.Is(err, ErrSchema) || !strings.Contains(err.Error(), "subtree") {
+			t.Errorf("path %q: Build = %v, want ErrRouteShape (not ErrSchema) naming the subtree", p, err)
 		}
 	}
 	r, g := newRouter(t, "listGadgets")
@@ -406,8 +406,8 @@ func TestHandle_RateClassChecked(t *testing.T) {
 	for _, rc := range []RateClass{RateExempt, RateExempt + 1} {
 		r, g := newRouter(t, "getGadget")
 		Handle(g, Route{Method: http.MethodGet, Path: "/gadgets/{id}", Name: "getGadget", Perm: rbac.Public, RateClass: rc}, getGadget)
-		if _, err := r.Build(); !errors.Is(err, ErrSchema) {
-			t.Errorf("RateClass %d: Build = %v, want ErrSchema", rc, err)
+		if _, err := r.Build(); !errors.Is(err, ErrRouteShape) || errors.Is(err, ErrSchema) {
+			t.Errorf("RateClass %d: Build = %v, want ErrRouteShape, not ErrSchema", rc, err)
 		}
 	}
 	for _, rc := range []RateClass{RateDefault, RateAuth, RateExpensive} {

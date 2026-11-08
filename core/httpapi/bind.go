@@ -1,5 +1,5 @@
 // file: core/httpapi/bind.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9ce63bfe-21b4-463d-ac55-8db492ac4b2c
 // last-edited: 2026-11-07
 
@@ -334,6 +334,9 @@ func decodeBody(w http.ResponseWriter, r *http.Request, rt Route, dst reflect.Va
 	if limit <= 0 {
 		limit = defaultJSONMaxBytes
 	}
+	// The body is read whole, then decoded: the raw bytes are kept so a
+	// decode error can be explained against them (bodyError), so peak memory
+	// per request is up to 2x MaxBody (the raw body plus the decoded value).
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		return bodyError(err, nil, nil)

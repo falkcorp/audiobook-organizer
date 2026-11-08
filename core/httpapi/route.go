@@ -1,5 +1,5 @@
 // file: core/httpapi/route.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0e02f805-1af9-41bb-87b2-82fc71cc65f0
 // last-edited: 2026-11-07
 
@@ -266,17 +266,18 @@ func statusOr(s, def int) int {
 	return s
 }
 
-// checkRouteShape reports a missing method or name, and a path that is not a
-// clean "/..." path under the group's base (ErrOutsideClaim: the route would
-// leave its owner's claim).
+// checkRouteShape reports a malformed method or name, a trailing-slash
+// path and a RateClass Handle does not accept (ErrRouteShape), and a path
+// that is not a clean "/..." path under the group's base (ErrOutsideClaim:
+// the route would leave its owner's claim).
 func checkRouteShape(g *Group, rt Route) []error {
 	var errs []error
 	what := g.owner + " " + rt.Method + " " + g.base + rt.Path
 	if rt.Method == "" || strings.ToUpper(rt.Method) != rt.Method || strings.ContainsAny(rt.Method, " /") {
-		errs = append(errs, fmt.Errorf("%w: %s: method %q", ErrSchema, what, rt.Method))
+		errs = append(errs, fmt.Errorf("%w: %s: method %q", ErrRouteShape, what, rt.Method))
 	}
 	if !routeName().MatchString(rt.Name) {
-		errs = append(errs, fmt.Errorf("%w: %s: name %q is not lowerCamel", ErrSchema, what, rt.Name))
+		errs = append(errs, fmt.Errorf("%w: %s: name %q is not lowerCamel", ErrRouteShape, what, rt.Name))
 	}
 	if rt.Path != "" && !strings.HasPrefix(rt.Path, "/") {
 		errs = append(errs, fmt.Errorf("%w: %s: path %q does not start with /", ErrOutsideClaim, what, rt.Path))
@@ -287,12 +288,12 @@ func checkRouteShape(g *Group, rt Route) []error {
 		// the slashless path to it; native patterns are exact (05-http-api
 		// §4.8), so the one trailing-slash form is ".../{$}".
 		errs = append(errs, fmt.Errorf("%w: %s: path %q ends in \"/\", which ServeMux serves as a subtree; drop the slash or end the path in \"/{$}\"",
-			ErrSchema, what, rt.Path))
+			ErrRouteShape, what, rt.Path))
 	}
 	if rt.RateClass > RateExempt {
-		errs = append(errs, fmt.Errorf("%w: %s: unknown RateClass %d", ErrSchema, what, rt.RateClass))
+		errs = append(errs, fmt.Errorf("%w: %s: unknown RateClass %d", ErrRouteShape, what, rt.RateClass))
 	} else if rt.RateClass == RateExempt {
-		errs = append(errs, fmt.Errorf("%w: %s: RateExempt is for infra probes and the SPA handler only", ErrSchema, what))
+		errs = append(errs, fmt.Errorf("%w: %s: RateExempt is for infra probes and the SPA handler only", ErrRouteShape, what))
 	}
 	return errs
 }
