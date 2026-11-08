@@ -1,5 +1,5 @@
 // file: internal/server/stophook_budget_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 877b968e-c9c6-4cac-b2e9-06bc892394d0
 // last-edited: 2026-11-08
 
@@ -137,6 +137,7 @@ func stopHookCleanStopServer(t *testing.T, add func(c *serviceregistry.Container
 		t.Fatal(err)
 	}
 	store.SetComplete(true)
+	bindFreshTruth(t, store)
 	c := serviceregistry.NewContainer().Override("chromemstore", store)
 	if add != nil {
 		add(c)

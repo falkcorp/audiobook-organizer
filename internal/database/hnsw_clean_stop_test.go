@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -30,6 +30,17 @@ func markCleanStop(t *testing.T, s *HNSWEmbeddingStore, dir string) {
 	}
 }
 
+// newBoundHNSW returns an empty store bound to a fresh in-memory database and
+// no embedding model, as the server binds the store it boots with: a store
+// with no database bound neither writes the marker nor trusts one (R1-15
+// round-2 review, S5).
+func newBoundHNSW(t *testing.T, dims int) *HNSWEmbeddingStore {
+	t.Helper()
+	s := NewHNSWEmbeddingStore(dims)
+	s.BindTruthSource(memGatedDB(t), "")
+	return s
+}
+
 func markerExists(t *testing.T, dir string) bool {
 	t.Helper()
 	_, err := os.Stat(cleanStopPath(dir))
@@ -50,7 +61,7 @@ var cleanStopRogues = map[string][]float32{
 // to dir with a Pebble truth count of 3, and that truth function.
 func exportedRogues(t *testing.T, dir string) (*HNSWEmbeddingStore, func(string) (int, error)) {
 	t.Helper()
-	s := NewHNSWEmbeddingStore(4)
+	s := newBoundHNSW(t, 4)
 	for id, v := range cleanStopRogues {
 		if err := s.Upsert(context.Background(), "book", id, v, nil); err != nil {
 			t.Fatalf("upsert %s: %v", id, err)
@@ -67,6 +78,26 @@ func exportedRogues(t *testing.T, dir string) (*HNSWEmbeddingStore, func(string)
 // TestCleanStop_MarkerLetsOneBootSkipTheReconcile: after a clean stop the
 // next boot takes the snapshot as fresh and consumes the marker, so a boot
 // after that (the run crashed, no stop wrote a new marker) reconciles.
+// TestCleanStop_ABootWithNoDatabaseBoundReconciles (R1-15 round-2 review, S5):
+// a boot whose store has no database bound cannot see the writes made before
+// its import, so a marker does not vouch for it. It still takes the marker.
+func TestCleanStop_ABootWithNoDatabaseBoundReconciles(t *testing.T) {
+	dir := t.TempDir()
+	src, truth := exportedRogues(t, dir)
+	markCleanStop(t, src, dir)
+
+	next := NewHNSWEmbeddingStore(4)
+	if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !next.NeedsReconcile() {
+		t.Error("a boot with no database bound must reconcile whatever the marker says")
+	}
+	if markerExists(t, dir) {
+		t.Error("the boot must take the marker even when it cannot use it")
+	}
+}
+
 func TestCleanStop_MarkerLetsOneBootSkipTheReconcile(t *testing.T) {
 	dir := t.TempDir()
 	src, truth := exportedRogues(t, dir)
@@ -75,7 +106,7 @@ func TestCleanStop_MarkerLetsOneBootSkipTheReconcile(t *testing.T) {
 		t.Fatal("MarkCleanStop reported the marker written but it is not on disk")
 	}
 
-	first := NewHNSWEmbeddingStore(4)
+	first := newBoundHNSW(t, 4)
 	if err := first.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -86,7 +117,7 @@ func TestCleanStop_MarkerLetsOneBootSkipTheReconcile(t *testing.T) {
 		t.Error("the boot must take the marker, so it vouches for one boot only")
 	}
 
-	second := NewHNSWEmbeddingStore(4)
+	second := newBoundHNSW(t, 4)
 	if err := second.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("second import: %v", err)
 	}
@@ -220,7 +251,7 @@ func TestCleanStop_AWriteAfterTheMarkerRemovesIt(t *testing.T) {
 		t.Fatal("the marker survived a write after it")
 	}
 
-	next := NewHNSWEmbeddingStore(4)
+	next := newBoundHNSW(t, 4)
 	if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -281,6 +312,14 @@ func TestMarkCleanStop_Refusals(t *testing.T) {
 			s.mu.Unlock()
 			return s
 		}, "damaged"},
+		// R1-15 round-2 review (S5): with no database bound nothing counts
+		// the writes the graph could have missed, so the store vouches for
+		// nothing.
+		{"no database bound", func(t *testing.T, dir string) *HNSWEmbeddingStore {
+			s, _ := exportedRogues(t, dir)
+			s.BindTruthSource(nil, "")
+			return s
+		}, "no Pebble database is bound"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -354,7 +393,7 @@ func TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt(t *testing.T) {
 	if markerExists(t, dir) {
 		t.Fatal("the marker survived a write the graph refused")
 	}
-	next := NewHNSWEmbeddingStore(4)
+	next := newBoundHNSW(t, 4)
 	if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -412,7 +451,7 @@ func TestCleanStop_AMarkerThatCannotBeRemovedIsEmptied(t *testing.T) {
 		if vouches(t, dir) {
 			t.Fatal("the marker still vouches after a write it could not be removed for")
 		}
-		next := NewHNSWEmbeddingStore(4)
+		next := newBoundHNSW(t, 4)
 		if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
 			t.Fatalf("import: %v", err)
 		}

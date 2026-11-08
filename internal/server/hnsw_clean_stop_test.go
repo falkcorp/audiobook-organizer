@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -36,11 +36,27 @@ func cleanStopServer(t *testing.T) (*Server, *database.HNSWEmbeddingStore) {
 		t.Fatal(err)
 	}
 	store.SetComplete(true)
+	bindFreshTruth(t, store)
 	c := serviceregistry.NewContainer().Override("chromemstore", store)
 	if err := c.Build(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	return &Server{hnswPersistDir: t.TempDir(), container: c}, store
+}
+
+// bindFreshTruth binds s to a Pebble database of its own (in memory, no
+// writes) and no embedding model, as the server binds the store it boots
+// with: a store with no database bound never writes the clean-stop marker
+// (R1-15 round-2 review, S5). A database of its own, so a test's writes to
+// another one model a later process's writes, not this store's.
+func bindFreshTruth(t *testing.T, s *database.HNSWEmbeddingStore) {
+	t.Helper()
+	ps, err := database.NewPebbleStoreInMemory("clean-stop-truth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ps.Close() })
+	s.BindTruthSource(ps.DB(), "")
 }
 
 func cleanStopMarkerExists(t *testing.T, dir string) bool {
@@ -172,6 +188,7 @@ func newChildModeFixture(t *testing.T, cleanStop bool) childModeFixture {
 		t.Fatal(err)
 	}
 	prev.SetComplete(true)
+	bindFreshTruth(t, prev)
 	if err := prev.ExportWithTruth(f.dir, f.es.CountByType); err != nil {
 		t.Fatal(err)
 	}

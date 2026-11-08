@@ -1,5 +1,5 @@
 // file: internal/dedup/ann_reconcile_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b41e9a6b-d62b-4ab5-97f2-4498e245117b
 // last-edited: 2026-11-08
 
@@ -102,6 +102,7 @@ func newANNFixture(t *testing.T, snapshotIDs []string) *annFixture {
 	}
 
 	src := database.NewHNSWEmbeddingStore(annTestDim)
+	bindFreshTruth(t, src)
 	for _, id := range snapshotIDs {
 		f.putRow(t, id)
 		if err := src.Upsert(context.Background(), "book", id, f.vecs[id], bookANNMeta(f.books[id])); err != nil {
@@ -116,6 +117,21 @@ func newANNFixture(t *testing.T, snapshotIDs []string) *annFixture {
 	// No clean-stop marker: by default the previous process crashed after
 	// this snapshot. cleanStop models the other ending.
 	return f
+}
+
+// bindFreshTruth binds s to a Pebble database of its own (in memory, no
+// writes) and the engine's embedding model. Each process in the fixture
+// opened its own database, so the rows putRow wrote are not writes either
+// process saw after it opened; a store with no database bound would neither
+// write the clean-stop marker nor trust one (R1-15 round-2 review, S5).
+func bindFreshTruth(t *testing.T, s *database.HNSWEmbeddingStore) {
+	t.Helper()
+	ps, err := database.NewPebbleStoreInMemory("ann-truth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ps.Close() })
+	s.BindTruthSource(ps.DB(), "bge-m3")
 }
 
 // cleanStop ends the previous process cleanly: its snapshot is the graph, so
@@ -162,6 +178,7 @@ func (f *annFixture) boot(t *testing.T) *database.HNSWEmbeddingStore {
 	t.Helper()
 	ctx := context.Background()
 	store := database.NewHNSWEmbeddingStore(annTestDim)
+	bindFreshTruth(t, store)
 	if err := store.ImportWithStalenessCheck(f.dir, f.es.CountByType); err != nil {
 		t.Fatal(err)
 	}
