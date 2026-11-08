@@ -1,7 +1,7 @@
 // file: internal/database/store_init.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7ffff60d-2915-4c59-a775-321f8367f69b
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
@@ -49,7 +49,7 @@ func InitializeStore(dbType, path string) (Store, error) {
 	case "pebble", "":
 		// PebbleDB is the default and only supported backend. Opening it can
 		// replay a large WAL, so ask systemd for start time first.
-		extendStartTimeout()
+		extendStartTimeout("store open")
 		s, err = NewPebbleStore(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize PebbleDB store: %w", err)

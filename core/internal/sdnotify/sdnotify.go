@@ -1,7 +1,7 @@
-// file: internal/sdnotify/sdnotify.go
-// version: 2.1.1
+// file: core/internal/sdnotify/sdnotify.go
+// version: 2.1.2
 // guid: 96427de2-bc6f-4a85-9a35-774bdfed9ee7
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 // Package sdnotify implements the systemd notify protocol (sd_notify(3)) with
 // the standard library only.
@@ -34,6 +34,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/mediacore/lifecycle"
 )
 
 // Capability is the token `audiobook-organizer --print-capabilities` prints
@@ -55,12 +57,6 @@ const StartupStepBudget = 10 * time.Minute
 // writeTimeout bounds the datagram write. systemd reads its notify socket
 // promptly; this only keeps a wedged receiver from stalling startup.
 const writeTimeout = time.Second
-
-// SocketEnv names the variable systemd sets for a Type=notify service.
-// Exported so code that starts child processes can withhold it: only the main
-// process may notify (NotifyAccess=main), and systemd logs a warning for
-// every datagram a child sends.
-const SocketEnv = "NOTIFY_SOCKET"
 
 // errSocketUnsupported is returned for a NOTIFY_SOCKET that is neither an
 // absolute path nor an abstract socket (for example systemd's vsock form,
@@ -86,7 +82,7 @@ func socketAddr(env string) (*net.UnixAddr, error) {
 // returns nil without doing anything when the variable is unset. The error
 // text never includes the socket path.
 func notify(state string) (err error) {
-	env := os.Getenv(SocketEnv)
+	env := os.Getenv(lifecycle.NotifySocketEnv)
 	if env == "" {
 		return nil
 	}

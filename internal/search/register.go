@@ -1,6 +1,6 @@
 // file: internal/search/register.go
-// version: 3.2.0
-// last-edited: 2026-10-12
+// version: 3.3.0
+// last-edited: 2026-11-08
 // guid: 7b4e2c1a-9f3d-4a82-b6e5-1d0c8f5a3e72
 //
 // Registers the BleveIndex as the "searchindex" service. IndexService
@@ -18,9 +18,9 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -30,6 +30,27 @@ type IndexService struct {
 	cfg  *config.Config
 	idx  *BleveIndex
 	path string
+
+	// extendStart is the func the module's Deps.ExtendStart gave this service
+	// (SetStartExtender); nil means no extension is requested. Atomic: it is
+	// set from books' Register and read from the start hook's goroutine.
+	extendStart atomic.Pointer[func(step string)]
+}
+
+// SetStartExtender injects the function Start calls, right before it opens
+// the index, to ask the service manager for more start time: books passes the
+// kernel's module.Deps.ExtendStart (05-health §5H.3.4). The package imports no
+// module, so a layer-2 package takes a plain func (MOD4-18). A nil f removes
+// it. Call it before Start; it is safe to call while Start runs.
+func (b *IndexService) SetStartExtender(f func(step string)) {
+	if b == nil {
+		return
+	}
+	if f == nil {
+		b.extendStart.Store(nil)
+		return
+	}
+	b.extendStart.Store(&f)
 }
 
 // Start opens the on-disk Bleve index. Idempotent — if already open,
@@ -48,12 +69,12 @@ func (b *IndexService) Start(_ context.Context) error {
 		return nil
 	}
 	indexPath := filepath.Join(filepath.Dir(b.cfg.DatabasePath), "library.bleve")
-	// Opening (or rebuilding) the index is a long startup step: ask systemd
-	// (Type=notify) for start time before it, never on a timer, so a hung
-	// open is still killed once its budget runs out. No-op without
-	// NOTIFY_SOCKET; a failure is logged and never fails startup.
-	if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
-		indexLog.Warn("systemd start-timeout extension failed: %v", err)
+	// Opening (or rebuilding) the index is a long startup step: ask for start
+	// time before it, never on a timer, so a hung open is still killed once
+	// its budget runs out. The injected func is a no-op without NOTIFY_SOCKET
+	// and never fails startup.
+	if f := b.extendStart.Load(); f != nil {
+		(*f)("search index open")
 	}
 	idx, err := Open(indexPath)
 	if err != nil {

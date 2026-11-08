@@ -1,7 +1,7 @@
 // file: main.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 package main
 
@@ -12,9 +12,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/cmd"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/sdnotify"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
+	"github.com/falkcorp/mediacore/app"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -43,14 +43,16 @@ func run() int {
 	}
 
 	// The deploy and rollback recipes ask a binary what it supports before
-	// restarting it (scripts/deploy-match-unit-type.sh). One token per line;
-	// `sd_notify` means it sends READY=1, so it may run under the Type=notify
-	// unit. A build older than this flag fails with "unknown flag" and prints
-	// nothing to stdout, which the recipes read as "no sd_notify": it then
-	// runs as Type=simple instead of being killed at TimeoutStartSec. Handled
-	// before cobra for the same stdout reason as --print-storage-format.
-	if len(os.Args) == 2 && os.Args[1] == "--print-capabilities" {
-		fmt.Println(sdnotify.Capability)
+	// restarting it (scripts/deploy-match-unit-type.sh): `--print-capabilities`
+	// prints one token per line, and `sd_notify` means the binary sends
+	// READY=1, so it may run under the Type=notify unit. The flag is core's:
+	// app.FastExit answers it. Handled before cobra for the same stdout reason
+	// as --print-storage-format.
+	if handled, err := app.FastExit(os.Args, os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		return 0
 	}
 

@@ -1,7 +1,7 @@
 // file: core/module/deps.go
 // version: 1.0.3
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package module
 
@@ -25,8 +25,9 @@ type Deps struct {
 	// ExtendStart is health.Supervisor.ExtendStart as a plain func: call it
 	// right before a startup step that makes real progress (a store open, a
 	// migration step, a search-index open); never from a timer; a no-op
-	// without NOTIFY_SOCKET (05-health §5H.3.4). Until R1-16 moves sdnotify
-	// into core it is a no-op everywhere.
+	// without NOTIFY_SOCKET (05-health §5H.3.4). It also extends the start
+	// window of the calling module's running hook Start, so a step that makes
+	// progress is not abandoned at core.lifecycle.start_timeout.
 	ExtendStart func(step string)
 
 	// RequestRestart is kernel.Lifecycle.RequestRestart as a plain func (06
