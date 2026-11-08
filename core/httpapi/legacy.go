@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
 // last-edited: 2026-11-07
 
@@ -76,12 +76,19 @@ func (r *Router) AllowAuthMethods(owner string, methods ...string) {
 // MountLegacy records a legacy mount (05-http-api §8.2) and returns the
 // errors it can see at once: a missing Owner or Handler, an Auth that is
 // neither LegacyAuthCore nor LegacyAuthGin, a malformed Redirects entry, and
-// a second owner of "/" (FE-1). Routes is read here, once. Every manifest
+// a second owner of "/" (FE-1). Routes is read here, once, before r.mu is
+// taken, so an iterator that reads router state cannot deadlock. Every manifest
 // rule (the pattern translation, the claims, the OwnAuth admission, the
 // collision rule) is checked by Build, so the order of the kernel's P7 calls
 // does not matter. Which module may use LegacyAuthGin is the Registrar's
 // check (ProblemLegacyAuth, SEC2-17), made before the mount reaches here.
 func (r *Router) MountLegacy(m LegacyMount) error {
+	var routes []LegacyRoute
+	if m.Routes != nil {
+		for lr := range m.Routes {
+			routes = append(routes, lr)
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.late("MountLegacy " + m.Owner); err != nil {
@@ -90,12 +97,6 @@ func (r *Router) MountLegacy(m LegacyMount) error {
 	var errs []error
 	if m.Owner == "" || m.Handler == nil {
 		errs = append(errs, fmt.Errorf("%w: legacy mount needs an Owner and a Handler", ErrLegacyManifest))
-	}
-	var routes []LegacyRoute
-	if m.Routes != nil {
-		for lr := range m.Routes {
-			routes = append(routes, lr)
-		}
 	}
 	if m.Auth != LegacyAuthCore && m.Auth != LegacyAuthGin {
 		errs = append(errs, fmt.Errorf("%w: %s: legacy mount Auth %d is neither LegacyAuthCore nor LegacyAuthGin", ErrLegacyManifest, m.Owner, m.Auth))
@@ -151,9 +152,11 @@ func MatchedPattern(ctx context.Context) (pattern string, ok bool) {
 // (method, ginPath) is the manifest entry of the pattern the mux matched or,
 // for a generalised pattern, one of its members; the caller answers 404 in
 // the legacy error shape otherwise, before any handler runs, so the route
-// stages 8, 10 and 13 judged is the route the legacy router runs. ok is false
-// outside a request the wrapper handed over (the "/" owner's fallback, or the
-// legacy handler served directly), where there is nothing to compare.
+// stages 8, 10 and 13 judged is the route the legacy router runs. A ServesSPA
+// mount's "/" fallback is wrapped the same way with GET / and HEAD / as its
+// only entries (rootHandler). ok is false outside a request a wrapper handed
+// over (the legacy handler served directly), where there is nothing to
+// compare.
 func LegacyMatchAgrees(ctx context.Context, method, ginPath string) (agrees, ok bool) {
 	m, ok := ctx.Value(legacyMatchKey{}).(*legacyMatch)
 	if !ok {
@@ -462,6 +465,7 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 		seen[n.key] = n.owner
 	}
 	r.legacy.infos = nil
+	var infos []RouteInfo
 	for mi, m := range r.mounts {
 		var routes []LegacyRoute
 		if mi < len(r.legacy.routes) {
@@ -494,12 +498,32 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 		}
 		for _, mem := range reg.members {
 			lr := mem.route
-			r.legacy.infos = append(r.legacy.infos, RouteInfo{Owner: m.Owner, Method: lr.Method, Pattern: reg.pat.path(),
+			infos = append(infos, RouteInfo{Owner: m.Owner, Method: lr.Method, Pattern: reg.pat.path(),
 				Name: lr.GinPath, Perm: lr.Perm, Guards: lr.Guards, RateClass: lr.RateClass, Kind: RouteKindLegacy,
 				OwnAuth: lr.OwnAuth, AuthMethod: lr.AuthMethod})
 		}
 	}
+	if len(errs) == 0 {
+		// Routes() describes a built router only: a failed register leaves
+		// no partial list behind.
+		r.legacy.infos = infos
+	}
 	return errs
+}
+
+// rootHandler is the "/" owner Build hands the dispatcher. A ServesSPA legacy
+// mount's handler is wrapped like a manifest pattern whose only entries are
+// GET / and HEAD /, so the fallback reaches the legacy router's NoRoute
+// chain and its "/" page only (05-http-api §8.2): an unclean path or a
+// SPAShared GET that the legacy router would route to any other handler
+// gets the post-match check's 404, because the mux never admitted that
+// route. r.mu is held.
+func (r *Router) rootHandler() http.Handler {
+	h, owner := r.rootOwner()
+	if h == nil || owner == "core" {
+		return h
+	}
+	return legacyHandler("", "/", []ginRoute{{method: http.MethodGet, path: "/"}, {method: http.MethodHead, path: "/"}}, h)
 }
 
 // nativeNodes are the routes Build registered itself, as graph nodes.
@@ -610,19 +634,32 @@ func (r *Router) checkLegacyPerm(owner, what string, lr LegacyRoute) []error {
 
 // checkLegacyPlace keeps a manifest route inside its owner's claims (SEC3-8,
 // ErrOutsideClaim; "/" is the "/" owner's, never a manifest route) and a
-// route outside /api/ on a first segment that is reserved, a TopSegments or
-// a SPAShared entry (ErrPrefixCollision, §3.5).
+// route outside /api/ on a first segment that is a TopSegments or SPAShared
+// entry of its mount (ErrPrefixCollision, §3.5). A reserved segment that is
+// core's own path space ("v<digits>", livez, readyz) or the SPA's (assets,
+// static, ui) is refused even when listed; auth, health, metrics and events
+// pass only when the mount lists them.
 func (r *Router) checkLegacyPlace(m LegacyMount, what, gin string) []error {
 	var errs []error
 	if !r.insideClaims(m.Owner, gin) {
 		errs = append(errs, fmt.Errorf("%w: %s", ErrOutsideClaim, what))
 	}
 	first := firstSegment(gin)
-	if first != "" && first != "api" && !reservedSegment(first) &&
-		!slices.Contains(m.TopSegments, first) && !slices.Contains(m.SPAShared, first) {
-		errs = append(errs, fmt.Errorf("%w: %s: top-level segment %q is neither reserved nor in the mount's TopSegments or SPAShared", ErrPrefixCollision, what, first))
+	switch {
+	case first == "" || first == "api":
+	case coreOnlySegment(first):
+		errs = append(errs, fmt.Errorf("%w: %s: top-level segment %q is reserved for core or the SPA", ErrPrefixCollision, what, first))
+	case !slices.Contains(m.TopSegments, first) && !slices.Contains(m.SPAShared, first):
+		errs = append(errs, fmt.Errorf("%w: %s: top-level segment %q is not in the mount's TopSegments or SPAShared", ErrPrefixCollision, what, first))
 	}
 	return errs
+}
+
+// coreOnlySegment reports a reserved first segment no legacy route may use:
+// "v<digits>" (versioned core paths), livez and readyz (core's probes), and
+// assets, static and ui (the SPA's own paths, FE2-11).
+func coreOnlySegment(s string) bool {
+	return (s[0] == 'v' && reservedSegment(s)) || slices.Contains([]string{"livez", "readyz", "assets", "static", "ui"}, s)
 }
 
 // insideClaims reports that every path gin matches lies under one claim of

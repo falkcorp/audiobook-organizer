@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2bad0d9-b859-4674-9232-a674448cef1f
 // last-edited: 2026-11-07
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -502,7 +503,8 @@ const legacyNotFound = `{"error":"endpoint not found","code":"NOT_FOUND","status
 
 // TestDispatch_LegacyWrongMethodIsLegacyNotFound: HEAD's gin has
 // HandleMethodNotAllowed off, so a wrong method on a manifest path is gin's
-// 404, byte for byte, never core's problem 405 with an Allow header.
+// 404 (status, Content-Type and body), never core's problem 405 with an
+// Allow header.
 func TestDispatch_LegacyWrongMethodIsLegacyNotFound(t *testing.T) {
 	g := newFakeGin("GET /api/v1/cases/:id", "POST /api/v1/cases")
 	h := mustBuild(t, gcpdRouter(t, g, gothamRoute(http.MethodGet, "/api/v1/cases/:id"),
@@ -566,5 +568,136 @@ func TestDispatch_SPASharedGetServesShell(t *testing.T) {
 	}
 	if rec := serve(h, http.MethodGet, "/login", ""); rec.Code != http.StatusTeapot {
 		t.Fatalf("GET /login = %d %q, want the shell (gin's NoRoute)", rec.Code, rec.Body.String())
+	}
+}
+
+// fallbackRouter is a ServesSPA mount for owner "gcpd" claiming /files/ and
+// /login/, the shape of the reviewer's B1 probes.
+func fallbackRouter(t *testing.T, g http.Handler, shared []string, routes ...LegacyRoute) http.Handler {
+	t.Helper()
+	r := NewRouter(Options{}, Deps{})
+	for _, c := range []string{"/files/", "/login/"} {
+		if err := r.Claim("gcpd", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthGin, ServesSPA: true,
+		TopSegments: []string{"files"}, SPAShared: shared, Routes: manifestOf(routes...)}); err != nil {
+		t.Fatal(err)
+	}
+	return mustBuild(t, r)
+}
+
+// TestFallback_UncleanPathNeverRunsALegacyRoute: an unclean non-/api path
+// goes to the "/" owner unchanged, and the legacy router would route
+// "/files/.." to GET /files/:id. The fallback may reach the NoRoute chain
+// and "/" only (05-http-api §8.2), so the post-match check refuses it.
+func TestFallback_UncleanPathNeverRunsALegacyRoute(t *testing.T) {
+	g := newFakeGin("GET /files/:id", "GET /")
+	h := fallbackRouter(t, g, nil, gothamRoute(http.MethodGet, "/files/:id"))
+	for _, p := range []string{"/files/..", "/files/."} {
+		rec := serve(h, http.MethodGet, p, "")
+		if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound {
+			t.Errorf("GET %s = %d %q, want the legacy 404", p, rec.Code, rec.Body.String())
+		}
+		if ran := g.took(); len(ran) != 0 {
+			t.Errorf("GET %s ran %v", p, ran)
+		}
+	}
+	// What the fallback may reach: the legacy router's "/" page and NoRoute.
+	if rec := serve(h, http.MethodGet, "/", ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"GET /"}) {
+		t.Errorf("GET / = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := serve(h, http.MethodGet, "/library/../shelf", ""); rec.Code != http.StatusTeapot {
+		t.Errorf("GET /library/../shelf = %d %q, want the legacy router's NoRoute", rec.Code, rec.Body.String())
+	}
+}
+
+// TestFallback_EncodedSlashOnSPASharedNeverRunsALegacyRoute: the mux sees
+// "/login/x%2Fy" as one segment and matches nothing; a GET on the SPAShared
+// segment goes to the "/" owner, and the legacy router decodes the path and
+// would run GET /login/:a/:b. The post-match check refuses it.
+func TestFallback_EncodedSlashOnSPASharedNeverRunsALegacyRoute(t *testing.T) {
+	g := newFakeGin("GET /login/:a/:b", "POST /login")
+	h := fallbackRouter(t, g, []string{"login"}, gothamRoute(http.MethodGet, "/login/:a/:b"),
+		LegacyRoute{Method: http.MethodPost, GinPath: "/login", Perm: rbac.Public, Public: true})
+	rec := serve(h, http.MethodGet, "/login/x%2Fy", "")
+	if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound {
+		t.Errorf("GET /login/x%%2Fy = %d %q, want the legacy 404", rec.Code, rec.Body.String())
+	}
+	if ran := g.took(); len(ran) != 0 {
+		t.Errorf("GET /login/x%%2Fy ran %v", ran)
+	}
+	if rec := serve(h, http.MethodGet, "/login/joker/riddler", ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"GET /login/:a/:b"}) {
+		t.Errorf("GET /login/joker/riddler = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMountLegacy_IteratorMayReadRouter: MountLegacy drains Routes before it
+// takes the router's lock, so a manifest built from router state cannot
+// deadlock.
+func TestMountLegacy_IteratorMayReadRouter(t *testing.T) {
+	r := NewRouter(Options{}, Deps{})
+	if err := r.Claim("gcpd", "/files/"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: []string{"files"},
+			Routes: func(yield func(LegacyRoute) bool) {
+				_ = r.NonSPASegments()
+				yield(gothamRoute(http.MethodGet, "/files/:id"))
+			}})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MountLegacy deadlocked: it ran the Routes iterator under r.mu")
+	}
+}
+
+// TestLegacyPlace_CoreOnlySegmentsRefused: a legacy route may not take
+// core's versioned or probe paths or the SPA's asset paths, even when the
+// mount lists the segment; auth, health and metrics pass only when listed.
+func TestLegacyPlace_CoreOnlySegmentsRefused(t *testing.T) {
+	for _, p := range []string{"/v2/x", "/livez", "/readyz", "/assets/app.js", "/static/x", "/ui/x"} {
+		seg := firstSegment(p)
+		r := NewRouter(Options{}, Deps{})
+		if err := r.Claim("gcpd", "/"+seg+"/"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: []string{seg},
+			Routes: manifestOf(gothamRoute(http.MethodGet, p))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Build(); !errors.Is(err, ErrPrefixCollision) {
+			t.Errorf("legacy route %s = %v, want ErrPrefixCollision", p, err)
+		}
+	}
+	for _, seg := range []string{"auth", "health", "metrics"} {
+		for _, listed := range []bool{false, true} {
+			r := NewRouter(Options{}, Deps{})
+			if err := r.Claim("gcpd", "/"+seg+"/"); err != nil {
+				t.Fatal(err)
+			}
+			var top []string
+			if listed {
+				top = []string{seg}
+			}
+			if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: top,
+				Routes: manifestOf(gothamRoute(http.MethodGet, "/"+seg+"/x"))}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := r.Build()
+			if listed && err != nil {
+				t.Errorf("/%s/x listed in TopSegments: %v", seg, err)
+			}
+			if !listed && !errors.Is(err, ErrPrefixCollision) {
+				t.Errorf("/%s/x not listed = %v, want ErrPrefixCollision", seg, err)
+			}
+		}
 	}
 }
