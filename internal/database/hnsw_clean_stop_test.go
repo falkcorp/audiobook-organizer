@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -155,51 +155,54 @@ func TestMarkCleanStop_RefusesAGraphThatChangedSinceItsSnapshot(t *testing.T) {
 	}
 }
 
-// blockGraphRename makes the next export's rename of the book graph fail, by
-// putting a non-empty directory where the graph file goes.
-func blockGraphRename(t *testing.T, dir string) {
+// blockRename makes the next export's rename onto name (a snapshot file in
+// dir) fail, by putting a non-empty directory where that file goes.
+func blockRename(t *testing.T, dir, name string) {
 	t.Helper()
-	bin := filepath.Join(dir, "hnsw-book.bin")
-	if err := os.Remove(bin); err != nil {
+	p := filepath.Join(dir, name)
+	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(bin, "blocker"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(p, "blocker"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // TestMarkCleanStop_NoMarkerAfterAFailedExport: an export that fails after it
-// began changing the directory (its truth sidecars are gone) leaves a snapshot
-// that describes no gen, so no marker may vouch for it, whether or not the
-// graph changed first.
+// began changing the directory (its truth sidecars are gone, and a failed
+// metadata rename follows a graph rename that landed) leaves a snapshot that
+// describes no gen, so no marker may vouch for it, whether or not the graph
+// changed first. Each rename has its own baseline drop (MINOR-2, M3b).
 func TestMarkCleanStop_NoMarkerAfterAFailedExport(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		dirty bool
-	}{
-		{"graph unchanged since the last snapshot", false},
-		{"graph changed since the last snapshot", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			s, truth := exportedRogues(t, dir)
-			if tc.dirty {
-				if err := s.Delete(context.Background(), "book", "bane"); err != nil {
-					t.Fatalf("delete: %v", err)
+	for _, blocked := range []string{"hnsw-book.bin", "hnsw-book.meta.json"} {
+		for _, tc := range []struct {
+			name  string
+			dirty bool
+		}{
+			{"graph unchanged since the last snapshot", false},
+			{"graph changed since the last snapshot", true},
+		} {
+			t.Run(blocked+"/"+tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				s, truth := exportedRogues(t, dir)
+				if tc.dirty {
+					if err := s.Delete(context.Background(), "book", "bane"); err != nil {
+						t.Fatalf("delete: %v", err)
+					}
 				}
-			}
-			blockGraphRename(t, dir)
-			if err := s.ExportWithTruth(dir, truth); err == nil {
-				t.Fatal("the export was meant to fail at the graph rename")
-			}
-			written, reason, err := s.MarkCleanStop(dir)
-			if err != nil || written {
-				t.Fatalf("MarkCleanStop = %v, %q, %v; want refused", written, reason, err)
-			}
-			if markerExists(t, dir) {
-				t.Error("a failed export left a clean-stop marker")
-			}
-		})
+				blockRename(t, dir, blocked)
+				if err := s.ExportWithTruth(dir, truth); err == nil {
+					t.Fatalf("the export was meant to fail at the rename onto %s", blocked)
+				}
+				written, reason, err := s.MarkCleanStop(dir)
+				if err != nil || written {
+					t.Fatalf("MarkCleanStop = %v, %q, %v; want refused", written, reason, err)
+				}
+				if markerExists(t, dir) {
+					t.Error("a failed export left a clean-stop marker")
+				}
+			})
+		}
 	}
 }
 
