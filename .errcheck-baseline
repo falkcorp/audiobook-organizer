@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.9.0
+# version: 1.9.1
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # The number of `errcheck` findings tolerated in the tree. This is a ONE-WAY
 # RATCHET, exactly like .interface-width-baseline: CI fails if the count goes
@@ -90,4 +90,8 @@
 # this script. .golangci.yml now exempts errors.AsType: all 37 of its
 # findings were type tests (`_, ok := errors.AsType[T](err)`, the blank is the
 # matched value), not dropped errors. No discard in the code changed.
-689
+# 2026-11-08 (R1-15 follow-up, review NIT-2): 689 -> 685, written by
+# `scripts/ci/run_gates.py --lower --only errcheck` (this script's linux pin).
+# Measured on R1-15's branch plus this follow-up, whose own changes add and
+# remove no finding; the drop came in with merges that did not lower this file.
+685
