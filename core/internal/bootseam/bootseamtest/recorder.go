@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseamtest/recorder.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6473c7ec-c6f5-4957-863f-62991f66eaa2
 // last-edited: 2026-11-07
 
@@ -15,6 +15,7 @@ package bootseamtest
 import (
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -26,9 +27,10 @@ import (
 // Labels an operation can carry besides a writer-table label.
 const (
 	// LabelPebble is an operation of Pebble's own engine (a table, the
-	// MANIFEST, OPTIONS, a marker, the WAL's creation or recycling) outside
-	// any region: Pebble's crash safety is relied on, not re-proven, and
-	// its operations are kill points only (decision D12).
+	// MANIFEST, OPTIONS, a marker, the WAL's creation or recycling, the
+	// store directory's creation and syncs) outside any region: Pebble's
+	// crash safety is relied on, not re-proven, and its operations are kill
+	// points only (decision D12).
 	LabelPebble = "pebble.engine"
 	// LabelNone is a durable operation outside every region that is not
 	// Pebble's own; a WAL write or sync outside a region is one (an
@@ -46,10 +48,17 @@ type Event struct {
 	// its label, which is deterministic across runs of one boot (Pebble's
 	// background work is not).
 	Ordinal int
+	// Engine is an operation of Pebble's engine, whatever region it ran in:
+	// one of Pebble's own files, or the creation or a sync of a store
+	// directory (Options.Stores), or, outside every region, a sync of one
+	// of its ancestors (Pebble's MkdirAll). Such an operation is a kill
+	// point only (decision D12): Pebble fails a WAL or MANIFEST write
+	// fatally, in goroutines no recover reaches.
+	Engine bool
 }
 
-// Pebble reports an operation on one of Pebble's own files.
-func (e Event) Pebble() bool { return pebbleFile(e.Path) }
+// Pebble reports an operation of Pebble's engine (Engine).
+func (e Event) Pebble() bool { return e.Engine }
 
 // Kill reports a kill point: an operation whose effect a crash can cut
 // (a create, link, remove, rename, mkdir or sync). A write collapses into
@@ -76,6 +85,9 @@ type Options struct {
 	Clones bool
 	// Fail returns the error to inject into ev, nil to let it run.
 	Fail func(ev Event) error
+	// Stores are the absolute paths of the Pebble stores the boot opens: the
+	// creation and syncs of these directories are Pebble's (Event.Engine).
+	Stores []string
 }
 
 // Recorder is one boot's filesystem.
@@ -89,6 +101,7 @@ type Recorder struct {
 	mu       sync.Mutex
 	label    string
 	depth    int
+	frozen   bool
 	events   []Event
 	clones   []Clone
 	ordinals map[string]int
@@ -131,6 +144,16 @@ func (r *Recorder) Enter(label string) func() {
 	}
 }
 
+// Freeze ends the boot's window: operations after it are neither recorded,
+// cloned nor failed. The crash-matrix kit freezes at readiness, the end of
+// 06 §6.5.1's writer table, so the shutdown that follows (the store's close
+// and the WAL sync it makes) is no boot writer's.
+func (r *Recorder) Freeze() {
+	r.mu.Lock()
+	r.frozen = true
+	r.mu.Unlock()
+}
+
 // Events is every durable operation recorded so far.
 func (r *Recorder) Events() []Event {
 	r.mu.Lock()
@@ -155,14 +178,18 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 		return nil
 	}
 	r.mu.Lock()
-	ev := Event{Seq: len(r.events), Kind: op.Kind, Path: op.Path}
+	if r.frozen {
+		r.mu.Unlock()
+		return nil
+	}
+	ev := Event{Seq: len(r.events), Kind: op.Kind, Path: op.Path, Engine: r.engine(op)}
 	switch {
 	case r.depth > 0:
 		ev.Label = r.label
-	case r.pebbleRE.MatchString(filepath.Base(op.Path)) && !walWrite(op):
+	case ev.Engine && !walWrite(op):
 		ev.Label = LabelPebble
 	}
-	if !r.pebbleRE.MatchString(filepath.Base(op.Path)) {
+	if !ev.Engine {
 		ev.Ordinal = r.ordinals[ev.Label]
 		r.ordinals[ev.Label]++
 	}
@@ -176,6 +203,24 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 		return fail(ev)
 	}
 	return nil
+}
+
+// engine reports an operation of Pebble's engine (Event.Engine); r.mu is
+// held.
+func (r *Recorder) engine(op errorfs.Op) bool {
+	if r.pebbleRE.MatchString(filepath.Base(op.Path)) {
+		return true
+	}
+	sync := op.Kind == errorfs.OpFileSync || op.Kind == errorfs.OpFileSyncData || op.Kind == errorfs.OpFileSyncTo
+	for _, store := range r.opts.Stores {
+		switch {
+		case (sync || op.Kind == errorfs.OpMkdirAll) && op.Path == store:
+			return true
+		case sync && r.depth == 0 && strings.HasPrefix(store, strings.TrimSuffix(op.Path, string(filepath.Separator))+string(filepath.Separator)):
+			return true
+		}
+	}
+	return false
 }
 
 // durable reports an operation that changes the filesystem.
@@ -193,8 +238,6 @@ func durable(k errorfs.OpKind) bool {
 func pebbleName() *regexp.Regexp {
 	return regexp.MustCompile(`^(\d+\.(sst|log|blob)|MANIFEST-\d+|OPTIONS-\d+|marker\..+|LOCK|CURRENT|.+\.dbtmp)$`)
 }
-
-func pebbleFile(path string) bool { return pebbleName().MatchString(filepath.Base(path)) }
 
 // walWrite is a write or sync of a WAL file: a batch's commit, which carries
 // the batch's label and is unlabelled outside a region.

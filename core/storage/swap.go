@@ -1,7 +1,7 @@
 // file: core/storage/swap.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 965b855f-5738-408a-b043-7d62a94a43d8
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -108,4 +108,9 @@ const (
 	labelStranded         = "storage.checkpoint.stranded"
 	labelAttemptClear     = "storage.attempt.clear"
 	labelCheckpointReady  = "storage.checkpoint.ready"
+	// labelClose is the store's close: Pebble's last WAL sync. Inside the
+	// kit's window only when a boot that opened the store fails before
+	// readiness (COR-24: nothing is left open); after readiness the kit has
+	// stopped recording.
+	labelClose = "storage.close"
 )
