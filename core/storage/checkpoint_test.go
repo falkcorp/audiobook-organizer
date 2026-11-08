@@ -230,29 +230,88 @@ func TestCheckpointSurvivesCrashLoop(t *testing.T) {
 // TestPartialCheckpointSwept (05-storage §5S.10, DATA3-22): a checkpoint
 // directory without a record, and a <name>.tmp, are swept at boot and never
 // reused; a record without its directory is dropped; the scratch area stays.
+// Only names in the checkpoint grammar (<UTC stamp>-<8 hex>) are touched:
+// anything else in the directory is not the sweep's (review BLOCKER-4).
 func TestPartialCheckpointSwept(t *testing.T) {
 	fs := vfs.NewMem()
 	e := headStore(t, fs, cpOwners()...)
 	dir := cpDir(e)
-	for _, d := range []string{"20260101T000000Z-catwoman", "20260102T000000Z-poison.tmp", "scratch"} {
+	// catwoman's directory has no record; poison's is a partial .tmp.
+	const catwoman, poison = "20260101T000000Z-ca7a0001", "20260102T000000Z-901500aa.tmp"
+	for _, d := range []string{catwoman, poison, "scratch", "batcave"} {
 		if err := fs.MkdirAll(filepath.Join(dir, d, "db"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	f, err := fs.Create(filepath.Join(dir, "20260103T000000Z-twoface.json"), vfs.WriteCategoryUnspecified)
-	if err != nil {
-		t.Fatal(err)
+	// twoface's record has no directory; joker.json is not a record name.
+	for _, n := range []string{"20260103T000000Z-2face002.json", "joker.json"} {
+		f, err := fs.Create(filepath.Join(dir, n), vfs.WriteCategoryUnspecified)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
 	}
-	_ = f.Close()
 	db := e.open()
 	names, _ := fs.List(dir)
 	slices.Sort(names)
-	want := []string{db.CheckpointName(), db.CheckpointName() + ".json", "scratch"}
+	want := []string{db.CheckpointName(), db.CheckpointName() + ".json", "scratch", "batcave", "joker.json"}
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("after the sweep: %v, want %v", names, want)
 	}
-	if strings.Contains(db.CheckpointName(), "catwoman") {
+	if db.CheckpointName() == catwoman {
 		t.Fatal("a record-less checkpoint was reused")
+	}
+}
+
+// TestCheckpointDirIsTheParent (review BLOCKER-4): core.storage.checkpoint_dir
+// names the directory that holds .mediacore-checkpoints/, never the leaf, so
+// setting it to the DB's own parent leaves the live store alone (it used to
+// sweep main.pebble as a record-less checkpoint); and Open refuses, before
+// any write, a checkpoint directory that is relative or overlaps the store.
+func TestCheckpointDirIsTheParent(t *testing.T) {
+	t.Run("db-parent", func(t *testing.T) {
+		fs := vfs.NewMem()
+		e := headStore(t, fs, cpOwners()...)
+		e.opts.CheckpointDir = filepath.Dir(e.path)
+		db := e.open()
+		name := db.CheckpointName()
+		if name == "" {
+			t.Fatal("an upgrade boot took no checkpoint")
+		}
+		if _, err := fs.Stat(filepath.Join(filepath.Dir(e.path), ".mediacore-checkpoints", name+".json")); err != nil {
+			t.Fatalf("the record is not under <checkpoint_dir>/.mediacore-checkpoints: %v", err)
+		}
+		g, _ := db.Legacy("gotham")
+		if v, err := g.Get(context.Background(), []byte("joker:1")); err != nil || string(v) != "ha" {
+			t.Fatalf("the live store after the boot: joker:1 = %q, %v", v, err)
+		}
+	})
+	for _, tc := range []struct {
+		name  string
+		set   func(e *env)
+		match func(error) bool
+	}{
+		{"inside-the-store", func(e *env) { e.opts.CheckpointDir = e.path },
+			func(err error) bool { return errors.Is(err, ErrCheckpointDirOverlap) }},
+		{"holds-the-store", func(e *env) {
+			parent := filepath.Dir(e.path)
+			e.path = filepath.Join(parent, ".mediacore-checkpoints", "main.pebble")
+			e.opts.Path, e.opts.CheckpointDir = e.path, parent
+		}, func(err error) bool { return errors.Is(err, ErrCheckpointDirOverlap) }},
+		{"relative", func(e *env) { e.opts.CheckpointDir = "batcave" },
+			func(err error) bool { return err != nil && strings.Contains(err.Error(), "not absolute") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := vfs.NewMem()
+			e := newEnvFS(t, fs, cpOwners()...)
+			tc.set(e)
+			if _, err := e.tryOpen(); !tc.match(err) {
+				t.Fatalf("Open = %v, want a refusal", err)
+			}
+			if _, err := fs.Stat(e.path); err == nil {
+				t.Fatal("Open created the store before refusing")
+			}
+		})
 	}
 }

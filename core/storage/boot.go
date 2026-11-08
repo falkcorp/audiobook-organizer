@@ -57,7 +57,7 @@ type OpenOptions struct {
 	Build           string        // the binary ID (§5S.3.7 "Binary ID")
 	FromRelease     string        // the predecessor release's tag the build embeds; "" when none (§5S.3.12 "How")
 	StateFiles      []StateFile   // copied into the checkpoint
-	CheckpointDir   string        // core.storage.checkpoint_dir; "" = <db parent>/.mediacore-checkpoints
+	CheckpointDir   string        // core.storage.checkpoint_dir: the directory that holds .mediacore-checkpoints/, absolute; "" = the DB's parent
 	FreeSpaceMargin uint64        // core.storage.checkpoint.free_space_margin; 0 = 2 GiB
 	InstallID       string        // a restore boot's hand-over for a marker-less store; "" = none
 	CacheBytes      int64         // core.storage.cache_bytes; 0 = Pebble's default
@@ -79,6 +79,10 @@ type OpenOptions struct {
 	sameDevice  func(a, b string) (bool, error)
 	chmod       func(path string, dir bool) error
 	hooks       testHooks
+
+	// cpDir is the checkpoint directory itself:
+	// <CheckpointDir or the DB's parent>/.mediacore-checkpoints.
+	cpDir string
 }
 
 const (
@@ -122,9 +126,11 @@ func (o *OpenOptions) defaults() {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
-	if o.CheckpointDir == "" {
-		o.CheckpointDir = filepath.Join(filepath.Dir(o.Path), ".mediacore-checkpoints")
+	parent := o.CheckpointDir
+	if parent == "" {
+		parent = filepath.Dir(o.Path)
 	}
+	o.cpDir = filepath.Join(parent, checkpointLeaf)
 	fs := o.fs
 	if o.freeSpace == nil {
 		o.freeSpace = func(dir string) (uint64, error) {
@@ -235,6 +241,9 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	opts.defaults()
 	if !filepath.IsAbs(opts.Path) {
 		return nil, fmt.Errorf("storage: core.storage.path %q is not absolute", opts.Path)
+	}
+	if err := opts.checkCheckpointDir(); err != nil {
+		return nil, err
 	}
 	owners, claims, refs, err := register(opts.Owners)
 	if err != nil {
