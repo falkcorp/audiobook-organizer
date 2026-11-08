@@ -1,0 +1,3 @@
+- [ ] **R1-23 step 3 follow-up: split `database.Store` per 04 §4.5** Brief step 3 says "`database.Store` splits per 04 §4.5". R1-23 left it whole: its flattened width is still 445 methods (`internal/database/store_width_test.go` `storeMethodBaseline`). R1-23 did narrow two consumers (`store_consumers_test.go` ratchet 28 → 26).
+  - 04 §4.5 assigns the methods to books, the run-row store, and core's `auth`/`rbac` decode types. The split is a re-typing of every consumer that names `database.Store`. Run it as its own `/parallel-sweep` with the `store-width` and `store-references` ratchets as gates.
+  - R1-26 (the alias rename to `internal/books/store`) lists "narrowing `database.Store`" as out of scope, so no row owns this yet.

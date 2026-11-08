@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R1-25-offline-restore-and-reset.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5c692ae4-468d-4905-b950-4341dd0ae790 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # R1-25 — Offline restore and reset: app.OpenOffline and OfflineCommands (storage restore-offline --checkpoint/--archive/--into, storage reset as KindReset), ABO's restore staged through the swap with exit 75, HEAD's two gin reset routes deleted and the SPA's reset control hidden, the updater refusing while a swap is in flight
 
@@ -26,6 +26,7 @@
 - `internal/server/handlers/system/`
 - `internal/server/wire_system_routes.go`
 - `internal/database/pebble_store.go`
+- `internal/database/pebble_store_open.go` (the standalone opener's P0a, step 7; added by R1-23's review)
 - `internal/books/reset_hook.go`
 - `internal/updater/updater.go`
 - `web/src/pages/Settings.tsx`
@@ -94,6 +95,10 @@ single-file bind mount; `storage.ErrRenameRefused`).
 - `TestSwapSlotExclusive` (06 §6.10; it replaces `TestRestoreAndResetBothStaged`, 05-backup §5B.3.4) with the ABO
   stagers: R1-21 lands its core half; this row extends it to ABO's restore stager and `storage reset`.
 - `TestCLISubcommandsUseOfflineOpen` (06 §6.4.6; 05-storage §5S.4).
+- `TestStandaloneOpenerHonoursInflightSwap` (coined by R1-23's review; `todo.d/2026-11-08-r1-23-standalone-opener-pre-boot-swap.md`):
+  with a swap staged in flight (`restore/<id>/inflight.json`), `database.OpenStandalone` completes the swap the way
+  the kernel's P0a does, or refuses with `storage.ErrSwapPending`'s message, before it opens, checkpoints or migrates
+  anything.
 - Also: `TestRestoreOffline` (with a cell for `--accept-loss`: a completed checkpoint and an archive are refused
   without it and restored with it; the flag does not change the open checkpoint's behaviour), `TestRestoreOfflineIntoEmptyPath`,
   `TestFactoryResetUnderClaims`, `TestCheckpointEscapeKeepsOwedHooks` (05-storage §5S.10) and the updater refusal
@@ -157,6 +162,12 @@ grep -n 'os.Exit' internal/backup/*.go internal/updater/updater.go | head   # re
 5. Delete the two gin reset routes, their handlers and `PebbleStore.Reset`; hide the SPA's reset control and remove
    its client call; `internal/books/reset_hook.go`; the updater's swap-slot refusal.
 6. Header bumps; fragment with the release-note lines below. Commits by step; every commit builds.
+7. **The standalone opener's P0a** (R1-23 review S5): `database.OpenStandalone` (`internal/database/pebble_store_open.go`,
+   behind `NewPebbleStore` and `InitializeStore`, so `diagnostics` and `cmd/pid-census`) runs `storage.Open`,
+   `Prepare` and `Migrate` with no P0a, and `storage.Open` does not look for a journaled swap. Once this row stages
+   resets and restores, run the same pre-boot swap there (or refuse, naming the fix: boot the app once) before
+   `storage.Open`, and close `todo.d/2026-11-08-r1-23-standalone-opener-pre-boot-swap.md` (check `TODO.md` too: the
+   fragment may have been assembled already).
 
 ## STOP conditions (data loss)
 
