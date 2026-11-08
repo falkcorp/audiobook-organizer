@@ -1,7 +1,7 @@
 // file: internal/activity/user_data_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
-// last-edited: 2026-10-27
+// last-edited: 2026-11-07
 
 package activity
 
@@ -63,6 +63,7 @@ func TestNamesOthersUserData_AccountAuditTypes(t *testing.T) {
 		TypeAuthEmailDisplaced, TypeUserMerge,
 		TypeGuestServiceTokenPrefix + "minted", TypeGuestServiceTokenPrefix + "mint_failed",
 		TypeGuestServiceTokenPrefix + "revoked", TypeGuestServiceTokenPrefix + "revoke_failed",
+		TypeGuestServiceTokenPrefix + "reissued", TypeGuestServiceTokenPrefix + "reissue_failed",
 	} {
 		e := database.ActivityEntry{Type: typ, Tier: "audit", Source: "invite", Summary: "a thing happened to somebody"}
 		assert.True(t, NamesOthersUserData(e), typ)

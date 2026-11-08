@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -554,6 +554,7 @@ func TestGuestToken_AdminListJoinsOnlyOurTokens(t *testing.T) {
 		{ID: "90a520fb-0000-4000-8000-000000000000", Name: "owner-phone", LastSeenAt: &seen},
 	}
 	views, note, err := f.srv.guestTokenViews(context.Background())
+	views = withoutFirstKeyRows(views) // active users with no record are listed too (owner decision 2026-11-07)
 	if err != nil || note != "" || len(views) != 1 {
 		t.Fatalf("views = %+v note=%q err=%v", views, note, err)
 	}
@@ -570,9 +571,22 @@ func TestGuestToken_AdminListJoinsOnlyOurTokens(t *testing.T) {
 	// Cloudflare unavailable: the list still renders, with a reason.
 	f.api.listErr = &cfservicetoken.APIError{Status: 403}
 	views, note, err = f.srv.guestTokenViews(context.Background())
+	views = withoutFirstKeyRows(views)
 	if err != nil || len(views) != 1 || views[0].LastSeenAt != nil || !strings.Contains(note, "Service Tokens") {
 		t.Fatalf("views=%+v note=%q err=%v", views, note, err)
 	}
+}
+
+// withoutFirstKeyRows drops the rows for users with no key record, which the
+// panel lists so an admin can issue them a first key.
+func withoutFirstKeyRows(views []guestTokenView) []guestTokenView {
+	var out []guestTokenView
+	for _, v := range views {
+		if v.Status != guestTokenStatusNone {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func TestGuestToken_AdminRoutesNeedAnAdmin(t *testing.T) {
@@ -581,6 +595,7 @@ func TestGuestToken_AdminRoutesNeedAnAdmin(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens"},
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens/plan"},
 		{http.MethodPost, "/api/v1/admin/guest-service-tokens/U1/revoke"},
+		{http.MethodPost, "/api/v1/admin/guest-service-tokens/U1/reissue"},
 	} {
 		w := httptest.NewRecorder()
 		f.srv.router.ServeHTTP(w, httptest.NewRequest(c.method, c.path, nil))
@@ -605,6 +620,7 @@ func TestGuestToken_AdminRoutesRefuseNonAdminSessionAndAdminAPIKey(t *testing.T)
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens"},
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens/plan"},
 		{http.MethodPost, "/api/v1/admin/guest-service-tokens/" + g.targetID + "/revoke"},
+		{http.MethodPost, "/api/v1/admin/guest-service-tokens/" + g.targetID + "/reissue"},
 	}
 	for _, r := range routes {
 		t.Run("non-admin session "+r.method+" "+r.path, func(t *testing.T) {
@@ -620,6 +636,10 @@ func TestGuestToken_AdminRoutesRefuseNonAdminSessionAndAdminAPIKey(t *testing.T)
 	// The admin's own sign-in is let through (no record for this user: 404).
 	assert.Equal(t, http.StatusOK, g.do(t, g.sessionToken, http.MethodGet, routes[0].path, nil).Code)
 	assert.Equal(t, http.StatusNotFound, g.do(t, g.sessionToken, http.MethodPost, routes[2].path, nil).Code)
+	// The reissue route reaches its handler for the admin's own sign-in; this
+	// fixture has no phone-app keys switched on, so it refuses (409) before
+	// touching anything.
+	assert.Equal(t, http.StatusConflict, g.do(t, g.sessionToken, http.MethodPost, routes[3].path, nil).Code)
 }
 
 // Once an owner is set the plan and the revoke need the owner, not just any admin.
@@ -632,6 +652,7 @@ func TestGuestToken_PlanAndRevokeNeedTheOwnerWhenOneIsSet(t *testing.T) {
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens/plan"},
 		{http.MethodPost, "/api/v1/admin/guest-service-tokens/" + g.targetID + "/revoke"},
+		{http.MethodPost, "/api/v1/admin/guest-service-tokens/" + g.targetID + "/reissue"},
 	} {
 		w := g.do(t, g.sessionToken, r.method, r.path, nil)
 		assert.Equal(t, http.StatusForbidden, w.Code, "%s %s: %s", r.method, r.path, w.Body.String())
