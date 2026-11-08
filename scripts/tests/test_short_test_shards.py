@@ -1,7 +1,7 @@
 # file: scripts/tests/test_short_test_shards.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: e4a7c1b9-58d2-4f36-a0c3-2d9b6f8e1a74
-# last-edited: 2026-11-06
+# last-edited: 2026-11-08
 """Tests for scripts/ci/short_test_shards.py: plan completeness, determinism, merge.
 
 The shard plan is what decides whether a test gates a PR at all: a name that
@@ -17,6 +17,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -338,6 +339,29 @@ class CoreShardTest(unittest.TestCase):
         self.assertEqual(seen[0][:4], ["go", "-C", "core", "test"])
         self.assertFalse(any(a.startswith("-cover") for a in seen[0]))
         self.assertIn(f"{CORE_MOD}/auth", seen[0])
+
+    def test_go_test_output_with_raw_bytes_is_decoded_not_raised(self) -> None:
+        child = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\x1f\\x8b\\xff end')"]
+        res = subprocess.run(child, **sts.GO_TEST_IO)
+        self.assertIn("ok", res.stdout)
+        self.assertIn("end", res.stdout)
+        self.assertIn("\ufffd", res.stdout)
+
+    def test_shard_run_captures_go_test_with_the_replacing_decoder(self) -> None:
+        bins, _ = both_plan()
+        seen: list[dict[str, object]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            seen.append(kwargs)
+            return mock.Mock(returncode=0, stdout="ok\n", stderr="")
+
+        with contextlib.ExitStack() as stack:
+            d = stack.enter_context(tempfile.TemporaryDirectory())
+            stack.enter_context(mock.patch.object(sts.subprocess, "run", fake_run))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            sts.run_shard(bins[4], ["-short"], os.path.join(d, "c.out"))
+        self.assertTrue(seen)
+        self.assertTrue(all(k.get("errors") == "replace" for k in seen), seen)
 
     def test_core_packages_are_listed_from_the_core_directory(self) -> None:
         # `go test -list` of a core package from the root fails on the root's
