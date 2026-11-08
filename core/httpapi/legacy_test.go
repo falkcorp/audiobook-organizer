@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e2bad0d9-b859-4674-9232-a674448cef1f
 // last-edited: 2026-11-07
 
@@ -572,10 +572,12 @@ func TestDispatch_SPASharedGetServesShell(t *testing.T) {
 }
 
 // fallbackRouter is a ServesSPA mount for owner "gcpd" claiming /files/ and
-// /login/, the shape of the reviewer's B1 probes.
-func fallbackRouter(t *testing.T, g http.Handler, shared []string, routes ...LegacyRoute) http.Handler {
+// /login/, the shape of the reviewer's B1 probes; observe, when non-nil, is
+// stage 2's route observer.
+func fallbackRouter(t *testing.T, g http.Handler, shared []string, observe func(string), routes ...LegacyRoute) http.Handler {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
+	r.observe = observe
 	for _, c := range []string{"/files/", "/login/"} {
 		if err := r.Claim("gcpd", c); err != nil {
 			t.Fatal(err)
@@ -594,7 +596,8 @@ func fallbackRouter(t *testing.T, g http.Handler, shared []string, routes ...Leg
 // and "/" only (05-http-api §8.2), so the post-match check refuses it.
 func TestFallback_UncleanPathNeverRunsALegacyRoute(t *testing.T) {
 	g := newFakeGin("GET /files/:id", "GET /")
-	h := fallbackRouter(t, g, nil, gothamRoute(http.MethodGet, "/files/:id"))
+	var routes []string
+	h := fallbackRouter(t, g, nil, func(route string) { routes = append(routes, route) }, gothamRoute(http.MethodGet, "/files/:id"))
 	for _, p := range []string{"/files/..", "/files/."} {
 		rec := serve(h, http.MethodGet, p, "")
 		if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound {
@@ -611,6 +614,21 @@ func TestFallback_UncleanPathNeverRunsALegacyRoute(t *testing.T) {
 	if rec := serve(h, http.MethodGet, "/library/../shelf", ""); rec.Code != http.StatusTeapot {
 		t.Errorf("GET /library/../shelf = %d %q, want the legacy router's NoRoute", rec.Code, rec.Body.String())
 	}
+	// The "/" owner's answers record no http.route (05-http-api §4.2 stage
+	// 2); a manifest route records its mux pattern.
+	for i, r := range routes {
+		if r != "" {
+			t.Errorf("fallback request %d recorded route %q, want none", i, r)
+		}
+	}
+	if len(routes) != 4 {
+		t.Fatalf("observed %d requests, want 4", len(routes))
+	}
+	routes = nil
+	if rec := serve(h, http.MethodGet, "/files/penguin", ""); rec.Code != http.StatusOK || !slices.Equal(routes, []string{"/files/{id}"}) {
+		t.Errorf("GET /files/penguin = %d, routes %q, want the mux pattern", rec.Code, routes)
+	}
+	g.took()
 }
 
 // TestFallback_EncodedSlashOnSPASharedNeverRunsALegacyRoute: the mux sees
@@ -619,7 +637,7 @@ func TestFallback_UncleanPathNeverRunsALegacyRoute(t *testing.T) {
 // would run GET /login/:a/:b. The post-match check refuses it.
 func TestFallback_EncodedSlashOnSPASharedNeverRunsALegacyRoute(t *testing.T) {
 	g := newFakeGin("GET /login/:a/:b", "POST /login")
-	h := fallbackRouter(t, g, []string{"login"}, gothamRoute(http.MethodGet, "/login/:a/:b"),
+	h := fallbackRouter(t, g, []string{"login"}, nil, gothamRoute(http.MethodGet, "/login/:a/:b"),
 		LegacyRoute{Method: http.MethodPost, GinPath: "/login", Perm: rbac.Public, Public: true})
 	rec := serve(h, http.MethodGet, "/login/x%2Fy", "")
 	if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound {

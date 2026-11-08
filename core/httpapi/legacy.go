@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
 // last-edited: 2026-11-07
 
@@ -523,7 +523,9 @@ func (r *Router) rootHandler() http.Handler {
 	if h == nil || owner == "core" {
 		return h
 	}
-	return legacyHandler("", "/", []ginRoute{{method: http.MethodGet, path: "/"}, {method: http.MethodHead, path: "/"}}, h)
+	// Path "": the "/" owner's pages record no http.route (05-http-api §4.2
+	// stage 2), and the carrier reads "" back as none.
+	return legacyHandler("", "", []ginRoute{{method: http.MethodGet, path: "/"}, {method: http.MethodHead, path: "/"}}, h)
 }
 
 // nativeNodes are the routes Build registered itself, as graph nodes.
