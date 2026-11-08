@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.5
+// version: 1.0.7
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -101,7 +102,7 @@ func r1Values(cfg server.ServerConfig, c config.Config) app.R1Values {
 		TLSCertFile:    cfg.TLSCertFile,
 		TLSKeyFile:     cfg.TLSKeyFile,
 		PeerAllowlist:  splitList(c.AllowedPeerCIDRs),
-		TrustedProxies: splitList(c.TunnelConnectorAddrs),
+		TrustedProxies: connectorAddrs(c.TunnelConnectorAddrs),
 		// The connectors set CF-Connecting-IP (client_trust.go).
 		ClientIPHeader: "CF-Connecting-IP",
 		// HEAD's rule: enable_rate_limit is the switch and a positive
@@ -111,6 +112,24 @@ func r1Values(cfg server.ServerConfig, c config.Config) app.R1Values {
 		JSONMaxBytes:       int64(c.JSONBodyLimitMB) << 20,
 		UploadMaxBytes:     int64(c.UploadBodyLimitMB) << 20,
 	}
+}
+
+// connectorAddrs is TUNNEL_CONNECTOR_ADDRS under HEAD's rule
+// (client_trust.go parseConnectorPeers): a connector is trusted by its exact
+// address, so an entry that is not one, a CIDR range included, is dropped.
+// Core's stage 0 accepts prefixes as trusted proxies; passing a range through
+// would trust every host in it to name the client. The warning for a dropped
+// entry is client_trust.go's reportConnectorRejects, which parses the same
+// setting with the same netip.ParseAddr rule; a second one here would show
+// the operator every warning twice.
+func connectorAddrs(csv string) []string {
+	var out []string
+	for _, e := range splitList(csv) {
+		if _, err := netip.ParseAddr(e); err == nil {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // splitList splits a comma-separated setting into its trimmed, non-empty

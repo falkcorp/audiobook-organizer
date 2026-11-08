@@ -1,5 +1,5 @@
 // file: internal/books/perimeter_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 7c2f9a14-3e8b-4d06-b5a1-9f4e2c8d6b37
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package books
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,6 +51,18 @@ func TestR1Values_PerimeterKeys(t *testing.T) {
 	if v.ClientIPHeader != "CF-Connecting-IP" || len(v.PeerAllowlist) != 2 || v.PeerAllowlist[1] != "198.51.100.7" ||
 		len(v.TrustedProxies) != 1 || v.JSONMaxBytes != 2<<20 || v.UploadMaxBytes != 50<<20 {
 		t.Fatalf("r1Values = %+v", v)
+	}
+}
+
+// TestR1Values_TunnelConnectorsAddressOnly: HEAD trusted a connector by its
+// exact address and ignored anything else (client_trust.go warns about it).
+// A CIDR is dropped too, because core's stage 0 would trust the whole range.
+func TestR1Values_TunnelConnectorsAddressOnly(t *testing.T) {
+	v := r1Values(server.ServerConfig{Host: "127.0.0.1", Port: "8484"}, config.Config{
+		TunnelConnectorAddrs: "192.0.2.10, 198.51.100.0/24, fe80::5%eth0, arkham-asylum, 2001:db8::/32, 203.0.113.53",
+	})
+	if want := []string{"192.0.2.10", "fe80::5%eth0", "203.0.113.53"}; !slices.Equal(v.TrustedProxies, want) {
+		t.Fatalf("TrustedProxies = %v, want %v", v.TrustedProxies, want)
 	}
 }
 
