@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-08
 
@@ -52,8 +52,24 @@ func TestBootCrashMatrixCoversEveryWriter(t *testing.T) {
 			observed[l] = true
 		}
 	}
-	for _, r := range crashmatrix.Uncovered(crashmatrix.Rows(), observed) {
-		t.Errorf("writer-table row %s %q: no fixture reaches any of %v", r.Phase, r.Writer, r.Labels)
+	missing, stale := crashmatrix.Unobserved(crashmatrix.Rows(), observed, unreachedLabels())
+	for _, l := range missing {
+		t.Errorf("label %s: no fixture's fault-free boot reaches it, so the matrix never breaks that writer", l)
+	}
+	for _, l := range stale {
+		t.Errorf("allowlist entry %s: a fixture reaches it, or no writer-table row lists it; drop it", l)
+	}
+}
+
+// unreachedLabels are the writer-table labels no hello fixture can reach,
+// each with the reason (R1-21 review M4).
+func unreachedLabels() map[string]string {
+	return map[string]string{
+		// storage/levels.go: the rollback rewrites the sidecars from the
+		// committed stamps only after a level step's sidecar write fails
+		// (a stamp commit's failure is fatal in Pebble). The level-step
+		// scenario's error runs at storage.levelstep.sidecars run it.
+		"storage.levelstep.rollback": "runs only after a level step's sidecar write fails",
 	}
 }
 
@@ -88,12 +104,18 @@ func crashScenarios(t *testing.T) []namedScenario {
 		restore(t, "restore-revert", restorejournal.KindRevert, false, withTag("staged")),
 		restore(t, "restore-checkpoint", restorejournal.KindCheckpoint, false, withTag("staged")),
 		restore(t, "restore-bad-level", restorejournal.KindArchive, false, levelVariant()),
+		restore(t, "restore-bad-level-location", restorejournal.KindArchive, true, levelVariant()),
+		unjournaled(t),
+		slotBothNames(t),
 		reset(t, restorejournal.ResetStore),
 		reset(t, restorejournal.ResetFactory),
 		rejected(t, "intent-stale", func(in *restorejournal.Intent) {
 			in.RequestedAt, in.ExpiresAt = crashmatrix.Now().Add(-2*time.Hour), crashmatrix.Now().Add(-time.Hour)
 		}),
 		rejected(t, "intent-foreign", func(in *restorejournal.Intent) { in.StagedByBuild = "joker-build" }),
+		undecodable(t),
+		checkpointReused(t),
+		attemptStranded(t),
 	}
 	dag := refused(restore(t, "restore-checkpoint-dag-fails", restorejournal.KindCheckpoint, false, withTag("poisoned")))
 	return []namedScenario{
@@ -333,6 +355,63 @@ func (p otherDevice) ItemDev(path string) (uint64, error) {
 func (p otherDevice) DirDev(path string) (uint64, error) {
 	dev, err := p.Probe.DirDev(path)
 	return p.shift(path, dev, err)
+}
+
+// unjournaled is a staged restore whose staged record a kill between
+// Stage's create and its record lost: pending.json beside an empty journal
+// directory, so P0a writes the record first (swap.journal.staged).
+func unjournaled(t *testing.T) crashmatrix.Fixture {
+	f := restore(t, "intent-unjournaled", restorejournal.KindArchive, false, withTag("staged"))
+	journal := filepath.Join(restorejournal.JournalDir(f.StateDir, "r-intent-unjournaled"), restorejournal.JournalName)
+	f.Mutate = func(mem *vfs.MemFS) (*vfs.MemFS, error) { return mem, mem.Remove(journal) }
+	return f
+}
+
+// slotBothNames is a restore killed inside its in-flight rename, after the
+// journal directory's sync and before the slot directory's: pending.json
+// and inflight.json both name the intent, and the next P0a removes the
+// former (swap.slot.cleanup).
+func slotBothNames(t *testing.T) crashmatrix.Fixture {
+	f := restore(t, "slot-both-names", restorejournal.KindArchive, false, withTag("staged"))
+	// The rename, the journal directory's sync, the slot directory's sync.
+	f.Mutate = crashmatrix.KillAt(t, f, build(hello.New()), "swap.slot.inflight", 2)
+	return f
+}
+
+// undecodable is a live store and a pending.json that is no intent: P0a
+// moves it to restore/rejected-<time>.json and boots plain
+// (swap.slot.invalid).
+func undecodable(t *testing.T) crashmatrix.Fixture {
+	f := crashmatrix.Fixture{Name: "intent-undecodable", StateDir: t.TempDir()}
+	boot(t, f, withTag("live"))
+	pending := restorejournal.PendingPath(f.StateDir)
+	if err := os.MkdirAll(filepath.Dir(pending), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pending, []byte(`{"id": "r-riddler", "kind": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// checkpointReused is upgradePendingStep after a boot killed before hello's
+// step committed: its checkpoint is open, so the next boot reuses it
+// instead of taking another (storage.checkpoint.reuse, a crash loop).
+func checkpointReused(t *testing.T) crashmatrix.Fixture {
+	f := upgradePendingStep(t)
+	f.Name = "checkpoint-reused"
+	f.Mutate = crashmatrix.KillAt(t, f, build(hello.New()), "storage.step.batch", 0)
+	return f
+}
+
+// attemptStranded is upgradePendingStep after a boot killed past step 9's
+// batch and before its checkpoint was completed: the next boot completes
+// the stranded attempt first (storage.checkpoint.stranded).
+func attemptStranded(t *testing.T) crashmatrix.Fixture {
+	f := upgradePendingStep(t)
+	f.Name = "attempt-stranded"
+	f.Mutate = crashmatrix.KillAt(t, f, build(hello.New()), "storage.checkpoint.complete", 0)
+	return f
 }
 
 // rejected is a restore intent P0a must reject (step a), edited by edit.

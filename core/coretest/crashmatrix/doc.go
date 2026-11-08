@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/doc.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 144093b3-6f51-4e66-92f8-51a3933e7804
 // last-edited: 2026-11-08
 
@@ -33,6 +33,22 @@
 // kit also compares the real directories the fixture names with what they
 // held before, so a writer that bypassed the boot filesystem and wrote to
 // the real disk fails too (COR10-7).
+//
+// Only the operations of a fixture's fault-free boot are broken, so a label
+// no fixture's fault-free boot reaches is a writer the matrix never faults;
+// Unobserved names every such label (TestBootCrashMatrixCoversEveryWriter),
+// and an app lists the ones it cannot reach with the reason. Fixture.Mutate
+// and KillAt make the starting states staging cannot, such as a boot killed
+// part way. Two limits remain (R1-21 review M4, m9):
+//
+//   - A writer added inside an existing labelled region takes that region's
+//     label: its operations are broken like the region's own, but no check
+//     sees that it has no row. Give every new writer its own region.
+//   - The Recorder holds one current label per boot, not per goroutine, and
+//     the outer region's label wins. A boot that runs two labelled writers
+//     at once gives both writers' operations the label of the region opened
+//     first; boot writers must stay sequential until the labeller is made
+//     per goroutine.
 //
 // The kit boots through Injector.New, which is app.New with the boot's
 // filesystem, binary ID, clock and labeller wired in through internal/
