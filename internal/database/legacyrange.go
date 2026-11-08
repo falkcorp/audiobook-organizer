@@ -1,16 +1,19 @@
 // file: internal/database/legacyrange.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 4c7e1a92-6b3d-4f05-9e28-d1a5b7c3f604
 // last-edited: 2026-11-08
 
 package database
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -34,6 +37,14 @@ import (
 //   - Not found is pebble.ErrNotFound, bare, because call sites compare with
 //     ==; a store core has closed is errStoreClosing (it wraps
 //     pebble.ErrClosed) so the registry's log-and-skip paths keep working.
+//   - A DeleteRange is split into the pieces books' claims cover
+//     (stageClaimedDeleteRange): core refuses a legacy DeleteRange that runs
+//     into a key no claim holds, and HEAD's ranges ([ident:, ident;), Reset's
+//     whole keyspace) span gaps between registered families and the
+//     reserved c/ and m/. A gap holds no key: books cannot write one under
+//     strict claims, and the first core boot refuses a store with a key no
+//     claim holds (ErrForeignKeys). So the split deletes exactly what the
+//     whole range would, and never touches core's keyspaces.
 //   - Durability is the caller's: pebble's nil and Sync write options commit
 //     storage.Sync, NoSync commits storage.NoSync (pebble.WriteOptions.GetSync).
 //   - A Get returns a copy and holds no engine lease past the call; its
@@ -45,9 +56,9 @@ import (
 //     estimates, the collector's sample) goes through core's storage.Admin,
 //     which the opener hands over with setStorageAdmin; until it does, those
 //     calls fail with errStorageAdminUnset rather than reaching an engine
-//     books does not own. Pebble's SSTables have no core equivalent: the
-//     estimated census needs them and stays a raw-backend feature until the
-//     census mechanism moves into core (todo.d).
+//     books does not own. The estimated census lists sstables through
+//     storage.Admin.Tables (GatedDB.tables); Pebble's own SSTables listing is
+//     raw-backend only.
 
 // storageAdmin is the part of storage.Admin the core backend uses.
 type storageAdmin interface {
@@ -57,6 +68,7 @@ type storageAdmin interface {
 	EngineSample() (storage.EngineSample, error)
 	EstimateDiskUsage(start, end []byte) (uint64, error)
 	Flush(ctx context.Context) error
+	Tables(ctx context.Context, o storage.TablesOptions) ([]storage.TableInfo, error)
 }
 
 var _ storageAdmin = (*storage.Admin)(nil)
@@ -72,9 +84,25 @@ var errNoSSTables = errors.New("pebble store: sstable listings are not available
 type legacyBackend struct {
 	r     storage.LegacyRange
 	admin atomic.Pointer[storageAdmin]
+	// commits counts the non-empty writes committed through this handle:
+	// the store-wide "did anything get written" signal tests read where the
+	// raw backend has pebble's WAL byte counter.
+	commits atomic.Uint64
 	// closeStore closes what the opener opened (the standalone opener owns
 	// its core DB); nil when the kernel owns the store and closes it itself.
 	closeStore func() error
+}
+
+// CommittedWrites is how many non-empty writes this store and every store
+// sharing its engine (activity, embedding, AI scan) have committed through
+// books' claims since it was built. Books' Register reads it to prove its
+// constructor commits none (05-storage §5S.4 step 12,
+// TestBooksConstructorWritesNothing); 0 on a store on the raw engine.
+func (p *PebbleStore) CommittedWrites() uint64 {
+	if p.db == nil || p.db.lr == nil {
+		return 0
+	}
+	return p.db.lr.commits.Load()
 }
 
 // newLegacyGatedDB wraps books' LegacyRange. closeStore is run by the owned
@@ -135,7 +163,14 @@ func (l *legacyBackend) write(o *pebble.WriteOptions, fn func(b *storage.Batch) 
 	if err := fn(b); err != nil {
 		return legacyErr(err)
 	}
-	return legacyErr(b.Commit(context.Background(), durability(o)))
+	n := b.Count()
+	if err := b.Commit(context.Background(), durability(o)); err != nil {
+		return legacyErr(err)
+	}
+	if n > 0 {
+		l.commits.Add(1)
+	}
+	return nil
 }
 
 // scanOptions converts pebble iterator options. Only the bounds have a core
@@ -293,3 +328,87 @@ const (
 	batchOpDelete
 	batchOpDeleteRange
 )
+
+// claimSpan is one piece of the key space books' claims cover: [lo, hi), or
+// the one key lo when single.
+type claimSpan struct {
+	lo, hi []byte
+	single bool
+}
+
+// booksClaimSpans are books' claims as sorted, disjoint spans: a prefix claim
+// is [prefix, prefixUpperBound(prefix)), a key claim the key alone; nested
+// claims (idx:user: inside idx:, setting:config_blob inside setting:) merge
+// into their parent. A function of the build, computed once.
+var booksClaimSpans = sync.OnceValue(func() []claimSpan {
+	var spans []claimSpan
+	for _, c := range BooksClaims() {
+		if c.Key != "" {
+			k := []byte(c.Key)
+			spans = append(spans, claimSpan{lo: k, hi: append(slices.Clone(k), 0), single: true})
+			continue
+		}
+		lo := []byte(c.Prefix)
+		spans = append(spans, claimSpan{lo: lo, hi: prefixUpperBound(lo)})
+	}
+	slices.SortFunc(spans, func(a, b claimSpan) int { return bytes.Compare(a.lo, b.lo) })
+	var out []claimSpan
+	for _, sp := range spans {
+		if n := len(out); n > 0 && bytes.Compare(sp.lo, out[n-1].hi) < 0 {
+			if bytes.Compare(sp.hi, out[n-1].hi) > 0 {
+				out[n-1].hi = sp.hi
+			}
+			out[n-1].single = false
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out
+})
+
+// claimedPieces is [start, end) cut to booksClaimSpans: the pieces of the
+// range a claim covers, in order.
+func claimedPieces(start, end []byte) []claimSpan {
+	var out []claimSpan
+	for _, sp := range booksClaimSpans() {
+		if bytes.Compare(sp.hi, start) <= 0 {
+			continue
+		}
+		if bytes.Compare(sp.lo, end) >= 0 {
+			break
+		}
+		if sp.single {
+			out = append(out, sp)
+			continue
+		}
+		lo, hi := sp.lo, sp.hi
+		if bytes.Compare(start, lo) > 0 {
+			lo = start
+		}
+		if bytes.Compare(end, hi) < 0 {
+			hi = end
+		}
+		out = append(out, claimSpan{lo: lo, hi: hi})
+	}
+	return out
+}
+
+// stageClaimedDeleteRange stages a delete of [start, end) into b as the
+// pieces books' claims cover (see THE CORE BACKEND).
+func stageClaimedDeleteRange(b *storage.Batch, start, end []byte) error {
+	if end == nil || bytes.Compare(start, end) >= 0 {
+		return b.DeleteRange(start, end) // core's own refusal names the bad range
+	}
+	for _, p := range claimedPieces(start, end) {
+		var err error
+		if p.single {
+			err = b.Delete(p.lo)
+		} else {
+			err = b.DeleteRange(p.lo, p.hi)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -1,12 +1,11 @@
 // file: internal/database/migrations.go
-// version: 1.54.4
+// version: 1.54.5
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -469,28 +468,10 @@ var migrations = []Migration{
 	},
 }
 
-// getCurrentVersion retrieves the current schema version
-func getCurrentVersion(store migrationStore) (int, error) {
-	// Try to get version from preferences
-	pref, err := store.GetUserPreference(dbVersionPreferenceKey)
-	if err != nil || pref == nil || pref.Value == nil {
-		// No version found, assume version 0 (fresh database)
-		return 0, nil
-	}
-
-	var version DatabaseVersion
-	if err := json.Unmarshal([]byte(*pref.Value), &version); err != nil {
-		return 0, fmt.Errorf("failed to parse version: %w", err)
-	}
-
-	return version.Version, nil
-}
-
 // setVersion updates the current schema version.
 //
-// Standalone use is limited to advancing past a migration whose record is
-// already durable; the normal path goes through commitMigrationBookkeeping,
-// which writes this key together with the migration record.
+// Only migration065Down uses it (a Down core storage never runs); books'
+// VersionSource writes db_version together with the migration record.
 func setVersion(store migrationStore, version int) error {
 	payload, err := databaseVersionPayload(version)
 	if err != nil {

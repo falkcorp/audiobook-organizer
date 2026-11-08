@@ -1,11 +1,12 @@
 // file: internal/database/migration061_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 13221161-da29-4cdf-b781-6e6506da9552
-// last-edited: 2026-09-11
+// last-edited: 2026-11-08
 
 package database
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,32 +80,28 @@ func TestMigration061FlagsOnlyPlaceholderPaths(t *testing.T) {
 	require.Nil(t, cleanBook.LibraryState, "a clean path must not be flagged")
 }
 
-// TestMigration061RunsThroughRunnerFromProductionVersion reconstructs the
-// production bookkeeping state — schema version 60, every migration up to and
-// including 14 recorded as applied — and proves RunMigrations reaches the
-// repair. This is the case the original wiring would have failed: a body
-// placed inside migration014Up is never invoked once the stored version is
-// past 14, which is why the repair carries version 61.
-func TestMigration061RunsThroughRunnerFromProductionVersion(t *testing.T) {
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
+// TestMigration061RunsAtFirstCoreBootFromProductionVersion reconstructs the
+// production bookkeeping state on a store HEAD left — schema version 60,
+// every migration through 60 recorded, 14 among them — and proves release
+// R1's first boot on core storage reaches the repair as legacy step 61, then
+// runs on to the latest version. A body placed inside migration014Up would
+// never run once the stored version is past 14, which is why the repair
+// carries version 61.
+func TestMigration061RunsAtFirstCoreBootFromProductionVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "production.pebble")
+	store, err := NewPebbleStore(path)
+	require.NoError(t, err)
 	corruptedID, cleanID := seedPlaceholderAndCleanBooks(t, store)
+	require.NoError(t, store.Close())
+	rewindToR0(t, path, 60, 60)
 
-	// Production state before this deploy: 14 (and everything through 60)
-	// already recorded, version counter at 60.
-	for _, m := range migrations {
-		if m.Version <= 60 {
-			require.NoError(t, recordMigration(store, m))
-		}
-	}
-	require.NoError(t, setVersion(store, 60))
-
-	require.NoError(t, RunMigrations(store))
+	store, err = NewPebbleStore(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
 
 	got, err := getCurrentVersion(store)
 	require.NoError(t, err)
-	require.Equal(t, migrations[len(migrations)-1].Version, got, "the runner must advance through the repair migration to the latest")
+	require.Equal(t, LatestMigrationVersion(), got, "the first core boot must run through the repair to the latest version")
 
 	rec, err := store.GetUserPreference(migrationRecordKey(61))
 	require.NoError(t, err)
@@ -112,7 +109,7 @@ func TestMigration061RunsThroughRunnerFromProductionVersion(t *testing.T) {
 
 	corrupted, err := store.GetBookByID(corruptedID)
 	require.NoError(t, err)
-	require.NotNil(t, corrupted.LibraryState, "the runner must have executed the repair")
+	require.NotNil(t, corrupted.LibraryState, "the first core boot must have executed the repair")
 	require.Equal(t, corruptedOrganizePathState, *corrupted.LibraryState)
 
 	cleanBook, err := store.GetBookByID(cleanID)

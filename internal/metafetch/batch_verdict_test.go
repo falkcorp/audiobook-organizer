@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-10-01
+// last-edited: 2026-11-08
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -59,7 +59,6 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	return &verdictFixture{t: t, store: store, mfs: NewService(store)}
 }

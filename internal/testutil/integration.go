@@ -1,7 +1,7 @@
 // file: internal/testutil/integration.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package testutil
 
@@ -69,9 +69,6 @@ func SetupIntegration(t *testing.T) (*IntegrationEnv, func()) {
 	// TestScanService_MultiChapterAudiobook flake (asserted book count of 1,
 	// occasionally observed 0 under load). See PebbleStore.WaitForWarmup doc.
 	store.WaitForWarmup()
-
-	err = database.RunMigrations(store)
-	require.NoError(t, err)
 
 	database.SetGlobalStore(store)
 	// Wire the scanner's package-local store to the test store.

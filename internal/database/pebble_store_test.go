@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.5
+// version: 1.8.6
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -830,7 +830,7 @@ func TestPebbleFormatVersion_UpgradesExisting(t *testing.T) {
 		t.Fatalf("Failed to create old-format DB: %v", err)
 	}
 	oldVersion := db.FormatMajorVersion()
-	if err := db.Set([]byte("test:key"), []byte("value"), pebble.Sync); err != nil {
+	if err := db.Set([]byte("quick_query_cache:test"), []byte("value"), pebble.Sync); err != nil {
 		t.Fatalf("Failed to write test key: %v", err)
 	}
 	db.Close()
@@ -851,7 +851,7 @@ func TestPebbleFormatVersion_UpgradesExisting(t *testing.T) {
 	}
 
 	// Verify data survived the upgrade
-	val, closer, err := store.db.Get([]byte("test:key"))
+	val, closer, err := store.db.Get([]byte("quick_query_cache:test"))
 	if err != nil {
 		t.Fatalf("Data lost after format upgrade: %v", err)
 	}
@@ -1002,16 +1002,16 @@ func TestPebbleUserPreferences(t *testing.T) {
 		t.Fatalf("Failed to get all preferences: %v", err)
 	}
 
-	// Every store carries the storage_format stamp the open writes
-	// (storage_format.go); count only the rows this test set.
+	// Every store carries books' bookkeeping (db_version, migration_<n>),
+	// which a fresh install records; count only the rows this test set.
 	var userSet []UserPreference
 	for _, p := range prefs {
-		if p.Key != storageFormatPreferenceKey {
+		if !IsReservedPreferenceKey(p.Key) {
 			userSet = append(userSet, p)
 		}
 	}
 	if len(userSet) != 1 {
-		t.Errorf("Expected 1 preference besides %s, got %d: %+v", storageFormatPreferenceKey, len(userSet), userSet)
+		t.Errorf("Expected 1 preference besides the reserved bookkeeping, got %d: %+v", len(userSet), userSet)
 	}
 }
 

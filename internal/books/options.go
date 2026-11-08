@@ -1,11 +1,12 @@
 // file: internal/books/options.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
 package books
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,16 +14,21 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // ABO's identity on core (03 §3.6, 05-metrics §2): the app ID, the metric
@@ -35,23 +41,21 @@ const (
 	displayName     = "Audiobook Organizer"
 )
 
-// ServeInputs are the values of serve books needs beyond the store.
+// ServeInputs are the values of serve books needs.
 type ServeInputs struct {
 	// Server is HEAD's listener flags (--host, --port, the timeouts, the TLS
-	// pair, --http3-port, --external-url) and the startup-step runner.
+	// pair, --http3-port, --external-url). Its StartupSteps is the startup
+	// runner; nil = Options makes one. Books runs its steps through it and
+	// hands it to the server, so /health reports every degraded step.
 	Server server.ServerConfig
-	// Telemetry is the config snapshot HEAD's InitOTEL read: taken right
-	// after the store opened, before the stored settings and env overrides
-	// apply, so the OTLP endpoints, interval and environment come from where
-	// they always did.
+	// Telemetry is the config snapshot HEAD's InitOTEL read: before the
+	// stored settings and env overrides apply (books' settings boot, in
+	// Register), so the OTLP endpoints, interval and environment come from
+	// where they always did.
 	Telemetry config.Config
 	// ShutdownBudget is core.shutdown.budget as serve read it from
 	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
 	ShutdownBudget time.Duration
-	// StateDir is the state directory serve resolved (EnsureSecureStateDir):
-	// ABO's log file lives under it (core.log.file.path, 05-logging section
-	// 11 item 1). "" keeps the log on the stream only, with no file.
-	StateDir string
 	// LogOut is the stream the log pipeline prints to, beside the file when
 	// there is one; nil is os.Stdout, where HEAD's lines went.
 	LogOut io.Writer
@@ -61,6 +65,12 @@ type ServeInputs struct {
 // §1.12.1), for mod, the value Module returned:
 //
 //   - ABO's identity and build version;
+//   - the store core opens: R1StoragePath is HEAD's database path, made
+//     absolute (a database_type other than Pebble, or no path, refuses);
+//     StateDir is the secure state directory ABO resolves (EnsureSecureStateDir,
+//     HEAD's resolver, ABK_STATE_DIR and its fallback beside the database),
+//     which core's ResolveStateDir must agree with; StorageStateFiles is the
+//     state-file table the first-boot checkpoint copies (StateFiles);
 //   - R1Values: the listener and perimeter values of the effective config
 //     (stored settings and env overrides applied), which the kernel reads
 //     once at start step 7; ShutdownBudget is ServeInputs.ShutdownBudget
@@ -86,8 +96,45 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		return app.Options{}, err
 	}
 	cfg := in.Server
+	if cfg.StartupSteps == nil {
+		cfg.StartupSteps = newSteps()
+	}
+	m.steps = cfg.StartupSteps
 	m.cfg.Store(&cfg)
-	logCfg, warn := logSettings(config.Snapshot().LogLevel, in.StateDir)
+
+	if err := m.steps.Run("EnsureSecureStateDir", func() error {
+		dir, err := config.EnsureSecureStateDir()
+		if err != nil {
+			return fmt.Errorf("failed to create state directory %q: %w", dir, err)
+		}
+		m.stateDir = dir
+		return nil
+	}); err != nil {
+		return app.Options{}, err
+	}
+	snap := config.Snapshot()
+	if err := database.ValidateDatabaseType(snap.DatabaseType); err != nil {
+		return app.Options{}, err
+	}
+	dbPath, err := storagePath(snap.DatabasePath)
+	if err != nil {
+		return app.Options{}, err
+	}
+	// One state directory per process (OPS4-8): core resolves it again in
+	// New (its explicit ABO_CORE_PATHS_STATE_DIR first, then this default),
+	// and HEAD's key, the checkpoint's state files and core's own state
+	// files must not land in two places.
+	coreDir, err := app.ResolveStateDir(app.Options{AppID: appID, StateDir: m.stateDir})
+	if err != nil {
+		return app.Options{}, err
+	}
+	if filepath.Clean(coreDir) != filepath.Clean(m.stateDir) {
+		return app.Options{}, fmt.Errorf("books: core's state directory %q is not ABO's %q (%s); set one, or set both to the same path",
+			coreDir, m.stateDir, config.SecureStateDirEnv)
+	}
+	// ABO's log file lives under the state directory (core.log.file.path,
+	// 05-logging section 11 item 1).
+	logCfg, warn := logSettings(snap.LogLevel, m.stateDir)
 	if warn != "" {
 		fmt.Fprintln(os.Stderr, "Warning: "+warn)
 	}
@@ -104,9 +151,51 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		Telemetry:             telemetryFromConfig(in.Telemetry),
 		LogOutput:             logStream(in.LogOut),
 		R1Log:                 &logCfg,
-		StateDir:              in.StateDir,
 		ProcessDefaults:       true,
+		StateDir:              m.stateDir,
+		R1StoragePath:         dbPath,
+		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
 	}, nil
+}
+
+// newSteps is the startup runner when serve hands none.
+func newSteps() *startup.Steps {
+	return startup.New().SetErrorLog(logger.New("startup").Error)
+}
+
+// errNoDatabasePath is Options' refusal of an empty database_path: core
+// would open a new, empty store at its own default path, and books would
+// serve an empty library looking healthy.
+var errNoDatabasePath = errors.New("books: database_path is empty; set DATABASE_PATH or --db to the Pebble store")
+
+// storagePath is HEAD's database path as core.storage.path: absolute, as
+// HEAD's open resolved a relative one against the working directory.
+func storagePath(dbPath string) (string, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return "", errNoDatabasePath
+	}
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("books: database_path %q: %w", dbPath, err)
+	}
+	return abs, nil
+}
+
+// StateFiles is ABO's state-file table at R1 (05-config §2.4): the files the
+// pre-migration checkpoint copies beside the store. encryption_key is HEAD's
+// key where InitEncryption would read it (the state directory, else the
+// legacy location bootSettings passes, the database's directory); gap_fill is HEAD's
+// config.yaml beside the database. A file that does not exist is skipped by
+// the checkpoint.
+func StateFiles(stateDir, dbPath string) []storage.StateFile {
+	keyDir := database.FindEncryptionKey(stateDir, filepath.Dir(dbPath))
+	if keyDir == "" {
+		keyDir = stateDir
+	}
+	return []storage.StateFile{
+		{Label: "encryption_key", Path: database.EncryptionKeyPath(keyDir)},
+		{Label: "gap_fill", Path: filepath.Join(filepath.Dir(dbPath), "config.yaml")},
+	}
 }
 
 // r1Values maps serve's flags and the effective config onto R1Values (05-config
@@ -205,14 +294,24 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 }
 
 // Attach binds what needs the App once New has returned, before Run: the
-// legacy client_golang families register on the App's Provider registry,
-// which the gin /metrics route then serves (05-metrics §6, §13 item 2), and
-// the activity feed becomes a tap on the App's log pipeline. A disabled
-// books (no server built) has nothing to attach.
+// store gets core's admin surface (checkpoint, compaction, flush, size
+// estimates, the collector's sample) and becomes the provider throttle
+// registry's process-scoped store; the legacy client_golang families
+// register on the App's Provider registry, which the gin /metrics route then
+// serves (05-metrics §6, §13 item 2), and the activity feed becomes a tap on
+// the App's log pipeline. A disabled books (no store or server built) has
+// nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
 	if err != nil {
 		return err
+	}
+	if store := m.store.Load(); store != nil {
+		store.AttachStorageAdmin(a.StorageAdmin())
+		// Process-scoped, so the throttle registry's store lifetime matches
+		// the process; after the server is built, as before. Deliberately
+		// NOT inside NewServer (see AttachProviderThrottleStore).
+		server.AttachProviderThrottleStore(store)
 	}
 	srv := m.srv.Load()
 	if srv == nil {

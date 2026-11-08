@@ -1,5 +1,7 @@
 // file: internal/database/quarantine_test.go
-// version: 1.1.0
+// version: 1.1.2
+// guid: 17d03189-baf4-4f26-b01a-327526983a01
+// last-edited: 2026-11-08
 
 package database
 
@@ -25,7 +27,6 @@ func TestBookQuarantineFields(t *testing.T) {
 func TestCreateBook_RecordsImportPathHistory(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-	require.NoError(t, RunMigrations(store))
 
 	book, err := store.CreateBook(&Book{
 		Title:    "Dune",

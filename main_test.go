@@ -1,11 +1,12 @@
 // file: main_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c3cc5d7-3d49-4e97-a0c1-9b2e38a9986f
-// last-edited: 2026-10-12
+// last-edited: 2026-11-08
 
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -124,5 +125,59 @@ func TestRunPrintCapabilities(t *testing.T) {
 	}
 	if string(out) != "sd_notify\n" {
 		t.Fatalf("stdout = %q, want %q", out, "sd_notify\n")
+	}
+}
+
+// TestRunPrintStorageLevels (05-storage §5S.3.7; R1-23): `make rollback` and
+// the image probe run a binary with --print-storage-levels and parse stdout
+// as the JSON level vector it serves, so stdout must be exactly that object
+// and cobra must never run. Release R1 raises no level (09 §9.2.2): core and
+// books both serve level 0.
+func TestRunPrintStorageLevels(t *testing.T) {
+	origArgs := os.Args
+	origStdout := os.Stdout
+	origExecute := executeCmd
+	t.Cleanup(func() {
+		os.Args = origArgs
+		os.Stdout = origStdout
+		executeCmd = origExecute
+	})
+
+	executeCmd = func() error {
+		t.Error("executeCmd must not run for --print-storage-levels")
+		return nil
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Args = []string{"audiobook-organizer", "--print-storage-levels"}
+	os.Stdout = w
+
+	code := run()
+
+	os.Stdout = origStdout
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	var levels map[string]int
+	if err := json.Unmarshal(out, &levels); err != nil {
+		t.Fatalf("stdout %q is not a JSON object: %v", out, err)
+	}
+	if len(levels) != 2 || levels["core"] != 0 || levels["books"] != 0 {
+		t.Fatalf("levels = %v, want core and books at 0 (R1 raises no level)", levels)
+	}
+	if _, ok := levels["books"]; !ok {
+		t.Fatalf("levels = %v, want a books entry", levels)
 	}
 }
