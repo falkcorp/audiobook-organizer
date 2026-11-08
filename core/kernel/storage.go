@@ -12,6 +12,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/falkcorp/mediacore/buildid"
 	"github.com/falkcorp/mediacore/metrics"
@@ -198,6 +199,23 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	}
 	checkpoint.Record(ctx, int64(open), metric.WithAttributes(attribute.String("state", "open")))
 	checkpoint.Record(ctx, int64(completed), metric.WithAttributes(attribute.String("state", "completed")))
+	return nil
+}
+
+// markReady is 05-storage §5S.3.12's readiness write, at start step 8: ready_at
+// and status served on every open checkpoint record of the live store, so no
+// later boot reuses a checkpoint that predates what this boot serves. Run
+// calls it before READY=1, so READY=1 implies the write. A failure stops the
+// app: serving on with the record unwritten would let the next upgrade reuse
+// that checkpoint, and a rollback to it would drop every write made
+// meanwhile without asking for --accept-loss.
+func (k *Kernel) markReady(now time.Time) error {
+	if k.store == nil || k.store.db == nil {
+		return nil
+	}
+	if err := k.store.db.MarkReady(now); err != nil {
+		return fmt.Errorf("kernel: storage readiness (ready_at, 05-storage §5S.3.12): %w", err)
+	}
 	return nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 )
@@ -394,4 +395,82 @@ func TestFreshStoreBesideOpenRecordGetsNewInstallID(t *testing.T) {
 	if rec := readRecord(t, e, old); rec.InstallID != oldRec.InstallID || !rec.open() {
 		t.Fatalf("the old store's record changed: %+v", rec)
 	}
+}
+
+// TestSecondUpgradeTakesFreshCheckpoint (05-storage §5S.3.12, DATA3-1;
+// review BLOCKER-1): only a crash loop reuses a checkpoint. A completed
+// attempt's is never reused, and neither is a failed attempt's once a boot
+// has served the store since: the previous binary serves, MarkReady writes
+// ready_at, and the fixed build takes its own checkpoint, so a rollback to
+// it keeps the writes made while rolled back.
+func TestSecondUpgradeTakesFreshCheckpoint(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		e := headStore(t, vfs.NewMem(), cpOwners()...)
+		db := e.open()
+		first := db.CheckpointName()
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readRecord(t, e, first); rec.CompletedAt == nil {
+			t.Fatalf("the first upgrade's record = %+v, want completed", rec)
+		}
+		e.opts.Owners = fixedOwners()
+		db = e.open()
+		if got := db.CheckpointName(); got == "" || got == first {
+			t.Fatalf("the second upgrade used checkpoint %q, want its own (not %q)", got, first)
+		}
+	})
+	t.Run("served", func(t *testing.T) {
+		e := headStore(t, vfs.NewMem(), failingOwners()...)
+		if _, err := e.tryOpen(); err == nil {
+			t.Fatal("the failing upgrade succeeded")
+		}
+		first := readPointer(t, e).Name
+		// The previous binary: no step to run, so no checkpoint; it serves.
+		e.opts.Owners = cpOwners()
+		db := e.open()
+		if db.CheckpointName() != "" {
+			t.Fatalf("the previous binary took checkpoint %q", db.CheckpointName())
+		}
+		ready := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+		if err := db.MarkReady(ready); err != nil {
+			t.Fatal(err)
+		}
+		ks, _ := db.Keyspace("wayne")
+		if err := ks.Set(context.Background(), []byte("robin"), []byte("written-while-rolled-back")); err != nil {
+			t.Fatal(err)
+		}
+		rec := readRecord(t, e, first)
+		if rec.ReadyAt == nil || !rec.ReadyAt.Equal(ready) || rec.Status != "served" || rec.CompletedAt != nil {
+			t.Fatalf("the served record = %+v, want ready_at %s, status served, no completed_at", rec, ready)
+		}
+		if p := readPointer(t, e); p.Name != first || p.State != "open" {
+			t.Fatalf("pointer = %+v, want %s open (served is not a pointer state)", p, first)
+		}
+		// A second call changes nothing.
+		if err := db.MarkReady(ready.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if again := readRecord(t, e, first); !again.ReadyAt.Equal(ready) {
+			t.Fatalf("a second MarkReady moved ready_at to %s", again.ReadyAt)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		e.opts.Owners = fixedOwners()
+		db = e.open()
+		got := db.CheckpointName()
+		if got == "" || got == first {
+			t.Fatalf("the fixed build used checkpoint %q, want its own (not the pre-serving %q)", got, first)
+		}
+		if n := readRecord(t, e, got); n.InstallID != rec.InstallID {
+			t.Fatalf("the new checkpoint's install_id = %q, want %q", n.InstallID, rec.InstallID)
+		}
+		if raw := rawKeys(t, e.fs, filepath.Join(cpDir(e), got, "db"), "m/wayne/robin"); len(raw) != 1 {
+			t.Fatalf("the fixed build's checkpoint lacks the write made while rolled back: %v", raw)
+		}
+		if old := readRecord(t, e, first); old.ReadyAt == nil || old.CompletedAt != nil {
+			t.Fatalf("the served record changed: %+v", old)
+		}
+	})
 }
