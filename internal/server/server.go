@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.11
+// version: 2.114.12
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -1747,11 +1747,31 @@ func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error
 //     deadline (setBodyReadDeadline), and the gzip writer hides the
 //     connection; captureRawResponseController covers that too, so this is
 //     the second of two guards. Its response is a few bytes of JSON.
+//
+// Whether a response is compressed is compresses, which the perimeter shim
+// also applies to the answers core's router writes itself (R1-15 review m5).
 func compressionMiddleware() gin.HandlerFunc {
 	return gzip.Gzip(gzip.DefaultCompression,
-		gzip.WithExcludedPaths([]string{"/api/events", "/metrics", "/api/v1/auth/accept-invite"}),
-		gzip.WithExcludedPathsRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`}),
-	)
+		gzip.WithCustomShouldCompressFn(func(c *gin.Context) bool { return compresses(c.Request) }))
+}
+
+var (
+	compressionExcludedPaths  = gzip.NewExcludedPaths([]string{"/api/events", "/metrics", "/api/v1/auth/accept-invite"})
+	compressionExcludedRegexs = gzip.NewExcludedPathesRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`})
+)
+
+// compresses reports whether compressionMiddleware compresses r's response:
+// gin-contrib/gzip's own default test (the client accepts gzip, the request
+// is no connection upgrade, the path's extension is not an image the library
+// excludes) plus the paths listed on compressionMiddleware.
+func compresses(r *http.Request) bool {
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+		strings.Contains(r.Header.Get("Connection"), "Upgrade") {
+		return false
+	}
+	p := r.URL.Path
+	return !gzip.DefaultExcludedExtentions.Contains(filepath.Ext(p)) &&
+		!compressionExcludedPaths.Contains(p) && !compressionExcludedRegexs.Contains(p)
 }
 
 // registerAll registers every operation the server owns, in the order that

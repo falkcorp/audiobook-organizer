@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"net"
 	"net/http"
@@ -38,7 +39,9 @@ import (
 //     ran, core wrote it, and the shim applies what gin's chain would have:
 //     the Basic gate as for a request gin routed to no route (path
 //     exemptions only, BasicGateRefusesUnrouted), then the security and CORS
-//     headers, and Alt-Svc where HEAD's late NoRoute middleware added it.
+//     headers, the response compression (compresses: gin-contrib/gzip's
+//     handling, R1-15 review m5), and Alt-Svc where HEAD's late NoRoute
+//     middleware added it.
 //
 // R1-17 replaces the shim with core's perimeter stages; the parity test
 // (perimeter_shim_test.go) pins what it must keep.
@@ -71,7 +74,9 @@ func (s *Server) perimeterShim(next http.Handler, altSvc string) http.Handler {
 		}
 		st := &perimeterState{}
 		r = r.WithContext(context.WithValue(r.Context(), perimeterKey{}, st))
-		next.ServeHTTP(&perimeterWriter{ResponseWriter: w, r: r, st: st, altSvc: altSvc}, r)
+		pw := &perimeterWriter{ResponseWriter: w, r: r, st: st, altSvc: altSvc}
+		next.ServeHTTP(pw, r)
+		pw.finish()
 	})
 }
 
@@ -85,6 +90,10 @@ type perimeterWriter struct {
 	altSvc  string
 	decided bool
 	refused bool
+	// gz compresses a core-written answer below 400 for a client that
+	// accepts gzip; wrote says a body byte went through it.
+	gz    *gzip.Writer
+	wrote bool
 }
 
 func (w *perimeterWriter) decide(status int) {
@@ -108,12 +117,50 @@ func (w *perimeterWriter) decide(status int) {
 	}
 	setSecurityHeaders(h, w.r)
 	setCORSHeaders(h, w.r)
+	w.compress(status)
 	// HEAD's Alt-Svc middleware was added to the engine at listen time, so it
 	// sat in the NoRoute chain after the /api redirect middleware: every
 	// unrouted answer carried it except that 301.
 	if w.altSvc != "" && status != http.StatusMovedPermanently {
 		h.Set("Alt-Svc", w.altSvc)
 	}
+}
+
+// compress applies what HEAD's compressionMiddleware, which ran after the
+// Basic gate and before any route or NoRoute handler, did to a response it
+// compressed (gin-contrib/gzip v1.2.9). An error status gets no compression
+// and loses Vary, Content-Encoding and ETag outright, so a same-origin 404
+// carried no Vary: Origin either. Anything below 400 (core's /api redirect)
+// is gzipped, with Content-Encoding: gzip and Vary: Accept-Encoding after
+// CORS's Vary.
+func (w *perimeterWriter) compress(status int) {
+	if !compresses(w.r) {
+		return
+	}
+	h := w.ResponseWriter.Header()
+	if status >= http.StatusBadRequest {
+		h.Del("Content-Encoding")
+		h.Del("Vary")
+		h.Del("ETag")
+		return
+	}
+	h.Set("Content-Encoding", "gzip")
+	h.Add("Vary", "Accept-Encoding")
+	h.Del("Content-Length")
+	w.gz = gzip.NewWriter(w.ResponseWriter)
+}
+
+// finish ends a compressed answer once core's handler has returned: the gzip
+// footer goes out after a body, and nothing at all when there was none (a
+// HEAD request), as gin-contrib/gzip does.
+func (w *perimeterWriter) finish() {
+	if w.gz == nil {
+		return
+	}
+	if w.wrote {
+		_ = w.gz.Close()
+	}
+	w.gz = nil
 }
 
 func (w *perimeterWriter) WriteHeader(status int) {
@@ -129,6 +176,12 @@ func (w *perimeterWriter) Write(b []byte) (int, error) {
 	if w.refused {
 		return len(b), nil
 	}
+	if w.gz != nil {
+		if len(b) > 0 {
+			w.wrote = true
+		}
+		return w.gz.Write(b)
+	}
 	return w.ResponseWriter.Write(b)
 }
 
@@ -138,6 +191,9 @@ func (w *perimeterWriter) Flush() {
 	w.decide(http.StatusOK)
 	if w.refused {
 		return
+	}
+	if w.gz != nil {
+		_ = w.gz.Flush()
 	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()

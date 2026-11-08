@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -90,6 +90,13 @@ type composed struct {
 // process defaults back and closes the store.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
+	return bootComposedWith(t, abs, edit, pre, nil)
+}
+
+// bootComposedWith is bootComposed with opt, when set, adjusting the App's
+// options after books.Options builds them and before app.New.
+func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dir := tempDir(t)
 	c := config.Config{
@@ -130,6 +137,9 @@ func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*d
 	cfg.Host, cfg.Port = "127.0.0.1", "0"
 	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot()})
 	require.NoError(t, err)
+	if opt != nil {
+		opt(&opts)
+	}
 	a, err := app.New(t.Context(), opts, mod)
 	t.Cleanup(func() { Release(mod) })
 	require.NoError(t, err)
