@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -337,14 +337,23 @@ func (s *Swapper) continueSwapBack(ctx context.Context, in restorejournal.Intent
 		}
 	}
 	// x5: the sidecars from the original stamps. A host with no previous
-	// store has no original to describe.
+	// store has no original to describe. x5 never fails x (R1-21 review
+	// M2): x4 already moved the original's own sidecars back with it, set
+	// aside by step c, so when the original cannot be opened or read (an
+	// empty directory, a corrupt MANIFEST: a broken store is a main reason
+	// to restore) or its sidecars cannot be rewritten, those stand. The
+	// error is logged and recorded in swapped_back's note, and the boot
+	// after x meets the original as it was, never a P0a that halts in x5
+	// on every boot.
 	if ok, err := exists(s.fs, in.DBPath); err != nil {
 		return err
 	} else if ok {
 		if err := bootseam.Labelled(seams, "swap.back.sidecars", func() error {
 			return storage.RewriteSidecars(ctx, s.fs, in.DBPath, s.o.Owners)
 		}); err != nil {
-			return fmt.Errorf("restoreswap: step x of %s: sidecars of the original store: %w", id, err)
+			s.o.Logger.Error("restoreswap: step x could not rewrite the original store's sidecars; they stand as set aside",
+				"id", id, "path", in.DBPath, "err", err)
+			reason += fmt.Sprintf("; the original store's sidecars stand as set aside (step x could not rewrite them: %v)", err)
 		}
 	}
 	// x6: the journal, then the in-flight file.
