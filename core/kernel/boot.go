@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -172,6 +172,11 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		metric.WithDescription("Duration of each boot phase of the last boot, set once per boot (06 §6.9).")); err != nil {
 		return fmt.Errorf("kernel: boot phase gauge: %w", err)
 	}
+	if k.logging != nil {
+		if k.logScope, err = registerLogMetrics(p, k.logging); err != nil {
+			return err
+		}
+	}
 	httpScope, err := p.Core("http")
 	if err != nil {
 		return fmt.Errorf("kernel: http metrics scope: %w", err)
@@ -187,12 +192,17 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	return nil
 }
 
-// buildLogging builds the App's log.Logging from core.log's defaults, or
-// adopts Config.Logger. Until config lands (F3) no layer can set core.log,
-// so the defaults (text, info, stderr) are the effective values, and the
-// file output, which needs core.paths.state_dir, cannot be selected yet.
+// buildLogging builds the App's log.Logging from core.log, or adopts
+// Config.Logger. Until config lands (F3) no layer can set core.log, so the
+// section is Config.Log when the app supplies one (release R1 only: ABO's
+// log_level and its file under the state directory), otherwise the defaults
+// (text, info, stderr). output=file needs core.paths.state_dir, which is
+// Config.StateDir until the config layer resolves it.
 func (k *Kernel) buildLogging(describe bool) error {
 	s := log.DefaultSettings()
+	if k.cfg.Log != nil {
+		s = *k.cfg.Log
+	}
 	k.redactor = log.NewRedactor(s.RedactKeys)
 	if k.cfg.Logger != nil {
 		k.log = k.coreLog("kernel")
@@ -208,27 +218,108 @@ func (k *Kernel) buildLogging(describe bool) error {
 			return fmt.Errorf("kernel: core.log.levels.%s: %w", scope, err)
 		}
 	}
-	format := log.FormatText
-	if s.Format == "json" {
+	var format log.Format
+	switch s.Format {
+	case "text":
+		format = log.FormatText
+	case "json":
 		format = log.FormatJSON
+	default:
+		return fmt.Errorf("kernel: core.log.format: %q is not text or json", s.Format)
 	}
-	out := k.cfg.LogOutput
-	switch {
-	case describe:
-		out = io.Discard
-	case out == nil && s.Output == "stdout":
-		out = os.Stdout
-	case out == nil:
-		out = os.Stderr
+	out, err := k.logOutput(s, describe)
+	if err != nil {
+		return err
 	}
 	l, err := log.New(log.Options{Output: out, Format: format, Level: level, Levels: levels,
 		AddSource: s.AddSource, Redactor: k.redactor})
 	if err != nil {
-		return fmt.Errorf("kernel: logging: %w", err)
+		return errors.Join(fmt.Errorf("kernel: logging: %w", err), k.closeLogFile())
 	}
 	k.logging = l
 	k.log = k.coreLog("kernel")
 	return nil
+}
+
+// logOutput is the primary output of core.log.output: stderr or stdout (or
+// Config.LogOutput, which replaces both), or the rotating file under the
+// state directory. With the file, Config.LogOutput (stderr by default) also
+// receives every line while core.log.file.tee_stderr is true. The file and
+// its root are closed by closeCore, after Logging. Describe discards its
+// output and opens nothing (COR2-13).
+func (k *Kernel) logOutput(s log.Settings, describe bool) (io.Writer, error) {
+	tee := k.cfg.LogOutput
+	if s.Output != "stderr" && s.Output != "stdout" && s.Output != "file" {
+		return nil, fmt.Errorf("kernel: core.log.output: %q is not stderr, stdout or file", s.Output)
+	}
+	switch {
+	case describe:
+		return io.Discard, nil
+	case s.Output == "file":
+		if tee == nil {
+			tee = os.Stderr
+		}
+		if k.cfg.StateDir == "" {
+			return nil, errors.New("kernel: core.log.output is file but there is no state directory (Config.StateDir)")
+		}
+		path := s.File.Path
+		if path == "" {
+			path = "logs/" + k.cfg.AppID + ".log"
+		}
+		root, err := os.OpenRoot(k.cfg.StateDir)
+		if err != nil {
+			return nil, fmt.Errorf("kernel: core.log.file.path: open the state directory: %w", err)
+		}
+		f, err := log.OpenRotatingFile(root, path, int64(s.File.MaxSizeMB)<<20, s.File.MaxFiles)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("kernel: core.log.file: %w", err), root.Close())
+		}
+		k.logClosers = []io.Closer{f, root}
+		if !s.File.TeeStderr {
+			return f, nil
+		}
+		return &fileTee{file: f, tee: tee}, nil
+	case tee != nil:
+		return tee, nil
+	case s.Output == "stdout":
+		return os.Stdout, nil
+	default:
+		return os.Stderr, nil
+	}
+}
+
+// closeLogFile closes the file output and its root, once.
+func (k *Kernel) closeLogFile() error {
+	var errs []error
+	for _, c := range k.logClosers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	k.logClosers = nil
+	return errors.Join(errs...)
+}
+
+// fileTee is the primary output with core.log.file.tee_stderr: every write
+// goes to the file and to the tee, whatever the file's result (an io.MultiWriter
+// would stop at the file's error). A file that closeCore already closed is not
+// an error: a line logged after shutdown (a stop hook that outlived the
+// budget) still reached the tee, so the pipeline does not count it as lost.
+type fileTee struct {
+	file *log.RotatingFile
+	tee  io.Writer
+}
+
+func (t *fileTee) Write(p []byte) (int, error) {
+	n, ferr := t.file.Write(p)
+	_, terr := t.tee.Write(p)
+	if ferr != nil && !errors.Is(ferr, os.ErrClosed) {
+		return n, ferr
+	}
+	if ferr != nil {
+		return len(p), terr
+	}
+	return n, nil
 }
 
 // coreLog is core's logger for one subsystem (module=core, 05-logging §3).
@@ -286,6 +377,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 			if err := k.logging.Close(cctx); err != nil {
 				errs = append(errs, fmt.Errorf("kernel: logging close: %w", err))
 			}
+		}
+		if err := k.closeLogFile(); err != nil {
+			errs = append(errs, fmt.Errorf("kernel: log file close: %w", err))
 		}
 		k.closeErr = errors.Join(errs...)
 	})

@@ -1,7 +1,7 @@
 // file: core/log/handler.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 00d59f68-e217-4796-9d74-36dcbf58a4ed
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package log
 
@@ -61,12 +61,29 @@ func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
 // so a group name the deny-list matches hides them exactly as it hides the
 // members of a slog.Group value; a LogValuer among them is resolved at log
 // time.
+//
+// A subsystem attribute (KeySubsystem, a non-empty string) added outside any
+// group is not kept as an attribute: it moves the returned logger to that
+// module's subsystem scope, as Scope(module, subsystem) would, so a logger
+// that only has a *slog.Logger (the books shim, 05-logging §11 item 2) is
+// gated by Levels["module.subsystem"]. The primary line and the taps then
+// carry it as the scope's one subsystem, never twice. The last one added wins.
 func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	red := slices.Clone(attrs)
 	nh := *h
+	red := make([]slog.Attr, 0, len(attrs))
+	for _, a := range attrs {
+		if sub, ok := subsystemAttr(a); ok && len(h.groups) == 0 {
+			nh.sc = h.l.scope(h.sc.module, sub)
+			continue
+		}
+		red = append(red, a)
+	}
+	if len(red) == 0 {
+		return &nh
+	}
 	if len(h.groups) == 0 {
 		nh.pre = append(slices.Clip(h.pre), red...)
 		return &nh
@@ -75,6 +92,19 @@ func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	last := &nh.groups[len(nh.groups)-1]
 	last.attrs = append(slices.Clip(last.attrs), red...)
 	return &nh
+}
+
+// subsystemAttr reports a's value when it is a subsystem attribute with a
+// non-empty string value.
+func subsystemAttr(a slog.Attr) (string, bool) {
+	if a.Key != KeySubsystem {
+		return "", false
+	}
+	v := a.Value.Resolve()
+	if v.Kind() != slog.KindString || v.String() == "" {
+		return "", false
+	}
+	return v.String(), true
 }
 
 // WithGroup opens a group: the record's attributes, and attrs added later,
