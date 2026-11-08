@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-08
 
