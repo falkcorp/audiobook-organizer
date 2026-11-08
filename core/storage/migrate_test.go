@@ -1,7 +1,7 @@
 // file: core/storage/migrate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 25ec79a2-2c84-47a2-8cd6-89d5026a6925
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -12,10 +12,15 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
+
+	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 )
 
 // TestMigrationStepAtomicWithBookkeeping (05-storage §5S.10): a crash at any
@@ -176,6 +181,10 @@ func TestMigrationFailureHaltsBoot(t *testing.T) {
 	var mf *ErrMigrationFailed
 	if !errors.As(err, &mf) || mf.Step.String() != "wayne#2" || !errors.Is(err, boom) {
 		t.Fatalf("err = %v", err)
+	}
+	var se *StepError
+	if !errors.As(err, &se) || se.Step.String() != "wayne#2" {
+		t.Fatalf("err = %v, want a *StepError naming wayne#2: Up's own failure", err)
 	}
 	if ranThree {
 		t.Fatal("a step after the failure ran")
@@ -557,4 +566,103 @@ func TestStepCannotCommitOutsideItsBatch(t *testing.T) {
 			t.Errorf("the failed step left %v behind", got)
 		}
 	}
+}
+
+// TestStepErrorIsOnlyTheStepsOwnFailure: Migrate marks a step's own failure
+// (its Up's error, or a write it staged that was refused) with *StepError,
+// the kernel's test for "the migration DAG fails" (05-backup §5B.3.4,
+// DATA7-12). A failure of the bookkeeping around the step (here a level
+// step's sidecar write) and a boot whose context ended say nothing about the
+// step and are not one.
+func TestStepErrorIsOnlyTheStepsOwnFailure(t *testing.T) {
+	t.Run("refused-write", func(t *testing.T) {
+		e := newEnv(t, OwnerSpec{Owner: "wayne", Spec: wayneSpec(), Enabled: true})
+		upgrade(t, e, OwnerSpec{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
+			{Version: 1, Name: "too-big", Compat: Additive, Up: func(ctx context.Context, tx *MigrationTx) error {
+				for i := range 3 {
+					if err := tx.Set(fmt.Appendf(nil, "k%d", i), []byte("v")); err != nil {
+						break // the step ignores the refusal; the batch stays poisoned
+					}
+				}
+				return nil
+			}},
+		}}})
+		e.opts.MigrationOps = 2
+		_, err := e.tryOpen()
+		var se *StepError
+		if !errors.As(err, &se) || !errors.Is(err, ErrMigrationTooLarge) {
+			t.Fatalf("err = %v, want a *StepError wrapping ErrMigrationTooLarge", err)
+		}
+	})
+	t.Run("legacy-up", func(t *testing.T) {
+		boom := errors.New("the penguin's umbrella jammed")
+		vs := &fakeVersionSource{}
+		e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamVSClaims(), VersionSource: vs}})
+		upgrade(t, e, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamVSClaims(), VersionSource: vs,
+			Legacy: []LegacyMigration{{Version: 1, Name: "umbrella", Up: func(context.Context, LegacyRange) error { return boom }}}}})
+		_, err := e.tryOpen()
+		var se *StepError
+		if !errors.As(err, &se) || se.Step.String() != "gotham#1" || !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want a *StepError naming gotham#1", err)
+		}
+	})
+	t.Run("level-sidecar-write", func(t *testing.T) {
+		mem := vfs.NewCrashableMem()
+		rec := bootseamtest.New(mem, bootseamtest.Options{Fail: func(ev bootseamtest.Event) error {
+			if ev.Label == labelLevelSidecars && ev.Kind == errorfs.OpCreate {
+				return syscall.ENOSPC
+			}
+			return nil
+		}})
+		e := newEnvFS(t, rec.FS(), OwnerSpec{Owner: "wayne", Spec: wayneSpec(), Enabled: true})
+		upgrade(t, e, OwnerSpec{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Level: 1, Migrations: []Migration{raise(1, 1)}}})
+		ctx := bootseam.With(context.Background(), rec.Seams())
+		op, err := Open(ctx, e.opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := op.Prepare(ctx)
+		if err != nil {
+			t.Fatal(errors.Join(err, op.Close()))
+		}
+		err = db.Migrate(ctx)
+		if cerr := db.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		var mf *ErrMigrationFailed
+		var se *StepError
+		if !errors.As(err, &mf) || !errors.Is(err, syscall.ENOSPC) {
+			t.Fatalf("err = %v, want ErrMigrationFailed wrapping the injected ENOSPC", err)
+		}
+		if errors.As(err, &se) {
+			t.Fatalf("err = %v: a sidecar write is bookkeeping, not the step's own failure", err)
+		}
+	})
+	t.Run("boot-cancelled", func(t *testing.T) {
+		e := newEnv(t, OwnerSpec{Owner: "wayne", Spec: wayneSpec(), Enabled: true})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		upgrade(t, e, OwnerSpec{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
+			{Version: 1, Name: "long", Compat: Additive, Up: func(ctx context.Context, _ *MigrationTx) error {
+				cancel() // SIGTERM arrives mid-step
+				return ctx.Err()
+			}},
+		}}})
+		op, err := Open(ctx, e.opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := op.Prepare(ctx)
+		if err != nil {
+			t.Fatal(errors.Join(err, op.Close()))
+		}
+		err = db.Migrate(ctx)
+		if cerr := db.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		var se *StepError
+		if !errors.Is(err, context.Canceled) || errors.As(err, &se) {
+			t.Fatalf("err = %v, want context.Canceled and no *StepError: a cancelled boot says nothing about the step", err)
+		}
+	})
 }
