@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -301,6 +301,55 @@ func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 	w := httptest.NewRecorder()
 	r1.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/core/v1/riddler", nil))
 	assert.Equal(t, altSvc, w.Header().Get("Alt-Svc"), "a kernel-written 404 lacks Alt-Svc")
+}
+
+// TestPerimeterShim_GatesEveryCoreAnswer: with the Basic gate on, an
+// answer core writes itself (gin never ran) is refused whatever its status,
+// a native 200 included, so a core route added later cannot skip the gate;
+// the stages' own refusals pass ungated, and a request gin served is left
+// to gin's own gate.
+func TestPerimeterShim_GatesEveryCoreAnswer(t *testing.T) {
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.BasicAuthEnabled = true
+	config.AppConfig.BasicAuthUsername = "alfred"
+	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
+	srv := &Server{}
+	for _, c := range []struct {
+		status int
+		gin    bool
+		want   int
+	}{
+		{http.StatusOK, false, http.StatusUnauthorized},
+		{http.StatusCreated, false, http.StatusUnauthorized},
+		{http.StatusNoContent, false, http.StatusUnauthorized},
+		{http.StatusMovedPermanently, false, http.StatusUnauthorized},
+		{http.StatusNotFound, false, http.StatusUnauthorized},
+		{http.StatusMethodNotAllowed, false, http.StatusUnauthorized},
+		{http.StatusGone, false, http.StatusUnauthorized},
+		{http.StatusForbidden, false, http.StatusForbidden},
+		{http.StatusRequestEntityTooLarge, false, http.StatusRequestEntityTooLarge},
+		{http.StatusTooEarly, false, http.StatusTooEarly},
+		{http.StatusTooManyRequests, false, http.StatusTooManyRequests},
+		{http.StatusInternalServerError, false, http.StatusInternalServerError},
+		{http.StatusOK, true, http.StatusOK}, // gin served it: its own gate decided
+	} {
+		kernel := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if c.gin {
+				r.Context().Value(perimeterKey{}).(*perimeterState).gin.Store(true)
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte("Riddler's answer"))
+		})
+		w := httptest.NewRecorder()
+		srv.perimeterShim(kernel, "").ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/core/v1/riddles", nil))
+		assert.Equal(t, c.want, w.Code, "core status %d (gin ran: %v)", c.status, c.gin)
+		if c.want == http.StatusUnauthorized {
+			assert.NotEmpty(t, w.Header().Get("WWW-Authenticate"), "core status %d", c.status)
+			assert.Empty(t, w.Body.String(), "core status %d: the refusal carries core's body", c.status)
+		}
+	}
 }
 
 // TestPerimeterShim_UnmatchedMethodMatchesGin is
