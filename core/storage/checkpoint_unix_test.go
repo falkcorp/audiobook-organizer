@@ -61,3 +61,39 @@ func TestCheckpointModes(t *testing.T) {
 		t.Fatalf("walked %d entries; the copy looks empty", n)
 	}
 }
+
+// wrappedOS is a pass-through vfs over the real filesystem that unwraps to
+// it, as a fault-injecting vfs does.
+type wrappedOS struct{ vfs.FS }
+
+func (w wrappedOS) Unwrap() vfs.FS { return w.FS }
+
+// TestOSChecksSeeThroughWrappers (review MINOR-5): the generation, device
+// and chmod helpers compare vfs.Root(fs) with vfs.Default, so a wrapper over
+// the real filesystem (R1-21's fault injector) still gets real modes, device
+// checks and directory identities; only a non-OS filesystem is exempt.
+func TestOSChecksSeeThroughWrappers(t *testing.T) {
+	osfs := wrappedOS{FS: vfs.Default}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "batsignal")
+	if err := os.WriteFile(file, []byte("lit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := osChmod(osfs)(file, false); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode through a wrapper = %v (%v), want 0600", fi.Mode().Perm(), err)
+	}
+	if _, ino, err := osDirIdentity(osfs)(dir); err != nil || ino == 0 {
+		t.Fatalf("directory identity through a wrapper = inode %d (%v), want the real inode", ino, err)
+	}
+	if _, err := osSameDevice(osfs)(dir, filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("the device check through a wrapper did not stat the paths")
+	}
+	// A non-OS filesystem stays exempt.
+	mem := vfs.NewMem()
+	if _, ino, err := osDirIdentity(mem)(dir); err != nil || ino != 0 {
+		t.Fatalf("directory identity on MemFS = %d (%v), want the constant", ino, err)
+	}
+}

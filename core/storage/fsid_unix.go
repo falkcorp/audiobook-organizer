@@ -17,10 +17,12 @@ import (
 
 // osDirIdentity is the DB directory's (device, inode) on the real
 // filesystem, the store generation's identity (§5S.3.7); a constant on any
-// other vfs.FS, where a directory cannot be swapped behind the process.
+// other vfs.FS, where a directory cannot be swapped behind the process. "The
+// real filesystem" is vfs.Root(fs) == vfs.Default, here and below, so a
+// wrapper over it (a fault injector) gets the real checks.
 func osDirIdentity(fs vfs.FS) func(string) (uint64, uint64, error) {
 	return func(path string) (uint64, uint64, error) {
-		if fs != vfs.Default {
+		if vfs.Root(fs) != vfs.Default {
 			return 0, 0, nil
 		}
 		st, err := statT(path)
@@ -34,7 +36,7 @@ func osDirIdentity(fs vfs.FS) func(string) (uint64, uint64, error) {
 // osSameDevice reports whether two paths are on one filesystem.
 func osSameDevice(fs vfs.FS) func(a, b string) (bool, error) {
 	return func(a, b string) (bool, error) {
-		if fs != vfs.Default {
+		if vfs.Root(fs) != vfs.Default {
 			return true, nil
 		}
 		sa, err := statT(a)
@@ -53,7 +55,7 @@ func osSameDevice(fs vfs.FS) func(a, b string) (bool, error) {
 // filesystem; vfs.FS has no chmod, and an in-memory one has no modes.
 func osChmod(fs vfs.FS) func(path string, dir bool) error {
 	return func(path string, dir bool) error {
-		if fs != vfs.Default {
+		if vfs.Root(fs) != vfs.Default {
 			return nil
 		}
 		mode := os.FileMode(0o600)
