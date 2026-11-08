@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -7,7 +7,11 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +19,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -76,11 +82,42 @@ func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 		gh.Del("Content-Type")
 		kh.Del("Content-Type")
 	} else {
-		assert.Equal(t, g.Body.String(), k.Body.String(), "%s: body", c.name)
+		assert.Equal(t, readableBody(g.Header(), g.Body.Bytes()), readableBody(k.Header(), k.Body.Bytes()), "%s: body", c.name)
 	}
 	if !maps.EqualFunc(gh, kh, slices.Equal) {
 		t.Errorf("%s: headers differ\nHEAD: %v\nR1:   %v", c.name, gh, kh)
 	}
+}
+
+// readableBody is a response body as the parity check compares and prints
+// it. A gzip-encoded body is decompressed, so the check compares what a
+// client reads (Content-Encoding and Vary are compared with the headers) and
+// a failure shows text rather than raw compressed bytes: binary in go test's
+// output breaks the CI shard runner's UTF-8 decode of a failing package. A
+// body that is not a readable gzip stream, or is not printable text, is
+// shown as its length and SHA-256 instead.
+func readableBody(h http.Header, b []byte) string {
+	opaque := func(what string, b []byte) string {
+		return fmt.Sprintf("<%s: %d bytes, sha256 %x>", what, len(b), sha256.Sum256(b))
+	}
+	prefix := ""
+	if h.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return opaque("unreadable gzip ("+err.Error()+")", b)
+		}
+		plain, err := io.ReadAll(zr)
+		if err != nil {
+			return opaque("unreadable gzip ("+err.Error()+")", b)
+		}
+		b, prefix = plain, "gzip: "
+	}
+	if !utf8.Valid(b) || strings.ContainsFunc(string(b), func(r rune) bool {
+		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+	}) {
+		return opaque(prefix+"binary", b)
+	}
+	return prefix + string(b)
 }
 
 // perimeterCases cover each kind of answer: an engine route, the SPA, the
