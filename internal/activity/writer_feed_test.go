@@ -1,5 +1,5 @@
 // file: internal/activity/writer_feed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c7a41d9-83be-4e52-a6f1-5d92e8b3c07a
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package activity
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -67,5 +68,39 @@ func TestWriter_FeedKeepsPartialLines(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no entry parsed from the split line")
+	}
+}
+
+// failingWriter is a stdout that takes n bytes and then fails with err.
+type failingWriter struct {
+	n   int
+	err error
+}
+
+func (f failingWriter) Write(p []byte) (int, error) { return f.n, f.err }
+
+// TestWriter_WriteReturnsTheStdoutErrorAfterFeeding: a failing stdout does not
+// stop the activity feed (the line still becomes an entry), and Write reports
+// stdout's short count and error to its caller rather than swallowing them.
+func TestWriter_WriteReturnsTheStdoutErrorAfterFeeding(t *testing.T) {
+	w := NewWriter(newTestPebbleActivityStore(t), 8)
+	boom := errors.New("stdout closed")
+	w.stdout = failingWriter{n: 3, err: boom}
+
+	line := []byte("time=2026-11-08T10:00:00Z level=WARN msg=\"harley\"\n")
+	n, err := w.Write(line)
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the stdout error", err)
+	}
+	if n != 3 {
+		t.Errorf("n = %d, want stdout's count 3", n)
+	}
+	select {
+	case e := <-w.Chan():
+		if e.Level != "warn" || e.Summary != "harley" {
+			t.Errorf("entry = %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the failing stdout stopped the feed")
 	}
 }
