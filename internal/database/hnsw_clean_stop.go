@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-08
 
@@ -100,10 +100,17 @@ func (d *GatedDB) claimCleanStop(dir string) {
 // popCleanStop returns the marker the open took from dir, once: ok is false
 // when this database's open took none (an in-memory database, a raw engine
 // wrapped by NewGatedDB, a child, or a second pop), or took it from another
-// directory, whose claim it then discards.
+// directory, whose claim it then discards with a warning (R1-15 round-2
+// review, N3): the server derives both directories from one database path,
+// so a mismatch means a refactor split them, and every boot after it loses
+// the fast path without one.
 func (d *GatedDB) popCleanStop(dir string) (rec *cleanStopRecord, ok bool) {
 	c := d.cleanStop.Swap(nil)
-	if c == nil || c.dir != dir {
+	if c == nil {
+		return nil, false
+	}
+	if c.dir != dir {
+		hnswLog.Warn("hnsw: the database's open took the clean-stop marker from %s, but the snapshot import reads %s; the open's claim is discarded and the import uses the marker in %s, so a marker the open removed cannot vouch for this boot", c.dir, dir, dir)
 		return nil, false
 	}
 	return c.rec, true
