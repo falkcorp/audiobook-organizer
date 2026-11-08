@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
@@ -83,6 +83,19 @@ type Options struct {
 	// from config (05-logging §4).
 	Logger *slog.Logger
 
+	// R1StoragePath is the app's own resolved database path, absolute (ABO:
+	// its config's database path, HEAD's --db / DATABASE_PATH, made absolute).
+	// It names core.storage.path when <EnvPrefix>_CORE_STORAGE_PATH is unset,
+	// so the store core opens is the one HEAD opened; both set to different
+	// paths fails New. "" = core's rule alone. Release R1 only: F3's config
+	// carries the renamed key (05-config's rename table) and deletes it.
+	R1StoragePath string
+	// StorageStateFiles is the state-file table (05-config §2.4): the files
+	// the pre-migration checkpoint copies beside the store, each by its label
+	// and resolved absolute path; one that does not exist is skipped. The app
+	// resolves them at R1 (ABO: HEAD's .encryption_key and the gap-fill
+	// config.yaml); from F3 core config builds the table.
+	StorageStateFiles []storage.StateFile
 	// StorageFS is the filesystem core storage opens the store on; the zero
 	// value is the OS's. Tests only: coretest's harness passes
 	// storage.MemFS(), so a harness boot leaves no store on disk (06 §6.4.8).

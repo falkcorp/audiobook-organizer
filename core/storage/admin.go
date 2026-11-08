@@ -1,5 +1,5 @@
 // file: core/storage/admin.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e760c156-0276-4ad3-9f53-76551e9860b5
 // last-edited: 2026-11-08
 
@@ -144,6 +144,39 @@ func (a *Admin) CompactionStats() CompactionStats {
 	}
 	defer release()
 	return compactionStatsFromMetrics(a.db.eng.DB().Metrics())
+}
+
+// EngineSample reads the engine's counters for an app's Pebble collector
+// (engine_sample.go). Cheap: it reads in-memory counters under a lease, so
+// it cannot race Close; a closed store returns ErrClosed and the collector
+// emits nothing for it rather than zeros.
+func (a *Admin) EngineSample() (EngineSample, error) {
+	release, err := a.db.lease()
+	if err != nil {
+		return EngineSample{}, err
+	}
+	defer release()
+	return engineSampleFromMetrics(a.db.eng.DB().Metrics()), nil
+}
+
+// Flush flushes the memtables to sstables, so that table properties and size
+// estimates cover recent writes (ABO's census flushes before it reads them).
+func (a *Admin) Flush(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a.db.readOnly {
+		return ErrReadOnly
+	}
+	release, err := a.db.lease()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := a.db.eng.DB().Flush(); err != nil {
+		return fmt.Errorf("storage: flush: %w", err)
+	}
+	return nil
 }
 
 // EstimateDiskUsage is Pebble's on-disk estimate for [start, end) (nil, nil
