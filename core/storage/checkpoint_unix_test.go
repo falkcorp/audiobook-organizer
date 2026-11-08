@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint_unix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c005d96-229c-4e91-ae0d-2e997b1d71f9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 //go:build unix
 
@@ -95,5 +95,40 @@ func TestOSChecksSeeThroughWrappers(t *testing.T) {
 	mem := vfs.NewMem()
 	if _, ino, err := osDirIdentity(mem)(dir); err != nil || ino != 0 {
 		t.Fatalf("directory identity on MemFS = %d (%v), want the constant", ino, err)
+	}
+}
+
+// TestDirIdentityIsTheFilesystemID (verification review MINOR; 05-storage
+// §5S.3.7): the directory identity is statfs's f_fsid and the inode, not
+// st_dev, which ZFS, btrfs, overlayfs and LVM can renumber across a reboot,
+// and it reads the same twice. Where the platform reads an f_fsid the packed
+// value differs from st_dev (on darwin its second word is the filesystem
+// type), so an identity back on st_dev fails here; fsidOr's st_dev fallback
+// for a filesystem that reports no f_fsid is checked directly.
+func TestDirIdentityIsTheFilesystemID(t *testing.T) {
+	dir := t.TempDir()
+	id, ino, err := osDirIdentity(vfs.Default)(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := statT(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := dirFSID(dir, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != want || ino != st.Ino {
+		t.Fatalf("identity = (%#x, %d), want the filesystem ID %#x and inode %d (st_dev is %#x)", id, ino, want, st.Ino, st.Dev)
+	}
+	if again, _, err := osDirIdentity(vfs.Default)(dir); err != nil || again != id {
+		t.Fatalf("a second read = %#x (%v), want %#x", again, err, id)
+	}
+	if got := fsidOr([2]int32{}, st); got != uint64(st.Dev) { //nolint:unconvert // Dev is int32 on darwin
+		t.Fatalf("an all-zero f_fsid = %#x, want st_dev %#x", got, st.Dev)
+	}
+	if got := fsidOr([2]int32{7, -1}, st); got != 0xffffffff_00000007 {
+		t.Fatalf("f_fsid {7, -1} packs to %#x, want 0xffffffff00000007", got)
 	}
 }

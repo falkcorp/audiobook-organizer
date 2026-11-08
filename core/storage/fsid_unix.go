@@ -1,7 +1,7 @@
 // file: core/storage/fsid_unix.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a3c187ed-9fc3-4d8c-94d2-944e59d4c7ba
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 //go:build unix
 
@@ -15,11 +15,17 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
-// osDirIdentity is the DB directory's (device, inode) on the real
+// osDirIdentity is the DB directory's (filesystem ID, inode) on the real
 // filesystem, the store generation's identity (§5S.3.7); a constant on any
 // other vfs.FS, where a directory cannot be swapped behind the process. "The
 // real filesystem" is vfs.Root(fs) == vfs.Default, here and below, so a
 // wrapper over it (a fault injector) gets the real checks.
+//
+// The filesystem half is dirFSID (statfs's f_fsid), not stat's st_dev: st_dev
+// is the device number the kernel gave the mount, which ZFS, btrfs, overlayfs
+// and LVM can hand out differently after a reboot, and a changed identity
+// starts a new generation for an unchanged store. osSameDevice keeps st_dev,
+// since a hard link needs the same mount, not the same filesystem identity.
 func osDirIdentity(fs vfs.FS) func(string) (uint64, uint64, error) {
 	return func(path string) (uint64, uint64, error) {
 		if vfs.Root(fs) != vfs.Default {
@@ -29,8 +35,22 @@ func osDirIdentity(fs vfs.FS) func(string) (uint64, uint64, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		return uint64(st.Dev), st.Ino, nil //nolint:unconvert // Dev is int32 on darwin
+		id, err := dirFSID(path, st)
+		if err != nil {
+			return 0, 0, err
+		}
+		return id, st.Ino, nil
 	}
+}
+
+// fsidOr packs statfs's two-word f_fsid into one value, or falls back to
+// st_dev when the filesystem reports none (all zero, as a few in-memory and
+// FUSE filesystems do), so two such mounts still differ.
+func fsidOr(val [2]int32, st *syscall.Stat_t) uint64 {
+	if val == ([2]int32{}) {
+		return uint64(st.Dev) //nolint:unconvert // Dev is int32 on darwin
+	}
+	return uint64(uint32(val[0])) | uint64(uint32(val[1]))<<32
 }
 
 // osSameDevice reports whether two paths are on one filesystem.
