@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.7.2
+# version: 1.7.3
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -38,8 +38,12 @@
 #                                      live); dead only if every run that loads a package reports
 #                                      it; one baseline, no core baseline
 #   core-pprof, core-mocks, core-coverage-floor  core halves of the root's pprof-check,
-#                                      mocks-check and coverage-check-short; "not applicable"
-#                                      or "no floor yet" lines until their subject exists
+#                                      mocks-check and coverage-check-short; mocks-check prints
+#                                      "not applicable" until core/.mockery.yaml exists;
+#                                      coverage-floor (from R1-23) holds the total of the
+#                                      coverage.out core's test-short writes at or above
+#                                      core/.ci/coverage-floor.txt, so it runs after test-short
+#                                      inside `make -C core ci`, never alone
 #   embed-context                      root: scripts/ci/check_embed_context.py judges every
 #                                      //go:embed input of both modules against .dockerignore
 #                                      and compares scripts/ci/embed_build_outputs.txt with the

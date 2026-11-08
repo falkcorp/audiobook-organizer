@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.4.0
+# version: 1.4.1
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
 # last-edited: 2026-11-08
 """Run the whole short Go test suite as one of N shards, then merge coverage.
@@ -36,9 +36,10 @@ root never reaches the nested core/ module, so core's packages are listed with
 `go -C core list ./...` and keyed `core/<path>`: a weights entry for core can
 never collide with a root package. The root packages fill the N numbered
 shards; every core package goes to the one extra core shard (`--shard core/N`),
-which runs `go -C core test` and writes no coverage profile, because core has
-no coverage floor yet (R1-23 adds it) and the root floor must keep comparing the
-same four-profile total. A weights entry that names no package of either module
+which runs `go -C core test` and writes no coverage profile: core's floor
+(core/.ci/coverage-floor.txt, from R1-23) is enforced by core-ci.yml's
+`make -C core ci` over the profile core's own test-short writes, and the root
+floor must keep comparing the same four-profile total. A weights entry that names no package of either module
 fails the plan ("stale weight"): the entry would otherwise sit unread, and the
 balance it was written for would silently stop applying.
 
@@ -52,7 +53,11 @@ internal/plugins/maintenance is 186 s, its package elapsed time under
 (it was 702 s there before its tests moved to in-memory stores, and its
 go_test_timings.json key predates that move). internal/scanner (A.7 timed out without a
 number) and internal/server/handlers/abs (not in A.7) use the sum of their
-go_test_timings.json entries, 292 s and 239 s. A package with tests that is in
+go_test_timings.json entries, 292 s and 239 s. internal/books is 55 s, its
+package elapsed time under `go test -short -race` on the Mac on 2026-11-08 at
+load average 16 (R1-23's first-boot, claims and boot tests each boot the
+composed app on a real Pebble store; it is in neither A.7 nor
+go_test_timings.json, so it weighed the 10 s default). A package with tests that is in
 neither file weighs _DEFAULT_WEIGHT (as in fixture_test_packages.py); a package
 without test files weighs _NO_TESTS_WEIGHT (it still runs, because `go test`
 reports its statements as uncovered and the coverage total depends on that).
