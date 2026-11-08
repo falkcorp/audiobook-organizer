@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
@@ -211,4 +212,65 @@ func TestLegacyProjectionRefusesPreGuardBuild(t *testing.T) {
 	if _, ok := errors.AsType[*LevelTooNewError](err); !ok {
 		t.Fatalf("a level-0 core build on a raised store = %v", err)
 	}
+}
+
+// TestUnreadableProjectionSidecarRefusesBoot (review MINOR-3): the legacy
+// projection's sidecar is the projection guard's only input, so one that
+// exists but cannot be read, or does not parse, refuses the boot instead of
+// letting a store a newer build converted pass (and be rewritten to this
+// build's value at step 9). An absent sidecar is not an error.
+func TestUnreadableProjectionSidecarRefusesBoot(t *testing.T) {
+	g := projectionGuard()
+	owner := OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: projectionClaims(), LegacyGuard: g}}
+	side := func(e *env) string { return e.path + g.SidecarSuffix }
+	t.Run("too-new-control", func(t *testing.T) {
+		e := newEnv(t, owner)
+		if err := e.open().Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := ipebble.WriteFileAtomic(e.fs, side(e), []byte("99\n")); err != nil {
+			t.Fatal(err)
+		}
+		_, err := e.tryOpen()
+		if lt, ok := errors.AsType[*LevelTooNewError](err); !ok || lt.Source != "legacy-stamp" {
+			t.Fatalf("boot with projection 99 = %v, want a legacy-stamp refusal", err)
+		}
+	})
+	t.Run("unreadable", func(t *testing.T) {
+		e := newEnv(t, owner)
+		if err := e.open().Close(); err != nil {
+			t.Fatal(err)
+		}
+		e.opts.fs = openFails{FS: e.fs, path: side(e)}
+		if _, err := e.tryOpen(); !errors.Is(err, errScarecrow) {
+			t.Fatalf("boot with an unreadable projection sidecar = %v, want the read error", err)
+		}
+	})
+	t.Run("garbled", func(t *testing.T) {
+		e := newEnv(t, owner)
+		if err := e.open().Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := ipebble.WriteFileAtomic(e.fs, side(e), []byte("batarang\n")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.tryOpen(); err == nil || !strings.Contains(err.Error(), "not an integer") {
+			t.Fatalf("boot with a garbled projection sidecar = %v, want a refusal", err)
+		}
+		if b, _, _ := ipebble.ReadFile(e.fs, side(e)); string(b) != "batarang\n" {
+			t.Fatalf("the refused boot rewrote the sidecar to %q", b)
+		}
+	})
+	t.Run("absent", func(t *testing.T) {
+		e := newEnv(t, owner)
+		if err := e.open().Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.fs.Remove(side(e)); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.open().Close(); err != nil {
+			t.Fatalf("boot without a projection sidecar: %v", err)
+		}
+	})
 }
