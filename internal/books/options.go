@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -29,7 +29,10 @@ import (
 // namespace every served family carries and the OTel service name. They are
 // the values HEAD's telemetry used, so no series changes name.
 const (
-	appID           = "abo"
+	// AppID is Options.AppID. main's --version-json prints it as "app", the
+	// value the updater's self-test compares with its own app ID (06 §6.4.5),
+	// so both read this one constant.
+	AppID           = "abo"
 	metricNamespace = "audiobook_organizer"
 	serviceName     = "audiobook-organizer"
 	displayName     = "Audiobook Organizer"
@@ -92,7 +95,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		fmt.Fprintln(os.Stderr, "Warning: "+warn)
 	}
 	return app.Options{
-		AppID:                 appID,
+		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,
 		ServiceName:           serviceName,
 		DisplayName:           displayName,
