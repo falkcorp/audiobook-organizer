@@ -1,5 +1,5 @@
 // file: internal/books/logging.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bed10864-095d-4c93-8263-f11300b314b9
 // last-edited: 2026-11-08
 
@@ -83,9 +83,18 @@ func tapActivity(a *app.App, w *activity.Writer) {
 	}
 }
 
-// activityTapFunc is the tap's consumer: render, then feed.
+// activityTapFunc is the tap's consumer: render, then feed. Only records from
+// the process default logger become entries (Record.Process): HEAD's feed saw
+// what went through slog.Default and nothing else, so core's own lines
+// (kernel, metrics, http, otel) and a module's own logger make no Activity
+// row.
 func activityTapFunc(feed func([]byte)) func(context.Context, corelog.Record) {
-	return func(_ context.Context, r corelog.Record) { feed(activityLine(r)) }
+	return func(_ context.Context, r corelog.Record) {
+		if !r.Process {
+			return
+		}
+		feed(activityLine(r))
+	}
 }
 
 // activityLine renders r as the line HEAD's slog.NewTextHandler(activityWriter,
