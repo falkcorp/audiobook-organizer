@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire.go
-// version: 1.33.1
+// version: 1.33.2
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
 // last-edited: 2026-11-08
 
@@ -136,6 +136,8 @@ func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
 	// builds it, and with OpenAI parsing configured that registers the batch
 	// handlers HEAD never registered: 06 §6.11.2 lists it as the latent defect
 	// the explicit list fixes, and that is an owner decision, not this row's.
+	// The open decision and its evidence are in
+	// todo.d/2026-11-08-batchpoller-never-built.md.
 	return slices.DeleteFunc(defs, func(d serviceregistry.ServiceDef) bool {
 		return d.Name == "batchpoller"
 	})
