@@ -74,6 +74,11 @@ type Config struct {
 	// Exit ends the process after a restart request's stop order; nil =
 	// os.Exit. It is called with restartExitCode only, never 0.
 	Exit func(code int)
+	// Telemetry is app.Options.R1Telemetry, converted: the part of the
+	// Provider's metrics.Options that F3's core.metrics and core.tracing
+	// sections will carry. nil = the Prometheus scrape only. Describe ignores
+	// it (an offline generator builds no exporter).
+	Telemetry *Telemetry
 	// Modules are the modules compiled into the app, enabled or not.
 	Modules []module.Module
 	// StoragePath is core.storage.path, absolute (05-storage §5S.4 step 1).
@@ -99,6 +104,17 @@ type R1Values struct {
 	RateLimitPerMinute           int
 	JSONMaxBytes, UploadMaxBytes int64
 	ShutdownBudget               time.Duration
+}
+
+// Telemetry mirrors app.R1Telemetry field for field: the OTLP metric push,
+// the OTLP span exporter and the resource attributes the kernel's Provider
+// takes from the app until config lands (F3 deletes both). The propagator
+// needs no option: the Provider's is always W3C trace context plus baggage.
+type Telemetry struct {
+	OTLP        *metrics.OTLPMetrics
+	Tracing     *metrics.OTLPTracing
+	Environment string
+	InstanceID  string
 }
 
 // ModuleState mirrors app.ModuleState (06 §6.4.5): one module's resolved
@@ -204,6 +220,39 @@ func (k *Kernel) Handler() http.Handler { return k.handler }
 // Routes is the router's Routes(): every route P8 built, for coretest's R6
 // gate (06 §6.4.8 AssertRoutesHavePermissions; R1-37's seam).
 func (k *Kernel) Routes() iter.Seq[httpapi.RouteInfo] { return k.router.Routes() }
+
+// Provider is the metrics Provider P5 built: the App's private registry,
+// MeterProvider, TracerProvider and propagator. package app reads it for
+// InstallProcessDefaults and for the composition root's R1 handle on the
+// served registry (05-metrics §6 R1 row).
+func (k *Kernel) Provider() *metrics.Provider { return k.provider }
+
+// RootLogger is the App's root logger: Logging.Root(), or Config.Logger when
+// the kernel adopted one. InstallProcessDefaults makes it slog's default.
+func (k *Kernel) RootLogger() *slog.Logger {
+	if k.logging != nil {
+		return k.logging.Root()
+	}
+	if k.cfg.Logger != nil {
+		return k.cfg.Logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
+// CoreLogger is core's logger for one subsystem (module=core).
+func (k *Kernel) CoreLogger(subsystem string) *slog.Logger { return k.coreLog(subsystem) }
+
+// familyTaken is the boot error for a second owner of a Prometheus family
+// refused while the app was booting (05-metrics §8: fail-closed during boot;
+// after it the second owner stays a no-op and the token is raised). The
+// Provider logged the family and both owners when it refused.
+func (k *Kernel) familyTaken(when string) error {
+	if k.provider == nil || !slices.Contains(k.provider.Degraded(), metrics.DegradedFamilyTaken) {
+		return nil
+	}
+	return fmt.Errorf("kernel: %w %s (the %s log line names the family and both owners)",
+		metrics.ErrFamilyTaken, when, metrics.DegradedFamilyTaken)
+}
 
 // Modules reports every module compiled into the app, in ID order.
 func (k *Kernel) Modules() []ModuleState {

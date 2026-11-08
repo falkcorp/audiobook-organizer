@@ -1,7 +1,7 @@
 // file: core/archtest/core_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bae86fdb-f804-4079-b250-514259741720
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package archtest
 
@@ -73,8 +73,12 @@ func outsideCore(pkgs map[string]*Package, allow []string) []string {
 			}
 			ok := false
 			for _, a := range allow {
-				if imp == a || strings.HasPrefix(imp, a+"/") {
-					ok = true
+				if exact, isExact := strings.CutPrefix(a, "="); isExact {
+					ok = imp == exact
+				} else {
+					ok = imp == a || strings.HasPrefix(imp, a+"/")
+				}
+				if ok {
 					break
 				}
 			}
@@ -111,6 +115,15 @@ func TestCoreImportsOnlyCore(t *testing.T) {
 	}}
 	if got := outsideCore(fake, nil); len(got) != 1 {
 		t.Fatalf("control: an app import in a test file was not flagged: %v", got)
+	}
+
+	// Control for the exact form: "=a/b" admits a/b and not a/b/c.
+	exact := map[string]*Package{corePath + "/y": {
+		ImportPath: corePath + "/y",
+		Imports:    []string{"example.com/gotham", "example.com/gotham/arkham"},
+	}}
+	if got := outsideCore(exact, []string{"=example.com/gotham"}); len(got) != 1 || !strings.HasSuffix(got[0], "example.com/gotham/arkham") {
+		t.Fatalf("control: =example.com/gotham must admit only that path, flagged %v", got)
 	}
 }
 

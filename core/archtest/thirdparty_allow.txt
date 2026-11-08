@@ -1,12 +1,13 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.4
+# version: 1.0.5
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
 # last-edited: 2026-11-07
 #
 # The third-party import paths core may use (03 R1(b), TestCoreImportsOnlyCore).
 # One import-path prefix per line; a prefix also admits its sub-packages
-# (github.com/x/y admits github.com/x/y/z, never github.com/x/yz). Blank lines
-# and lines starting with # are ignored.
+# (github.com/x/y admits github.com/x/y/z, never github.com/x/yz). A line
+# starting with = admits that one path and none of its sub-packages. Blank
+# lines and lines starting with # are ignored.
 #
 # Empty at R1's first core PR: core imports only the standard library and its
 # own packages. R1-10 and R1-12 add the modules they pin (13 §13.5.2), each
@@ -60,3 +61,11 @@ github.com/cockroachdb/pebble/v2
 # reporter's tests, moved with it from ABO's internal/compactprogress, at the
 # root's version.
 github.com/stretchr/testify
+# R1-15: app.InstallProcessDefaults, the one function that sets the OTel
+# globals (05-logging §3, L3): the otel root package only (its sub-packages
+# stay listed one by one above), and logr for the value-dropping SDK sink
+# (05-logging L6) with stdr, the SDK's default logger that its restore puts
+# back.
+=go.opentelemetry.io/otel
+github.com/go-logr/logr
+github.com/go-logr/stdr

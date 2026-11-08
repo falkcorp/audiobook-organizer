@@ -1,14 +1,20 @@
 // file: core/app/options.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
 package app
 
 import (
+	"context"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"time"
 
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -81,6 +87,50 @@ type Options struct {
 	// storage.MemFS(), so a harness boot leaves no store on disk (06 §6.4.8).
 	// A store on any other filesystem is not durable.
 	StorageFS storage.FS
+	// LogOutput is where the App's log pipeline writes its primary output;
+	// nil = core.log.output's stream (stderr until config lands). Ignored when
+	// Logger is set. ABO points it at its activity writer in R1, which tees
+	// each line to stdout and parses it into a system activity entry, so the
+	// slog-fed Activity page keeps its entries once InstallProcessDefaults
+	// makes the pipeline slog's default (R1-18 replaces that with a
+	// Logging.Tap and the file output of 05-logging §11 item 1).
+	LogOutput io.Writer
+
+	// R1Listen opens the listener of 06 §6.5.2 start step (7) in release R1,
+	// in place of httpapi.Listen: the kernel still decides when it opens
+	// (after the hooks, the workers and R1Values) and drains it first in the
+	// stop order, within min(core.shutdown.http_drain, remaining). ABO keeps
+	// HEAD's listener stack behind it (HTTP/3, the port-80 redirect, the TLS
+	// fallback, its timeouts, Alt-Svc and the peer allow-list) until core's
+	// listener carries those (R1-17). nil = httpapi.Listen. Release R1 only.
+	R1Listen func(httpapi.ListenOptions, http.Handler, *slog.Logger) (R1Server, error)
+
+	// R1Telemetry is the part of the App's metrics.Options the core.metrics
+	// and core.tracing config sections carry from F3: the OTLP metric push,
+	// the OTLP span exporter and the resource's deployment environment and
+	// instance ID. nil = the Prometheus scrape only, no tracing. ABO fills it
+	// from its effective config (OTEL_EXPORTER_OTLP_ENDPOINT and friends) so
+	// production tracing survives the move to the App's Provider. Release R1
+	// only: F3 deletes the field and the type.
+	R1Telemetry *R1Telemetry
+}
+
+// R1Server is one listener R1Listen opens: what the supervisor drives.
+// Serve blocks until the listener stops (nil after Shutdown); Shutdown
+// drains within ctx and closes what is left when ctx ends.
+type R1Server interface {
+	Addr() net.Addr
+	Serve() error
+	Shutdown(ctx context.Context) error
+}
+
+// R1Telemetry is the release-R1-only value of Options.R1Telemetry. The
+// propagator needs no field: the App's is W3C trace context plus baggage.
+type R1Telemetry struct {
+	OTLP        *metrics.OTLPMetrics // nil = no OTLP metric push
+	Tracing     *metrics.OTLPTracing // nil = the no-op TracerProvider
+	Environment string               // deployment.environment; "" = metrics.DefaultEnvironment
+	InstanceID  string               // service.instance.id; "" = a random one per Provider
 }
 
 // R1Values is the release-R1-only value Options.R1Values returns (05-config
