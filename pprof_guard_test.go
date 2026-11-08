@@ -1,7 +1,7 @@
 // file: pprof_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e6b3f9a-8d24-4c71-a5b8-61f2d7c94e03
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package main
 
@@ -27,6 +27,9 @@ import (
 //     handler (a nil handler means DefaultServeMux);
 //   - an http.Server literal with `Handler: nil` or no Handler field at all
 //     (the zero value also means DefaultServeMux);
+//   - the same for quic-go's http3.Server, and http3.ListenAndServeQUIC /
+//     ListenAndServeTLS with a nil handler: HTTP/3 falls back to
+//     DefaultServeMux too (R1-15 review);
 //   - any reference to http.DefaultServeMux (wrapping it hands it to a server).
 //
 // It is untagged so it runs in plain `go test`, not just the pprof build.
@@ -74,34 +77,44 @@ func scanForDefaultServeMux(t *testing.T, path string) []string {
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
-	httpName := ""
-	for _, imp := range f.Imports {
-		p, _ := strconv.Unquote(imp.Path.Value)
-		if p != "net/http" {
-			continue
+	// The name each package is imported under in this file ("" = not
+	// imported, or imported blank or dot, which this scan cannot follow).
+	importName := func(path, def string) string {
+		for _, imp := range f.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p != path {
+				continue
+			}
+			if imp.Name == nil {
+				return def
+			}
+			if n := imp.Name.Name; n != "_" && n != "." {
+				return n
+			}
 		}
-		httpName = "http"
-		if imp.Name != nil {
-			httpName = imp.Name.Name
-		}
+		return ""
 	}
-	if httpName == "" || httpName == "_" || httpName == "." {
+	httpName := importName("net/http", "http")
+	h3Name := importName("github.com/quic-go/quic-go/http3", "http3")
+	if httpName == "" && h3Name == "" {
 		return nil
 	}
-	isHTTP := func(e ast.Expr, name string) bool {
+	isPkg := func(e ast.Expr, pkg, name string) bool {
 		sel, ok := e.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != name {
+		if !ok || pkg == "" || sel.Sel.Name != name {
 			return false
 		}
 		id, ok := sel.X.(*ast.Ident)
-		return ok && id.Name == httpName
+		return ok && id.Name == pkg
 	}
+	isHTTP := func(e ast.Expr, name string) bool { return isPkg(e, httpName, name) }
+	isH3 := func(e ast.Expr, name string) bool { return isPkg(e, h3Name, name) }
 	isNil := func(e ast.Expr) bool {
 		id, ok := e.(*ast.Ident)
 		return ok && id.Name == "nil"
 	}
 	// handlerArg is the index of the handler argument per package-level func.
 	handlerArg := map[string]int{"ListenAndServe": 1, "ListenAndServeTLS": 3, "Serve": 1, "ServeTLS": 1}
+	h3HandlerArg := map[string]int{"ListenAndServeQUIC": 3, "ListenAndServeTLS": 3}
 
 	var out []string
 	report := func(n ast.Node, what string) {
@@ -119,8 +132,19 @@ func scanForDefaultServeMux(t *testing.T, path string) []string {
 					report(x, "http."+name+" with a nil handler")
 				}
 			}
+			for name, idx := range h3HandlerArg {
+				if isH3(x.Fun, name) && idx < len(x.Args) && isNil(x.Args[idx]) {
+					report(x, "http3."+name+" with a nil handler")
+				}
+			}
 		case *ast.CompositeLit:
-			if !isHTTP(x.Type, "Server") {
+			kind := ""
+			switch {
+			case isHTTP(x.Type, "Server"):
+				kind = "http.Server"
+			case isH3(x.Type, "Server"):
+				kind = "http3.Server"
+			default:
 				return true
 			}
 			hasHandler := false
@@ -132,12 +156,12 @@ func scanForDefaultServeMux(t *testing.T, path string) []string {
 				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Handler" {
 					hasHandler = true
 					if isNil(kv.Value) {
-						report(kv, "http.Server with Handler: nil")
+						report(kv, kind+" with Handler: nil")
 					}
 				}
 			}
 			if !hasHandler {
-				report(x, "http.Server literal without a Handler (zero value serves DefaultServeMux)")
+				report(x, kind+" literal without a Handler (zero value serves DefaultServeMux)")
 			}
 		}
 		return true
@@ -148,13 +172,18 @@ func scanForDefaultServeMux(t *testing.T, path string) []string {
 // The scanner must actually catch each shape, or the guard above proves nothing.
 func TestPprofGuard_ScannerCatchesEachShape(t *testing.T) {
 	src := map[string]string{
-		"listen":     `package p; import "net/http"; func f() { http.ListenAndServe(":1", nil) }`,
-		"listentls":  `package p; import "net/http"; func f() { http.ListenAndServeTLS(":1", "c", "k", nil) }`,
-		"serve":      `package p; import "net/http"; func f() { var l any; _ = l; http.Serve(nil, nil) }`,
-		"nilhandler": `package p; import "net/http"; var s = &http.Server{Handler: nil}`,
-		"nohandler":  `package p; import "net/http"; var s = &http.Server{Addr: ":1"}`,
-		"wrap":       `package p; import "net/http"; var h = http.StripPrefix("/x", http.DefaultServeMux)`,
-		"alias":      `package p; import h "net/http"; var s = &h.Server{}`,
+		"listen":      `package p; import "net/http"; func f() { http.ListenAndServe(":1", nil) }`,
+		"listentls":   `package p; import "net/http"; func f() { http.ListenAndServeTLS(":1", "c", "k", nil) }`,
+		"serve":       `package p; import "net/http"; func f() { var l any; _ = l; http.Serve(nil, nil) }`,
+		"nilhandler":  `package p; import "net/http"; var s = &http.Server{Handler: nil}`,
+		"nohandler":   `package p; import "net/http"; var s = &http.Server{Addr: ":1"}`,
+		"wrap":        `package p; import "net/http"; var h = http.StripPrefix("/x", http.DefaultServeMux)`,
+		"alias":       `package p; import h "net/http"; var s = &h.Server{}`,
+		"h3nohandler": `package p; import "github.com/quic-go/quic-go/http3"; var s = &http3.Server{Addr: ":1"}`,
+		"h3nil":       `package p; import "github.com/quic-go/quic-go/http3"; var s = &http3.Server{Handler: nil}`,
+		"h3alias":     `package p; import q "github.com/quic-go/quic-go/http3"; var s = q.Server{}`,
+		"h3quic":      `package p; import "github.com/quic-go/quic-go/http3"; func f() { http3.ListenAndServeQUIC(":1", "c", "k", nil) }`,
+		"h3tls":       `package p; import "github.com/quic-go/quic-go/http3"; func f() { http3.ListenAndServeTLS(":1", "c", "k", nil) }`,
 	}
 	for name, code := range src {
 		path := filepath.Join(t.TempDir(), name+".go")
@@ -164,7 +193,7 @@ func TestPprofGuard_ScannerCatchesEachShape(t *testing.T) {
 		}
 	}
 	ok := filepath.Join(t.TempDir(), "ok.go")
-	writeTestFile(t, ok, `package p; import "net/http"; var m = http.NewServeMux(); var s = &http.Server{Handler: m}; func f() { http.ListenAndServe(":1", m) }`)
+	writeTestFile(t, ok, `package p; import ("net/http"; "github.com/quic-go/quic-go/http3"); var m = http.NewServeMux(); var s = &http.Server{Handler: m}; var q = &http3.Server{Handler: m}; func f() { http.ListenAndServe(":1", m); http3.ListenAndServeQUIC(":1", "c", "k", m) }`)
 	if got := scanForDefaultServeMux(t, ok); len(got) != 0 {
 		t.Errorf("clean file flagged: %v", got)
 	}
