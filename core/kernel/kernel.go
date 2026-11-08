@@ -196,7 +196,9 @@ func Describe(ctx context.Context, c Config) (Description, error) {
 	return d, nil
 }
 
-// Handler is the root handler P8 built.
+// Handler is the root handler P8 built. Serving it without Run marks no
+// checkpoint record served (Run's start step (0), markServed); App.Handler
+// says what that means for an embedder.
 func (k *Kernel) Handler() http.Handler { return k.handler }
 
 // Routes is the router's Routes(): every route P8 built, for coretest's R6
