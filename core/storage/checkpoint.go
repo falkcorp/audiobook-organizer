@@ -42,10 +42,6 @@ var ErrCheckpointDevice = errors.New("storage: the checkpoint directory is not o
 // write.
 var ErrCheckpointDirOverlap = errors.New("storage: the checkpoint directory overlaps the store")
 
-// scratchDir is the scratch area under the checkpoint directory; the
-// record-less-directory rule does not apply to it (§5S.3.12 "Scratch copies").
-const scratchDir = "scratch"
-
 // checkpointLeaf is the checkpoint directory's name under
 // core.storage.checkpoint_dir (§5S.3.12 "Where").
 const checkpointLeaf = ".mediacore-checkpoints"
