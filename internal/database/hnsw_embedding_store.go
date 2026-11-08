@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.8
+// version: 1.8.9
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -1069,6 +1069,36 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 	if cerr != nil {
 		hnswLog.Error("hnsw import: %v; the snapshot is treated as stale", cerr)
 	}
+	// Without a marker that vouches, the previous process did not stop
+	// cleanly, or its stop could not vouch for the snapshot. Whatever changed
+	// may have left every row count as it was (an add and a delete, a
+	// re-embed, a merge or primary change that flips a row's hydrate verdict),
+	// so the snapshot is reconciled whatever the counts say. The same goes for
+	// a marker from another embedding model, or a verdict write this process
+	// already made.
+	return s.importChecked(dir, truth, func() string {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.cleanStopStaleReasonLocked(rec, dir)
+	})
+}
+
+// ImportCountChecked is ImportWithStalenessCheck without the clean-stop
+// marker: it neither takes a marker nor needs one, and the row counts alone
+// decide whether the snapshot is installed complete or pending a reconcile.
+// An operation-runner child imports this way (R1-15 follow-up review,
+// MINOR-3): the marker is its parent's, and the counts still catch a snapshot
+// whose Pebble rows moved since it was written.
+func (s *HNSWEmbeddingStore) ImportCountChecked(dir string, truth func(entityType string) (int, error)) error {
+	return s.importChecked(dir, truth, nil)
+}
+
+// importChecked loads the snapshot in dir and installs it complete when
+// markerReason (nil: no marker check) returns "" and every entity type's
+// recorded Pebble row count matches truth's; otherwise it installs it pending
+// a reconcile, or discards it (ImportWithStalenessCheck says when). A nil
+// truth skips every check.
+func (s *HNSWEmbeddingStore) importChecked(dir string, truth func(entityType string) (int, error), markerReason func() string) error {
 	graphs, meta, n, err := s.loadSnapshot(dir)
 	if err != nil {
 		return err
@@ -1079,22 +1109,16 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		return nil
 	}
 
-	// Without a marker that vouches, the previous process did not stop
-	// cleanly, or its stop could not vouch for the snapshot. Whatever changed
-	// may have left every row count as it was (an add and a delete, a
-	// re-embed, a merge or primary change that flips a row's hydrate verdict),
-	// so the snapshot is reconciled whatever the counts say. The same goes for
-	// a marker from another embedding model, or a verdict write this process
-	// already made.
-	s.mu.RLock()
-	reason := s.cleanStopStaleReasonLocked(rec, dir)
-	s.mu.RUnlock()
-	stale := reason != ""
-	if stale {
-		hnswLog.Info("hnsw import: %s; the snapshot will be reconciled against Pebble", reason)
+	stale := false
+	if markerReason != nil {
+		if reason := markerReason(); reason != "" {
+			hnswLog.Info("hnsw import: %s; the snapshot will be reconciled against Pebble", reason)
+			stale = true
+		}
 	}
 
-	// With the marker, the row counts are a second check. They run on the
+	// The row counts are a second check after the marker (the only check
+	// without one). They run on the
 	// decoded local graphs, so the Pebble truth reads happen with no store lock
 	// held and the swap below is one atomic step (the store is never briefly
 	// "complete" with a stale graph installed).
