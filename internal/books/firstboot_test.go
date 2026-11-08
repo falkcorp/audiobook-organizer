@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -43,8 +44,9 @@ type headSeed struct {
 // build adds, as internal/database's rewindToR0 does for that package's
 // tests (that helper is unexported and its package cannot be imported by a
 // test helper there without a cycle, so the R0 keys are named here: HEAD's
-// on-disk format is frozen).
-func headStoreAt(t *testing.T, path string) headSeed {
+// on-disk format is frozen). extra, when set, writes more rows before the
+// rewind.
+func headStoreAt(t *testing.T, path string, extra func(*database.PebbleStore)) headSeed {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	store, err := database.NewPebbleStore(path)
@@ -53,6 +55,9 @@ func headStoreAt(t *testing.T, path string) headSeed {
 	require.NoError(t, err)
 	require.NoError(t, store.SetSetting("config_blob", flatEmbeddingBlob, "json", false))
 	require.NoError(t, store.SetUserPreference("arkham_theme", "dark"))
+	if extra != nil {
+		extra(store)
+	}
 	require.NoError(t, store.Close())
 
 	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
@@ -153,7 +158,7 @@ func checkpointName(t *testing.T, path string) string {
 // names (the encryption key).
 func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 	path := filepath.Join(tempDir(t), "gotham.pebble")
-	headStoreAt(t, path)
+	headStoreAt(t, path, nil)
 	before := rawKVs(t, path)
 
 	edit, disk := onDisk(path)
@@ -209,7 +214,7 @@ func TestClaimsModeIsStrictOnABOsBoot(t *testing.T) {
 // .storage-format sidecar says 1.
 func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 	path := filepath.Join(tempDir(t), "wayne.pebble")
-	headStoreAt(t, path)
+	headStoreAt(t, path, nil)
 	before := rawKVs(t, path)
 	var dvBefore database.UserPreference
 	require.NoError(t, json.Unmarshal([]byte(before["preference:db_version"]), &dvBefore))
@@ -233,4 +238,89 @@ func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fmt.Sprint(database.SupportedStorageFormat), strings.TrimSpace(string(sidecar)))
 	assert.Equal(t, 1, database.SupportedStorageFormat, "R1 raised the legacy projection")
+}
+
+// TestFirstBootRefusesForeignKeys on ABO's boot (05-storage §5S.10): a HEAD
+// store that already holds keys under c/ or m/ but no install marker (a
+// store some other build wrote into) halts books' first R1 boot with
+// ErrForeignKeys before the server exists, and the boot writes nothing: not
+// a row, not a checkpoint.
+func TestFirstBootRefusesForeignKeys(t *testing.T) {
+	path := filepath.Join(tempDir(t), "arkham.pebble")
+	headStoreAt(t, path, nil)
+	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
+	require.NoError(t, err)
+	require.NoError(t, db.Set([]byte("c/rogue"), []byte("x"), pebble.Sync))
+	require.NoError(t, db.Set([]byte("m/scarecrow/toxin"), []byte("y"), pebble.Sync))
+	require.NoError(t, db.Close())
+	before := rawKVs(t, path)
+
+	edit, disk := onDisk(path)
+	mod, opts, _ := composedOptions(t, false, edit, nil)
+	disk(&opts)
+	err = bootFails(t, mod, opts)
+	assert.ErrorIs(t, err, storage.ErrForeignKeys)
+	assert.Equal(t, before, rawKVs(t, path), "a refused first boot wrote")
+	_, err = os.Stat(database.StorageMigrationCheckpointPath(path))
+	assert.True(t, os.IsNotExist(err), "a refused first boot wrote a checkpoint pointer: %v", err)
+}
+
+// TestR1BootRepairsOpsAndEmails (05-storage §5S.10, §5S.9.3; COR5-7,
+// XFILE-10): on books' first R1 boot of a HEAD store holding an opv3 record
+// an older binary left stale and a user row it wrote without an email
+// source, books' repairs start hook repairs both before books serves: app.New
+// (books' constructor) leaves them as they were, and when Run opens the
+// listener the record matches its opv2 row and the row is stamped.
+func TestR1BootRepairsOpsAndEmails(t *testing.T) {
+	path := filepath.Join(tempDir(t), "blackgate.pebble")
+	const runID = "01JBATCAVE0000000000000001"
+	var userID string
+	headStoreAt(t, path, func(s *database.PebbleStore) {
+		now := time.Now().UTC().Truncate(time.Second)
+		require.NoError(t, s.InsertOperationV2(database.OperationV2Row{ID: runID, DefID: "test.rollback", Plugin: "test", Status: "queued", QueuedAt: now, Params: `{}`}))
+		// An older binary ran it to completed with no opv3 write.
+		row, err := s.GetOperationV2(runID)
+		require.NoError(t, err)
+		done := now.Add(time.Minute)
+		row.Status, row.StartedAt, row.CompletedAt = "completed", &now, &done
+		raw, err := json.Marshal(row)
+		require.NoError(t, err)
+		require.NoError(t, s.DB().Set([]byte("opv2:op:"+runID), raw, pebble.Sync))
+
+		// And rewrote a user row, dropping the email source it does not know.
+		u, err := s.CreateUser("nightwing", "nightwing@example.invalid", "argon2id", "x", []string{"viewer"}, "active")
+		require.NoError(t, err)
+		userID = u.ID
+		key := []byte("u:" + u.ID)
+		cur, closer, err := s.DB().Get(key)
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(cur, &fields))
+		require.NoError(t, closer.Close())
+		delete(fields, "email_source")
+		raw, err = json.Marshal(fields)
+		require.NoError(t, err)
+		require.NoError(t, s.DB().Set(key, raw, pebble.Sync))
+	})
+
+	stale := func(c *composed) {
+		rec, err := c.store.GetRunV3(runID)
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		assert.NotEqual(t, state.V3Succeeded, rec.State, "the opv3 record was repaired before the start hooks")
+		u, err := c.store.GetUserByID(userID)
+		require.NoError(t, err)
+		assert.Empty(t, u.EmailSource, "the email row was stamped before the start hooks")
+	}
+	edit, disk := onDisk(path)
+	r := runComposedWith(t, edit, nil, disk, stale)
+
+	rec, err := r.store.GetRunV3(runID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, state.V3Succeeded, rec.State, "books' start hook left the opv3 record stale")
+	u, err := r.store.GetUserByID(userID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, u.EmailSource, "books' start hook left the email row unstamped")
+	require.NoError(t, r.stop())
 }

@@ -210,7 +210,7 @@ func TestR0OpensR1Store(t *testing.T) {
 	bin := r0Binary(t)
 
 	path := filepath.Join(tempDir(t), "gotham.pebble")
-	seed := headStoreAt(t, path)
+	seed := headStoreAt(t, path, nil)
 	edit, disk := onDisk(path)
 	r := runComposedWith(t, edit, nil, disk, nil)
 	served, err := r.store.CreateBook(&database.Book{Title: "The Long Halloween", FilePath: filepath.Join(filepath.Dir(path), "library", "The Long Halloween.m4b")})
