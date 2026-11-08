@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -395,8 +395,11 @@ func (p *PebbleStore) RunBootRepairs(ctx context.Context) error {
 }
 
 // DefaultCloseDrainTimeout bounds Close's wait for in-flight engine accesses.
-// The unit's TimeoutStopSec is 30s and the HTTP drain and ops registry spend
-// part of it before the store closes, so this leaves room for both.
+// Books' repairs hook closes the store in its Stop, after the server's stop
+// hook, so this wait comes out of what the HTTP drain and the ops registry
+// leave of the kernel's shutdown budget, which the supervisor's stop timeout
+// is sized against (under systemd, the unit's TimeoutStopSec, which the deploy
+// drop-in sets). It stays small so the hooks before it keep most of the budget.
 const DefaultCloseDrainTimeout = 10 * time.Second
 
 var pebbleCloseLog = logger.New("database.pebble-close")
