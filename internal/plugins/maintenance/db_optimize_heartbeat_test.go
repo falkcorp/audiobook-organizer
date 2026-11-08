@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_optimize_heartbeat_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6b27f0a4-91c3-4de8-8a05-3c7e1b94d260
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // maintenance.db-optimize could not finish on a real database.
 //
@@ -207,10 +207,13 @@ func TestOptimizeMainWithHeartbeat_ReturnsImmediatelyWhenCompactionIsFast(t *tes
 }
 
 // TestCompactLog_KeepsTheSubsystemLine: the step lines core's RunStep writes
-// through compactLog still reach the default logger as "db-optimize: <line>",
-// as the sampler's package logger wrote them before it moved into core, with
-// a '%' in the line left alone and attributes appended. Not parallel: it
-// swaps slog's default logger.
+// through compactLog reach the default logger with subsystem=db-optimize as an
+// attribute of the record, not as a "db-optimize: " prefix of the message
+// (05-logging §11 item 4, R1-18: the shim passes the subsystem as an attribute
+// so a per-subsystem level applies, and the Activity tap folds it back into
+// the summary), with a '%' in the line left alone and attributes appended.
+// Journal lines that were found by "db-optimize: " are found by
+// "subsystem=db-optimize" now. Not parallel: it swaps slog's default logger.
 func TestCompactLog_KeepsTheSubsystemLine(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -221,8 +224,8 @@ func TestCompactLog_KeepsTheSubsystemLine(t *testing.T) {
 	compactLog().With("store", "batcave").Error("Compacting OpenLibrary cache (3/3): failed after 1s: boom")
 	out := buf.String()
 	for _, want := range []string{
-		`level=INFO msg="db-optimize: Compacting main database (1/3): done in 2s; 100% of the cowl"`,
-		`level=ERROR msg="db-optimize: Compacting OpenLibrary cache (3/3): failed after 1s: boom store=\"batcave\""`,
+		`level=INFO msg="Compacting main database (1/3): done in 2s; 100% of the cowl" subsystem=db-optimize`,
+		`level=ERROR msg="Compacting OpenLibrary cache (3/3): failed after 1s: boom store=\"batcave\"" subsystem=db-optimize`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("default logger output lacks %s:\n%s", want, out)

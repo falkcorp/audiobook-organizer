@@ -1,7 +1,7 @@
 // file: internal/server/opcontext_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 14942c06-75c3-4b74-a4c2-ad3a8105aa5e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -74,16 +74,27 @@ func TestOpContextAttrsResolvedAtLogTime(t *testing.T) {
 	wg.Wait()
 }
 
-// TestOpContextThroughInfoCtxAndDefaultHandler is the production path until
-// R1-15: logger.InfoCtx over a stdlib TextHandler as slog.Default(), with the
-// operation in the context under the empty key. The keys are flat, the op
-// attrs come first, and a newline in an entity is escaped. Not parallel: it
-// swaps slog.Default() and restores it.
+// TestOpContextThroughInfoCtxAndDefaultHandler is the production path since
+// R1-18: logger.InfoCtx over the App's pipeline as slog.Default() (core's
+// Root, which app.InstallProcessDefaults installs), with the operation in the
+// context under the empty key. The pipeline, not the helper, appends the
+// context's attributes, once, after the record's own: the keys are flat, each
+// op attr appears exactly once, and a newline in an entity is escaped, so a
+// forged "INFO" line stays inside one quoted value. A stdlib handler as the
+// default would not add them (the helper no longer does); the scan and
+// organize commands' stdout default does, which internal/logger's tests pin.
+// Not parallel: it swaps slog.Default() and restores it.
 func TestOpContextThroughInfoCtxAndDefaultHandler(t *testing.T) {
 	prev := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	pipe, err := logging.New(logging.Options{Output: &buf, Format: logging.FormatText, Level: logging.LevelInfo,
+		Redactor: logging.NewRedactor(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pipe.Close(context.Background()) })
+	slog.SetDefault(pipe.Root())
 
 	op := &opContext{ID: "op-gcpd-7", Type: "dedup.book-merge", Status: "pending"}
 	ctx := logging.WithAttrs(context.Background(), slog.Any("", op))
@@ -100,7 +111,9 @@ func TestOpContextThroughInfoCtxAndDefaultHandler(t *testing.T) {
 			t.Errorf("line lacks %q: %q", want, line)
 		}
 	}
-	if strings.Index(line, "opID=") > strings.Index(line, " err=") {
-		t.Errorf("op attrs not written before the record's: %q", line)
+	for _, once := range []string{" opID=", " opType=", " opStatus=", " entities="} {
+		if n := strings.Count(line, once); n != 1 {
+			t.Errorf("%q appears %d times, want once (the helper and the pipeline both adding it?): %q", once, n, line)
+		}
 	}
 }
