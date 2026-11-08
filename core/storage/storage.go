@@ -87,4 +87,4 @@ var (
 // intent of any kind is staged) or a swap is in flight. Defined in the L0
 // leaf restorejournal, whose CreateIntent returns it, and re-exported here
 // for every caller (R8-1, COR8-6, COR9-13).
-var ErrSwapPending = restorejournal.ErrSwapPending
+var ErrSwapPending = restorejournal.ErrSwapPending //archtest:allow-var the spec's re-export of restorejournal's sentinel, compared with errors.Is
