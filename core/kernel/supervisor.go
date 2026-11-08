@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-07
 
@@ -363,12 +363,19 @@ func (k *Kernel) stopHooks(ctx context.Context, started []moduleHook, deadline t
 
 // stopInBackground calls each hook's Stop in order from one goroutine with a
 // ctx that ends at deadline (already past it for the hooks stopHooks hands
-// over), unawaited. With started set, it first waits for that abandoned
-// Start's result and stops only if it was nil. A Stop's error or panic is
-// logged; the primary log output outlives closeCore.
+// over), unawaited by its caller. With started set, it first waits for that
+// abandoned Start's result and stops only if it was nil. A Stop's error or
+// panic is logged; the primary log output outlives closeCore. The
+// goroutine's done channel is kept on the kernel, so closeCore can let the
+// Stops finish before it closes storage (awaitLateStops).
 func (k *Kernel) stopInBackground(ctx context.Context, hooks []moduleHook, deadline time.Time, started <-chan error) {
 	lctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	done := make(chan struct{})
+	k.lateMu.Lock()
+	k.lateStops = append(k.lateStops, done)
+	k.lateMu.Unlock()
 	go func() {
+		defer close(done)
 		defer cancel()
 		if started != nil {
 			if err := <-started; err != nil {
@@ -381,6 +388,45 @@ func (k *Kernel) stopInBackground(ctx context.Context, hooks []moduleHook, deadl
 			}
 		}
 	}()
+}
+
+// awaitLateStops waits, until ctx is done, for every goroutine
+// stopInBackground started, so a module's late Stop does not find its
+// storage closed under it. closeCore calls it before it closes storage, with
+// its one floor; storage then closes whether or not they finished (06
+// §6.5.2: storage is closed last regardless), and a Stop still running is
+// logged at ERROR and left.
+func (k *Kernel) awaitLateStops(ctx context.Context) {
+	k.lateMu.Lock()
+	stops := slices.Clone(k.lateStops)
+	k.lateMu.Unlock()
+	for i, done := range stops {
+		select {
+		case <-done:
+			continue
+		default:
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			k.log.ErrorContext(ctx, "kernel: late hook stops still running at the close floor; storage closes regardless",
+				"running", countOpen(stops[i:]))
+			return
+		}
+	}
+}
+
+// countOpen is how many of the done channels are still open.
+func countOpen(chs []chan struct{}) int {
+	n := 0
+	for _, ch := range chs {
+		select {
+		case <-ch:
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 // await runs fn(ctx) in its own goroutine, turning a panic into an error,

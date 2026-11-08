@@ -145,6 +145,9 @@ type Kernel struct {
 	workers   []moduleWorker
 	lifecycle *Lifecycle
 
+	lateMu    sync.Mutex
+	lateStops []chan struct{} // closed when each stopInBackground goroutine ends (supervisor.go)
+
 	ran       atomic.Bool
 	closeOnce sync.Once
 	closeErr  error
