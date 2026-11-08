@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -369,11 +369,11 @@ func TestCheckpointRestoreFailedKeepsInFlight(t *testing.T) {
 	if _, err := h.boot(h.config(nil, broken)); !errors.Is(err, ErrCheckpointRestoreFailedHere) {
 		t.Fatalf("the same binary's next boot = %v, want ErrCheckpointRestoreFailedHere", err)
 	}
-	if err := ReaderCheck(h.state, ReaderCheckAllow{}); !errors.Is(err, ErrSwapInFlight) {
-		t.Fatalf("reader check = %v, want ErrSwapInFlight", err)
-	}
-	if err := ReaderCheck(h.state, ReaderCheckAllow{FailedCheckpointEscape: true}); err != nil {
-		t.Fatalf("reader check with the failed-checkpoint escape = %v, want nil", err)
+	// What the previous binary's offline escape will read (05-storage
+	// §5S.3.12): the swap is still in flight, a KindCheckpoint at failed.
+	if id, kind, last, ok, err := restoreswap.InFlightJournal(vfs.Default, h.state); err != nil || !ok ||
+		id != "r-checkpoint" || kind != restorejournal.KindCheckpoint || last != restoreswap.StepFailed {
+		t.Fatalf("in flight = %q %q %q %v (%v), want r-checkpoint, a checkpoint restore at failed", id, kind, last, ok, err)
 	}
 }
 
@@ -542,31 +542,6 @@ func TestPostResetHookSkipsKeptPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(aux); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the auxiliary delete entry: %v, want it removed", err)
-	}
-}
-
-// TestReaderCheck (05-storage §5S.3.7): a pending intent passes; an
-// in-flight one refuses with ErrSwapInFlight, the escape admitting only a
-// KindCheckpoint journal at failed.
-func TestReaderCheck(t *testing.T) {
-	h := newSwapHost(t)
-	if err := ReaderCheck(h.state, ReaderCheckAllow{}); err != nil {
-		t.Fatalf("no state directory: %v", err)
-	}
-	h.close(h.mustBoot(h.config(nil)))
-	h.stage("r-pending", restorejournal.KindArchive, h.stagedCopy("r-pending", "robin"))
-	if err := ReaderCheck(h.state, ReaderCheckAllow{}); err != nil {
-		t.Fatalf("a pending intent: %v, want nil", err)
-	}
-	// In flight: the swap took the slot, and a kill fell before step c.
-	dir := restorejournal.JournalDir(h.state, "r-pending")
-	if err := os.Rename(restorejournal.PendingPath(h.state), filepath.Join(dir, restorejournal.InflightName)); err != nil {
-		t.Fatal(err)
-	}
-	for _, allow := range []ReaderCheckAllow{{}, {FailedCheckpointEscape: true}} {
-		if err := ReaderCheck(h.state, allow); !errors.Is(err, ErrSwapInFlight) {
-			t.Fatalf("an in-flight archive restore with %+v: %v, want ErrSwapInFlight", allow, err)
-		}
 	}
 }
 
