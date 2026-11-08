@@ -1,9 +1,11 @@
 # file: internal/server/testdata/own_auth_routes.golden
-# version: 1.0.0
+# version: 1.0.1
 # guid: b304ad2a-94d4-454f-84c4-4c6d6a4c6bae
 # last-edited: 2026-11-07
 POST /api/authorize books.abs
 GET /api/authors/:id books.abs
+GET /api/authors/:id/image books.abs
+HEAD /api/authors/:id/image books.abs
 POST /api/collections books.abs
 DELETE /api/collections/:id books.abs
 GET /api/collections/:id books.abs
@@ -19,6 +21,7 @@ HEAD /api/items/:id/file/:ino books.abs
 GET /api/items/:id/file/:ino/download books.abs
 HEAD /api/items/:id/file/:ino/download books.abs
 POST /api/items/:id/play books.abs
+POST /api/items/batch/get books.abs
 GET /api/libraries books.abs
 GET /api/libraries/:libraryId books.abs
 GET /api/libraries/:libraryId/authors books.abs
@@ -31,6 +34,7 @@ GET /api/libraries/:libraryId/playlists books.abs
 GET /api/libraries/:libraryId/recent-episodes books.abs
 GET /api/libraries/:libraryId/search books.abs
 GET /api/libraries/:libraryId/series books.abs
+GET /api/libraries/:libraryId/stats books.abs
 GET /api/me books.abs
 GET /api/me/bookmarks/:id books.abs
 PATCH /api/me/item/:id/bookmark books.abs

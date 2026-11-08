@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
 // last-edited: 2026-11-07
 
@@ -389,9 +389,9 @@ func TestLegacyManifest_RegistersAsMuxPatterns(t *testing.T) {
 			}
 			want := 496
 			if abs {
-				want = 571
+				want = 575
 			}
-			assert.Equal(t, want, n, "gin routes besides GET / (497 and 572 with it)")
+			assert.Equal(t, want, n, "gin routes besides GET / (497 and 576 with it)")
 			assert.Len(t, served, n)
 
 			gen, kept := generalised(abs)
