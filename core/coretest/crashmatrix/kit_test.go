@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
@@ -199,5 +200,57 @@ func TestReadSlotSkipsDirectoriesWithNoSwap(t *testing.T) {
 	}
 	if j, ok := journals["r-orphan"]; !ok || j.last != "" || !j.inflight {
 		t.Fatalf("journals = %+v, want r-orphan in flight at step \"\"", journals)
+	}
+}
+
+// TestI2TiesTheEndToTheStore (R1-21 review M5): I2 holds a run's end class
+// and the store at the DB path together. A swap that ended back with the
+// placed store live, or applied with the original live, is a breach; so is
+// an applied end whose previous/ lost the original store, a restore that
+// ended back with no staged store left, and two journals with different
+// ends. The legal pairings pass.
+func TestI2TiesTheEndToTheStore(t *testing.T) {
+	const id = "r-archive"
+	fr := &fixtureRun{initial: "original", hadStore: true,
+		intent: &restorejournal.Intent{ID: id, Kind: restorejournal.KindArchive},
+		legal: []outcome{
+			{end: endApplied, endID: id, store: true, rows: "restored", previous: "original"},
+			{end: endBack, store: true, rows: "original"},
+		}}
+	at := func(step string) map[string]journal { return map[string]journal{id: {last: step}} }
+	applied, back := at(restoreswap.StepApplied), at(restoreswap.StepSwappedBack)
+	i2 := func(o outcome) []string {
+		var out []string
+		for _, v := range fr.violations(o) {
+			if strings.HasPrefix(v, "I2:") {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name   string
+		o      outcome
+		breach bool
+	}{
+		{"applied with the placed store", outcome{end: endApplied, endID: id, store: true, rows: "restored", previous: "original", journals: applied}, false},
+		{"back with the original store", outcome{end: endBack, endID: id, store: true, rows: "original", stagedKept: true, journals: back}, false},
+		{"back with the placed store", outcome{end: endBack, endID: id, store: true, rows: "restored", stagedKept: true, journals: back}, true},
+		{"applied with the original store", outcome{end: endApplied, endID: id, store: true, rows: "original", previous: "original", journals: applied}, true},
+		{"applied with previous/ lost", outcome{end: endApplied, endID: id, store: true, rows: "restored", journals: applied}, true},
+		{"back with the staged store lost", outcome{end: endBack, endID: id, store: true, rows: "original", journals: back}, true},
+		{"two journals, two ends", outcome{end: endMixed, store: true, rows: "original", stagedKept: true,
+			journals: map[string]journal{id: {last: restoreswap.StepSwappedBack}, "r-older": {last: restoreswap.StepApplied}}}, true},
+	} {
+		got := i2(tc.o)
+		switch {
+		case tc.breach && len(got) == 0:
+			t.Errorf("%s: no I2 breach reported", tc.name)
+		case !tc.breach && len(got) > 0:
+			t.Errorf("%s: legal, and I2 reports %v", tc.name, got)
+		}
+	}
+	if end, _ := endOfAll(map[string]journal{id: {last: restoreswap.StepSwappedBack}, "r-older": {last: restoreswap.StepApplied}}); end != endMixed {
+		t.Errorf("endOfAll over two different ends = %s, want %s", end, endMixed)
 	}
 }

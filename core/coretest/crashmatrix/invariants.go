@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/invariants.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bc10682b-4c38-446d-a7dd-4fb4b2cc676b
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package crashmatrix
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -37,13 +38,18 @@ import (
 //   - I2: every swap journal ends terminal (applied, swapped_back, rejected,
 //     hook_done), or at failed for KindCheckpoint; restore/<id>/inflight.json
 //     exists exactly while it is not terminal; no pending.json is left; and
-//     the DB path holds one whole store: its module rows are the fault-free
-//     run's, or, for a fixture with a staged swap, those of the store the
-//     swap would have replaced (the swap rejected or swapped back), never a
-//     mix (fixtureRun.legal).
+//     the DB path holds one whole store, the one the journal's end names
+//     (R1-21 review M5): the swap's end class (none, applied, back, failed)
+//     and the store's module rows are together those of a legal run, the
+//     fault-free run's, or, for a fixture with a staged swap, "back" with
+//     the rows of the store the swap would have replaced, never a mix
+//     (fixtureRun.legal). An applied end also leaves the original store
+//     opening in previous/ (the only undo), and a restore that ended back
+//     leaves the staged store opening in failed/ or staging.
 //   - I3: the level sidecar equals the stamps after recovery, and at every
 //     kill point it is never below a stamp (machine 2: sidecar first).
-//   - I5: readiness within maxBoots boots, or the fixture's Refusal.
+//   - I5: readiness within maxBoots boots, or the fixture's Refusal where
+//     the fault-free boot refuses too (R1-21 review (d)).
 //   - I6: every checkpoint record names a complete checkpoint directory
 //     that opens, no partial one is left, a crash loop leaves no more
 //     checkpoints than the legal runs leave between them (at least one),
@@ -60,11 +66,53 @@ func terminal(step string) bool {
 	return false
 }
 
+// The end classes of a run's swap (I2): which store its journal says is
+// live. endOpen (a journal not at an end) and endMixed (two journals of
+// different classes) match no legal run.
+const (
+	endNone    = "none"    // no journal: no swap, or one rejected before it had an id
+	endApplied = "applied" // applied or hook_done: the store the swap placed
+	endBack    = "back"    // swapped_back or rejected: the store the swap would replace
+	endFailed  = "failed"  // KindCheckpoint at failed: the restored store, refused to this binary
+	endOpen    = "open"
+	endMixed   = "mixed"
+)
+
+// endOf is the end class of journal j.
+func endOf(j journal) string {
+	switch {
+	case j.last == restoreswap.StepApplied || j.last == restoreswap.StepHookDone:
+		return endApplied
+	case j.last == restoreswap.StepSwappedBack || j.last == restoreswap.StepRejected:
+		return endBack
+	case j.last == restoreswap.StepFailed && j.kind == restorejournal.KindCheckpoint:
+		return endFailed
+	}
+	return endOpen
+}
+
+// endOfAll is the end class of every journal and the id that decides it.
+func endOfAll(js map[string]journal) (end, id string) {
+	end = endNone
+	for _, jid := range slices.Sorted(maps.Keys(js)) {
+		switch c := endOf(js[jid]); {
+		case end == endNone:
+			end, id = c, jid
+		case c != end:
+			return endMixed, ""
+		}
+	}
+	return end, id
+}
+
 // outcome is what a run left on its filesystem.
 type outcome struct {
 	err         error
+	end, endID  string // the swap's end class and its journal's id (endOfAll)
 	store       bool
 	rows        string // digest of every module row (m/)
+	previous    string // an applied end: the module-row digest of the store in previous/, "" when none opens there
+	stagedKept  bool   // a restore's back end: the staged store opens in failed/ or staging
 	stamps      map[string]int
 	sidecar     map[string]int
 	journals    map[string]journal
@@ -91,8 +139,9 @@ type stampRecord struct {
 	Level int `json:"level"`
 }
 
-// read inspects the store, its sidecar, the swap slot and the checkpoints.
-func read(mem *vfs.MemFS, f Fixture) outcome {
+// read inspects the store, its sidecar, the swap slot, the swap's undo and
+// the checkpoints. in is the fixture's staged intent, nil when none.
+func read(mem *vfs.MemFS, f Fixture, in *restorejournal.Intent) outcome {
 	var o outcome
 	db := f.dbPath()
 	o.store, o.rows, o.stamps, o.err = readStore(mem, db, true)
@@ -107,8 +156,65 @@ func read(mem *vfs.MemFS, f Fixture) outcome {
 	if o.journals, o.pending, o.err = readSlot(mem, f.StateDir); o.err != nil {
 		return o
 	}
+	o.end, o.endID = endOfAll(o.journals)
+	switch {
+	case o.end == endApplied:
+		var ok bool
+		if ok, o.previous, _, o.err = readStore(mem, restorejournal.SetAsideDest(f.StateDir, db, o.endID, db), false); o.err != nil {
+			return o
+		} else if !ok {
+			o.previous = ""
+		}
+	case o.end == endBack && in != nil && in.Kind != restorejournal.KindReset:
+		for _, p := range []string{restorejournal.FailedDest(f.StateDir, db, o.endID, db), stagedStore(in)} {
+			ok, _, _, err := readStore(mem, p, false)
+			if err != nil {
+				o.err = fmt.Errorf("the staged store at %s: %w", p, err)
+				return o
+			}
+			o.stagedKept = o.stagedKept || ok
+		}
+	}
 	o.checkpoints, o.partial, o.orphans, o.broken, o.err = readCheckpoints(mem, filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
 	return o
+}
+
+// stagedStore is the staged item a restore places at its DB path.
+func stagedStore(in *restorejournal.Intent) string {
+	for _, t := range in.Targets {
+		if filepath.Clean(t.To) == filepath.Clean(in.DBPath) {
+			return t.From
+		}
+	}
+	return ""
+}
+
+// stagedIntent is the intent in the fixture's swap slot (pending.json, else
+// the in-flight file), nil when the slot holds none or none that decodes.
+func stagedIntent(mem vfs.FS, stateDir string) (*restorejournal.Intent, error) {
+	path := restorejournal.PendingPath(stateDir)
+	if _, err := mem.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		ids, err := restorejournal.InFlightIDs(mem, stateDir)
+		if err != nil || len(ids) == 0 {
+			return nil, err
+		}
+		path = filepath.Join(restorejournal.JournalDir(stateDir, ids[0]), restorejournal.InflightName)
+	} else if err != nil {
+		return nil, err
+	}
+	f, err := mem.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	var in restorejournal.Intent
+	derr := json.NewDecoder(f).Decode(&in)
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	if derr != nil {
+		return nil, nil // P0a moves it aside (an unusable intent): no swap to check
+	}
+	return &in, nil
 }
 
 // readStore opens the store at path read-only: its module rows' digest and,
@@ -310,6 +416,12 @@ func (fr *fixtureRun) check(at string, ch chain) {
 		fr.errorf("%s: I5: no %s within %d boots: %v", at, want, maxBoots, ch.errs())
 		return
 	}
+	if !ch.ready && !fr.census.refused(fr.f) {
+		// R1-21 review (d): the declared refusal is a legal end only where
+		// the fault-free boot refuses too; elsewhere it hides a wrong end.
+		fr.errorf("%s: I5: the boot refused (%v), which the fault-free boot does not", at, ch.errs()[len(ch.errs())-1])
+		return
+	}
 	o := ch.outcome
 	if o.err != nil {
 		fr.errorf("%s: reading the result: %v", at, o.err)
@@ -338,10 +450,20 @@ func (fr *fixtureRun) violations(o outcome) []string {
 	}
 	legal := false
 	for _, l := range fr.legal {
-		legal = legal || (l.store == o.store && l.rows == o.rows)
+		legal = legal || (l.end == o.end && l.store == o.store && l.rows == o.rows)
 	}
 	if !legal {
-		out = append(out, fmt.Sprintf("I2: the DB path holds %s; the legal stores hold %s", rowsOf(o), fr.legalRows()))
+		out = append(out, fmt.Sprintf("I2: the swap ended %s with the DB path holding %s; the legal ends are %s", o.end, rowsOf(o), fr.legalEnds()))
+	}
+	switch {
+	case o.end == endApplied && fr.hadStore && o.previous != fr.initial:
+		held := o.previous
+		if held == "" {
+			held = "no store"
+		}
+		out = append(out, fmt.Sprintf("I2: journal %s applied, and previous/ holds %s, not the original store's %s: the only undo is gone", o.endID, held, fr.initial))
+	case o.end == endBack && fr.intent != nil && fr.intent.Kind != restorejournal.KindReset && !o.stagedKept:
+		out = append(out, fmt.Sprintf("I2: journal %s ended back, and no staged store opens in failed/ or staging", o.endID))
 	}
 	if o.store {
 		want := map[string]int{}
@@ -397,10 +519,10 @@ func rowsOf(o outcome) string {
 	return o.rows
 }
 
-func (fr *fixtureRun) legalRows() string {
+func (fr *fixtureRun) legalEnds() string {
 	var s []string
 	for _, l := range fr.legal {
-		s = append(s, rowsOf(l))
+		s = append(s, l.end+" with "+rowsOf(l))
 	}
 	return strings.Join(s, " or ")
 }
