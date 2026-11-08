@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ff1aae37-5f8d-4461-a1fe-d80e76ea662e
 // last-edited: 2026-11-08
 
@@ -20,7 +20,7 @@ import (
 // state directory that exists before any intent is staged.
 func durableDir(t *testing.T, fs *vfs.MemFS, dir string) {
 	t.Helper()
-	if err := MkdirAllSynced(fs, dir); err != nil {
+	if err := MkdirAllSynced(fs, "/", dir); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -107,5 +107,33 @@ func TestValidID(t *testing.T) {
 		if got := ValidID(id); got != want {
 			t.Errorf("ValidID(%q) = %v, want %v", id, got, want)
 		}
+	}
+}
+
+// TestMkdirAllSyncedSyncsTheChainItFinds (R1-21 review M6, found by the
+// crash matrix's nested faults): a directory found existing is not known
+// durable. An earlier attempt may have created it and failed its parent's
+// fsync, so every level between dir and root is synced whether this call
+// created it or not, and a crash keeps the whole chain.
+func TestMkdirAllSyncedSyncsTheChainItFinds(t *testing.T) {
+	fs := vfs.NewCrashableMem()
+	root := "/gotham/state"
+	durableDir(t, fs, root)
+	leaf := filepath.Join(root, "restore", "r-arkham", "failed", "storage")
+	// The earlier attempt: the chain created, no parent synced.
+	if err := fs.MkdirAll(leaf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.CrashClone(vfs.CrashCloneCfg{}).Stat(leaf); err == nil {
+		t.Fatal("fixture: the unsynced chain survives a crash")
+	}
+	if err := MkdirAllSynced(fs, root, leaf); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.CrashClone(vfs.CrashCloneCfg{}).Stat(leaf); err != nil {
+		t.Fatalf("after a crash %s is gone (%v): the chain MkdirAllSynced found was not synced", leaf, err)
+	}
+	if err := MkdirAllSynced(fs, leaf, root); err == nil {
+		t.Fatal("MkdirAllSynced accepted a dir outside its root")
 	}
 }
