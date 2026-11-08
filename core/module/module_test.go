@@ -1,5 +1,5 @@
 // file: core/module/module_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2e0a9bf1-27de-4d08-af46-624ebc5146e5
 // last-edited: 2026-11-07
 
@@ -89,6 +89,10 @@ func TestRegistrar_RecordsAndCloses(t *testing.T) {
 	// registrations, without the late hook.
 	if again := r.Close(); len(again.Hooks) != 1 || again.Hooks[0].Name != "batcave.signal" || len(again.Mounts) != 1 {
 		t.Fatalf("second Close = %+v, want the first Close's registrations", again)
+	}
+	// Close itself records nothing.
+	if errors.As(r.Err(), &ve) && len(ve.Problems) != 2 {
+		t.Fatalf("after a second Close Err = %v, want the same two problems", r.Err())
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/module/registrar.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b007ae28-2b2a-42a1-aa5a-047aa14d3b77
 // last-edited: 2026-11-07
 
@@ -74,10 +74,10 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 }
 
 // Close ends registration and returns what was recorded. Kernel-only. It is
-// idempotent: every call returns the same registrations, so a module that
-// calls Close itself inside Register loses nothing (its later calls record
-// ProblemRegistrarClosed). Every call after the first records
-// ProblemRegistrarClosed, and Err keeps reporting it.
+// idempotent and records nothing itself: every call returns the same
+// registrations, so a module that calls Close inside Register loses nothing.
+// Every other registrar call after Close records ProblemRegistrarClosed and
+// takes no effect, and Err keeps reporting it.
 func (r *Registrar) Close() Registrations {
 	r.mu.Lock()
 	defer r.mu.Unlock()

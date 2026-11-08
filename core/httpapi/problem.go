@@ -1,5 +1,5 @@
 // file: core/httpapi/problem.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 58d791ab-c222-4ab1-b523-0444ce052274
 // last-edited: 2026-11-07
 
@@ -117,6 +117,7 @@ var (
 	ErrPrefixCollision  = errors.New("httpapi: path prefix claimed by two owners")
 	ErrBadBinding       = errors.New("httpapi: invalid request binding tags")
 	ErrSchema           = errors.New("httpapi: type cannot be described in OpenAPI")
+	ErrRouteShape       = errors.New("httpapi: route method, name, path or rate class is malformed")
 	ErrJSONName         = errors.New("httpapi: JSON property name is not snake_case")
 	ErrLegacyManifest   = errors.New("httpapi: legacy route missing from or inconsistent with the manifest")
 	ErrLegacyAuthGin    = errors.New("httpapi: LegacyAuthGin mount not named by app.Options.LegacyAuthGinUntil")
