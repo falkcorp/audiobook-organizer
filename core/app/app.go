@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-07
 
@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -61,6 +63,12 @@ func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New.
 func (a *App) Handler() http.Handler { return a.k.Handler() }
+
+// Routes describes every route of the built handler: native routes, the
+// legacy manifest routes and the "/" owner (httpapi.Router.Routes). It is
+// what coretest.AssertRoutesHavePermissions walks (03 R6, 06 §6.4.8); valid
+// after New. Not in 06 §6.4.5's App: R1-37's seam, recorded in its seams file.
+func (a *App) Routes() iter.Seq[httpapi.RouteInfo] { return a.k.Routes() }
 
 // Modules reports each module's resolved state (enabled, disabled, reason),
 // in ID order.

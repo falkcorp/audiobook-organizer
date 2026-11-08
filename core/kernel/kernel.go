@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-07
 
@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -178,6 +179,10 @@ func Describe(ctx context.Context, c Config) (Description, error) {
 
 // Handler is the root handler P8 built.
 func (k *Kernel) Handler() http.Handler { return k.handler }
+
+// Routes is the router's Routes(): every route P8 built, for coretest's R6
+// gate (06 §6.4.8 AssertRoutesHavePermissions; R1-37's seam).
+func (k *Kernel) Routes() iter.Seq[httpapi.RouteInfo] { return k.router.Routes() }
 
 // Modules reports every module compiled into the app, in ID order.
 func (k *Kernel) Modules() []ModuleState {

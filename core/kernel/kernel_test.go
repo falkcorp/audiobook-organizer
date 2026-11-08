@@ -66,7 +66,7 @@ func (m testModule) with(fn func(*module.Manifest)) testModule {
 // testConfig is a Config for mods whose log goes to a capture.
 func testConfig(t *testing.T, mods ...module.Module) Config {
 	t.Helper()
-	return Config{AppID: "gotham", Logger: logcapture.NewLogCapture(t).Logger(), Modules: mods}
+	return Config{AppID: "gotham", Logger: logcapture.New(t).Logger(), Modules: mods}
 }
 
 // mustNew boots c or fails the test.
@@ -370,7 +370,7 @@ func TestSPAOwner(t *testing.T) {
 }
 
 func TestDepsScoping(t *testing.T) {
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	var got []module.Deps
 	reg := func(r *module.Registrar) error {
 		d := r.Deps()
@@ -418,7 +418,7 @@ func TestDepsScoping(t *testing.T) {
 
 func TestRegistrarClosedAfterRegister(t *testing.T) {
 	var kept *module.Registrar
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	c := testConfig(t, mod("batcave", func(r *module.Registrar) error { kept = r; return nil }))
 	c.Logger = capture.Logger()
 	k := mustNew(t, c)
@@ -502,7 +502,7 @@ func TestDescribe_EveryModuleEnabled(t *testing.T) {
 }
 
 func TestKernelFamiliesGathered(t *testing.T) {
-	k := mustNew(t, Config{AppID: "gotham", Logger: logcapture.NewLogCapture(t).Logger()})
+	k := mustNew(t, Config{AppID: "gotham", Logger: logcapture.New(t).Logger()})
 	srv := httptest.NewServer(k.provider.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL)

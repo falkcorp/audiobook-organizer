@@ -14,7 +14,7 @@ import (
 
 func TestLogCapture_RecordsWithoutDefault(t *testing.T) {
 	before := slog.Default()
-	c := NewLogCapture(t)
+	c := New(t)
 	l := c.Logger()
 
 	var wg sync.WaitGroup
@@ -37,7 +37,7 @@ func TestLogCapture_RecordsWithoutDefault(t *testing.T) {
 }
 
 func TestLogCapture_DerivedLoggersShareCapture(t *testing.T) {
-	c := NewLogCapture(t)
+	c := New(t)
 	c.Logger().With("subsystem", "cave").WithGroup("g").Warn("signal lit", "who", "gordon")
 
 	recs := c.Records()

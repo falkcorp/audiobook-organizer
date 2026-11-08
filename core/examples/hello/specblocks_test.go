@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-07
 
@@ -36,7 +36,7 @@ const (
 	// of a package the snapshot itself provides is rewritten to it, because
 	// under corePath it would resolve to core's own copy of that package.
 	specModule = "specblocks.test"
-	// bootTimeout bounds one generated boot program.
+	// bootTimeout bounds one generated boot test.
 	bootTimeout = 2 * time.Minute
 )
 
@@ -54,12 +54,12 @@ type specGroup struct {
 	files map[string]string // file name -> text
 	core  []string          // core packages it imports, relative to the core module root
 	deps  []string          // other snapshot directories it imports
-	boot  bool              // a non-main package declaring func New() T: booted through app.New
+	boot  bool              // a non-main package declaring func New() T: booted through coretest.New
 }
 
 // TestSpecGoBlocksCompile is 06 §6.10's COR-16 row: the Go blocks of 06 that
 // make up the hello example are compiled against core in a temp module, and
-// each module package is booted through app.New, so a manifest-level refusal
+// each module package is booted through coretest.New, so a manifest-level refusal
 // fails the test as a compile error does. It reads the snapshot regen.py
 // wrote under testdata/specblocks, never the spec, so a spec-only edit cannot
 // break core CI.
@@ -300,8 +300,8 @@ func hasGoFiles(dir string) bool {
 
 // buildSpec writes the groups into a temp module that requires core through a
 // replace of the core module root, builds every package, compiles every test
-// file, and runs one generated program per module package that calls app.New
-// with that package's New() and exits non-zero on its error.
+// file, and runs one generated test per module package that boots that
+// package's New() through coretest.New, which fails the test on a boot error.
 func buildSpec(t *testing.T, root string, build []*specGroup) error {
 	t.Helper()
 	tmp := t.TempDir()
@@ -341,7 +341,7 @@ func buildSpec(t *testing.T, root string, build []*specGroup) error {
 			if err := os.MkdirAll(filepath.Join(tmp, filepath.FromSlash(pkg)), 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(filepath.Join(tmp, filepath.FromSlash(pkg), "main.go"), bootMain(g), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, filepath.FromSlash(pkg), "boot_test.go"), bootTest(g), 0o644); err != nil {
 				return err
 			}
 			boots = append(boots, pkg)
@@ -357,7 +357,7 @@ func buildSpec(t *testing.T, root string, build []*specGroup) error {
 		}
 	}
 	for _, pkg := range boots {
-		if out, err := goCmd(t, tmp, bootTimeout, "run", "./"+pkg); err != nil {
+		if out, err := goCmd(t, tmp, bootTimeout, "test", "-count=1", "-run", "^TestBoot$", "./"+pkg); err != nil {
 			return fmt.Errorf("boot %s: %w\n%s", pkg, err, out)
 		}
 	}
@@ -392,25 +392,19 @@ func specGoMod(root string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// bootMain is the program that boots g's module through app.New.
-func bootMain(g *specGroup) []byte {
-	return fmt.Appendf(nil, `package main
+// bootTest is the test that boots g's module through coretest.New (06
+// §6.4.8), the harness every later row's tests boot core through.
+func bootTest(g *specGroup) []byte {
+	return fmt.Appendf(nil, `package boot_test
 
 import (
-	"context"
-	"fmt"
-	"os"
+	"testing"
 
-	"%s/app"
+	"%s/coretest"
 	m %q
 )
 
-func main() {
-	if _, err := app.New(context.Background(), app.Options{AppID: "specboot"}, m.New()); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
+func TestBoot(t *testing.T) { coretest.New(t, coretest.WithModules(m.New())) }
 `, corePath, specModule+"/"+g.dir)
 }
 
