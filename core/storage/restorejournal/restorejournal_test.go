@@ -212,9 +212,7 @@ func TestCreateIntentConcurrentOneWins(t *testing.T) {
 	)
 	start := make(chan struct{})
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			err := CreateIntent(state, Intent{ID: "robin-" + string(rune('a'+i)), Kind: KindArchive})
 			mu.Lock()
@@ -224,7 +222,7 @@ func TestCreateIntentConcurrentOneWins(t *testing.T) {
 				return
 			}
 			errs = append(errs, err)
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

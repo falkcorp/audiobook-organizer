@@ -407,8 +407,8 @@ func (db *DB) commitStripes(keysToLock [][]byte, all bool) func() {
 		db.stripes[i].Lock()
 	}
 	return func() {
-		for j := len(idx) - 1; j >= 0; j-- {
-			db.stripes[idx[j]].Unlock()
+		for _, i := range slices.Backward(idx) {
+			db.stripes[i].Unlock()
 		}
 	}
 }

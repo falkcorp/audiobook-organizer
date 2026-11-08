@@ -299,7 +299,7 @@ func TestUnserializedBulkWriteTakesNoStripes(t *testing.T) {
 // own commit included, never lets a later boot reissue an ID.
 func TestSequenceNeverReusesAfterCrash(t *testing.T) {
 	ctx := context.Background()
-	for crashAt := 0; crashAt < 12; crashAt++ {
+	for crashAt := range 12 {
 		for _, inRefill := range []bool{false, true} {
 			t.Run(fmt.Sprintf("after=%d/inRefill=%v", crashAt, inRefill), func(t *testing.T) {
 				fs := vfs.NewCrashableMem()

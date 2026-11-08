@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -355,9 +356,7 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 
 func maps0(l Levels) Levels {
 	out := make(Levels, len(l))
-	for k, v := range l {
-		out[k] = v
-	}
+	maps.Copy(out, l)
 	return out
 }
 
@@ -845,9 +844,7 @@ func (db *DB) freshInstall(ctx context.Context) error {
 		return fmt.Errorf("storage: fresh install: %w", err)
 	}
 	st.marker, st.epoch, st.epochNew = true, ep, false
-	for lo, v := range st.supported {
-		st.stamps[lo] = v
-	}
+	maps.Copy(st.stamps, st.supported)
 	for o, v := range versions {
 		st.versions[o] = v
 		st.applied[o] = map[int]AppliedStep{}

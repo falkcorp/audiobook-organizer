@@ -201,7 +201,7 @@ func buildClaimIndex(refs []claimRef) *claimIndex {
 			continue
 		}
 		r := refs[best]
-		iv := interval{span: span{start: lo, end: hi}, owner: r.owner, mode: r.c.Mode, serialized: r.c.Serialized}
+		iv := interval{start: lo, end: hi, owner: r.owner, mode: r.c.Mode, serialized: r.c.Serialized}
 		if n := len(ci.intervals); n > 0 {
 			last := &ci.intervals[n-1]
 			if bytes.Equal(last.end, lo) && last.owner == iv.owner && last.mode == iv.mode && last.serialized == iv.serialized {

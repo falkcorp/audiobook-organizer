@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,9 +142,7 @@ func oserrorNotExist(err error) bool { return errors.Is(err, os.ErrNotExist) }
 func (db *DB) currentVector() vector {
 	st := db.boot
 	v := vector{Versions: map[Owner]int{}, Levels: map[Owner]int{}, Format: uint64(db.eng.FormatMajorVersion())}
-	for o, n := range st.versions {
-		v.Versions[o] = n
-	}
+	maps.Copy(v.Versions, st.versions)
 	for lo := range st.supported {
 		v.Levels[lo] = st.stamps[lo]
 	}
@@ -208,8 +207,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		return err
 	}
 	cur := db.currentVector()
-	for i := len(recs) - 1; i >= 0; i-- {
-		r := recs[i]
+	for _, r := range slices.Backward(recs) {
 		if r.rec.InstallID == st.installID && r.rec.Epoch == st.epoch.Epoch && r.rec.open() && r.rec.FromVector.ancestorOf(cur) {
 			st.cpName = r.name
 			db.log.Info("storage: reusing the upgrade attempt's checkpoint", "name", r.name)
