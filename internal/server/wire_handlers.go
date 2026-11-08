@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.3
+// version: 2.64.4
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -72,7 +72,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 
 	// ── Instantiate Phase 2 handlers ─────────────────────────────────────────
-	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring())
+	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring(), s.metricsGatherer())
 	// Typed-nil guard as for compactEnqueuer below: a nil *Registry boxed into
 	// the interface would pass the handler's nil check and then panic.
 	// The trash purge's activity row carries every user's progress summary;

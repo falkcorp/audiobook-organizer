@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.5
+// version: 2.114.6
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-07
 
@@ -56,6 +56,8 @@ import (
 	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	// Blank-import the plugin packages so their init() functions run and
@@ -405,6 +407,13 @@ type Server struct {
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
 
+	// served is the App's Provider registry, bound once by AttachMetrics
+	// after app.New and before Run (R1-15: the Provider exists only once New
+	// returns, and NewServer runs inside New). /metrics, the cache stats
+	// handler and the cache snapshotter read it; before it is bound /metrics
+	// answers 503 and the cache readers see no families.
+	served atomic.Pointer[servedMetrics]
+
 	// Accept-time Cloudflare Access guest-policy sync (invite_guest_access.go).
 	// guestPolicy is the ONE shared client, built once on first accept;
 	// guestPolicyOverride, when set before the first accept, replaces it
@@ -644,6 +653,72 @@ func newBaseRouter() *gin.Engine {
 	return router
 }
 
+// servedMetrics is the registry AttachMetrics binds: the App's Provider
+// registry and the handler that serves it.
+type servedMetrics struct {
+	gatherer prometheus.Gatherer
+	handler  http.Handler
+}
+
+// errMetricsNotAttached is what a read of the served registry returns before
+// AttachMetrics bound it.
+var errMetricsNotAttached = errors.New("server: the App's metrics registry is not attached yet")
+
+// AttachMetrics registers internal/metrics' families on reg and binds the
+// registry /metrics serves (05-metrics §6 R1 row, §13 item 2). In production
+// reg, g and h are the App's Provider Registerer, Gatherer and Handler
+// (books.Attach, after app.New and before Run): the gin /metrics route serves
+// Provider.Handler() until F8 moves it to the kernel's infra mount. A family
+// reg already holds is an error naming it, and the caller fails boot. It may
+// be called once.
+func (s *Server) AttachMetrics(reg prometheus.Registerer, g prometheus.Gatherer, h http.Handler) error {
+	if reg == nil || g == nil || h == nil {
+		return errors.New("server: AttachMetrics needs a registerer, a gatherer and a handler")
+	}
+	if s.served.Load() != nil {
+		return errors.New("server: the metrics registry is already attached")
+	}
+	if err := metrics.Register(reg); err != nil {
+		return fmt.Errorf("server: register the legacy metric families on the App's registry: %w", err)
+	}
+	if !s.served.CompareAndSwap(nil, &servedMetrics{gatherer: g, handler: h}) {
+		return errors.New("server: the metrics registry is already attached")
+	}
+	return nil
+}
+
+// metricsGatherer is the served registry as a Gatherer that resolves on each
+// Gather, so readers built inside NewServer (the cache stats handler) see the
+// registry AttachMetrics binds later.
+func (s *Server) metricsGatherer() prometheus.Gatherer {
+	return prometheus.GathererFunc(func() ([]*dto.MetricFamily, error) {
+		m := s.served.Load()
+		if m == nil {
+			return nil, errMetricsNotAttached
+		}
+		return m.gatherer.Gather()
+	})
+}
+
+// MetricsHandler is the handler the legacy gin /metrics route serves (behind
+// its auth chain): the handler AttachMetrics bound, the App's
+// Provider.Handler() in production. internal/telemetrypolicy's series
+// contract scrapes it, so the contract reads what the route serves
+// (TestContractScrapesServedHandler).
+func (s *Server) MetricsHandler() http.Handler { return http.HandlerFunc(s.serveMetrics) }
+
+// serveMetrics is the /metrics handler: the attached Provider handler, or 503
+// before AttachMetrics (unreachable in production, where Run opens the
+// listener only after books.Attach).
+func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request) {
+	m := s.served.Load()
+	if m == nil {
+		http.Error(w, errMetricsNotAttached.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	m.handler.ServeHTTP(w, r)
+}
+
 // NewServer constructs a Server with an explicit Store dependency.
 // s.Ops() is still assigned at startup for code that hasn't
 // been migrated to use s.Ops() yet (see DI migration plan 4.4).
@@ -733,8 +808,9 @@ func NewServer(store database.Store) *Server {
 	// is the RAW path though, which carries invite tokens: see tracingMiddleware.
 	router.Use(tracingMiddleware()...)
 
-	// Register metrics (idempotent)
-	metrics.Register()
+	// internal/metrics' families are registered on the App's Provider by
+	// AttachMetrics (books.Attach, after app.New), never on the default
+	// registry (05-metrics §6, R1-15).
 
 	if store == nil {
 		slog.Error("NewServer called with nil store — this is a programming error; callers must provide a concrete database.Store")
@@ -814,13 +890,28 @@ func NewServer(store database.Store) *Server {
 	// file. Audit a group with
 	//   grep -rn 'Groups.*"<groupname>"' internal/ --include="*.go"
 	regCtx := context.Background()
+	// The ops registry, its event hub, the updater and the update scheduler
+	// are constructed here and handed to the container as Overrides (R1-15
+	// replaced their packages' init() registrations with explicit
+	// construction). An Override still gets the container's PostInit, Start
+	// and Stop, and the services that Need these names resolve them as before.
+	opHub := opsregistry.NewEventHub()
+	opRegistry, err := opsregistry.NewService(store, slog.Default(), opHub)
+	if err != nil {
+		slog.Error("ops registry", "err", err)
+		os.Exit(1)
+	}
+	appUpdater := updater.NewService(appVersion)
 	regContainer := serviceregistry.NewContainer().
 		Override("store", store).
 		Override("config", &config.AppConfig).
 		Override("appversion", appVersion).
+		Override(serviceregistry.KeyOpHub, opHub).
+		Override("opregistry", opRegistry).
+		Override(serviceregistry.KeyUpdater, appUpdater).
+		Override("updatescheduler", updater.NewSchedulerService(appUpdater)).
 		IncludeGroup("core", "ai", "scheduler", "plugins").
-		// W3.6 batchpoller is in scheduler group; opregistry/ophub are
-		// in scheduler group. No additional explicit names needed.
+		// W3.6 batchpoller is in the scheduler group.
 		Include() // explicit Include() reserved for ad-hoc additions
 	// `activity` (+ `activitystore`) only registers when DatabasePath is
 	// set — the activitystore Build errors on an empty DatabasePath.

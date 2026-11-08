@@ -1,7 +1,7 @@
 // file: internal/operations/registry/aliases_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9b4e2d71-3f6a-4c85-b1d0-6e8a5c3f2b97
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 package registry_test
 
@@ -13,18 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // deprecatedUses reads audiobook_organizer_operation_deprecated_def_id_total
-// for one (alias, entry) pair from the default gatherer. metrics.Register is
-// idempotent, so calling it here is safe alongside any other test.
+// for one (alias, entry) pair through a fresh registry holding every internal/metrics family (the
+// collectors are package globals, so the value is the process-wide one).
 func deprecatedUses(t *testing.T, alias, entry string) float64 {
 	t.Helper()
-	metrics.Register()
-	mfs, err := prometheus.DefaultGatherer.Gather()
+	mfs, err := metricstest.Registry(t).Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
 	}
@@ -46,12 +44,11 @@ func deprecatedUses(t *testing.T, alias, entry string) float64 {
 }
 
 // legacyCounter reads the process-global legacy counter
-// audiobook_organizer_<name>{type=defID} through the default gatherer. Tests use a def id of their own, so
+// audiobook_organizer_<name>{type=defID} through a metricstest registry. Tests use a def id of their own, so
 // the value is theirs alone.
 func legacyCounter(t *testing.T, name, defID string) float64 {
 	t.Helper()
-	metrics.Register()
-	mfs, err := prometheus.DefaultGatherer.Gather()
+	mfs, err := metricstest.Registry(t).Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
 	}

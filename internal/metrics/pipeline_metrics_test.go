@@ -1,7 +1,7 @@
 // file: internal/metrics/pipeline_metrics_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 2b18e9de-8f9d-46b8-91f8-94c25c4bcd6b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package metrics
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -57,9 +58,8 @@ func TestObserveReviewIndexRequest_RecordsUnderView(t *testing.T) {
 		t.Errorf("series = %d, want 4 (gone, full, page, ids_all)", got)
 	}
 
-	Register()
 	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	scrapeHandler(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	if !strings.Contains(body, `audiobook_organizer_review_index_request_seconds_count{view="gone"} 2`) {
 		t.Errorf("scrape missing gone count=2; body excerpt:\n%s", excerpt(body, "review_index_request_seconds"))
@@ -102,18 +102,19 @@ func TestObserveFixerDuration_RecordsUnderFixerAndPhase(t *testing.T) {
 }
 
 // TestPipelineMetrics_AppearInScrape pins every new metric NAME a Prometheus
-// scrape sees, via the same promhttp.Handler() /metrics is wired to. A
-// collector left out of Register's MustRegister list would pass every
-// in-process test above and still be invisible to Prometheus.
+// scrape sees, via a promhttp handler over the registry Register filled (the
+// App's, which /metrics serves). A collector left out of Register's list
+// would pass every in-process test above and still be invisible to
+// Prometheus.
 func TestPipelineMetrics_AppearInScrape(t *testing.T) {
-	Register()
+	h := scrapeHandler(t)
 	IncMetadataFetch("audnexus", FetchSourceNetwork)
 	ObserveReviewIndexRequest(ReviewViewFull, time.Second)
 	SetNumberLeadingTitles(3)
 	ObserveFixerDuration("x", FixerPhasePlan, time.Second)
 
 	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, name := range []string{
 		"audiobook_organizer_metadata_fetch_total",
@@ -132,15 +133,25 @@ func TestPipelineMetrics_AppearInScrape(t *testing.T) {
 func TestOperationDurationBuckets_ReachADay(t *testing.T) {
 	operationDuration.Reset()
 	t.Cleanup(operationDuration.Reset)
-	Register()
+	h := scrapeHandler(t)
 	ObserveOperationDuration("dedup.full-scan", time.Hour)
 
 	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	if !strings.Contains(body, `audiobook_organizer_operation_duration_seconds_bucket{type="dedup.full-scan",le="86400"} 1`) {
 		t.Errorf("no le=86400 bucket holding the 1h observation; body excerpt:\n%s", excerpt(body, "operation_duration_seconds_bucket"))
 	}
+}
+
+// scrapeHandler is a /metrics handler over a fresh registry Register filled.
+func scrapeHandler(t *testing.T) http.Handler {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	if err := Register(reg); err != nil {
+		t.Fatal(err)
+	}
+	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }
 
 func excerpt(body, needle string) string {

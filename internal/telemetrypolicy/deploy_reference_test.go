@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/deploy_reference_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3dc4dda0-b7db-4683-8b0c-2541cea06869
 // last-edited: 2026-11-07
 
@@ -15,8 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,7 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -93,15 +90,11 @@ func distinct(refs []reference) map[string]bool {
 	return out
 }
 
-// servedSeries is every sample name on one GET /metrics of the default
-// registry (TestMain seeded it): family names plus _bucket/_sum/_count.
+// servedSeries is every sample name on one GET /metrics of the served
+// handler (TestMain seeded it): family names plus _bucket/_sum/_count.
 func servedSeries(t *testing.T) map[string]bool {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/metrics returned %d", rec.Code)
-	}
+	rec := scrapeServed(t)
 	out := map[string]bool{}
 	for line := range strings.SplitSeq(rec.Body.String(), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {

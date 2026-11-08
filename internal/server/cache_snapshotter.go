@@ -1,7 +1,7 @@
 // file: internal/server/cache_snapshotter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-06-02
+// last-edited: 2026-11-07
 
 // Rescued from cache_handlers.go during Phase 2 handler extraction.
 // These helpers support the background cache-stats snapshotter goroutine
@@ -18,10 +18,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// gatherCacheSnapshots reads the current Prometheus default registry and
+// gatherCacheSnapshots reads g, the registry internal/metrics' cache
+// families are on (the App's Provider registry in production, R1-15), and
 // returns one CacheStatsSnapshot per cache name.
-func gatherCacheSnapshots(now time.Time) []database.CacheStatsSnapshot {
-	mfs, err := prometheus.DefaultGatherer.Gather()
+func gatherCacheSnapshots(g prometheus.Gatherer, now time.Time) []database.CacheStatsSnapshot {
+	mfs, err := g.Gather()
 	if err != nil {
 		return nil
 	}
@@ -69,7 +70,7 @@ func (s *Server) runCacheStatsSnapshotter(shutdown <-chan struct{}) {
 		case <-shutdown:
 			return
 		case now := <-ticker.C:
-			snaps := gatherCacheSnapshots(now)
+			snaps := gatherCacheSnapshots(s.metricsGatherer(), now)
 			if len(snaps) == 0 {
 				continue
 			}

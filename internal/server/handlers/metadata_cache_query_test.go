@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.7
+// version: 1.17.8
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-11-04
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -37,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
@@ -195,8 +196,8 @@ func TestReviewList_ViewIndexIs410(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	metrics.Register()
-	before := reviewRequestCount(t, metrics.ReviewViewGone)
+	reg := metricstest.Registry(t)
+	before := reviewRequestCount(t, reg, metrics.ReviewViewGone)
 	queries := []string{"view=index", "all=true&view=index", "view=index&ids=" + goldenIDList(1, 4)}
 	for _, q := range queries {
 		code, body, _ := serveReviewRaw(t, h, q)
@@ -211,15 +212,15 @@ func TestReviewList_ViewIndexIs410(t *testing.T) {
 		require.Contains(t, got["error"], "reload the page")
 		require.NotContains(t, got, "results", "a 410 must carry no rows")
 	}
-	require.Equal(t, before+uint64(len(queries)), reviewRequestCount(t, metrics.ReviewViewGone),
+	require.Equal(t, before+uint64(len(queries)), reviewRequestCount(t, reg, metrics.ReviewViewGone),
 		"every view=index request is counted under view=gone")
 }
 
 // reviewRequestCount is the sample count of review_index_request_seconds for
-// one view label, read from the default Prometheus registry.
-func reviewRequestCount(t testing.TB, view string) uint64 {
+// one view label, read from the given gatherer.
+func reviewRequestCount(t testing.TB, g prometheus.Gatherer, view string) uint64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := g.Gather()
 	require.NoError(t, err)
 	for _, mf := range families {
 		if mf.GetName() != "audiobook_organizer_review_index_request_seconds" {
@@ -1445,18 +1446,18 @@ func TestReviewPage_CountsUnderPageAndIDsAll(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	metrics.Register()
-	page, ids := reviewRequestCount(t, metrics.ReviewViewPage), reviewRequestCount(t, metrics.ReviewViewIDsAll)
+	reg := metricstest.Registry(t)
+	page, ids := reviewRequestCount(t, reg, metrics.ReviewViewPage), reviewRequestCount(t, reg, metrics.ReviewViewIDsAll)
 
 	for _, q := range []string{"view=page&limit=5", "view=page&limit=5&offset=5", "view=page&limit=0"} {
 		serveReviewRaw(t, h, q) // the last is a 400: still a page request
 	}
-	require.Equal(t, page+3, reviewRequestCount(t, metrics.ReviewViewPage))
-	require.Equal(t, ids, reviewRequestCount(t, metrics.ReviewViewIDsAll), "no id list was asked for")
+	require.Equal(t, page+3, reviewRequestCount(t, reg, metrics.ReviewViewPage))
+	require.Equal(t, ids, reviewRequestCount(t, reg, metrics.ReviewViewIDsAll), "no id list was asked for")
 
 	serveReviewRaw(t, h, "view=page&ids=all")
-	require.Equal(t, ids+1, reviewRequestCount(t, metrics.ReviewViewIDsAll))
-	require.Equal(t, page+3, reviewRequestCount(t, metrics.ReviewViewPage), "an id list is not a page")
+	require.Equal(t, ids+1, reviewRequestCount(t, reg, metrics.ReviewViewIDsAll))
+	require.Equal(t, page+3, reviewRequestCount(t, reg, metrics.ReviewViewPage), "an id list is not a page")
 }
 
 // serveSelection posts a selection check: the filter is the query string, the
@@ -1570,11 +1571,11 @@ func TestReviewSelectionCheck_RefusalsAndMetric(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	prev := config.AppConfig.BulkApplyMaxItems
 	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
 	config.AppConfig.BulkApplyMaxItems = 2
-	before := reviewRequestCount(t, metrics.ReviewViewSelection)
+	before := reviewRequestCount(t, reg, metrics.ReviewViewSelection)
 
 	code, body := serveSelection(t, h, "", []string{"a", "b", "c"})
 	require.Equal(t, http.StatusUnprocessableEntity, code, string(body))
@@ -1594,7 +1595,7 @@ func TestReviewSelectionCheck_RefusalsAndMetric(t *testing.T) {
 	c.Request.Header.Set("Content-Type", "application/json")
 	h.ReviewSelectionCheck(c)
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Equal(t, before+6, reviewRequestCount(t, metrics.ReviewViewSelection))
+	require.Equal(t, before+6, reviewRequestCount(t, reg, metrics.ReviewViewSelection))
 }
 
 func titleOfID(t testing.TB, h *MetadataCacheHandler, id string) string {

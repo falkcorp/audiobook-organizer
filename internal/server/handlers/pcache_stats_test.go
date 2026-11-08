@@ -1,7 +1,7 @@
 // file: internal/server/handlers/pcache_stats_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 53fdb1b5-7be2-452b-a745-a14b47a44e70
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 // pcacheFixtureStore holds three question rows (one an Audible empty answer
@@ -71,7 +72,7 @@ func providerAnswerStat(t *testing.T, h *CacheHandler, rawQuery string) map[stri
 // The provider_answer row is present (even before any counter fires) with
 // the family's row count; ?deep=true adds the expired-row count.
 func TestHandleCacheStats_ProviderAnswerCounts(t *testing.T) {
-	h := NewCacheHandler(nil, pcacheFixtureStore(t))
+	h := NewCacheHandler(nil, pcacheFixtureStore(t), metricstest.Registry(t))
 	stat := providerAnswerStat(t, h, "")
 	_, hasExpired := stat["expired"]
 	require.False(t, hasExpired, "the expired count needs ?deep=true")
@@ -81,7 +82,7 @@ func TestHandleCacheStats_ProviderAnswerCounts(t *testing.T) {
 }
 
 func TestHandleCacheStats_ProviderAnswerSizeWithoutCensus(t *testing.T) {
-	stat := providerAnswerStat(t, NewCacheHandler(nil, countOnlyStore{n: 17}), "deep=true")
+	stat := providerAnswerStat(t, NewCacheHandler(nil, countOnlyStore{n: 17}, metricstest.Registry(t)), "deep=true")
 	require.EqualValues(t, 17, stat["size"])
 	require.NotEmpty(t, stat["expired_error"], "a store that cannot page says so instead of a count")
 }

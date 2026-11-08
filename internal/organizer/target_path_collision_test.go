@@ -1,7 +1,7 @@
 // file: internal/organizer/target_path_collision_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c1a9e4f-2b3d-4c5e-8f6a-1d2e3f4a5b6c
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package organizer
 
@@ -18,19 +18,19 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 // collisionCounterValue reads the current total of
 // audiobook_organizer_organize_target_path_collision_total straight from the
-// default Prometheus gatherer. The counter var itself is unexported in
+// given gatherer. The counter var itself is unexported in
 // package metrics, so a cross-package test cannot hold a Collector handle the
 // way internal/metrics/metrics_test.go does — gathering by name is the
 // equivalent read for an external caller. A family with no samples yet
 // (before the first Inc) is treated as zero.
-func collisionCounterValue(t *testing.T) float64 {
+func collisionCounterValue(t *testing.T, g prometheus.Gatherer) float64 {
 	t.Helper()
-	mfs, err := prometheus.DefaultGatherer.Gather()
+	mfs, err := g.Gather()
 	if err != nil {
 		t.Fatalf("gather metrics: %v", err)
 	}
@@ -114,8 +114,8 @@ func TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath(t *testing.T) {
 	}
 	t.Cleanup(func() { config.AppConfig = config.Config{} })
 
-	metrics.Register()
-	before := collisionCounterValue(t)
+	reg := metricstest.Registry(t)
+	before := collisionCounterValue(t, reg)
 
 	org := NewOrganizer(&config.AppConfig)
 
@@ -188,7 +188,7 @@ func TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath(t *testing.T) {
 
 	// (b) The collision counter increased by exactly 1 — one collision event
 	// for the two books sharing sharedTarget, none for book-c.
-	after := collisionCounterValue(t)
+	after := collisionCounterValue(t, reg)
 	if got := after - before; got != 1 {
 		t.Fatalf("collision counter increased by %v, want exactly 1 (before=%v after=%v)", got, before, after)
 	}

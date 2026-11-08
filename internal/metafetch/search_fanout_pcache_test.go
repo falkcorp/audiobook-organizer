@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_pcache_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4f9b2d61-8e07-4c5a-a3f1-7d26c0b95e18
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package metafetch
 
@@ -17,14 +17,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 // Tests of the shared provider-answer cache (P1/P2). Every fixture is
@@ -504,11 +503,10 @@ func scenarioProvider() *scriptedProvider {
 }
 
 // providerAnswerCounters reads cache_{hits,misses}_total{cache=provider_answer}
-// from the default registry.
+// from a metricstest registry (the collectors are package globals).
 func providerAnswerCounters(t *testing.T) (hits, misses float64) {
 	t.Helper()
-	metrics.Register()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := metricstest.Registry(t).Gather()
 	require.NoError(t, err)
 	for _, f := range families {
 		name := f.GetName()
