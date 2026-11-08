@@ -1,12 +1,11 @@
 // file: cmd/root.go
-// version: 1.28.7
+// version: 1.28.8
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -26,7 +26,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
-	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -79,13 +78,12 @@ var (
 	updateSeriesTags       = tagger.UpdateSeriesTags
 	initEncryption         = database.InitEncryption
 	loadConfigFromDB       = config.LoadConfigFromDatabase
-	initOTEL               = telemetry.InitOTEL
 	syncConfigFromEnv      = config.SyncConfigFromEnv
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
-	startServer            = func(srv *server.Server, cfg server.ServerConfig) error {
-		return srv.Start(cfg)
-	}
+	// runApp is serve's composition root (serve_app.go): app.New(ctx, opts,
+	// books.Module(store)) and Run, after serve's pre-server steps.
+	runApp = runComposedApp
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -290,34 +288,11 @@ var serveCmd = &cobra.Command{
 
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 
-		// Initialize OpenTelemetry: the Prometheus-exporting meter provider
-		// always; the OTLP tracer only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
-		appCfg := config.Snapshot()
-		otelCfg := telemetry.LoadConfig("audiobook-organizer", appCfg.OTelExporterOTLPEndpoint,
-			telemetry.WithMetricsOTLP(appCfg.OTelMetricsOTLPEndpoint,
-				telemetry.ParseMetricsInterval(appCfg.OTelMetricsOTLPInterval),
-				appCfg.OTelMetricsOTLPInsecure),
-			telemetry.WithEnvironment(appCfg.TelemetryEnvironment))
-		// Degraded (token metrics_disabled): observability must not take the
-		// library down. InitOTEL returns a usable shutdown even alongside a
-		// metrics error; the nil check is belt and braces for a stub.
-		var otelShutdown func(context.Context) error
-		_ = steps.Run("InitOTEL", func() error {
-			var err error
-			otelShutdown, err = initOTEL(context.Background(), otelCfg)
-			return err
-		})
-		if otelShutdown != nil {
-			defer func() {
-				// Bounded: the final OTLP flush must not hold the exit hostage
-				// when the collector is unreachable. InitOTEL's shutdown divides
-				// this budget between the tracer and the meter, so a hung tracer
-				// cannot starve the metric flush.
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				_ = otelShutdown(ctx)
-			}()
-		}
+		// The telemetry settings as HEAD's InitOTEL read them: before the
+		// stored settings and env overrides below apply. The App's Provider
+		// (app.New) builds the exporters from them; its Run flushes them on
+		// stop within the shutdown budget.
+		telemetryCfg := config.Snapshot()
 
 		// Initialize encryption for settings.
 		//
@@ -401,23 +376,14 @@ var serveCmd = &cobra.Command{
 
 		fmt.Println("Starting audiobook organizer web server...")
 
-		// Create and start server. Store is passed explicitly per the 4.4 DI
-		// migration; database.GlobalStore remains assigned for call sites that
-		// haven't yet been migrated to use s.Store().
 		// The shared Google Books daily budget persists its count in this
 		// store for the life of the process -- attached BEFORE the server is
-		// built, so no Google call made while it starts counts against an
-		// in-memory zero the attach would then discard. Process-scoped, so
-		// not inside NewServer (see AttachProviderThrottleStore).
+		// built (books' Register, inside app.New), so no Google call made
+		// while it starts counts against an in-memory zero the attach would
+		// then discard. Process-scoped, so not inside NewServer (see
+		// AttachProviderThrottleStore).
 		server.AttachGoogleBooksBudgetStore(store)
 
-		srv := newServer(store)
-
-		// Process-scoped, so the throttle registry's store lifetime matches the
-		// process. Deliberately NOT inside NewServer -- see the doc comment.
-		server.AttachProviderThrottleStore(store)
-
-		fmt.Println("Server initialized (hub, batcher, file I/O pool)")
 		cfg := getDefaultServerConfig()
 
 		// Apply command line flags (use defaults or user-provided values)
@@ -453,7 +419,7 @@ var serveCmd = &cobra.Command{
 		// degraded step of this process.
 		cfg.StartupSteps = steps
 
-		return startServer(srv, cfg)
+		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg})
 	},
 }
 

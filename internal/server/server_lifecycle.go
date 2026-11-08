@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.4
+// version: 4.66.5
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -377,6 +377,13 @@ func listenOptionsFor(cfg ServerConfig) httpapi.ListenOptions {
 // A failure flushes the deferred activity entries and stops the flight
 // recorder; the kernel then does not call StopHook.
 func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
+	// The kernel calls no stop after a failed start, so for Stopped's
+	// waiters (serve, before it closes the store) the server has stopped.
+	defer func() {
+		if err != nil {
+			s.markStopped()
+		}
+	}()
 	steps := s.startupStepsFor(cfg)
 	cfg.StartupSteps = steps
 	s.life.cfg = cfg
@@ -727,10 +734,18 @@ func (s *Server) endStreamsOnShutdown() gin.HandlerFunc {
 	}
 }
 
-// Stopped is closed when StopHook has returned. The kernel abandons a stop
-// hook that outlives the shutdown budget without stopping it, so the
-// composition root waits on this before closing the store.
+// Stopped is closed when StopHook has returned, or when StartHook failed
+// (the kernel then calls no stop). The kernel abandons a stop hook that
+// outlives the shutdown budget without stopping it, so the composition root
+// waits on this before closing the store.
 func (s *Server) Stopped() <-chan struct{} { return s.stopped }
+
+// markStopped closes Stopped's channel once.
+func (s *Server) markStopped() {
+	if s.stopped != nil {
+		s.stopOnce.Do(func() { close(s.stopped) })
+	}
+}
 
 // budgeted is d, or the time left before ctx's deadline less reserve when that
 // is shorter (never below zero): a stop step's own wait clamped to the
@@ -753,7 +768,7 @@ func budgeted(ctx context.Context, d, reserve time.Duration) time.Duration {
 // steps whose APIs take no deadline (the file I/O pool, the plugin and
 // container stops) run in order regardless. It closes Stopped on return.
 func (s *Server) StopHook(ctx context.Context) error {
-	defer s.stopOnce.Do(func() { close(s.stopped) })
+	defer s.markStopped()
 
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
 	// pinning this Server and its stores.
@@ -1049,7 +1064,22 @@ type R1Listener struct {
 // perimeter shim and the peer allow-list.
 func (s *Server) R1Listen(cfg ServerConfig) func(o httpapi.ListenOptions, h http.Handler, log *slog.Logger) (*R1Listener, error) {
 	return func(o httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (*R1Listener, error) {
-		return s.listenR1(cfg, o, h)
+		// The "http" step of HEAD's startup table (Fatal): StartHook stored
+		// the process's runner, so /health's step record stays complete.
+		steps := s.life.cfg.StartupSteps
+		if steps == nil {
+			steps = s.startupStepsFor(cfg)
+		}
+		var ln *R1Listener
+		err := steps.Run("http", func() error {
+			var err error
+			ln, err = s.listenR1(cfg, o, h)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+		return ln, nil
 	}
 }
 
