@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -8,10 +8,13 @@ package database
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // R1-15 follow-up (MAJOR-1): the clean-stop marker. Each test below pins one
@@ -561,4 +564,54 @@ func TestPebbleStoreOpen_TakesTheCleanStopMarker(t *testing.T) {
 			t.Error("an open with claims turned off took the marker")
 		}
 	})
+}
+
+// TestPopCleanStop_WarnsOnADirectoryMismatch (R1-15 round-2 review, N3): the
+// open took the marker from one directory and the import reads another, so the
+// claim is discarded. That costs every later boot its fast path, so it is
+// logged, naming both directories; a pop that matches, or finds no claim, is
+// silent.
+func TestPopCleanStop_WarnsOnADirectoryMismatch(t *testing.T) {
+	cases := []struct {
+		name      string
+		claimFrom string // "" leaves no claim
+		popFrom   string
+		wantOK    bool
+		wantWarn  bool
+	}{
+		{name: "another directory", claimFrom: "gotham/hnsw", popFrom: "arkham/hnsw", wantWarn: true},
+		{name: "the same directory", claimFrom: "gotham/hnsw", popFrom: "gotham/hnsw", wantOK: true},
+		{name: "no claim", popFrom: "arkham/hnsw"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := logtest.Capture(t, slog.LevelWarn) // not parallel: swaps slog.Default
+			d := memGatedDB(t)
+			if tc.claimFrom != "" {
+				d.cleanStop.Store(&cleanStopClaim{dir: tc.claimFrom, rec: &cleanStopRecord{Version: 1, Model: "bge-m3"}})
+			}
+			rec, ok := d.popCleanStop(tc.popFrom)
+			if ok != tc.wantOK || (rec != nil) != tc.wantOK {
+				t.Errorf("popCleanStop(%q) = %+v, %v; want ok %v", tc.popFrom, rec, ok, tc.wantOK)
+			}
+			if d.cleanStop.Load() != nil {
+				t.Error("the pop left the claim in place")
+			}
+			lines := buf.Lines("clean-stop marker")
+			if !tc.wantWarn {
+				if len(lines) != 0 {
+					t.Errorf("a pop that is not a mismatch logged %q", lines)
+				}
+				return
+			}
+			if len(lines) != 1 {
+				t.Fatalf("want one warning, got %q (all output: %q)", lines, buf.String())
+			}
+			for _, want := range []string{"level=WARN", tc.claimFrom, tc.popFrom} {
+				if !strings.Contains(lines[0], want) {
+					t.Errorf("the warning %q does not contain %q", lines[0], want)
+				}
+			}
+		})
+	}
 }
