@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.17.3
+// version: 1.17.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -174,11 +174,11 @@ func (s *Server) wireLibraryRoutes(
 		// maintenance.user-merge operation and only with a grant these
 		// handlers mint. Registered before /:id/... so "merges" is not an id.
 		users.GET("/merges", s.perm("users.manage"), userH.ListUserMerges)
-		s.credRoute(users, http.MethodPost, "/merges/:jid/resume", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.ResumeUserMerge)
-		s.credRoute(users, http.MethodPost, "/merges/:jid/undo", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.UndoUserMerge)
+		s.ownerCredRoute(users, http.MethodPost, "/merges/:jid/resume", s.perm("users.manage"), userH.ResumeUserMerge)
+		s.ownerCredRoute(users, http.MethodPost, "/merges/:jid/undo", s.perm("users.manage"), userH.UndoUserMerge)
 		users.GET("/:id/footprint", s.perm("users.manage"), userH.UserFootprint)
-		s.credRoute(users, http.MethodPost, "/:id/merge-into/:target/preview", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.PreviewUserMerge)
-		s.credRoute(users, http.MethodPost, "/:id/merge-into/:target/apply", s.perm("users.manage"), s.ownerGateWhenOwnerSet(), userH.ApplyUserMerge)
+		s.ownerCredRoute(users, http.MethodPost, "/:id/merge-into/:target/preview", s.perm("users.manage"), userH.PreviewUserMerge)
+		s.ownerCredRoute(users, http.MethodPost, "/:id/merge-into/:target/apply", s.perm("users.manage"), userH.ApplyUserMerge)
 	}
 
 	// Version groups
@@ -221,8 +221,8 @@ func (s *Server) wireLibraryRoutes(
 	// credential guard.
 	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodGet, "/admin/guest-service-tokens"),
 		http.MethodGet, "/admin/guest-service-tokens", s.handleListGuestServiceTokens)
-	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodGet, "/admin/guest-service-tokens/plan"),
-		http.MethodGet, "/admin/guest-service-tokens/plan", s.ownerGateWhenOwnerSet(), s.handlePlanGuestServiceToken)
-	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke"),
-		http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.ownerGateWhenOwnerSet(), s.handleRevokeGuestServiceToken)
+	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodGet, "/admin/guest-service-tokens/plan"),
+		http.MethodGet, "/admin/guest-service-tokens/plan", s.handlePlanGuestServiceToken)
+	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke"),
+		http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.handleRevokeGuestServiceToken)
 }

@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
-// last-edited: 2026-10-07
+// last-edited: 2026-11-07
 
 package server
 
@@ -28,4 +28,27 @@ func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {
 	return servermiddleware.RequireOwner(ownerEmail, "", func(*gin.Context) bool {
 		return strings.TrimSpace(ownerEmail()) != ""
 	})
+}
+
+// ownerCredRoute is credRoute for a route behind ownerGateWhenOwnerSet. The
+// owner gate runs after every handler of h but the last, so the route's own
+// permission leg (its s.perm, or the admin gate adminGroup added) is checked
+// first, as at every owner route. The route is recorded in s.ownerRoutes
+// ("METHOD /full/path"), so the legacy manifest's Guards.Owner rows are
+// compared with the registrations exactly (legacy_manifest_test.go).
+func (s *Server) ownerCredRoute(g *gin.RouterGroup, method, rel string, h ...gin.HandlerFunc) {
+	credRoutesMu.Lock()
+	if s.ownerRoutes == nil {
+		s.ownerRoutes = make(map[string]bool)
+	}
+	s.ownerRoutes[routeKey(g, method, rel)] = true
+	credRoutesMu.Unlock()
+	chain := make([]gin.HandlerFunc, 0, len(h)+1)
+	if n := len(h); n > 0 {
+		chain = append(chain, h[:n-1]...)
+		chain = append(chain, s.ownerGateWhenOwnerSet(), h[n-1])
+	} else {
+		chain = append(chain, s.ownerGateWhenOwnerSet())
+	}
+	s.credRoute(g, method, rel, chain...)
 }

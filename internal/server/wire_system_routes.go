@@ -1,7 +1,7 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -42,10 +42,10 @@ func (s *Server) wireSystemRoutes(
 	// Both also clear owner_email, so while an owner is set only the
 	// owner may run them (ownerGateWhenOwnerSet; plan D15). The admin gate
 	// runs before the credential guard.
-	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/reset"),
-		http.MethodPost, "/system/reset", s.ownerGateWhenOwnerSet(), systemH.ResetSystem)
-	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/factory-reset"),
-		http.MethodPost, "/system/factory-reset", s.ownerGateWhenOwnerSet(), systemH.FactoryReset)
+	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/reset"),
+		http.MethodPost, "/system/reset", systemH.ResetSystem)
+	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/factory-reset"),
+		http.MethodPost, "/system/factory-reset", systemH.FactoryReset)
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
 	// Setup-wizard OpenAI key check (SEC-9). Registered next to /config because
@@ -62,7 +62,7 @@ func (s *Server) wireSystemRoutes(
 	// with the backup's, so it is a credential change; and the restored
 	// settings can predate owner_email, so it is owner-only while an owner
 	// is set (ownerGateWhenOwnerSet; plan D15).
-	s.credRoute(protected, http.MethodPost, "/backup/restore", s.perm(auth.PermSettingsManage), s.ownerGateWhenOwnerSet(), systemH.RestoreBackup)
+	s.ownerCredRoute(protected, http.MethodPost, "/backup/restore", s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
 	protected.DELETE("/backup/:filename", s.perm(auth.PermSettingsManage), systemH.DeleteBackup)
 	protected.GET("/library/quick-queries", s.perm(auth.PermLibraryView), systemH.GetQuickQueries)
 	protected.GET("/maintenance/transcribe-stats", s.perm(auth.PermLibraryView), systemH.GetTranscribeStats)
