@@ -1,9 +1,9 @@
-// file: internal/compactprogress/step.go
-// version: 1.1.1
+// file: core/storage/compact_progress.go
+// version: 1.1.2
 // guid: 0e9c7d31-5a4b-4f62-8b1e-7c3d9a2f6e15
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
-package compactprogress
+package storage
 
 import (
 	"context"
@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // DefaultInterval is how often a running step is sampled in production. The
@@ -48,6 +46,17 @@ type Step struct {
 	Frame func(message string)
 	// Interval between samples; <= 0 means DefaultInterval.
 	Interval time.Duration
+	// Log receives the completion line and any sampler panic, passed in by
+	// the caller (no package logger, 04 §8.5 R1). Nil discards.
+	Log *slog.Logger
+}
+
+// log is the step's logger; a nil Log discards.
+func (s Step) log() *slog.Logger {
+	if s.Log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return s.Log
 }
 
 // Result is what a finished step measured.
@@ -58,8 +67,6 @@ type Result struct {
 	HasStats bool
 	Err      error
 }
-
-var stepLog = logger.New("db-optimize")
 
 // Moved reports whether the engine did real work between two samples.
 //
@@ -108,7 +115,7 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 		// its completion line still gets written.
 		defer func() {
 			if p := recover(); p != nil {
-				stepLog.Error("%s: progress sampler panicked, sampling stopped: %v\n%s", s.Label, p, debug.Stack())
+				s.log().Error(fmt.Sprintf("%s: progress sampler panicked, sampling stopped: %v\n%s", s.Label, p, debug.Stack()))
 			}
 		}()
 		sample(ctx, rep, s, interval, start, res.Before, stop)
@@ -132,9 +139,9 @@ func RunStep(ctx context.Context, rep LogReporter, s Step) Result {
 	level := slog.LevelInfo
 	if res.Err != nil {
 		level = slog.LevelError
-		stepLog.Error("%s", line)
+		s.log().Error(line)
 	} else {
-		stepLog.Info("%s", line)
+		s.log().Info(line)
 	}
 	_ = rep.Log(level, line)
 	rep.SetCurrentItem("")
@@ -182,7 +189,7 @@ func sample(ctx context.Context, rep LogReporter, s Step, interval time.Duration
 func safeStats(s Step) (st Stats) {
 	defer func() {
 		if p := recover(); p != nil {
-			stepLog.Error("%s: sampling compaction stats panicked: %v\n%s", s.Label, p, debug.Stack())
+			s.log().Error(fmt.Sprintf("%s: sampling compaction stats panicked: %v\n%s", s.Label, p, debug.Stack()))
 			st = Stats{Absent: true}
 		}
 	}()

@@ -1,5 +1,5 @@
 # file: .golangci.yml
-# version: 1.6.0
+# version: 1.6.1
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
 # last-edited: 2026-11-07
 
@@ -88,9 +88,6 @@ linters:
         - (github.com/falkcorp/audiobook-organizer/internal/operations.ProgressReporter).UpdateProgress
         - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).Log
         - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).UpdateProgress
-        # compactprogress.LogReporter is the two-method slice of registry.Reporter
-        # the compaction sampler needs; its Log is the same op-log write.
-        - (github.com/falkcorp/audiobook-organizer/internal/compactprogress.LogReporter).Log
         # Concrete adapters that wrap a Reporter; same benign shape.
         - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).Log
         - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).UpdateProgress

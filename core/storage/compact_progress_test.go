@@ -1,9 +1,9 @@
-// file: internal/compactprogress/step_test.go
-// version: 1.2.2
+// file: core/storage/compact_progress_test.go
+// version: 1.2.3
 // guid: 3f8a1c6e-2d7b-4c90-a5e4-9b1f0d7c2a83
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
-package compactprogress
+package storage
 
 import (
 	"context"
@@ -19,8 +19,6 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 const gib = 1 << 30
@@ -277,9 +275,9 @@ func TestRunStep_NoStatsReportsElapsedOnly(t *testing.T) {
 	assert.NotContains(t, logs[len(logs)-1], "live tables")
 }
 
-// CollectCompactionStats reads real field names from the pinned Pebble version; this pins
+// compactionStatsFromMetrics reads real field names from the pinned Pebble version; this pins
 // that the mapping compiles and produces sane numbers on a real DB.
-func TestCollectCompactionStats_RealPebble(t *testing.T) {
+func TestCompactionStats_RealPebble(t *testing.T) {
 	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -293,12 +291,13 @@ func TestCollectCompactionStats_RealPebble(t *testing.T) {
 		require.NoError(t, db.Delete([]byte{byte(i >> 8), byte(i)}, pebble.NoSync))
 	}
 	require.NoError(t, db.Flush())
-	gated := database.NewGatedDB(db)
-	before := database.CollectCompactionStats(gated)
+	before := compactionStatsFromMetrics(db.Metrics())
 	require.NoError(t, db.Compact(context.Background(), nil, []byte{0xff}, false))
-	after := database.CollectCompactionStats(gated)
+	after := compactionStatsFromMetrics(db.Metrics())
 	assert.Greater(t, after.LiveTableSize, int64(0))
 	assert.Greater(t, after.WrittenBytes(), before.WrittenBytes(), "a compaction must show written bytes")
 	assert.Greater(t, after.BottomLevelSize, int64(0), "a full compaction lands data in the bottom level")
-	assert.Equal(t, Stats{Absent: true}, database.CollectCompactionStats(nil))
+	closed := newEnv(t).open()
+	require.NoError(t, closed.Close())
+	assert.Equal(t, Stats{Absent: true}, closed.Admin().CompactionStats())
 }

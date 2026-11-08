@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: d4e5f6a7-b8c9-0123-def0-345678901234
-// last-edited: 2026-10-10
+// last-edited: 2026-11-07
 
 package maintenance
 
@@ -10,13 +10,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // dbOptimizeDef is the only registration of the database compaction.
@@ -53,12 +56,12 @@ func (p *Plugin) runDBOptimize(ctx context.Context, _ json.RawMessage, reporter 
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	runDBOptimizeSteps(ctx, store, p.deps, reporter, compactprogress.DefaultInterval)
+	runDBOptimizeSteps(ctx, store, p.deps, reporter, storage.DefaultInterval)
 	return nil
 }
 
 // runDBOptimizeSteps compacts the main, AI-scan and OpenLibrary stores, each
-// through compactprogress.RunStep so the op log shows what Pebble is doing
+// through storage.RunStep so the op log shows what Pebble is doing
 // every interval and a before/after line when each store finishes. Before
 // 2026-10-02 the only lines were "Compacting main database..." and, ~28
 // minutes later, "Main database optimized in ...".
@@ -92,12 +95,13 @@ func runDBOptimizeSteps(ctx context.Context, store compactableStore, aux StoreOp
 				"AI scan store has no separate database (absent or shares the main one); nothing separate to compact")
 		}
 	} else {
-		res := compactprogress.RunStep(ctx, reporter, compactprogress.Step{
+		res := storage.RunStep(ctx, reporter, storage.Step{
 			Label:    fmt.Sprintf("Compacting AI scan database (2/%d)", storesTotal),
 			Run:      aux.OptimizeAIScanStore,
-			Stats:    func() compactprogress.Stats { st, _ := aux.AIScanStoreCompactionStats(); return st },
+			Stats:    func() storage.Stats { st, _ := aux.AIScanStoreCompactionStats(); return storage.Stats(st) },
 			Frame:    func(msg string) { _ = reporter.UpdateProgress(1, storesTotal, msg) },
 			Interval: interval,
+			Log:      compactLog(),
 		})
 		if res.Err == nil {
 			storesOptimized++
@@ -109,12 +113,13 @@ func runDBOptimizeSteps(ctx context.Context, store compactableStore, aux StoreOp
 	if _, ok := aux.OLStoreCompactionStats(); !ok {
 		_ = reporter.Log(slog.LevelInfo, "OpenLibrary cache not initialized, skipping")
 	} else {
-		res := compactprogress.RunStep(ctx, reporter, compactprogress.Step{
+		res := storage.RunStep(ctx, reporter, storage.Step{
 			Label:    fmt.Sprintf("Compacting OpenLibrary cache (3/%d)", storesTotal),
 			Run:      aux.OptimizeOLStore,
-			Stats:    func() compactprogress.Stats { st, _ := aux.OLStoreCompactionStats(); return st },
+			Stats:    func() storage.Stats { st, _ := aux.OLStoreCompactionStats(); return storage.Stats(st) },
 			Frame:    func(msg string) { _ = reporter.UpdateProgress(2, storesTotal, msg) },
 			Interval: interval,
+			Log:      compactLog(),
 		})
 		if res.Err == nil {
 			storesOptimized++
@@ -148,9 +153,9 @@ func runDBOptimizeSteps(ctx context.Context, store compactableStore, aux StoreOp
 // WHY COUNTERS AND NOT A TICKER. A frame on every tick regardless of work
 // would satisfy the watchdog and destroy it at the same time: a genuinely
 // wedged compaction would keep reporting healthy forever. So progress FRAMES
-// go out only when Pebble says work happened (compactprogress.Moved: bytes
+// go out only when Pebble says work happened (storage.Moved: bytes
 // written by a compaction, a compaction completed, or debt fell). Since
-// 2026-10-02 the sampling itself lives in compactprogress.RunStep, which also
+// 2026-10-02 the sampling itself lives in storage.RunStep, which also
 // LOGS a descriptive line every tick -- logs do not stamp liveness, so that
 // adds visibility without masking a wedge.
 //
@@ -163,12 +168,56 @@ type compactableStore interface {
 }
 
 func optimizeMainWithHeartbeat(ctx context.Context, store compactableStore, reporter sdk.Reporter, storesTotal int, interval time.Duration) error {
-	res := compactprogress.RunStep(ctx, reporter, compactprogress.Step{
+	res := storage.RunStep(ctx, reporter, storage.Step{
 		Label:    fmt.Sprintf("Compacting main database (1/%d)", storesTotal),
 		Run:      store.Optimize,
-		Stats:    store.CompactionStats,
+		Stats:    func() storage.Stats { return storage.Stats(store.CompactionStats()) },
 		Frame:    func(msg string) { _ = reporter.UpdateProgress(0, storesTotal, msg) },
 		Interval: interval,
+		Log:      compactLog(),
 	})
 	return res.Err
 }
+
+// compactLog is the logger of a compaction step's own lines (its completion
+// line and a sampler panic): the "db-optimize" subsystem logger the sampler
+// held as a package variable before it moved into core's storage, whose
+// RunStep takes a *slog.Logger instead (04 §8.5 R1). Each line still reads
+// "db-optimize: <line>" on stdout and in the activity log's system rows.
+func compactLog() *slog.Logger {
+	return slog.New(standardLoggerHandler{l: logger.New("db-optimize")})
+}
+
+// standardLoggerHandler writes slog records through an internal/logger
+// StandardLogger at the record's level. The message is passed as a "%s"
+// argument, never as a format, and attributes are appended in
+// logger.FormatAttrs form; groups are flattened.
+type standardLoggerHandler struct {
+	l     *logger.StandardLogger
+	attrs []slog.Attr
+}
+
+func (h standardLoggerHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h standardLoggerHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := slices.Clone(h.attrs)
+	r.Attrs(func(a slog.Attr) bool { attrs = append(attrs, a); return true })
+	msg := r.Message + logger.FormatAttrs(attrs)
+	switch {
+	case r.Level >= slog.LevelError:
+		h.l.Error("%s", msg)
+	case r.Level >= slog.LevelWarn:
+		h.l.Warn("%s", msg)
+	case r.Level >= slog.LevelInfo:
+		h.l.Info("%s", msg)
+	default:
+		h.l.Debug("%s", msg)
+	}
+	return nil
+}
+
+func (h standardLoggerHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	return standardLoggerHandler{l: h.l, attrs: append(slices.Clone(h.attrs), as...)}
+}
+
+func (h standardLoggerHandler) WithGroup(string) slog.Handler { return h }

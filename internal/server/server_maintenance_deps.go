@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.76.3
+// version: 1.76.4
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-11-07
 
@@ -22,7 +22,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
@@ -383,16 +382,16 @@ func (s *Server) OptimizeOLStore(ctx context.Context) error {
 	return store.Optimize(ctx)
 }
 
-func (s *Server) AIScanStoreCompactionStats() (compactprogress.Stats, bool) {
+func (s *Server) AIScanStoreCompactionStats() (database.CompactionStats, bool) {
 	if s.aiScanStore == nil {
-		return compactprogress.Stats{}, false
+		return database.CompactionStats{}, false
 	}
 	return s.aiScanStore.CompactionStats()
 }
 
-func (s *Server) OLStoreCompactionStats() (compactprogress.Stats, bool) {
+func (s *Server) OLStoreCompactionStats() (database.CompactionStats, bool) {
 	if s.olService == nil {
-		return compactprogress.Stats{Absent: true}, false
+		return database.CompactionStats{Absent: true}, false
 	}
 	// Under olService.Mu: the delete-OL-data and factory-reset handlers close
 	// and nil the store while holding it.
