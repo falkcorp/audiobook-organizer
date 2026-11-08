@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/keys"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
+	"github.com/falkcorp/mediacore/storage/restorejournal/restorejournaltest"
 )
 
 // swapBuild is the binary ID the swap tests hand the kernel through
@@ -152,6 +154,33 @@ func (h *swapHost) stage(id string, kind restorejournal.Kind, staged string) {
 	if err := s.Stage(h.ctx, in); err != nil {
 		h.t.Fatal(err)
 	}
+}
+
+// resetStager makes the host's later boots, and the swapper it returns for
+// staging, read every path in dirs as on a second filesystem
+// (restorejournaltest.OtherDevice through bootseam.Seams.Probe). A reset's delete
+// entry on the DB's filesystem is refused at Stage and at P0a's step a
+// (05-storage §5S.3.15), and the host has one filesystem.
+func (h *swapHost) resetStager(dirs ...string) *restoreswap.Swapper {
+	h.t.Helper()
+	probe := restorejournaltest.OtherDevice{Probe: restorejournal.OSProbe(), Dirs: dirs}
+	h.ctx = bootseam.With(h.t.Context(), &bootseam.Seams{BuildID: swapBuild, Probe: probe})
+	s, err := restoreswap.New(restoreswap.Options{StateDir: h.state, BuildID: swapBuild, Probe: probe})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return s
+}
+
+// resetIntent is a reset of the host's store and its levels sidecar, each
+// set aside under restore/<id>/previous/, deleting del.
+func (h *swapHost) resetIntent(id string, reset restorejournal.ResetKind, del ...string) restorejournal.Intent {
+	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: reset, DBPath: h.db, Delete: del,
+		StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}
+	for _, p := range []string{h.db, h.db + restorejournal.LevelsSuffix} {
+		in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(h.state, h.db, id, p)})
+	}
+	return in
 }
 
 // stagedCopy is a copy of the live store under the swap's staging directory,
@@ -463,16 +492,7 @@ func TestResetHookDoneAfterMigrationList(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "z-reset"
-	s, err := restoreswap.New(restoreswap.Options{StateDir: h.state, BuildID: swapBuild})
-	if err != nil {
-		t.Fatal(err)
-	}
-	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: restorejournal.ResetStore, DBPath: h.db,
-		Delete: []string{aux}, StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}
-	for _, p := range []string{h.db, h.db + restorejournal.LevelsSuffix} {
-		in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(h.state, h.db, id, p)})
-	}
-	if err := s.Stage(h.ctx, in); err != nil {
+	if err := h.resetStager(aux).Stage(h.ctx, h.resetIntent(id, restorejournal.ResetStore, aux)); err != nil {
 		t.Fatal(err)
 	}
 	broken := storage.Migration{Version: 2, Name: "broken", Compat: storage.Additive,
@@ -501,12 +521,88 @@ func TestResetHookDoneAfterMigrationList(t *testing.T) {
 	}
 }
 
+// TestP0aRejectsKeptDeleteEntries (05-storage §5S.3.15 rule (4); R1-21
+// review M1, probe 1; verification review): a reset intent written past
+// Stage that lists the DB's parent and the state directory among its delete
+// entries is rejected at P0a's step a, as Stage refuses it. The journal
+// says rejected, the store boots untouched with nothing set aside, and the
+// auxiliary entry (on a second filesystem, so only the kept rule refuses
+// the intent) stays.
+func TestP0aRejectsKeptDeleteEntries(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.config(nil)))
+	aux := filepath.Join(filepath.Dir(h.state), "batcave-index")
+	if err := os.MkdirAll(aux, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "z-kept"
+	in := h.resetIntent(id, restorejournal.ResetFactory, filepath.Dir(h.db), h.state, aux)
+	if err := h.resetStager(aux).Stage(h.ctx, in); !errors.Is(err, restorejournal.ErrDeleteRefused) {
+		t.Fatalf("Stage = %v, want ErrDeleteRefused", err)
+	}
+	if err := os.MkdirAll(restorejournal.JournalDir(h.state, id), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := restorejournal.CreateIntent(h.state, in); err != nil {
+		t.Fatal(err)
+	}
+	h.mustBoot(h.config(nil))
+	if got := stepsOf(h.journal(id)); got[len(got)-1] != "rejected" {
+		t.Fatalf("journal = %v, want the intent rejected at step a", got)
+	}
+	if _, err := os.Stat(filepath.Join(restorejournal.JournalDir(h.state, id), restorejournal.RejectedName)); err != nil {
+		t.Fatalf("rejected.json: %v", err)
+	}
+	if _, err := os.Stat(restorejournal.SetAsideDest(h.state, h.db, id, h.db)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a rejected reset set the store aside: %v", err)
+	}
+	if ms, _ := filepath.Glob(filepath.Join(h.db, "MANIFEST-*")); len(ms) == 0 {
+		t.Fatal("the live store is gone")
+	}
+	if _, err := os.Stat(aux); err != nil {
+		t.Fatalf("a rejected reset removed its auxiliary entry: %v", err)
+	}
+}
+
+// TestP0aRejectsADeleteEntryOnTheDBFilesystem (05-storage §5S.3.15 "Stage";
+// R1-21 review M1; verification review): the kernel's P0a reads the
+// operating system's probe, so step a refuses a reset written past Stage
+// whose delete entry is on the DB's filesystem, which Stage's probe would
+// have refused, and the entry stays.
+func TestP0aRejectsADeleteEntryOnTheDBFilesystem(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.config(nil)))
+	aux := filepath.Join(filepath.Dir(h.state), "batcave-index")
+	if err := os.MkdirAll(aux, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "z-same-fs"
+	in := h.resetIntent(id, restorejournal.ResetFactory, aux)
+	if err := os.MkdirAll(restorejournal.JournalDir(h.state, id), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := restorejournal.CreateIntent(h.state, in); err != nil {
+		t.Fatal(err)
+	}
+	h.mustBoot(h.config(nil))
+	recs := h.journal(id)
+	if last := recs[len(recs)-1]; last.Step != "rejected" || !strings.Contains(last.Note, "on the DB's filesystem") {
+		t.Fatalf("journal ends %+v, want step a's rejection of an entry on the DB's filesystem", last)
+	}
+	if _, err := os.Stat(aux); err != nil {
+		t.Fatalf("a rejected reset removed its delete entry: %v", err)
+	}
+}
+
 // TestPostResetHookSkipsKeptPaths (05-storage §5S.3.15 rule (4), the kernel's
-// no-hook case; R1-21 review M1, probe 1): a reset intent that lists the
-// DB's parent and the state directory among its delete entries (written
-// past Stage, which refuses it) completes with both recorded as kept and
-// neither removed: the set-aside original and the fresh store survive, and
-// the one auxiliary entry is removed.
+// no-hook case; R1-21 review M1, probe 1): once the in-flight file exists
+// nothing but the kernel's completion reads the delete entries again, so
+// its own skip still guards them. A reset staged with one auxiliary entry
+// fails its P4b and stays at applied, and its in-flight intent is then
+// rewritten to list the DB's parent and the state directory as well. The
+// next boot completes with both recorded as kept and neither removed: the
+// set-aside original and the fresh store survive, and the auxiliary entry
+// is removed.
 func TestPostResetHookSkipsKeptPaths(t *testing.T) {
 	h := newSwapHost(t)
 	h.close(h.mustBoot(h.config(nil)))
@@ -515,16 +611,31 @@ func TestPostResetHookSkipsKeptPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "z-kept"
-	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: restorejournal.ResetFactory, DBPath: h.db,
-		Delete:        []string{filepath.Dir(h.db), h.state, aux},
-		StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}
-	for _, p := range []string{h.db, h.db + restorejournal.LevelsSuffix} {
-		in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(h.state, h.db, id, p)})
-	}
-	if err := os.MkdirAll(restorejournal.JournalDir(h.state, id), 0o700); err != nil {
+	if err := h.resetStager(aux).Stage(h.ctx, h.resetIntent(id, restorejournal.ResetFactory, aux)); err != nil {
 		t.Fatal(err)
 	}
-	if err := restorejournal.CreateIntent(h.state, in); err != nil {
+	broken := storage.Migration{Version: 2, Name: "broken", Compat: storage.Additive,
+		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }}
+	if _, err := h.boot(h.config(nil, broken)); err == nil {
+		t.Fatal("reset boot with a failing step succeeded")
+	}
+	if got := stepsOf(h.journal(id)); got[len(got)-1] != "applied" {
+		t.Fatalf("after a failed P4b the journal is %v, want it at applied", got)
+	}
+	inflight := filepath.Join(restorejournal.JournalDir(h.state, id), restorejournal.InflightName)
+	b, err := os.ReadFile(inflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in restorejournal.Intent
+	if err := json.Unmarshal(b, &in); err != nil {
+		t.Fatal(err)
+	}
+	in.Delete = []string{filepath.Dir(h.db), h.state, aux}
+	if b, err = json.Marshal(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inflight, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h.mustBoot(h.config(nil))
