@@ -1,5 +1,5 @@
 // file: core/coretest/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d3cedf2-afcc-4dd3-818a-7d6ca97695ab
 // last-edited: 2026-11-07
 
@@ -52,6 +52,8 @@ func TestBootZeroModules(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
 		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
 	}
+	// Zero modules build zero routes: the gate must pass an empty route set,
+	// not fail or panic on it.
 	AssertRoutesHavePermissions(t, h)
 }
 
@@ -592,6 +594,53 @@ func TestHarness_ParallelBoots(t *testing.T) {
 				h := New(t, WithModules(hello.New()), WithDisabled(hello.ID))
 				AssertModuleInert(t, h, hello.ID)
 				AssertRoutesHavePermissions(t, New(t, WithModules(hello.New())))
+			}
+		})
+	}
+}
+
+// gcpd and gordon are modules whose values are not comparable (a slice
+// field, a func field): Boot must tell modules apart without ==, which
+// panics on such interface values.
+type gcpd struct{ units []string }
+
+func (gcpd) Manifest() module.Manifest {
+	return module.Manifest{ID: "gcpd", Version: "1.0.0", MinCoreVersion: "0.1.0", DefaultEnabled: true}
+}
+
+func (gcpd) Register(r *module.Registrar) error { return r.Err() }
+
+type gordon struct{ signal func() string }
+
+func (gordon) Manifest() module.Manifest {
+	return module.Manifest{ID: "gordon", Version: "1.0.0", MinCoreVersion: "0.1.0", DefaultEnabled: true}
+}
+
+func (gordon) Register(r *module.Registrar) error { return r.Err() }
+
+// TestBoot_UncomparableModuleValues: modules passed by value with a slice or
+// func field boot, enabled or disabled.
+func TestBoot_UncomparableModuleValues(t *testing.T) {
+	mods := func() []module.Module {
+		return []module.Module{gcpd{units: []string{"bullock"}}, gordon{signal: func() string { return "bat" }}}
+	}
+	for _, c := range []struct {
+		name string
+		opts []Option
+	}{
+		{"enabled", nil},
+		{"disabled", []Option{WithDisabled("gcpd", "gordon")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("Boot panicked: %v", p)
+				}
+			}()
+			h := New(t, append([]Option{WithModules(mods()...)}, c.opts...)...)
+			if c.opts != nil {
+				AssertModuleInert(t, h, "gcpd")
+				AssertModuleInert(t, h, "gordon")
 			}
 		})
 	}

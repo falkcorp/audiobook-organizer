@@ -1,5 +1,5 @@
 // file: core/coretest/harness.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
 // last-edited: 2026-11-07
 
@@ -147,13 +147,18 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 	}
 	// A nil module and a duplicate ID are the kernel's to refuse (a
 	// ValidationError), so every module goes to app.New; the map keeps the
-	// first module of an ID.
-	for _, m := range s.mods {
+	// first module of an ID, and first its index. Modules are told apart by
+	// index, never by comparing them: a module's value need not be
+	// comparable (a struct with a slice or func field), and == on such an
+	// interface value panics.
+	first := map[module.ID]int{}
+	for i, m := range s.mods {
 		if m == nil {
 			continue
 		}
 		if id := m.Manifest().ID; h.mods[id] == nil {
 			h.mods[id] = m
+			first[id] = i
 		}
 	}
 	disable := map[module.ID]bool{}
@@ -178,7 +183,7 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 			continue
 		}
 		id := m.Manifest().ID
-		if h.mods[id] != m || !(disable[id] || !m.Manifest().DefaultEnabled) {
+		if first[id] != i || !(disable[id] || !m.Manifest().DefaultEnabled) {
 			continue
 		}
 		w := &watchedModule{Module: m, disabled: disable[id]}
