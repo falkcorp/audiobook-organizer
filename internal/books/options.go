@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -164,8 +164,8 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 // Attach binds what needs the App once New has returned, before Run: the
 // legacy client_golang families register on the App's Provider registry,
 // which the gin /metrics route then serves (05-metrics §6, §13 item 2), and
-// the App's log output switches to the activity feed's writer. A disabled
-// books (no server built) has nothing to attach.
+// the process default logger's lines switch to the activity feed's writer
+// (see logTee). A disabled books (no server built) has nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
 	if err != nil {
@@ -188,24 +188,25 @@ func Attach(mod module.Module, a *app.App) error {
 // logTee is the App's log output (app.Options.LogOutput). R1-18's activity
 // tap replaces it.
 //
-// Until Attach, every line goes to out (stdout when unset). Attach points
-// activity at the activity feed's writer, which tees each line to stdout
+// Until Attach, every line goes to stdout. Attach points activity at the
+// activity feed's writer, which tees each line to stdout
 // itself and parses it into the Activity Log. In HEAD, NewServer made a text
 // handler over that writer slog's default, so the feed saw exactly what
 // logged through slog's default. With the App's logger installed as the
 // default instead (app.InstallProcessDefaults), the tee keeps that: a line
 // from the process default logger goes to the feed, and a line from a scoped
 // logger (core's own kernel, metrics, http and otel lines, module=core, or a
-// module's own logger) goes to out, so it is printed but makes no Activity
-// row (R1-15 review M2). The process default writes no module attribute
+// module's own logger) goes to stdout, so it is printed but makes no
+// Activity row (R1-15 review M2). The process default writes no module attribute
 // (core/log Root), so the two are told apart by scopedLine.
 type logTee struct {
-	out      atomic.Pointer[io.Writer]
+	// stdout takes every line that does not go to the activity feed; nil =
+	// os.Stdout. Production leaves it nil. A test sets it before the App is
+	// built and never after, so it needs no synchronisation, unlike activity,
+	// which Attach sets while the App's goroutines may be logging.
+	stdout   io.Writer
 	activity atomic.Pointer[io.Writer]
 }
-
-// set points every line that does not go to the activity feed at w.
-func (t *logTee) set(w io.Writer) { t.out.Store(&w) }
 
 // setActivity points the process default logger's lines at the activity
 // feed's writer.
@@ -215,8 +216,8 @@ func (t *logTee) Write(p []byte) (int, error) {
 	if a := t.activity.Load(); a != nil && !scopedLine(p) {
 		return (*a).Write(p)
 	}
-	if w := t.out.Load(); w != nil {
-		return (*w).Write(p)
+	if t.stdout != nil {
+		return t.stdout.Write(p)
 	}
 	return os.Stdout.Write(p)
 }
