@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.52.0
+# version: 2.52.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -223,11 +223,13 @@ run-api: build-api
 # web-build, web-test, web-lint and web-typecheck pay for the install once, and
 # two of them under `make -j` never run the install in the same directory at once.
 # The stamp lives in node_modules, so deleting node_modules also forces a reinstall.
-# GNU make has no `**`, hence the find over core/web/packages (empty until core/web exists).
+# GNU make has no `**`, hence the find over core/web/packages. It skips node_modules
+# (packages ship `src/` directories there, which npm ci rewrites) and the built
+# `dist/`, so the stamp tracks only the packages' own sources.
 WEB_DEPS_STAMP := $(WEB_DIR)/node_modules/.web-deps.stamp
 WEB_DEPS_INPUTS := $(WEB_DIR)/package-lock.json $(wildcard $(ROOT_DIR)/core/web/package-lock.json) \
 	$(ROOT_DIR)/scripts/ci/build_web.sh \
-	$(shell find $(ROOT_DIR)/core/web/packages -path '*/src/*' -type f 2>/dev/null)
+	$(shell find $(ROOT_DIR)/core/web/packages -path '*/src/*' -type f -not -path '*/node_modules/*' 2>/dev/null)
 
 web-deps: $(WEB_DEPS_STAMP)
 

@@ -26,6 +26,7 @@
   "dependencies": {
     "@emotion/react": "^11.11.1",
     "@emotion/styled": "^11.11.0",
+    "@mediacore/api-client": "file:../core/web/packages/api-client",
     "@mui/icons-material": "^9.5.0",
     "@mui/material": "^9.3.1",
     "esbuild": "0.28.2",
