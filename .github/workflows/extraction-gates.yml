@@ -1,7 +1,7 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # The `extraction-gates` required check (09 §9.2.1; R1-02). Parallel jobs, each
 # with `timeout-minutes` <= 30 (09 §9.2.10), and one terminal job named
@@ -104,12 +104,21 @@ jobs:
   # MOD9-5: rebase merges land every commit of a PR on main, where git bisect
   # and auto-revert see each one, so each must build. The script prints
   # "no rename into core/: nothing to check" and exits 0 for any other PR.
+  # Sharded across 4 machines: one runner builds about 1.6 commits a minute, so a
+  # 48-commit PR (#4453) ran past the 30-minute cap that 09 §9.2.10 sets for
+  # every job here. Each shard builds one contiguous slice of the commits (the
+  # script's --shard); shard 1 also runs the rename-similarity check. The
+  # terminal job below sees one result for the whole matrix.
   check-commits-build:
-    name: check-commits-build
+    name: check-commits-build (${{ matrix.shard }}/4)
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,6 +153,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           case "$EVENT" in
@@ -151,7 +161,7 @@ jobs:
             merge_group) base="$MERGE_GROUP_BASE" ;;
             *) echo "event $EVENT has no PR range: nothing to check"; exit 0 ;;
           esac
-          python3 scripts/ci/check_commits_build.py --base "$base"
+          python3 scripts/ci/check_commits_build.py --base "$base" --shard "${SHARD}/4"
 
   # 05-metrics §12 / 09 §9.2.1: a metric rename or removal must fail before it
   # blanks a dashboard panel or silences an alert. promtool is a pinned

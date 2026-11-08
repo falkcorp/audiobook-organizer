@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_commits_build.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6f66fba8-e2b8-4472-80c2-7f0130d4b25d
-# last-edited: 2026-11-06
+# last-edited: 2026-11-08
 """Tests for scripts/ci/check_commits_build.py (09 §9.2.1 extraction-gates; MOD9-5).
 
 Every case builds a throwaway git repository holding two tiny Go modules, a root
@@ -113,9 +113,9 @@ class CheckCommitsBuildTests(unittest.TestCase):
         (self.repo / "core/mover").mkdir(parents=True, exist_ok=True)
         self.git("mv", "internal/mover/mover.go", "core/mover/mover.go")
 
-    def run_script(self) -> subprocess.CompletedProcess:
+    def run_script(self, *extra: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--base", self.base],
+            [sys.executable, str(SCRIPT), "--base", self.base, *extra],
             cwd=self.repo,
             env=ENV,
             capture_output=True,
@@ -193,6 +193,68 @@ class CheckCommitsBuildTests(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         listed = self.git("worktree", "list", "--porcelain")
         self.assertEqual(listed.count("worktree "), 1, listed)
+
+    def test_shards_split_the_commits_and_only_one_reports_the_bad_commit(self):
+        self.move()
+        self.commit("move the mover into core")
+        self.write("main.go", MAIN_GO + "\n// touched\n")
+        self.commit("touch main")
+        self.write("main.go", MAIN_GO + "\nfunc broken( {\n")
+        bad = self.commit("break the root build")
+        self.write("main.go", MAIN_GO)
+        self.commit("repair the root build")
+        first = self.run_script("--shard", "1/2")
+        second = self.run_script("--shard", "2/2")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("2 of 4", first.stdout)
+        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+        self.assertIn(bad[:12], second.stdout)
+
+    def test_similarity_is_reported_by_shard_one_only(self):
+        self.move()
+        self.write("core/mover/mover.go", MOVER_GO_EDITED)
+        self.commit("move the mover into core and rewrite it")
+        self.write("main.go", MAIN_GO + "\n// touched\n")
+        self.commit("touch main")
+        first = self.run_script("--shard", "1/2")
+        second = self.run_script("--shard", "2/2")
+        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+        self.assertIn("core/mover/mover.go", first.stdout)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertNotIn("FAIL", second.stdout)
+
+    def test_more_shards_than_commits_leaves_spare_shards_empty(self):
+        self.move()
+        self.commit("move the mover into core")
+        res = self.run_script("--shard", "3/3")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("no commits to build", res.stdout)
+
+
+class ShardSliceTests(unittest.TestCase):
+    def test_slices_are_contiguous_near_equal_and_cover_every_commit(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import check_commits_build as ccb
+        finally:
+            sys.path.pop(0)
+        for total in range(0, 12):
+            commits = [f"c{i}" for i in range(total)]
+            for n in range(1, 6):
+                parts = [ccb.shard_slice(commits, k, n) for k in range(1, n + 1)]
+                self.assertEqual(sum(parts, []), commits, (total, n))
+                sizes = [len(p) for p in parts]
+                self.assertLessEqual(max(sizes) - min(sizes), 1, (total, n))
+
+    def test_bad_shard_values_are_rejected(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        try:
+            import check_commits_build as ccb
+        finally:
+            sys.path.pop(0)
+        for bad in ("0/4", "5/4", "1/0", "x/4", "4"):
+            with self.assertRaises(Exception, msg=bad):
+                ccb.parse_shard(bad)
 
 
 if __name__ == "__main__":
