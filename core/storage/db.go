@@ -1,5 +1,5 @@
 // file: core/storage/db.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
 // last-edited: 2026-11-08
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"regexp"
 	"slices"
@@ -103,6 +104,16 @@ type DB struct {
 	seqs  map[string]*Sequence
 
 	closed atomic.Bool
+
+	// violations counts out-of-claim accesses by owner, op class and mode
+	// (violation); the kernel serves them as
+	// <namespace>_storage_claim_violations_total (§5S.8, §5S.9.4 step 2).
+	// violationKeys holds the first few distinct keys of each series
+	// (ClaimViolationKeys), so a count can be traced to the family that made
+	// it even when the caller swallowed the error.
+	violationsMu  sync.Mutex
+	violations    map[ClaimViolation]uint64
+	violationKeys map[ClaimViolation][]string
 
 	// boot is the boot state Open read and Prepare and Migrate advance; nil
 	// for a read-only DB.
@@ -289,15 +300,102 @@ func (s handleOf) absolute(key []byte, op opKind) (abs []byte, serialized bool, 
 // the emergency dial core.storage.claims.mode=shadow, logged and allowed,
 // persisting nothing (§5S.0 D-S2). Keys under c/ and m/ are never reachable
 // through a legacy range, shadow or not.
+//
+// Shadow rescues point accesses only (Get, Set, Delete, a batch's ops).
+// It does not widen a scan: an iterator stays clipped to the handle's
+// ownedSpans, so a family the claims miss is invisible to every scan in
+// either mode, and an op that lists it sees nothing rather than an error.
+//
+// The shadow Warn is rate-limited per series: it fires on the 1st, 2nd,
+// 4th, 8th, ... access (a power of two) and carries the series count, so a
+// hot unclaimed family cannot flood the log. The counter and
+// ClaimViolationKeys see every access.
 func (db *DB) violation(owner Owner, op opKind, key []byte) error {
 	reserved := bytes.HasPrefix(key, []byte("c/")) || bytes.HasPrefix(key, []byte("m/"))
+	v := ClaimViolation{Owner: owner, Op: "write", Mode: "refused"}
+	if op == opRead {
+		v.Op = "read"
+	}
 	if !db.set.shadow || reserved {
+		db.countViolation(v, key)
 		return fmt.Errorf("storage: %s %q by %s: %w", op, key, owner, ErrOutsideKeyspace)
 	}
-	db.log.Warn("storage: out-of-claim access allowed by core.storage.claims.mode=shadow",
-		"owner", string(owner), "op", op.String(), "key", fmt.Sprintf("%q", key))
+	v.Mode = "shadow"
+	if n := db.countViolation(v, key); n&(n-1) == 0 {
+		db.log.Warn("storage: out-of-claim access allowed by core.storage.claims.mode=shadow",
+			"owner", string(owner), "op", op.String(), "key", fmt.Sprintf("%q", key), "count", n)
+	}
 	return nil
 }
+
+// ClaimViolation is one series of <namespace>_storage_claim_violations_total
+// (§5S.8): the owner whose handle made an out-of-claim access, its op class
+// ("read" or "write") and what storage did ("refused", or "shadow" when the
+// dial core.storage.claims.mode=shadow allowed it).
+type ClaimViolation struct {
+	Owner Owner
+	Op    string
+	Mode  string
+}
+
+// maxViolationKeys is how many distinct keys ClaimViolationKeys keeps per
+// series.
+const maxViolationKeys = 4
+
+// countViolation counts one access of series v at key and returns the
+// series' new count.
+func (db *DB) countViolation(v ClaimViolation, key []byte) uint64 {
+	db.violationsMu.Lock()
+	defer db.violationsMu.Unlock()
+	if db.violations == nil {
+		db.violations = make(map[ClaimViolation]uint64)
+		db.violationKeys = make(map[ClaimViolation][]string)
+	}
+	db.violations[v]++
+	if ks := db.violationKeys[v]; len(ks) < maxViolationKeys {
+		q := fmt.Sprintf("%q", key)
+		if !slices.Contains(ks, q) {
+			db.violationKeys[v] = append(ks, q)
+		}
+	}
+	return db.violations[v]
+}
+
+// ClaimViolations is every out-of-claim access counted since the store
+// opened, by series. A series appears from its first access.
+func (db *DB) ClaimViolations() map[ClaimViolation]uint64 {
+	db.violationsMu.Lock()
+	defer db.violationsMu.Unlock()
+	return maps.Clone(db.violations)
+}
+
+// ClaimViolationKeys is the first few distinct keys (quoted, at most
+// maxViolationKeys) of each series ClaimViolations counts.
+func (db *DB) ClaimViolationKeys() map[ClaimViolation][]string {
+	db.violationsMu.Lock()
+	defer db.violationsMu.Unlock()
+	out := make(map[ClaimViolation][]string, len(db.violationKeys))
+	for v, ks := range db.violationKeys {
+		out[v] = slices.Clone(ks)
+	}
+	return out
+}
+
+// ShadowViolations is how many out-of-claim accesses the shadow dial has
+// allowed since the store opened, over every owner and op; 0 under strict
+// claims, which refuse them instead.
+func (db *DB) ShadowViolations() uint64 {
+	var n uint64
+	for v, c := range db.ClaimViolations() {
+		if v.Mode == "shadow" {
+			n += c
+		}
+	}
+	return n
+}
+
+// ClaimsShadow reports whether the store runs the shadow dial.
+func (db *DB) ClaimsShadow() bool { return db.set.shadow }
 
 // ownedSpans are the absolute ranges a legacy handle may read, clamped to
 // [lo, hi); for a keyspace the one range of its prefix.

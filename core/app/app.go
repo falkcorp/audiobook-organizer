@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // App is one booted process: the kernel behind New.
@@ -65,6 +66,12 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	c.StorageFS = opts.StorageFS
 	if c.StoragePath, c.StateDir, err = storagePath(opts, mods); err != nil {
 		return nil, err
+	}
+	if c.StoragePath != "" {
+		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
+			return nil, err
+		}
+		c.StorageStateFiles = slices.Clone(opts.StorageStateFiles)
 	}
 	// The SDK's logger and error handler go in once the App's logging exists
 	// and before the Provider is built (Options.ProcessDefaults).
@@ -120,6 +127,15 @@ func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
 // Close does nothing. Added with storage, the first thing New opens that must
 // be closed (R1-20).
 func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
+
+// StorageAdmin is the store's admin surface (storage.Admin), nil when New
+// opened no store. Release R1 only: ABO's books module still holds the
+// store-wide administration that HEAD ran on its own engine (the backup
+// checkpoint, the compaction op, the census flush and the Pebble collector's
+// sample), and reaches it here once New returns. Each one moves into core
+// with its subsystem (05-storage §5S.9.1: the census mechanism; 05-backup),
+// and the accessor is deleted with the last of them.
+func (a *App) StorageAdmin() *storage.Admin { return a.k.StorageAdmin() }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New. Embedding still needs Run: Handler alone
@@ -310,6 +326,19 @@ func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, e
 	if dbPath != "" && !filepath.IsAbs(dbPath) {
 		return "", "", fmt.Errorf("app: %s %q is not an absolute path (core.storage.path)", dbVar, dbPath)
 	}
+	if r1 := opts.R1StoragePath; r1 != "" {
+		if !filepath.IsAbs(r1) {
+			return "", "", fmt.Errorf("app: Options.R1StoragePath %q is not an absolute path (core.storage.path)", r1)
+		}
+		// Two sources naming two stores would let serve and the app's own
+		// offline commands open different databases: refuse rather than
+		// pick one.
+		if dbPath != "" && filepath.Clean(dbPath) != filepath.Clean(r1) {
+			return "", "", fmt.Errorf("app: %s %q and the app's database path %q (Options.R1StoragePath) name different stores; set one, or set both to the same path",
+				dbVar, dbPath, r1)
+		}
+		dbPath = r1
+	}
 	if stateDir, err = ResolveStateDir(opts); err != nil {
 		return "", "", err
 	}
@@ -320,6 +349,31 @@ func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, e
 		return filepath.Clean(dbPath), stateDir, nil
 	}
 	return filepath.Join(stateDir, "storage", "main.pebble"), stateDir, nil
+}
+
+// claimsShadow is core.storage.claims.mode (05-storage §5S.0 D-S2, §5S.9.4
+// step 2): until config (F3) its one layer is <EnvPrefix>_CORE_STORAGE_CLAIMS_MODE.
+// "strict" (the default, also when unset) refuses every out-of-claim access;
+// "shadow", the emergency dial, logs, counts and allows it. Any other value
+// fails the boot: a mistyped dial must not silently mean either.
+func claimsShadow(opts Options) (bool, error) {
+	prefix, err := envPrefix(opts)
+	if err != nil {
+		return false, err
+	}
+	env := opts.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	name := prefix + "_CORE_STORAGE_CLAIMS_MODE"
+	switch v := lookupEnv(env, name); v {
+	case "", "strict":
+		return false, nil
+	case "shadow":
+		return true, nil
+	default:
+		return false, fmt.Errorf("app: %s=%q is not a claims mode (strict or shadow; core.storage.claims.mode)", name, v)
+	}
 }
 
 // envPrefix is Options.EnvPrefix, default strings.ToUpper(AppID), checked
