@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -293,5 +293,69 @@ func TestMarkCleanStop_Refusals(t *testing.T) {
 				t.Error("a refused MarkCleanStop left a marker")
 			}
 		})
+	}
+}
+
+// TestMarkCleanStop_RefusesAfterAWriteTheGraphMissed (R1-15 follow-up review,
+// MAJOR-1(C)): the caller wrote the row to Pebble before it mirrored it, so a
+// mirror the graph refused (or the engine reports failed) leaves the graph
+// short of a row Pebble holds. A refused Upsert changes nothing in the graph,
+// so the generation check alone would let the marker vouch.
+func TestMarkCleanStop_RefusesAfterAWriteTheGraphMissed(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		write func(s *HNSWEmbeddingStore) error
+	}{
+		{"a vector of another dimension", func(s *HNSWEmbeddingStore) error {
+			return s.Upsert(ctx, "book", "scarecrow", []float32{1, 0}, nil)
+		}},
+		{"a reserved metadata key", func(s *HNSWEmbeddingStore) error {
+			return s.Upsert(ctx, "book", "scarecrow", []float32{0, 0, 0, 1}, map[string]string{hnswTombstoneKey: "1"})
+		}},
+		{"a failed mirror the engine reports", func(s *HNSWEmbeddingStore) error {
+			s.MarkDiverged("chromem upsert book scarecrow: simulated")
+			return errors.New("reported")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, _ := exportedRogues(t, dir)
+			if err := tc.write(s); err == nil {
+				t.Fatal("the write was accepted; the case needs a refused one")
+			}
+			written, reason, err := s.MarkCleanStop(dir)
+			if err != nil || written {
+				t.Fatalf("MarkCleanStop = %v, %q, %v; want refused", written, reason, err)
+			}
+			if !strings.Contains(reason, "missed a write that Pebble holds") {
+				t.Errorf("reason = %q", reason)
+			}
+			if markerExists(t, dir) {
+				t.Error("a refused MarkCleanStop left a marker")
+			}
+		})
+	}
+}
+
+// TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt: a mirror that
+// failed after the stop-time marker (the embed queue's drain) removes it, and
+// the next boot reconciles.
+func TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt(t *testing.T) {
+	dir := t.TempDir()
+	s, truth := exportedRogues(t, dir)
+	markCleanStop(t, s, dir)
+	if err := s.Upsert(context.Background(), "book", "scarecrow", []float32{1, 0}, nil); err == nil {
+		t.Fatal("a vector of another dimension was accepted")
+	}
+	if markerExists(t, dir) {
+		t.Fatal("the marker survived a write the graph refused")
+	}
+	next := NewHNSWEmbeddingStore(4)
+	if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !next.NeedsReconcile() {
+		t.Error("a snapshot that lacks a refused write must be reconciled")
 	}
 }
