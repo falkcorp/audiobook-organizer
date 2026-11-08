@@ -1,7 +1,7 @@
 # file: deploy/local.conf.example
-# version: 1.4.0
+# version: 1.4.1
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
-# last-edited: 2026-10-22
+# last-edited: 2026-11-08
 #
 # TEMPLATE — this is a systemd drop-in for audiobook-organizer.service.
 # Copy to deploy/local.conf (gitignored) and fill in your own TLS cert
@@ -27,10 +27,14 @@ ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
       --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
       --http3-port 8484
 
-# How long systemd waits for a graceful shutdown before SIGKILL. Raise this
-# if large in-flight operations (fingerprint rescans, dedup purges) need time
-# to finish cleanly on stop/restart.
-TimeoutStopSec=30
+# How long systemd waits for a graceful shutdown before SIGKILL. The base unit
+# sets none, so this value (or systemd's DefaultTimeoutStopSec) is the one the
+# server stops under. It must cover the kernel's shutdown budget (25s by
+# default) plus the store's close after it, which can wait up to 10s for a
+# Pebble access still in flight. Production runs with 90s. Raise it if large
+# in-flight operations (fingerprint rescans, dedup purges) need longer to
+# finish cleanly on stop/restart.
+TimeoutStopSec=90
 
 # Point at your own Windows GPU box (or other Ollama-compatible endpoint)
 # running bge-m3 (1024-dim embeddings) and qwen2.5:7b-instruct. See
