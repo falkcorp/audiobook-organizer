@@ -1,5 +1,5 @@
 // file: internal/books/perimeter_app_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d50ddd31-9468-4c34-9994-a64e31f28a71
 // last-edited: 2026-11-08
 
@@ -39,7 +39,8 @@ import (
 // gzipped with Vary: Origin, Accept-Encoding; an error status is sent
 // uncompressed with no Vary at all, CORS's Origin included. internal/server's
 // TestPerimeter_ParityWithHEAD diffs the other headers against HEAD's frozen
-// perimeter.
+// perimeter. The CSP and Reporting-Endpoints are books' stage 5 values, which
+// only this test sees wired through books' module.
 func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 	r := runComposed(t)
 	c, addr := r.composed, r.addr
@@ -51,6 +52,7 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 	t.Cleanup(client.CloseIdleConnections)
+	legacyCSP, _, _ := c.srv.LegacyPerimeter()
 	const origin = "https://gotham.example"
 	gzipSame := map[string]string{"Accept-Encoding": "gzip", "Origin": origin}
 	for _, tc := range []struct {
@@ -108,8 +110,17 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 			}
 			// Core's stages wrote the rest of the perimeter on this answer.
 			assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"), "security headers")
-			assert.NotEmpty(t, resp.Header.Get("Content-Security-Policy"), "CSP")
 			assert.Equal(t, "dev", resp.Header.Get("X-App-Build"), "X-App-Build")
+			if tc.coreBody {
+				// Core owns /api/core/: its default policy, no report URL.
+				assert.Equal(t, "default-src 'none'; frame-ancestors 'self'", resp.Header.Get("Content-Security-Policy"), "CSP")
+				assert.Empty(t, resp.Header.Get("Reporting-Endpoints"), "Reporting-Endpoints")
+			} else {
+				// Books' stage 5 values (module.go's MountLegacy: DefaultCSP
+				// and CSPReport from LegacyPerimeter) on the mount's answers.
+				assert.Equal(t, legacyCSP(req), resp.Header.Get("Content-Security-Policy"), "CSP")
+				assert.Equal(t, `csp="/api/v1/csp-report"`, resp.Header.Get("Reporting-Endpoints"), "Reporting-Endpoints")
+			}
 		})
 	}
 }
