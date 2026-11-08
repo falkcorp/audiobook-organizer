@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ff1aae37-5f8d-4461-a1fe-d80e76ea662e
 // last-edited: 2026-11-08
 
@@ -99,4 +99,13 @@ func TestCreateIntentFSTakesBackAnUnsyncedLink(t *testing.T) {
 		}
 		noDotNames(t, mem)
 	})
+}
+
+// TestValidID: an intent id names a directory of its own under restore/.
+func TestValidID(t *testing.T) {
+	for id, want := range map[string]bool{"r-archive": true, "z-reset.1": true, "": false, ".": false, "..": false, "../joker": false, "a/b": false, "/gotham": false} {
+		if got := ValidID(id); got != want {
+			t.Errorf("ValidID(%q) = %v, want %v", id, got, want)
+		}
+	}
 }

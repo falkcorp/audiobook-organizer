@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -189,13 +189,18 @@ func readIntent(fs vfs.FS, path string) (restorejournal.Intent, error) {
 		return in, fmt.Errorf("restoreswap: read intent %s: %w", path, err)
 	}
 	if err := json.Unmarshal(b, &in); err != nil {
-		return in, fmt.Errorf("restoreswap: intent %s does not decode: %w", path, err)
+		return in, fmt.Errorf("%w: %s does not decode: %w", errIntentInvalid, path, err)
 	}
-	if in.ID == "" || filepath.Base(in.ID) != in.ID || !filepath.IsAbs(in.DBPath) {
-		return in, fmt.Errorf("restoreswap: intent %s has no usable id or db_path", path)
+	if !restorejournal.ValidID(in.ID) || !filepath.IsAbs(in.DBPath) {
+		return in, fmt.Errorf("%w: %s has no usable id or db_path", errIntentInvalid, path)
 	}
 	return in, nil
 }
+
+// errIntentInvalid marks an intent file that was read and cannot be a swap:
+// it does not decode, or its id or db_path is unusable. It is a verdict on
+// the content; an error reading the file is not one.
+var errIntentInvalid = errors.New("restoreswap: the intent is not a usable swap")
 
 // InFlight reports the one swap whose in-flight file exists: the probe of
 // 05-storage §5S.3.7's reader check and of the rollback guard. More than
@@ -231,9 +236,12 @@ func InFlightJournal(fs vfs.FS, stateDir string) (id string, kind restorejournal
 
 // RunP0a is boot phase P0a (06 §6.5.1; 05-backup §5B.3.4): it resumes the
 // swap whose in-flight file exists, else applies the staged intent (step a's
-// rejection rule first), else returns BootPlain. Run once per boot, before
-// storage opens; never from Describe. An error halts boot; every step is
-// idempotent, so the next boot resumes from the journal.
+// rejection rule first), else returns BootPlain. A pending.json that is no
+// usable intent is moved out of the slot (rejectInvalid) and the boot goes
+// on plain, degraded restore_rejected; beside an in-flight file the swap
+// resumes after it. Run once per boot, before storage opens; never from
+// Describe. An error halts boot, an error reading pending.json among them;
+// every step is idempotent, so the next boot resumes from the journal.
 func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 	id, inflight, err := InFlight(s.fs, s.o.StateDir)
 	if err != nil {
@@ -247,15 +255,23 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 		if pending {
 			// The slot artifact of a kill inside the in-flight rename: the
 			// later file wins. Two different ids cannot both hold the slot.
+			// A pending.json that is no usable intent cannot be this swap's
+			// own slot file (the in-flight file is its copy): it is moved
+			// aside and the swap resumes.
 			p, err := readIntent(s.fs, s.pendingPath())
-			if err != nil {
+			switch {
+			case errors.Is(err, errIntentInvalid):
+				if _, err := s.rejectInvalid(ctx, err); err != nil {
+					return Outcome{}, err
+				}
+			case err != nil:
 				return Outcome{}, err
-			}
-			if p.ID != id {
+			case p.ID != id:
 				return Outcome{}, fmt.Errorf("%w: pending %s, in flight %s", ErrSlotConflict, p.ID, id)
-			}
-			if err := s.cleanupSlot(ctx, s.pendingPath()); err != nil {
-				return Outcome{}, err
+			default:
+				if err := s.cleanupSlot(ctx, s.pendingPath()); err != nil {
+					return Outcome{}, err
+				}
 			}
 		}
 		return s.resume(ctx, id)
@@ -264,6 +280,9 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 		return Outcome{}, nil
 	}
 	in, err := readIntent(s.fs, s.pendingPath())
+	if errors.Is(err, errIntentInvalid) {
+		return s.rejectInvalid(ctx, err)
+	}
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -357,6 +376,51 @@ func (s *Swapper) rejectPending(ctx context.Context, in restorejournal.Intent, r
 		"id", in.ID, "kind", string(in.Kind), "reason", reason)
 	return Outcome{ID: in.ID, Intent: in, Last: StepRejected,
 		Degraded: degraded, Reason: fmt.Sprintf("%s intent %s: %s", in.Kind, in.ID, reason)}, nil
+}
+
+// rejectInvalid moves a pending.json that is no usable intent
+// (errIntentInvalid, cause) out of the slot before anything moved (R1-21
+// review m3): to restore/rejected-<UTC time>[-n].json, a name no earlier
+// rejection holds, since it has no id to journal under and the file is its
+// own record. It logs at ERROR and the boot goes on plain, degraded
+// restore_rejected. A kill before the directory sync leaves pending.json in
+// the slot, and the next boot rejects it again.
+func (s *Swapper) rejectInvalid(ctx context.Context, cause error) (Outcome, error) {
+	var dst string
+	if err := bootseam.Labelled(bootseam.From(ctx), "swap.slot.invalid", func() error {
+		var err error
+		if dst, err = freeName(s.fs, restorejournal.Dir(s.o.StateDir), "rejected-"+s.now().UTC().Format("20060102T150405Z")); err != nil {
+			return err
+		}
+		if err := s.fs.Rename(s.pendingPath(), dst); err != nil {
+			return fmt.Errorf("restoreswap: move the unusable intent to %s: %w", dst, err)
+		}
+		return syncDir(s.fs, filepath.Dir(dst))
+	}); err != nil {
+		return Outcome{}, err
+	}
+	s.o.Logger.Error("restoreswap: the staged intent is not a usable swap; moved out of the slot, booting the untouched store",
+		"moved_to", dst, "err", cause)
+	return Outcome{Boot: BootPlain, Degraded: DegradedRestoreRejected,
+		Reason: fmt.Sprintf("%v (moved to %s)", cause, filepath.Base(dst))}, nil
+}
+
+// freeName is dir/<base>.json, or dir/<base>-<n>.json for the first n that
+// no file holds.
+func freeName(fs vfs.FS, dir, base string) (string, error) {
+	for n := 0; n < 1000; n++ {
+		name := base + ".json"
+		if n > 0 {
+			name = fmt.Sprintf("%s-%d.json", base, n)
+		}
+		p := filepath.Join(dir, name)
+		if ok, err := exists(fs, p); err != nil {
+			return "", err
+		} else if !ok {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("restoreswap: no free name for %s in %s", base, dir)
 }
 
 // cleanupSlot removes a slot file a later file superseded.

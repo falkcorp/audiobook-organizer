@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/stage.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f8808c55-579d-4ed5-81e1-2c5276a578b9
 // last-edited: 2026-11-08
 
@@ -42,7 +42,7 @@ import (
 // so its operations are not crash-matrix rows: a crash leaves the slot
 // taken or free, and an empty restore/<id>/ that P0a ignores.
 func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
-	if in.ID == "" || filepath.Base(in.ID) != in.ID {
+	if !restorejournal.ValidID(in.ID) {
 		return fmt.Errorf("restoreswap: intent id %q is not one path segment", in.ID)
 	}
 	if !filepath.IsAbs(in.DBPath) {
