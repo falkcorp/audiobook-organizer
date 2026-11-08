@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.15.2 -->
+<!-- version: 4.15.3 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # CLAUDE.md
 
@@ -105,8 +105,11 @@ resolves it:
 
 ```bash
 cd ../<repo>-<feature>
-npm ci --prefix web   # Playwright must come from the worktree, not an orphan
-                      # ~/node_modules with a different pinned version.
+make web-deps         # Playwright must come from the worktree, not an orphan
+                      # ~/node_modules with a different pinned version. Not a bare
+                      # npm ci in web/: web/ depends on core/web's
+                      # @mediacore/api-client through file:, which must be
+                      # installed and built first (scripts/ci/build_web.sh deps).
 ```
 
 > **Do NOT run `go work init .` in a worktree.** It was recommended here briefly
