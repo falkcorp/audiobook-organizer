@@ -1,5 +1,5 @@
 // file: internal/server/handlers/phone_app_steps.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: dc8db512-0961-4e2c-a747-9c5014eb7267
 // last-edited: 2026-11-07
 
@@ -73,12 +73,8 @@ const phoneAppStepsHTMLDef = `{{define "phoneAppSteps"}}<p><strong>iPhone or iPa
 {{if .KeyInEmail}}<p>If the app is already set up with your old key, open the same Custom Headers screen and replace both values with the two above.</p>
 {{end}}{{end}}`
 
-// phoneAppStepsData is what the partial reads.
-type phoneAppStepsData struct {
-	Username   string
-	ServerURL  string
-	KeyInEmail bool
-}
+// The partial reads Username, ServerURL and KeyInEmail from whatever data the
+// including template executes with (inviteEmailData, phoneKeyEmailData).
 
 // Why an email cannot go out; the reasons EmailSendBlocked returns. The
 // invitation wording (mailNotConfiguredReason and publicURLMissingReason in
