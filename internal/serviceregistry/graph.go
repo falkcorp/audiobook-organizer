@@ -1,5 +1,6 @@
 // file: internal/serviceregistry/graph.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-11-08
 
 package serviceregistry
 
@@ -13,7 +14,7 @@ import (
 // queue is sorted lexically before processing for deterministic order
 // (stable startup logs, reproducible tests).
 //
-// Returns ErrUnknownService if a dep references an unregistered name.
+// Returns ErrUnknownService if a dep references a name with no def in the container.
 // Returns ErrCycle if the dep graph contains a cycle.
 // Idempotent after first successful call.
 func (c *Container) Resolve() error {
@@ -33,9 +34,9 @@ func (c *Container) Resolve() error {
 			wanted[name] = true
 			return nil
 		}
-		def, ok := registered[name]
+		def, ok := c.defs[name]
 		if !ok {
-			return fmt.Errorf("%w: %q (declared as a dep but not registered)", ErrUnknownService, name)
+			return fmt.Errorf("%w: %q (declared as a dep but not in the container's defs)", ErrUnknownService, name)
 		}
 		wanted[name] = true
 		for _, dep := range def.Needs {
@@ -59,7 +60,7 @@ func (c *Container) Resolve() error {
 			incoming[name] = 0
 			continue
 		}
-		def := registered[name]
+		def := c.defs[name]
 		incoming[name] = len(def.Needs)
 		for _, dep := range def.Needs {
 			outgoing[dep] = append(outgoing[dep], name)

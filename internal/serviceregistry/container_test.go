@@ -1,6 +1,6 @@
 // file: internal/serviceregistry/container_test.go
-// version: 1.1.0
-// last-edited: 2026-08-23
+// version: 1.2.0
+// last-edited: 2026-11-08
 
 package serviceregistry
 
@@ -25,21 +25,20 @@ func (f *fakeService) Start(ctx context.Context) error { f.started = true; retur
 func (f *fakeService) Stop(ctx context.Context) error  { f.stopped = true; return nil }
 
 func TestContainer_Build_RunsInDepOrder(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
-
 	order := []string{}
-	Register(ServiceDef{Name: "leaf", Build: func(c *Container) (any, error) {
-		order = append(order, "leaf")
-		return &fakeService{name: "leaf"}, nil
-	}})
-	Register(ServiceDef{Name: "top", Needs: []string{"leaf"}, Build: func(c *Container) (any, error) {
-		_ = Get[*fakeService](c, "leaf") // verify Get works mid-Build
-		order = append(order, "top")
-		return &fakeService{name: "top"}, nil
-	}})
+	defs := []ServiceDef{
+		{Name: "leaf", Build: func(c *Container) (any, error) {
+			order = append(order, "leaf")
+			return &fakeService{name: "leaf"}, nil
+		}},
+		{Name: "top", Needs: []string{"leaf"}, Build: func(c *Container) (any, error) {
+			_ = Get[*fakeService](c, "leaf") // verify Get works mid-Build
+			order = append(order, "top")
+			return &fakeService{name: "top"}, nil
+		}},
+	}
 
-	c := NewContainer().Include("top")
+	c := NewContainerFrom(defs...)
 	if err := c.Build(t.Context()); err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -49,19 +48,18 @@ func TestContainer_Build_RunsInDepOrder(t *testing.T) {
 }
 
 func TestContainer_Get_UndeclaredDepPanics(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		{Name: "leaf", Build: func(c *Container) (any, error) {
+			return "leaf-instance", nil
+		}},
+		// "naughty" does NOT declare "leaf" in Needs but tries to Get it.
+		{Name: "naughty", Build: func(c *Container) (any, error) {
+			_ = Get[string](c, "leaf") // should panic
+			return nil, nil
+		}},
+	}
 
-	Register(ServiceDef{Name: "leaf", Build: func(c *Container) (any, error) {
-		return "leaf-instance", nil
-	}})
-	// "naughty" does NOT declare "leaf" in Needs but tries to Get it.
-	Register(ServiceDef{Name: "naughty", Build: func(c *Container) (any, error) {
-		_ = Get[string](c, "leaf") // should panic
-		return nil, nil
-	}})
-
-	c := NewContainer().Include("leaf", "naughty")
+	c := NewContainerFrom(defs...)
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -72,13 +70,12 @@ func TestContainer_Get_UndeclaredDepPanics(t *testing.T) {
 }
 
 func TestContainer_PostInit_RunsAfterAllBuilds(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		{Name: "a", Build: func(c *Container) (any, error) { return &fakeService{name: "a"}, nil }},
+		{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) { return &fakeService{name: "b"}, nil }},
+	}
 
-	Register(ServiceDef{Name: "a", Build: func(c *Container) (any, error) { return &fakeService{name: "a"}, nil }})
-	Register(ServiceDef{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) { return &fakeService{name: "b"}, nil }})
-
-	c := NewContainer().Include("a", "b")
+	c := NewContainerFrom(defs...)
 	if err := c.Build(t.Context()); err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -94,21 +91,20 @@ func TestContainer_PostInit_RunsAfterAllBuilds(t *testing.T) {
 }
 
 func TestContainer_Stop_ReverseOrder(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
-
 	stopOrder := []string{}
-	Register(ServiceDef{Name: "a", Build: func(c *Container) (any, error) {
-		return &recordingService{name: "a", sink: &stopOrder}, nil
-	}})
-	Register(ServiceDef{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) {
-		return &recordingService{name: "b", sink: &stopOrder}, nil
-	}})
-	Register(ServiceDef{Name: "c", Needs: []string{"b"}, Build: func(c *Container) (any, error) {
-		return &recordingService{name: "c", sink: &stopOrder}, nil
-	}})
+	defs := []ServiceDef{
+		{Name: "a", Build: func(c *Container) (any, error) {
+			return &recordingService{name: "a", sink: &stopOrder}, nil
+		}},
+		{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) {
+			return &recordingService{name: "b", sink: &stopOrder}, nil
+		}},
+		{Name: "c", Needs: []string{"b"}, Build: func(c *Container) (any, error) {
+			return &recordingService{name: "c", sink: &stopOrder}, nil
+		}},
+	}
 
-	c := NewContainer().Include("c")
+	c := NewContainerFrom(defs...)
 	if err := c.Build(t.Context()); err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -152,25 +148,24 @@ func (r *recordingService) Stop(ctx context.Context) error {
 // call site.
 //
 // The real accessors can't be exercised from this file: config and plugin
-// both import serviceregistry (to Register their own ServiceDefs), so
+// both import serviceregistry (to declare their own ServiceDefs), so
 // serviceregistry importing them back — even from a test file — would be
 // an import cycle. This uses an in-package stand-in of the same shape
 // instead.
 func TestTypedAccessor_UndeclaredDepStillPanics(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		{Name: "widget", Build: func(c *Container) (any, error) {
+			return "widget-instance", nil
+		}},
+		// "naughty" does NOT declare "widget" in Needs but calls the typed
+		// accessor for it.
+		{Name: "naughty", Build: func(c *Container) (any, error) {
+			_ = getWidget(c) // should panic, same as a bare Get[string](c, "widget")
+			return nil, nil
+		}},
+	}
 
-	Register(ServiceDef{Name: "widget", Build: func(c *Container) (any, error) {
-		return "widget-instance", nil
-	}})
-	// "naughty" does NOT declare "widget" in Needs but calls the typed
-	// accessor for it.
-	Register(ServiceDef{Name: "naughty", Build: func(c *Container) (any, error) {
-		_ = getWidget(c) // should panic, same as a bare Get[string](c, "widget")
-		return nil, nil
-	}})
-
-	c := NewContainer().Include("widget", "naughty")
+	c := NewContainerFrom(defs...)
 	defer func() {
 		r := recover()
 		if r == nil {

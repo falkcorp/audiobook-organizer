@@ -1,6 +1,6 @@
 // file: internal/search/register.go
-// version: 3.2.0
-// last-edited: 2026-10-12
+// version: 3.2.1
+// last-edited: 2026-11-08
 // guid: 7b4e2c1a-9f3d-4a82-b6e5-1d0c8f5a3e72
 //
 // Registers the BleveIndex as the "searchindex" service. IndexService
@@ -102,14 +102,18 @@ func (b *IndexService) Path() string {
 	return b.path
 }
 
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "searchindex",
-		Needs:  []string{serviceregistry.KeyConfig},
-		Groups: []string{"scheduler"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			return &IndexService{cfg: cfg}, nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		{
+			Name:   "searchindex",
+			Needs:  []string{serviceregistry.KeyConfig},
+			Groups: []string{"scheduler"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				return &IndexService{cfg: cfg}, nil
+			},
 		},
-	})
+	}
 }

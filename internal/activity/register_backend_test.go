@@ -1,7 +1,7 @@
 // file: internal/activity/register_backend_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6d2e8b41-37a9-4c5f-9e0d-1b8a4f7c2e93
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package activity
 
@@ -31,8 +31,14 @@ func buildActivityStore(t *testing.T, backend string) (any, error) {
 		DatabasePath:    t.TempDir(),
 		ActivityBackend: backend,
 	}
-	c := serviceregistry.NewContainer().
-		Include(serviceregistry.KeyActivityStore).
+	// Only the activitystore def: the others would need a built store too.
+	var storeDefs []serviceregistry.ServiceDef
+	for _, d := range ServiceDefs() {
+		if d.Name == serviceregistry.KeyActivityStore {
+			storeDefs = append(storeDefs, d)
+		}
+	}
+	c := serviceregistry.NewContainerFrom(storeDefs...).
 		Override(serviceregistry.KeyConfig, cfg).
 		Override("pebble-activitystore", pas)
 	if err := c.Build(context.Background()); err != nil {

@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.33.0
+// version: 1.33.1
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-10-14
+// last-edited: 2026-11-08
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -28,8 +29,14 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
+	delugeplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
+	itunesplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
+	metafetchplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
@@ -83,293 +90,347 @@ func resolveVectorBackend(backend string) string {
 	}
 }
 
-// init registers services that can't live in their domain packages due
-// to import cycles or because they need package-private symbols from
-// internal/server.
+// serviceDefs is the one explicit list the production container is built from
+// (06 §6.11.1 step 3): every registering package's ServiceDefs, in 06 §6.11.2's
+// row order, plus the two this package defines. The activity group (its four
+// defs) is in the list only when databasePathSet: the activitystore Build
+// errors on an empty DatabasePath. internal/server's own tests need this full
+// set and cannot import internal/books, so the list lives here and books gets
+// it through NewServer.
+//
+// The ops registry, its event hub, the updater and the update scheduler are
+// not here: NewServer constructs them and hands them to the container as
+// Overrides (R1-15).
+func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
+	defs := slices.Concat(
+		plugin.ServiceDefs(),
+		config.ServiceDefs(),
+		fileops.ServiceDefs(),
+		sysinfo.ServiceDefs(),
+		search.ServiceDefs(),
+		serverServiceDefs(),
+		ai.ServiceDefs(),
+		metafetch.ServiceDefs(),
+		work.ServiceDefs(),
+		audiobookspkg.ServiceDefs(),
+		quarantine.ServiceDefs(),
+		scanner.ServiceDefs(),
+		merge.ServiceDefs(),
+		importer.ServiceDefs(),
+		batch.ServiceDefs(),
+		metafetchplugin.ServiceDefs(),
+		itunesplugin.ServiceDefs(),
+		delugeplugin.ServiceDefs(),
+		dedupplugin.ServiceDefs(),
+		acoustidplugin.ServiceDefs(),
+		batchPollerServiceDefs(),
+	)
+	if databasePathSet {
+		defs = slices.Concat(defs, activity.ServiceDefs())
+	}
+	// R1-34 changes no service. The batch poller's def has never carried
+	// Groups, so HEAD's group-based include never built it and
+	// wireServerFromContainer's TryGet[*BatchPoller] always missed. Every def in
+	// a list is built, so it is filtered out here to keep the production set
+	// what HEAD built (TestServiceDefs_BuildsHEADSet). Removing this filter
+	// builds it, and with OpenAI parsing configured that registers the batch
+	// handlers HEAD never registered: 06 §6.11.2 lists it as the latent defect
+	// the explicit list fixes, and that is an owner decision, not this row's.
+	return slices.DeleteFunc(defs, func(d serviceregistry.ServiceDef) bool {
+		return d.Name == "batchpoller"
+	})
+}
+
+// serverServiceDefs returns the services that can't live in their domain
+// packages due to import cycles or because they need package-private symbols
+// from internal/server. serviceDefs puts them in the one explicit list
+// (06 §6.11.1 step 3).
 //
 //   - `system` — needs appVersion + calculateLibrarySizes from this pkg.
 //   - `embeddingstore`, `chromemstore`, `aijobsstore` — live in
 //     internal/database which can't import internal/config (cycle).
 //   - `dedup` (the engine) — needs *config.Config to read thresholds;
-//     internal/dedup doesn't already import internal/config, so registering
+//     internal/dedup doesn't already import internal/config, so defining it
 //     here avoids forcing a new dependency on that pkg.
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeySystem,
-		Needs:  []string{serviceregistry.KeyStore},
-		Groups: []string{"core"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[sysinfo.SystemServiceStore](c, serviceregistry.KeyStore)
-			return sysinfo.NewSystemService(store, appVersion, calculateLibrarySizes), nil
+func serverServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		{
+			Name:   serviceregistry.KeySystem,
+			Needs:  []string{serviceregistry.KeyStore},
+			Groups: []string{"core"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[sysinfo.SystemServiceStore](c, serviceregistry.KeyStore)
+				return sysinfo.NewSystemService(store, appVersion, calculateLibrarySizes), nil
+			},
 		},
-	})
 
-	// embeddingstore — Pebble-backed key namespace for dedup embeddings.
-	// Returns nil if the underlying store isn't *PebbleStore (e.g. tests).
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyEmbeddingStore,
-		Needs:  []string{serviceregistry.KeyStore},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			// FromStore, not AsPebbleStore + DB(): the unwrap lives in
-			// internal/database so this package does not name *PebbleStore.
-			if es := database.NewEmbeddingStoreFromStore(store); es != nil {
-				return es, nil
-			}
-			return (*database.EmbeddingStore)(nil), nil
+		// embeddingstore — Pebble-backed key namespace for dedup embeddings.
+		// Returns nil if the underlying store isn't *PebbleStore (e.g. tests).
+		{
+			Name:   serviceregistry.KeyEmbeddingStore,
+			Needs:  []string{serviceregistry.KeyStore},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+				// FromStore, not AsPebbleStore + DB(): the unwrap lives in
+				// internal/database so this package does not name *PebbleStore.
+				if es := database.NewEmbeddingStoreFromStore(store); es != nil {
+					return es, nil
+				}
+				return (*database.EmbeddingStore)(nil), nil
+			},
 		},
-	})
 
-	// chromemstore — in-memory ANN vector store for dedup Layer 2. The backend
-	// is config-selectable (config.VectorIndexBackend): "hnsw" (default,
-	// coder/hnsw graph, sub-linear search) or "chromem" (brute-force cosine
-	// scan — see resolveVectorBackend for why picking it is now audible).
-	// Both satisfy database.VectorANNStore. Optional; on disabled/error the Build
-	// returns an UNTYPED nil so TryGet[database.VectorANNStore] yields ok=false
-	// (returning a typed-nil pointer would assert non-nil to the interface and
-	// trip the engine's chromemStore != nil guards — the classic Go nil-iface
-	// trap). Dedup then falls back to the Pebble linear scan.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "chromemstore",
-		Needs:  []string{serviceregistry.KeyConfig},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			if cfg.DatabasePath == "" {
-				return nil, nil
-			}
-			dir := filepath.Dir(cfg.DatabasePath)
-			// Dimension is config-driven so a local model (e.g. bge-m3 = 1024)
-			// can replace OpenAI text-embedding-3-large (3072). Guard against a
-			// zero value: an upgraded install loads an older config_blob that
-			// predates EmbeddingDimensions (whole-struct replace zeroes it), so
-			// fall back to the historical 3072 default rather than build a
-			// 0-dim store.
-			dims := cfg.Embedding.Dimensions
-			if dims <= 0 {
-				dims = 3072
-			}
-			if resolveVectorBackend(cfg.Embedding.VectorBackend) == "hnsw" {
-				return database.NewHNSWEmbeddingStore(dims), nil
-			}
-			store, err := database.NewChromemEmbeddingStore(dir, dims)
-			if err != nil {
-				return nil, nil
-			}
-			return store, nil
+		// chromemstore — in-memory ANN vector store for dedup Layer 2. The backend
+		// is config-selectable (config.VectorIndexBackend): "hnsw" (default,
+		// coder/hnsw graph, sub-linear search) or "chromem" (brute-force cosine
+		// scan — see resolveVectorBackend for why picking it is now audible).
+		// Both satisfy database.VectorANNStore. Optional; on disabled/error the Build
+		// returns an UNTYPED nil so TryGet[database.VectorANNStore] yields ok=false
+		// (returning a typed-nil pointer would assert non-nil to the interface and
+		// trip the engine's chromemStore != nil guards — the classic Go nil-iface
+		// trap). Dedup then falls back to the Pebble linear scan.
+		{
+			Name:   "chromemstore",
+			Needs:  []string{serviceregistry.KeyConfig},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				if cfg.DatabasePath == "" {
+					return nil, nil
+				}
+				dir := filepath.Dir(cfg.DatabasePath)
+				// Dimension is config-driven so a local model (e.g. bge-m3 = 1024)
+				// can replace OpenAI text-embedding-3-large (3072). Guard against a
+				// zero value: an upgraded install loads an older config_blob that
+				// predates EmbeddingDimensions (whole-struct replace zeroes it), so
+				// fall back to the historical 3072 default rather than build a
+				// 0-dim store.
+				dims := cfg.Embedding.Dimensions
+				if dims <= 0 {
+					dims = 3072
+				}
+				if resolveVectorBackend(cfg.Embedding.VectorBackend) == "hnsw" {
+					return database.NewHNSWEmbeddingStore(dims), nil
+				}
+				store, err := database.NewChromemEmbeddingStore(dir, dims)
+				if err != nil {
+					return nil, nil
+				}
+				return store, nil
+			},
 		},
-	})
 
-	// aijobsstore — interface assertion on the main store.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "aijobsstore",
-		Needs:  []string{serviceregistry.KeyStore},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			return database.GetAIJobs(store), nil
+		// aijobsstore — interface assertion on the main store.
+		{
+			Name:   "aijobsstore",
+			Needs:  []string{serviceregistry.KeyStore},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+				return database.GetAIJobs(store), nil
+			},
 		},
-	})
 
-	// dedup — the duplicate detection engine.
-	// Returns nil if any required dep is missing (no API key, no embed
-	// client, etc.) — matches the existing inline conditional construction
-	// in NewServer.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyDedup,
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			// Keyless local backends are valid (TOGGLE-1/TASK-10): gate on the
-			// resolved effective mode, not on OpenAIAPIKey presence. The old
-			// key check silently disabled the whole dedup plugin on keyless
-			// prod once TASK-10 stopped injecting a dummy key into cfg.
-			if cfg.EffectiveEmbeddingMode() == config.AIBackendModeDisabled {
-				return (*dedup.Engine)(nil), nil
-			}
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
-			embClient, _ := serviceregistry.TryGet[*ai.EmbeddingClient](c, "embedclient")
-			if embStore == nil || embClient == nil {
-				return (*dedup.Engine)(nil), nil
-			}
-			// llmParser may legitimately be nil (EffectiveLLMMode disabled on a
-			// keyless local-embedding box) — NewEngine documents nil as "Layer 3
-			// LLM review disabled" and nil-guards every use.
-			llmParser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
-			if llmParser == nil {
-				slog.Info("dedup engine: LLM parser unavailable (LLM mode disabled) — Layer 3 LLM review off")
-			}
-			store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
-			mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
-			// The unified scorer's bands + per-kind confidence bounds come from
-			// the persisted dedup.signals settings (config.yaml overlaid by the DB
-			// settings blob) and are handed to the engine HERE, at construction.
-			// An invalid config fails the build — and so server startup — loudly.
-			// Until 2026-09-02 this block wrote the same values into two unified
-			// package globals that the engine never read, so every configured
-			// band threshold was inert and scoring ran on the compiled-in
-			// 97/90/75/60.
-			//
-			// Fail-closed is only safe because the SAME conversion now runs
-			// before anything is persisted (config.UpdateService.UpdateConfig
-			// rejects a bad ladder with 400 and writes nothing), so a ladder that
-			// trips this at startup can only have arrived via a hand-edited
-			// config.yaml or a settings blob written by an older build.
-			scoreCfg, err := cfg.Dedup.Signals.ScoreConfig()
-			if err != nil {
-				return nil, fmt.Errorf("dedup engine: %w — refusing to start on default thresholds. The effective value is config.yaml's dedup.signals overlaid by the settings blob persisted in the database (written by PUT /api/v1/config, Settings → Dedup, and calibrate-composite apply); the persisted blob wins, so re-save a valid ladder through the API/Settings page, or clear its dedup.signals keys, if config.yaml already looks right", err)
-			}
-			engine, err := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)
-			if err != nil {
-				return nil, fmt.Errorf("dedup engine: %w", err)
-			}
-			// Log the ladder the engine will actually score on, once, so a
-			// deploy can be checked against the persisted settings without
-			// reading the DB blob. (Review-round M5.)
-			slog.Info("dedup engine: effective score ladder",
-				"certain", scoreCfg.BandCertainMin,
-				"high", scoreCfg.BandHighMin,
-				"medium", scoreCfg.BandMediumMin,
-				"review", scoreCfg.BandReviewMin,
-				"confidence_overrides", len(cfg.Dedup.Signals.Confidence),
-				"source", "config.yaml dedup.signals overlaid by the persisted settings blob")
-			// Every later PUT /api/v1/config that changes dedup.signals reaches
-			// the live engine through the UpdateService's dedup sink (review-
-			// round H2), which also re-bands the stored candidate rows under
-			// the new ladder (H3) — AutoResolveCertain reads the STORED band,
-			// so swapping the ladder without a rescore would leave rows
-			// auto-merging on the old one. The sink is installed by the dedup
-			// PLUGIN (internal/plugins/dedup/register.go PostInit), not here:
-			// it queues the re-band as the dedup.rescore operation, which
-			// needs the ops registry — a plugin-level dependency this Build
-			// does not have. It used to be an inline closure here that ran the
-			// whole re-band synchronously inside the HTTP PUT with a
-			// Background context and no concurrency key against a running
-			// dedup.full-scan (PR #3052 follow-up, D4).
-			// Window-print signal (02-PR8). The index methods are a Pebble
-			// capability the decorator does not carry, so resolve them through
-			// the chain. The collector emits nothing until
-			// dedup.window-index-build has completed a pass.
-			if ws, ok := database.AsCapability[dedup.WindowAcoustIDStore](store); ok {
-				engine.SetWindowStore(ws)
-			} else {
-				logger.New("dedup").Info("dedup engine: store has no window-print index (non-Pebble backend); window_acoustid signal off")
-			}
-			engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
-			engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
-			engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold
-			engine.AuthorLowThreshold = cfg.Dedup.AuthorLowThreshold
-			engine.AutoMergeEnabled = cfg.Dedup.AutoMergeEnabled
-			return engine, nil
+		// dedup — the duplicate detection engine.
+		// Returns nil if any required dep is missing (no API key, no embed
+		// client, etc.) — matches the existing inline conditional construction
+		// in NewServer.
+		{
+			Name:   serviceregistry.KeyDedup,
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				// Keyless local backends are valid (TOGGLE-1/TASK-10): gate on the
+				// resolved effective mode, not on OpenAIAPIKey presence. The old
+				// key check silently disabled the whole dedup plugin on keyless
+				// prod once TASK-10 stopped injecting a dummy key into cfg.
+				if cfg.EffectiveEmbeddingMode() == config.AIBackendModeDisabled {
+					return (*dedup.Engine)(nil), nil
+				}
+				embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
+				embClient, _ := serviceregistry.TryGet[*ai.EmbeddingClient](c, "embedclient")
+				if embStore == nil || embClient == nil {
+					return (*dedup.Engine)(nil), nil
+				}
+				// llmParser may legitimately be nil (EffectiveLLMMode disabled on a
+				// keyless local-embedding box) — NewEngine documents nil as "Layer 3
+				// LLM review disabled" and nil-guards every use.
+				llmParser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
+				if llmParser == nil {
+					slog.Info("dedup engine: LLM parser unavailable (LLM mode disabled) — Layer 3 LLM review off")
+				}
+				store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
+				mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
+				// The unified scorer's bands + per-kind confidence bounds come from
+				// the persisted dedup.signals settings (config.yaml overlaid by the DB
+				// settings blob) and are handed to the engine HERE, at construction.
+				// An invalid config fails the build — and so server startup — loudly.
+				// Until 2026-09-02 this block wrote the same values into two unified
+				// package globals that the engine never read, so every configured
+				// band threshold was inert and scoring ran on the compiled-in
+				// 97/90/75/60.
+				//
+				// Fail-closed is only safe because the SAME conversion now runs
+				// before anything is persisted (config.UpdateService.UpdateConfig
+				// rejects a bad ladder with 400 and writes nothing), so a ladder that
+				// trips this at startup can only have arrived via a hand-edited
+				// config.yaml or a settings blob written by an older build.
+				scoreCfg, err := cfg.Dedup.Signals.ScoreConfig()
+				if err != nil {
+					return nil, fmt.Errorf("dedup engine: %w — refusing to start on default thresholds. The effective value is config.yaml's dedup.signals overlaid by the settings blob persisted in the database (written by PUT /api/v1/config, Settings → Dedup, and calibrate-composite apply); the persisted blob wins, so re-save a valid ladder through the API/Settings page, or clear its dedup.signals keys, if config.yaml already looks right", err)
+				}
+				engine, err := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)
+				if err != nil {
+					return nil, fmt.Errorf("dedup engine: %w", err)
+				}
+				// Log the ladder the engine will actually score on, once, so a
+				// deploy can be checked against the persisted settings without
+				// reading the DB blob. (Review-round M5.)
+				slog.Info("dedup engine: effective score ladder",
+					"certain", scoreCfg.BandCertainMin,
+					"high", scoreCfg.BandHighMin,
+					"medium", scoreCfg.BandMediumMin,
+					"review", scoreCfg.BandReviewMin,
+					"confidence_overrides", len(cfg.Dedup.Signals.Confidence),
+					"source", "config.yaml dedup.signals overlaid by the persisted settings blob")
+				// Every later PUT /api/v1/config that changes dedup.signals reaches
+				// the live engine through the UpdateService's dedup sink (review-
+				// round H2), which also re-bands the stored candidate rows under
+				// the new ladder (H3) — AutoResolveCertain reads the STORED band,
+				// so swapping the ladder without a rescore would leave rows
+				// auto-merging on the old one. The sink is installed by the dedup
+				// PLUGIN (internal/plugins/dedup/register.go PostInit), not here:
+				// it queues the re-band as the dedup.rescore operation, which
+				// needs the ops registry — a plugin-level dependency this Build
+				// does not have. It used to be an inline closure here that ran the
+				// whole re-band synchronously inside the HTTP PUT with a
+				// Background context and no concurrency key against a running
+				// dedup.full-scan (PR #3052 follow-up, D4).
+				// Window-print signal (02-PR8). The index methods are a Pebble
+				// capability the decorator does not carry, so resolve them through
+				// the chain. The collector emits nothing until
+				// dedup.window-index-build has completed a pass.
+				if ws, ok := database.AsCapability[dedup.WindowAcoustIDStore](store); ok {
+					engine.SetWindowStore(ws)
+				} else {
+					logger.New("dedup").Info("dedup engine: store has no window-print index (non-Pebble backend); window_acoustid signal off")
+				}
+				engine.BookHighThreshold = cfg.Dedup.BookHighThreshold
+				engine.BookLowThreshold = cfg.Dedup.BookLowThreshold
+				engine.AuthorHighThreshold = cfg.Dedup.AuthorHighThreshold
+				engine.AuthorLowThreshold = cfg.Dedup.AuthorLowThreshold
+				engine.AutoMergeEnabled = cfg.Dedup.AutoMergeEnabled
+				return engine, nil
+			},
 		},
-	})
 
-	// metricsstore — Pebble-backed cache-stats snapshot store (replaced the
-	// retired NutsDB metrics store). Shares the main PebbleDB instance under the
-	// "met:" key prefix; TTL is emulated via the sweep-pebble-metrics-ttl
-	// maintenance job rather than a native per-key expiry. Returns a
-	// nil *PebbleMetricsStore + logs when DatabasePath is empty (test paths)
-	// or the store isn't a *database.PebbleStore — server code nil-checks
-	// before use.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "metricsstore",
-		Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyStore},
-		Groups: []string{"core"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			if cfg.DatabasePath == "" {
-				return (*database.PebbleMetricsStore)(nil), nil
-			}
-			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			ms := database.NewPebbleMetricsStoreFromStore(store)
-			if ms == nil {
-				slog.Warn("metricsstore: backend is not PebbleStore, metrics disabled")
-				return (*database.PebbleMetricsStore)(nil), nil
-			}
-			return ms, nil
+		// metricsstore — Pebble-backed cache-stats snapshot store (replaced the
+		// retired NutsDB metrics store). Shares the main PebbleDB instance under the
+		// "met:" key prefix; TTL is emulated via the sweep-pebble-metrics-ttl
+		// maintenance job rather than a native per-key expiry. Returns a
+		// nil *PebbleMetricsStore + logs when DatabasePath is empty (test paths)
+		// or the store isn't a *database.PebbleStore — server code nil-checks
+		// before use.
+		{
+			Name:   "metricsstore",
+			Needs:  []string{serviceregistry.KeyConfig, serviceregistry.KeyStore},
+			Groups: []string{"core"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				if cfg.DatabasePath == "" {
+					return (*database.PebbleMetricsStore)(nil), nil
+				}
+				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+				ms := database.NewPebbleMetricsStoreFromStore(store)
+				if ms == nil {
+					slog.Warn("metricsstore: backend is not PebbleStore, metrics disabled")
+					return (*database.PebbleMetricsStore)(nil), nil
+				}
+				return ms, nil
+			},
 		},
-	})
 
-	// aiscanstore — AI scan history/phases/results, sharing the main
-	// PebbleDB under the "aiscan:" key prefix. Returns nil when the
-	// store isn't a PebbleStore (test paths).
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "aiscanstore",
-		Needs:  []string{serviceregistry.KeyStore},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			s, err := database.NewAIScanStoreFromStore(store)
-			if err != nil {
-				slog.Warn("Failed to init AI scan store", "err", err)
-				return (*database.AIScanStore)(nil), nil
-			}
-			if s == nil {
-				return (*database.AIScanStore)(nil), nil
-			}
-			return s, nil
+		// aiscanstore — AI scan history/phases/results, sharing the main
+		// PebbleDB under the "aiscan:" key prefix. Returns nil when the
+		// store isn't a PebbleStore (test paths).
+		{
+			Name:   "aiscanstore",
+			Needs:  []string{serviceregistry.KeyStore},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+				s, err := database.NewAIScanStoreFromStore(store)
+				if err != nil {
+					slog.Warn("Failed to init AI scan store", "err", err)
+					return (*database.AIScanStore)(nil), nil
+				}
+				if s == nil {
+					return (*database.AIScanStore)(nil), nil
+				}
+				return s, nil
+			},
 		},
-	})
 
-	// pipelinemanager — AI scan pipeline coordinator. Needs aiscanstore +
-	// the main store + an *ai.OpenAIParser (llmparser). When the parser
-	// is nil (no OpenAI key) or aiscanstore is nil, returns nil.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "pipelinemanager",
-		Needs:  []string{serviceregistry.KeyStore, "aiscanstore", "llmparser"},
-		Groups: []string{"ai"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			scanStore, _ := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore")
-			parser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
-			if scanStore == nil || parser == nil {
-				return (*aiscan.PipelineManager)(nil), nil
-			}
-			store := serviceregistry.Get[aiscan.Store](c, serviceregistry.KeyStore)
-			return aiscan.NewPipelineManager(scanStore, store, parser), nil
+		// pipelinemanager — AI scan pipeline coordinator. Needs aiscanstore +
+		// the main store + an *ai.OpenAIParser (llmparser). When the parser
+		// is nil (no OpenAI key) or aiscanstore is nil, returns nil.
+		{
+			Name:   "pipelinemanager",
+			Needs:  []string{serviceregistry.KeyStore, "aiscanstore", "llmparser"},
+			Groups: []string{"ai"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				scanStore, _ := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore")
+				parser, _ := serviceregistry.TryGet[*ai.OpenAIParser](c, "llmparser")
+				if scanStore == nil || parser == nil {
+					return (*aiscan.PipelineManager)(nil), nil
+				}
+				store := serviceregistry.Get[aiscan.Store](c, serviceregistry.KeyStore)
+				return aiscan.NewPipelineManager(scanStore, store, parser), nil
+			},
 		},
-	})
 
-	// itunes — the iTunes integration service. Registered here (rather
-	// than in internal/itunes/service/register.go) because the
-	// OrganizerFactory closure needs internal/organizer + internal/config,
-	// and itunesservice deliberately avoids importing internal/organizer
-	// (see internal/itunes/service/types.go BookOrganizer comment).
-	//
-	// Construction never returns an error in practice: itunesservice.New
-	// returns NewDisabled() when cfg.Enabled is false. The "Enabled: true"
-	// flag here mirrors the pre-container inline construction in NewServer.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyITunes,
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus, serviceregistry.KeyMetaFetch},
-		Groups: []string{"core"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[itunesWireStore](c, serviceregistry.KeyStore)
-			cfg := config.GetConfig(c)
-			bus := plugin.GetEventBus(c)
-			mf := serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
-			svc, err := itunesservice.New(itunesservice.Deps{
-				Store: store,
-				Config: itunesservice.Config{
-					Enabled:         true,
-					LibraryReadPath: cfg.ITunes.LibraryReadPath,
-				},
-				EventBus:  bus,
-				Metafetch: mf,
-				OrganizerFactory: func() itunesservice.BookOrganizer {
-					org := organizer.NewOrganizer(cfg)
-					org.SetStore(store)
-					return org
-				},
-			})
-			if err != nil {
-				slog.Warn("iTunes service construction failed, falling back to disabled", "err", err)
-				return itunesservice.NewDisabled(), nil
-			}
-			return svc, nil
+		// itunes — the iTunes integration service. Registered here (rather
+		// than in internal/itunes/service/register.go) because the
+		// OrganizerFactory closure needs internal/organizer + internal/config,
+		// and itunesservice deliberately avoids importing internal/organizer
+		// (see internal/itunes/service/types.go BookOrganizer comment).
+		//
+		// Construction never returns an error in practice: itunesservice.New
+		// returns NewDisabled() when cfg.Enabled is false. The "Enabled: true"
+		// flag here mirrors the pre-container inline construction in NewServer.
+		{
+			Name:   serviceregistry.KeyITunes,
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus, serviceregistry.KeyMetaFetch},
+			Groups: []string{"core"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[itunesWireStore](c, serviceregistry.KeyStore)
+				cfg := config.GetConfig(c)
+				bus := plugin.GetEventBus(c)
+				mf := serviceregistry.Get[*metafetch.Service](c, serviceregistry.KeyMetaFetch)
+				svc, err := itunesservice.New(itunesservice.Deps{
+					Store: store,
+					Config: itunesservice.Config{
+						Enabled:         true,
+						LibraryReadPath: cfg.ITunes.LibraryReadPath,
+					},
+					EventBus:  bus,
+					Metafetch: mf,
+					OrganizerFactory: func() itunesservice.BookOrganizer {
+						org := organizer.NewOrganizer(cfg)
+						org.SetStore(store)
+						return org
+					},
+				})
+				if err != nil {
+					slog.Warn("iTunes service construction failed, falling back to disabled", "err", err)
+					return itunesservice.NewDisabled(), nil
+				}
+				return svc, nil
+			},
 		},
-	})
+	}
 }
 
 // wireServerFromContainer populates the typed service fields on *Server

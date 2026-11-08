@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.10
+// version: 2.114.11
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -932,12 +932,10 @@ func NewServer(store database.Store) *Server {
 	// creates or updates reach search.
 	scanner.SetStore(store)
 
-	// SERVER-PLUGIN-REG: build the service registry container.
-	// Production wires services by named group (REGISTRY-NAMED-GROUPS,
-	// PR #886). Adding a new service is just `Groups: []string{"core"}`
-	// (or "ai", "plugins", etc.) on its ServiceDef — no edit to this
-	// file. Audit a group with
-	//   grep -rn 'Groups.*"<groupname>"' internal/ --include="*.go"
+	// SERVER-PLUGIN-REG: build the service registry container from one
+	// explicit list (06 §6.11.1 step 3): serviceDefs in registry_wire.go.
+	// Adding a service means adding its def to that package's ServiceDefs and
+	// that package to serviceDefs; nothing registers itself at init.
 	regCtx := context.Background()
 	// The ops registry, its event hub, the updater and the update scheduler
 	// are constructed here and handed to the container as Overrides (R1-15
@@ -953,22 +951,16 @@ func NewServer(store database.Store) *Server {
 		os.Exit(1)
 	}
 	appUpdater := updater.NewService(appVersion)
-	regContainer := serviceregistry.NewContainer().
+	// The activity defs (`activity` + `activitystore`) are in the list only
+	// when DatabasePath is set: the activitystore Build errors on an empty one.
+	regContainer := serviceregistry.NewContainerFrom(serviceDefs(config.AppConfig.DatabasePath != "")...).
 		Override("store", store).
 		Override("config", &config.AppConfig).
 		Override("appversion", appVersion).
 		Override(serviceregistry.KeyOpHub, opHub).
 		Override("opregistry", opRegistry).
 		Override(serviceregistry.KeyUpdater, appUpdater).
-		Override("updatescheduler", updater.NewSchedulerService(appUpdater)).
-		IncludeGroup("core", "ai", "scheduler", "plugins").
-		// W3.6 batchpoller is in the scheduler group.
-		Include() // explicit Include() reserved for ad-hoc additions
-	// `activity` (+ `activitystore`) only registers when DatabasePath is
-	// set — the activitystore Build errors on an empty DatabasePath.
-	if config.AppConfig.DatabasePath != "" {
-		regContainer.IncludeGroup("activity")
-	}
+		Override("updatescheduler", updater.NewSchedulerService(appUpdater))
 	if activityStoreOverrideForTest != nil {
 		regContainer.Override(serviceregistry.KeyActivityStore, activityStoreOverrideForTest)
 	}

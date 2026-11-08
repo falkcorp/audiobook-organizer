@@ -1,5 +1,6 @@
 // file: internal/importer/register_test.go
-// version: 1.0.0
+// version: 1.0.1
+// last-edited: 2026-11-08
 
 package importer_test
 
@@ -12,9 +13,8 @@ import (
 )
 
 func TestImportPathRegistration(t *testing.T) {
-	c := serviceregistry.NewContainer().
-		Override("store", mocks.NewMockStore(t)).
-		Include("importpath")
+	c := serviceregistry.NewContainerFrom(importer.ServiceDefs()...).
+		Override("store", mocks.NewMockStore(t))
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
