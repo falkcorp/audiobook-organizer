@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -358,4 +358,80 @@ func TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt(t *testing.T) {
 	if !next.NeedsReconcile() {
 		t.Error("a snapshot that lacks a refused write must be reconciled")
 	}
+}
+
+// TestDiscardCleanStop_RetriesARemovalOnce (R1-15 follow-up review, NIT-2): a
+// removal that fails once (a transient error) is retried, and the marker is
+// gone rather than emptied.
+func TestDiscardCleanStop_RetriesARemovalOnce(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := exportedRogues(t, dir)
+	markCleanStop(t, s, dir)
+	calls := 0
+	markerRemove = func(path string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("simulated transient failure")
+		}
+		return os.Remove(path)
+	}
+	t.Cleanup(func() { markerRemove = os.Remove })
+	if err := discardCleanStop(cleanStopPath(dir)); err != nil {
+		t.Fatalf("discardCleanStop: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("removal attempts = %d, want 2", calls)
+	}
+	if markerExists(t, dir) {
+		t.Error("the marker is still on disk after the retried removal")
+	}
+}
+
+// TestCleanStop_AMarkerThatCannotBeRemovedIsEmptied (NIT-2): in a directory
+// that refuses the unlink, the marker this process wrote is emptied when a
+// later write removes it, and so is the marker a boot takes, so neither can
+// vouch for a later boot.
+func TestCleanStop_AMarkerThatCannotBeRemovedIsEmptied(t *testing.T) {
+	vouches := func(t *testing.T, dir string) bool {
+		t.Helper()
+		rec, _ := readCleanStop(cleanStopPath(dir))
+		return rec != nil
+	}
+
+	t.Run("a write after the marker", func(t *testing.T) {
+		dir := t.TempDir()
+		s, truth := exportedRogues(t, dir)
+		markCleanStop(t, s, dir)
+		readOnlyDir(t, dir)
+		if err := s.Upsert(context.Background(), "book", "scarecrow", []float32{0, 0, 0, 1}, nil); err != nil {
+			t.Fatalf("upsert after the marker: %v", err)
+		}
+		if vouches(t, dir) {
+			t.Fatal("the marker still vouches after a write it could not be removed for")
+		}
+		next := NewHNSWEmbeddingStore(4)
+		if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
+			t.Fatalf("import: %v", err)
+		}
+		if !next.NeedsReconcile() {
+			t.Error("a boot that found an emptied marker must reconcile")
+		}
+	})
+
+	t.Run("the boot's take", func(t *testing.T) {
+		dir := t.TempDir()
+		s, _ := exportedRogues(t, dir)
+		markCleanStop(t, s, dir)
+		readOnlyDir(t, dir)
+		rec, err := takeCleanStop(dir)
+		if err != nil {
+			t.Fatalf("takeCleanStop: %v", err)
+		}
+		if rec == nil {
+			t.Fatal("the boot's take lost a marker that vouched")
+		}
+		if vouches(t, dir) {
+			t.Error("the marker a boot took still vouches for the boot after it")
+		}
+	})
 }

@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-08
 
@@ -68,13 +68,39 @@ func fsyncDir(dir string) error {
 	return nil
 }
 
-// removeDurably removes path and fsyncs its directory. A path already gone is
-// not an error.
-func removeDurably(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+// markerRemove removes a clean-stop marker file. A test replaces it to make a
+// removal fail.
+var markerRemove = os.Remove
+
+// discardCleanStop makes the marker at path vouch for nothing, durably. It
+// removes the file, retrying once, and fsyncs the directory. When neither
+// removal works (a directory that refuses the unlink, say) it empties the
+// file instead and fsyncs it: an empty marker does not parse, so it vouches
+// for nothing (readCleanStop). A marker already gone is not an error. An error
+// means a marker that may still vouch is on disk, and says so.
+func discardCleanStop(path string) error {
+	first := removeMarker(path)
+	if first == nil {
+		return fsyncDir(filepath.Dir(path))
+	}
+	second := removeMarker(path)
+	if second == nil {
+		return fsyncDir(filepath.Dir(path))
+	}
+	if err := writeFileSynced(path, nil); err != nil {
+		return fmt.Errorf("clean-stop marker %s could be neither removed (%w) nor emptied (%w)", path, errors.Join(first, second), err)
+	}
+	hnswLog.Warn("hnsw: clean-stop marker %s could not be removed (%v), so it was emptied; an empty marker vouches for nothing", path, second)
+	return nil
+}
+
+// removeMarker removes path with markerRemove; a path already gone is not an
+// error.
+func removeMarker(path string) error {
+	if err := markerRemove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return fsyncDir(filepath.Dir(path))
+	return nil
 }
 
 // cleanStopRecord is the marker's content. A marker that does not parse, or
@@ -124,8 +150,8 @@ func (s *HNSWEmbeddingStore) dropCleanStopLocked(why string) {
 	p := s.cleanStop
 	s.cleanStop = ""
 	s.cleanStopLive.Store(false)
-	if err := removeDurably(p); err != nil {
-		hnswLog.Error("hnsw: %s, and the clean-stop marker could not be removed, so the next boot may load a snapshot that lacks it without a reconcile; delete %s by hand: %v", why, p, err)
+	if err := discardCleanStop(p); err != nil {
+		hnswLog.Error("hnsw: %s, and the clean-stop marker could not be discarded, so the next boot may load a snapshot that lacks it without a reconcile; delete %s by hand: %v", why, p, err)
 	}
 }
 
@@ -238,10 +264,10 @@ func (s *HNSWEmbeddingStore) MarkCleanStop(dir string) (written bool, reason str
 		return false, "", fmt.Errorf("hnsw: encode clean-stop marker: %w", err)
 	}
 	if err := writeFileSynced(p, append(body, '\n')); err != nil {
-		return false, "", fmt.Errorf("hnsw: write clean-stop marker: %w", errors.Join(err, removeDurably(p)))
+		return false, "", fmt.Errorf("hnsw: write clean-stop marker: %w", errors.Join(err, discardCleanStop(p)))
 	}
 	if err := fsyncDir(dir); err != nil {
-		return false, "", fmt.Errorf("hnsw: clean-stop marker: %w", errors.Join(err, removeDurably(p)))
+		return false, "", fmt.Errorf("hnsw: clean-stop marker: %w", errors.Join(err, discardCleanStop(p)))
 	}
 	s.cleanStop = p
 	s.cleanStopLive.Store(true)
@@ -271,8 +297,10 @@ func pebbleVerdictWritesReason(n int64) string {
 // a snapshot the run lets fall behind. ImportWithStalenessCheck takes it first
 // thing, and the server calls this directly when the HNSW store is not in use.
 // An operation-runner child takes neither path: the marker belongs to the
-// parent. A marker that cannot be removed is reported absent (the snapshot is
-// then reconciled, the safe direction) with an error saying it is still there.
+// parent. A marker that cannot be removed is emptied instead, so it vouches
+// for nothing (discardCleanStop); one that can be neither is reported absent
+// (the snapshot is then reconciled, the safe direction) with an error saying
+// it is still there.
 func TakeHNSWCleanStop(dir string) (bool, error) {
 	rec, err := takeCleanStop(dir)
 	return rec != nil, err
@@ -289,8 +317,8 @@ func takeCleanStop(dir string) (*cleanStopRecord, error) {
 		return nil, fmt.Errorf("clean-stop marker %s: %w", p, err)
 	}
 	rec, readErr := readCleanStop(p)
-	if err := removeDurably(p); err != nil {
-		return nil, errors.Join(readErr, fmt.Errorf("clean-stop marker %s could not be removed durably, so a later boot may trust a snapshot this run lets fall behind; delete it by hand: %w", p, err))
+	if err := discardCleanStop(p); err != nil {
+		return nil, errors.Join(readErr, fmt.Errorf("clean-stop marker %s could not be discarded durably, so a later boot may trust a snapshot this run lets fall behind; delete it by hand: %w", p, err))
 	}
 	return rec, readErr
 }
