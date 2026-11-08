@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -42,6 +42,10 @@ type App struct {
 	// Options.ProcessDefaults, which InstallProcessDefaults adopts; nil when
 	// New installed none.
 	otel *otelDiagnostics
+	// slog is the slog default and standard library log output New installed
+	// before module Register for Options.ProcessDefaults, which
+	// InstallProcessDefaults adopts; nil when New installed none.
+	slog *slogDefaults
 }
 
 // New runs the boot phases that exist at R1 (06 §6.5.1 P1, P2, P4a, P4b, P5,
@@ -64,7 +68,14 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	// The SDK's logger and error handler go in once the App's logging exists
 	// and before the Provider is built (Options.ProcessDefaults).
 	var diag *otelDiagnostics
+	var sd *slogDefaults
 	if opts.ProcessDefaults {
+		// The pipeline is the process default before any module's Register
+		// builds a service that captures slog.Default().
+		c.ProcessLogging = func(root *slog.Logger, stdlib slog.Handler) error {
+			sd = installSlogDefault(root, stdlib)
+			return nil
+		}
 		c.BeforeTelemetry = func(l *slog.Logger) error {
 			d, err := installOTelDiagnostics(l)
 			if err != nil {
@@ -83,12 +94,15 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	}
 	k, err := kernel.New(ctx, c)
 	if err != nil {
+		if sd != nil {
+			sd.restore()
+		}
 		if diag != nil {
 			diag.restore()
 		}
 		return nil, err
 	}
-	return &App{k: k, otel: diag}, nil
+	return &App{k: k, otel: diag, slog: sd}, nil
 }
 
 // Run starts the app in the order of 06 §6.5.2; blocks until ctx is done or a

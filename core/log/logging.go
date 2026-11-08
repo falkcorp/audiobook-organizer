@@ -1,5 +1,5 @@
 // file: core/log/logging.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
 // last-edited: 2026-11-08
 
@@ -160,12 +160,14 @@ type Record struct {
 	Attrs     []slog.Attr // resolved (LogValuer applied), groups preserved
 	TraceID   string
 	SpanID    string
-	// Process is true when the record came from Root or Handler, the logger
-	// that is the process default (slog.Default, the stdlib log), or from a
-	// logger derived from it with With or WithGroup, and false when it came
-	// from a logger an owner asked for with Module or Scope. A tap that must
-	// see only what the process's own code logs, not core's own kernel,
-	// metrics or http lines nor a module's, filters on it.
+	// Process is true when the record came from Root or ProcessHandler, the
+	// logger that is the process default (slog.Default), or from a logger
+	// derived from it with With or WithGroup, and false when it came from a
+	// logger an owner asked for with Module or Scope, or from Handler (the
+	// adapters: gin, logr, the standard library log bridge). A tap that must
+	// see only what the process's own code logs through slog, not core's own
+	// kernel, metrics or http lines, a module's, or an adapter's, filters on
+	// it.
 	Process bool
 }
 
@@ -312,15 +314,15 @@ func levelName(lv slog.Level) string {
 }
 
 // Root returns the process default logger: the one app.InstallProcessDefaults
-// makes slog's default (and so the stdlib log package's). It runs the whole
-// pipeline (level gate, redaction, primary output, taps) but adds no module
-// attribute, because what logs through slog's default is the application's
-// own code and third-party libraries, not core: in an app that keeps direct
-// slog calls (ABO in R1), a module=core attribute would land on every one of
-// its lines. Its level is the root level; no Levels entry applies to it.
+// makes slog's default. It runs the whole pipeline (level gate, redaction,
+// primary output, taps) but adds no module attribute, because what logs
+// through slog's default is the application's own code and third-party
+// libraries, not core: in an app that keeps direct slog calls (ABO in R1), a
+// module=core attribute would land on every one of its lines. Its level is the
+// root level; no Levels entry applies to it. Its records are Record.Process.
 // Core's own components log through Scope("core", subsystem), which carries
 // module=core (05-logging §3).
-func (l *Logging) Root() *slog.Logger { return slog.New(&handler{l: l, sc: l.process, process: true}) }
+func (l *Logging) Root() *slog.Logger { return slog.New(l.ProcessHandler()) }
 
 // Module returns module id's logger (module=id). It never panics: an invalid
 // id is refused at kernel validation, not here.
@@ -335,9 +337,16 @@ func (l *Logging) Scope(module, subsystem string) *slog.Logger {
 	return slog.New(&handler{l: l, sc: l.scope(module, subsystem)})
 }
 
-// Handler returns Root's handler (the process default logger, no module
-// attribute), for adapters that stand in for the process default.
-func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.process, process: true} }
+// Handler returns the process default scope's handler (no module attribute),
+// for adapters that stand in for the process default (the gin bridge, the logr
+// sink, the standard library log bridge). Its records are not Record.Process:
+// an adapter's lines are not what the process's own code logged, and must not
+// reach a tap that filters on it.
+func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.process} }
+
+// ProcessHandler is Handler for the process default (slog.Default): the
+// handler behind Root, whose records are Record.Process.
+func (l *Logging) ProcessHandler() slog.Handler { return &handler{l: l, sc: l.process, process: true} }
 
 // Redactor returns the pipeline's redactor, for span redaction (05-metrics).
 func (l *Logging) Redactor() *Redactor { return l.redactor }
