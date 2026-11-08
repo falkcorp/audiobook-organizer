@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.6
+// version: 4.66.7
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -242,11 +242,12 @@ func (s *Server) ReleaseUnstarted() {
 }
 
 // releaseUnstarted is ReleaseUnstarted's teardown, in the order of StopHook's
-// tail: detach the search observer and the authority provider, cancel bgCtx
-// and wait (bounded) for the bgWG goroutines, which may still write activity,
-// then close the activity store. Every step is idempotent.
+// tail: cancel bgCtx and wait (bounded) for the bgWG goroutines, which may
+// still write books and activity; only then detach the search observer and
+// the authority provider, which a writer still running would need; then close
+// the activity store. No op ran (StartHook starts the registry), so there is
+// no registry to stop first. Every step is idempotent.
 func (s *Server) releaseUnstarted() {
-	s.releaseSearchAndAuthority()
 	if s.bgCancel != nil {
 		s.bgCancel()
 	}
@@ -259,6 +260,7 @@ func (s *Server) releaseUnstarted() {
 	case <-done:
 	case <-time.After(releaseUnstartedWait):
 	}
+	s.releaseSearchAndAuthority()
 	s.closeActivityStore()
 }
 
@@ -1443,12 +1445,6 @@ func http3ServerQUICConfig() *quic.Config {
 // without binding port 80.
 func redirectServerHandler(host, httpsPort string) http.Handler {
 	return newPeerAllowListHandler(newHTTPSRedirectHandler(host, httpsPort))
-}
-
-// peerGatedHandler is the handler every serving listener uses: the router
-// behind the peer allow-list.
-func (s *Server) peerGatedHandler() http.Handler {
-	return newPeerAllowListHandler(s.router)
 }
 
 // bindMainListener binds s.httpServer.Addr and records the bound address in
