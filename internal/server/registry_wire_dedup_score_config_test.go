@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
 // last-edited: 2026-11-08
 
@@ -97,9 +97,12 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 }
 
 // headSetNames is the set of names the production container resolved at R1-34's
-// base (R1-15's head, b91bfec17) with DatabasePath set: captured by resolving
-// HEAD's group-based container (the core, ai, scheduler and plugins groups, plus
-// activity) with NewServer's seven overrides, before any R1-34 edit. Sorted.
+// base (R1-15's head, fc21cd0ca) with DatabasePath set: captured by resolving
+// that base's group-based container (the core, ai, scheduler and plugins groups,
+// plus activity) with NewServer's seven overrides, from a checkout of the base
+// and before any R1-34 edit. An earlier capture at b91bfec17 gave the same 45
+// names, so R1-15's review fixes and R1-20 changed neither services nor
+// overrides. Sorted.
 var headSetNames = []string{
 	"acoustidplugin",
 	"activity",
