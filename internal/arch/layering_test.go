@@ -128,7 +128,6 @@ var layerOf = map[string]int{
 	"internal/policy":                0, // computed: imports no module package
 	"internal/querygrammar":          0, // table: leaf
 	"internal/scanlock":              0, // computed: imports no module package
-	"internal/sdnotify":              0, // computed: imports no module package
 	"internal/security/safehttp":     0, // computed: imports no module package
 	"internal/seqnum":                0, // table: leaf
 	"internal/serverdecode":          0, // computed: imports no module package

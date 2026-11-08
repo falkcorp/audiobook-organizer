@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -18,6 +18,12 @@ import (
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/module"
 )
+
+// injectStartExtender hands the store the start-timeout request it makes
+// before its long steps: app.ExtendStart, which is stateless because the
+// store opens before app.New builds the App (R1-23 moves the open inside it
+// and retires this seam). It is serve's only; other commands run without one.
+func injectStartExtender() { database.SetStartExtender(app.ExtendStart) }
 
 // serveLog logs the composed serve path.
 var serveLog = logger.New("serve")

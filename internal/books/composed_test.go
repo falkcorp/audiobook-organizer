@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -465,4 +465,65 @@ func probe(h http.Handler, method, path string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req.WithContext(ctx))
 	return w
+}
+
+// notifySocket binds a unix datagram socket and points NOTIFY_SOCKET at it
+// for the test. It lives under os.MkdirTemp rather than t.TempDir: a socket
+// path is limited to 104 bytes on darwin and t.TempDir's passes that.
+func notifySocket(t *testing.T) *net.UnixConn {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sdn")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "notify.sock")
+	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	t.Setenv("NOTIFY_SOCKET", path)
+	return conn
+}
+
+// TestComposedApp_SystemdSignals runs the composed App under a fake
+// NOTIFY_SOCKET. R1-16 moved READY=1, STATUS= and STOPPING=1 from the server
+// into the kernel, and books wires its search index's long open step to
+// Deps.ExtendStart: the index open must ask for start time (once, before
+// READY=1), READY=1 must come after the listener is up, and the stop must
+// send STOPPING=1.
+func TestComposedApp_SystemdSignals(t *testing.T) {
+	sock := notifySocket(t)
+	c := bootComposed(t, false, nil, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.app.Run(ctx) }()
+
+	var got []string
+	next := func() string {
+		t.Helper()
+		require.NoError(t, sock.SetReadDeadline(time.Now().Add(60*time.Second)))
+		buf := make([]byte, 4096)
+		n, err := sock.Read(buf)
+		require.NoError(t, err, "datagrams so far: %q", got)
+		got = append(got, string(buf[:n]))
+		return got[len(got)-1]
+	}
+	require.Equal(t, "STATUS=starting", next())
+	extends := 0
+	for msg := next(); msg != "READY=1"; msg = next() {
+		require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", msg, "only start-timeout extensions may precede READY=1")
+		extends++
+	}
+	require.Equal(t, 1, extends, "the search index open asks for start time once, through Deps.ExtendStart: %q", got)
+	require.Equal(t, "STATUS=Serving; readiness is reported by the health endpoint", next())
+
+	cancel()
+	require.Equal(t, "STOPPING=1", next())
+	require.Equal(t, "STATUS=Shutting down", next())
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(90 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
 }
