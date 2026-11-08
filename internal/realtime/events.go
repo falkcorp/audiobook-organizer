@@ -1,7 +1,7 @@
 // file: internal/realtime/events.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 9e8d7f6a-5c4b-3a21-0f9e-8d7c6b5a4392
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package realtime
 
@@ -219,7 +219,7 @@ func (h *EventHub) HandleSSE(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache, no-transform")
 	c.Header("Connection", "keep-alive")
 	// CORS headers (Access-Control-Allow-Origin, etc.) are set upstream by
-	// corsMiddleware (internal/server/server_middleware.go), which enforces
+	// core's CORS stage (stage 6, mediacore/httpapi), which enforces
 	// an allowlist. Do not set Access-Control-Allow-Origin here: gin.Context.
 	// Header is a Set, not an Add, so a hardcoded "*" here would silently
 	// replace the middleware's allowlisted value while leaving

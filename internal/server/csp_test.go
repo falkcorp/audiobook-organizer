@@ -1,7 +1,7 @@
 // file: internal/server/csp_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a8dee6b8-6533-4d26-9f2c-34437fd9caa3
-// last-edited: 2026-10-21
+// last-edited: 2026-11-08
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -46,10 +47,10 @@ func TestSecurityHeaders_SendCSPAndPermissionsPolicy(t *testing.T) {
 	setAccessTeam(t, "")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(securityHeadersMiddleware())
-	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "<html></html>") })
+	r.GET("/shell", func(c *gin.Context) { c.String(http.StatusOK, "<html></html>") })
+	_, h := stagesOver(t, r, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/shell"})
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/shell", nil))
 
 	csp := w.Header().Get("Content-Security-Policy")
 	require.NotEmpty(t, csp, "the SPA shell must carry a Content-Security-Policy")
@@ -82,13 +83,13 @@ func TestSecurityHeaders_HandlerCSPWins(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const own = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
 	r := gin.New()
-	r.Use(securityHeadersMiddleware())
 	r.GET("/own", func(c *gin.Context) {
 		c.Header("Content-Security-Policy", own)
 		c.String(http.StatusOK, "x")
 	})
+	_, h := stagesOver(t, r, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/own"})
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/own", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/own", nil))
 	require.Equal(t, []string{own}, w.Header().Values("Content-Security-Policy"),
 		"exactly one policy, the handler's own")
 }
@@ -125,12 +126,12 @@ func TestSetSPAInlineScripts_AllowsExactlyThoseHashes(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(securityHeadersMiddleware())
-	r.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/shell", func(c *gin.Context) { c.Status(http.StatusOK) })
+	_, h := stagesOver(t, r, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/shell"})
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/shell", nil))
 	require.Contains(t, w.Header().Get("Content-Security-Policy"), hash,
-		"the middleware serves the installed policy, not a copy taken at construction")
+		"stage 5 serves the installed policy, not a copy taken at construction")
 
 	// A different index replaces the hashes rather than adding to them.
 	require.Equal(t, 0, setSPAInlineScripts([]byte("<html></html>")))
@@ -168,4 +169,25 @@ func TestCSP_MalformedAccessTeamIsDropped(t *testing.T) {
 		require.Equal(t, "connect-src 'self'", cspDirective(contentSecurityPolicy(), "connect-src"), "%q", bad)
 		require.NotContains(t, contentSecurityPolicy(), "X-Injected")
 	}
+}
+
+// TestBuildIDFromIndex: the legacy mount's build ID (X-App-Build) is the
+// embedded index.html's mediacore-build meta tag, attributes in either
+// order, entities decoded; none is "" (stage 5 then sends "dev").
+func TestBuildIDFromIndex(t *testing.T) {
+	restoreCSP(t)
+	prev := spaBuildID.Load()
+	t.Cleanup(func() { spaBuildID.Store(prev) })
+	for in, want := range map[string]string{
+		`<head><meta name="mediacore-build" content="batcomputer-7"></head>`:   "batcomputer-7",
+		`<head><META content='alfred&amp;co' NAME='mediacore-build' /></head>`: "alfred&co",
+		`<head><meta name="viewport" content="width=device-width"></head>`:     "",
+		`<head><meta name="mediacore-build"></head>`:                           "",
+	} {
+		require.Equal(t, want, buildIDFromIndex([]byte(in)), in)
+	}
+	setSPAInlineScripts([]byte(`<html><head><meta name="mediacore-build" content="wayne-1939"></head></html>`))
+	_, report, build := (&Server{}).LegacyPerimeter()
+	require.Equal(t, "wayne-1939", build)
+	require.Equal(t, "/api/v1/csp-report", report)
 }

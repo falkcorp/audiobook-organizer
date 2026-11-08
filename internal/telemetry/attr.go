@@ -1,5 +1,5 @@
 // file: internal/telemetry/attr.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
 // last-edited: 2026-11-08
 
@@ -19,7 +19,7 @@ import (
 //     TestInstrumentNames in internal/telemetrypolicy rejects any other key.
 //   - ScrapeOnlyAttributeKeys: keys that exist on /metrics today but no new
 //     instrument may adopt (the legacy op_id label, and the semconv keys
-//     otelgin sets). Only the golden and scrape checks accept them.
+//     core's HTTP stage 2 sets). Only the golden and scrape checks accept them.
 //
 // TestAttributeKeysAllowlisted fails when any label on the golden or the
 // /metrics scrape is in neither list (dots compared as underscores, the
@@ -76,8 +76,9 @@ const (
 	OpID = attribute.Key("op_id")
 )
 
-// Keys otelgin sets from the OTel HTTP semantic conventions. They are not
-// ours to name, but they reach /metrics, so the scrape-only list names them.
+// Keys core's HTTP stage 2 (mediacore/httpapi, the HTTP server metrics since
+// R1-17) sets from the OTel HTTP semantic conventions. They are not ours to
+// name, but they reach /metrics, so the scrape-only list names them.
 const (
 	HTTPRequestMethod      = attribute.Key("http.request.method")
 	HTTPResponseStatusCode = attribute.Key("http.response.status_code")

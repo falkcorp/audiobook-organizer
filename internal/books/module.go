@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -172,6 +172,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	}
 
 	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
+	// Stage 5's values for the mount's responses (R1-17): HEAD's
+	// per-response CSP, its report URL and the embedded bundle's build ID.
+	csp, cspReport, buildID := srv.LegacyPerimeter()
 	r.MountLegacy(httpapi.LegacyMount{
 		Handler:     srv.LegacyHandler(),
 		Auth:        httpapi.LegacyAuthGin,
@@ -180,6 +183,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		Redirects:   srv.LegacyRedirects(),
 		TopSegments: server.LegacyTopSegments(),
 		SPAShared:   server.LegacySPAShared(),
+		DefaultCSP:  csp,
+		CSPReport:   cspReport,
+		BuildID:     buildID,
 	})
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{

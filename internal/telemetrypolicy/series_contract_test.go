@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/series_contract_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-11-08
 
@@ -40,7 +40,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -55,7 +54,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/httpapi"
 	coremetrics "github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 const (
@@ -64,7 +65,7 @@ const (
 
 	sourceClientGolang = "client_golang" // the default when the 4th column is empty
 	sourceOTel         = "otel"          // our own instruments, via telemetry.Meter
-	sourceOtelgin      = "otelgin"       // otelgin.Middleware in internal/server
+	sourceHTTPAPI      = "httpapi"       // core's stage 2 (mediacore/httpapi), the HTTP server instruments since R1-17
 )
 
 // inScopePrefixes are the family-name prefixes the contract owns. go_*,
@@ -123,7 +124,7 @@ func readGolden() ([]goldenRow, error) {
 			return nil, fmt.Errorf("%s:%d: unknown type %q", goldenPath, n, r.typ)
 		}
 		switch r.source {
-		case sourceClientGolang, sourceOTel, sourceOtelgin:
+		case sourceClientGolang, sourceOTel, sourceHTTPAPI:
 		default:
 			return nil, fmt.Errorf("%s:%d: unknown source %q", goldenPath, n, r.source)
 		}
@@ -174,7 +175,7 @@ func buildSeedingTable() []seedRow {
 	pebble := once(seedPebble)
 	failover := once(seedDispatchFailover)
 	noCapable := once(seedDispatchNoCapable)
-	gin := once(seedOtelgin)
+	stage2 := once(seedStage2)
 	opsSeed := once(seedOpsMetrics)
 	aiCall := once(seedAICalls)
 	pebbleRow := func(name string) seedRow {
@@ -273,9 +274,9 @@ func buildSeedingTable() []seedRow {
 		pebbleRow("level_bytes_flushed_total"),
 		pebbleRow("level_bytes_compacted_total"),
 
-		{"http_server_request_duration_seconds", "one GET through otelgin.Middleware", gin},
-		{"http_server_request_body_size_bytes", "one GET through otelgin.Middleware", gin},
-		{"http_server_response_body_size_bytes", "one GET through otelgin.Middleware", gin},
+		{"http_server_request_duration_seconds", "one GET through core's stage 2", stage2},
+		{"http_server_request_body_size_bytes", "one GET through core's stage 2", stage2},
+		{"http_server_response_body_size_bytes", "one GET through core's stage 2", stage2},
 	}
 }
 
@@ -410,19 +411,36 @@ func seedOpsMetrics() error {
 	return nil
 }
 
-// seedOtelgin serves one request through the same middleware the server
-// installs (internal/server/server.go router.Use(otelgin.Middleware(...))).
-func seedOtelgin() error {
+// seedStage2 serves one request through core's stage 2, which records the
+// http_server_* families for every request since R1-17 (gin's tracing
+// middleware's job before): a router whose legacy mount is a gin engine, as the kernel serves
+// books', on the App's Provider.
+func seedStage2() error {
 	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(otelgin.Middleware("audiobook-organizer"))
-	r.GET("/contract", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	engine := gin.New()
+	engine.GET("/contract", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	r := httpapi.NewRouter(httpapi.Options{ServerName: "example.test"}, httpapi.Deps{MeterProvider: servedProvider.MeterProvider()})
+	if err := r.Claim("books", "/contract"); err != nil {
+		return err
+	}
+	if err := r.MountLegacy(httpapi.LegacyMount{
+		Owner: "books", Handler: engine, Auth: httpapi.LegacyAuthGin, TopSegments: []string{"contract"},
+		Routes: slices.Values([]httpapi.LegacyRoute{{Method: http.MethodGet, GinPath: "/contract", Perm: rbac.AnyAuthenticated}}),
+	}); err != nil {
+		return err
+	}
+	h, err := r.Build()
+	if err != nil {
+		return err
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test:8484/contract", nil)
+	// The listener's port, which stage 2 records as server_port (never the
+	// Host header's), so server_port is pinned in the golden too.
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8484}))
 	rec := httptest.NewRecorder()
-	// A host:port target, as production requests carry, so server_port is
-	// pinned in the golden too.
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://example.test:8484/contract", nil))
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		return fmt.Errorf("otelgin seed: status %d", rec.Code)
+		return fmt.Errorf("stage 2 seed: status %d", rec.Code)
 	}
 	return nil
 }
@@ -679,7 +697,7 @@ func mustGolden(t *testing.T) []goldenRow {
 // TestDeclaredFamiliesInGolden (declared_families_test.go) parses every
 // client_golang constructor and OTel instrument call in internal/, pkg/ and
 // cmd/ and fails on any name without a golden row. Families created by
-// third-party code (otelgin) are seen only through seeding.
+// core's stage 2 (the http_server_* families) are seen only through seeding.
 func TestSeriesContract(t *testing.T) {
 	rows := mustGolden(t)
 
@@ -887,7 +905,7 @@ func TestAIDashboardUsesGoldenNames(t *testing.T) {
 
 // TestNoScopeLabels: with WithoutScopeInfo no OTel series carries
 // instrumentation-scope labels, so OTel families keep the label sets of the
-// client_golang families they replace. otelgin's series in the scrape (seeded
+// client_golang families they replace. Stage 2's series in the scrape (seeded
 // in TestMain) are the real-world check; a probe through telemetry.Meter is
 // the second. The probe's name is outside the contract's prefixes so it does
 // not show up as an extra family in TestSeriesContract.
@@ -1028,7 +1046,7 @@ func checkInstrument(spec instrumentSpec) []string {
 		switch {
 		case slices.Contains(allowed, k):
 		case slices.Contains(telemetry.ScrapeOnlyAttributeKeys(), k):
-			problems = append(problems, fmt.Sprintf("attribute key %q is scrape-only in internal/telemetry/attr.go (legacy or otelgin); a new instrument may not use it", k))
+			problems = append(problems, fmt.Sprintf("attribute key %q is scrape-only in internal/telemetry/attr.go (legacy or core's HTTP semconv); a new instrument may not use it", k))
 		default:
 			problems = append(problems, fmt.Sprintf("attribute key %q is not in internal/telemetry/attr.go", k))
 		}
@@ -1100,7 +1118,7 @@ func TestInstrumentNames(t *testing.T) {
 		`unit "1"`:                 {name: "audiobook_organizer.books.share", kind: kindGauge, unit: "1"},
 		"key outside attr.go":      {name: "audiobook_organizer.books.removed", kind: kindCounter, keys: []attribute.Key{"book_id"}},
 		"legacy op_id key":         {name: "audiobook_organizer.ops.items", kind: kindGauge, unit: "{item}", keys: []attribute.Key{telemetry.OpID}},
-		"otelgin semconv key":      {name: "audiobook_organizer.http.hits", kind: kindCounter, keys: []attribute.Key{telemetry.HTTPRoute}},
+		"HTTP semconv key":         {name: "audiobook_organizer.http.hits", kind: kindCounter, keys: []attribute.Key{telemetry.HTTPRoute}},
 		"no prefix":                {name: "books.removed", kind: kindCounter},
 		"uppercase":                {name: "audiobook_organizer.Books.removed", kind: kindCounter},
 		"histogram with no view":   {name: "audiobook_organizer.books.scan.duration", kind: kindHistogram, unit: "s"},
@@ -1167,8 +1185,8 @@ func viewKeyFor(family string, views map[string][]float64) (string, bool) {
 // histograms as creation advice at each call site
 // (metric.WithExplicitBucketBoundaries(telemetry.HistogramBuckets()[...])), not
 // as provider views, so the served scrape is the only place the applied
-// bounds can be read; otelgin's three http_server_* histograms carry the same
-// bounds as their own advice.
+// bounds can be read; core's stage 2 gives its three http_server_*
+// histograms the same bounds (the semconv advice and the SDK default).
 func TestEveryHistogramHasAView(t *testing.T) {
 	views := telemetry.HistogramBuckets()
 	fams := scrape(t)
@@ -1203,7 +1221,7 @@ func TestEveryHistogramHasAView(t *testing.T) {
 // pinned in testdata/histogram_buckets.golden, a file independent of
 // internal/telemetry/views.go. Both the live scrape and the views table must
 // match it, so neither a constructor edit nor a views.go edit (which is what
-// shapes the otelgin and OTel scrape) can move a bucket without changing the
+// shapes the OTel scrape) can move a bucket without changing the
 // pinned file in the same PR. Dashboards and recording rules select buckets
 // by their `le` string, so the text is compared, not just the value.
 func TestHistogramBucketsPinned(t *testing.T) {

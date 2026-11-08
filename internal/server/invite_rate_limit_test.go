@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -53,9 +53,9 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
-	// The production writer chain: the raw controller captured, then gzip
-	// (which wraps c.Writer for clients sending Accept-Encoding: gzip).
-	r.Use(captureRawResponseController(), compressionMiddleware())
+	// The production writer chain in gin: the raw controller captured (core's
+	// stage 9 compresses outside the engine since R1-17).
+	r.Use(captureRawResponseController())
 	r.Use(func(c *gin.Context) {
 		if c.GetHeader("X-Test-Verified") != "" {
 			servermiddleware.MarkCFAccessVerified(c)
@@ -1146,31 +1146,6 @@ func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
 	}
 	if n := unlistedConnectors.len(); n != 1 {
 		t.Fatalf("the rotation filled %d warning slots, want 1 (its /64)", n)
-	}
-}
-
-// S1: the accept-invite route is excluded from gzip, so its body read
-// deadline never depends on the gzip writer; an ordinary route is still
-// compressed.
-func TestCompressionMiddleware_ExcludesAcceptInvite(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(compressionMiddleware())
-	big := strings.Repeat("x", 4096)
-	r.POST("/api/v1/auth/accept-invite", func(c *gin.Context) { c.String(http.StatusOK, big) })
-	r.GET("/api/v1/other", func(c *gin.Context) { c.String(http.StatusOK, big) })
-	for path, wantGzip := range map[string]bool{"/api/v1/auth/accept-invite": false, "/api/v1/other": true} {
-		method := http.MethodGet
-		if path == "/api/v1/auth/accept-invite" {
-			method = http.MethodPost
-		}
-		req := httptest.NewRequest(method, path, nil)
-		req.Header.Set("Accept-Encoding", "gzip")
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if got := w.Header().Get("Content-Encoding") == "gzip"; got != wantGzip {
-			t.Errorf("%s: gzipped=%v, want %v", path, got, wantGzip)
-		}
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.115.0
+// version: 2.115.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -54,11 +54,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
-	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	// Blank-import the plugin packages so their init() functions run and
 	// the plugins register themselves with the serviceregistry. The
@@ -833,50 +831,22 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		slog.Warn("failed to disable trusted proxies", "err", err)
 	}
 
+	// The perimeter (peer allow-list and client address, request ID, tracing
+	// and the HTTP metrics, recovery, the access log, security headers, CORS,
+	// cross-origin protection, compression, the /api rate limit) runs in
+	// core's stages around the kernel's router (05-http-api §4.2, R1-17):
+	// every request passes it before this engine sees it. Only the Basic gate
+	// (stage 8) stays here until F3.
+	//
 	// First: marks the request for the perimeter shim (perimeter_shim.go),
 	// so a response this engine writes is told apart from one core's router
-	// writes itself, which the shim gives HEAD's perimeter (R1-15).
+	// writes itself, which the shim puts through the Basic gate.
 	router.Use(perimeterSeen())
-
-	// Custom logger that skips noisy polling endpoints
-	// (UOS-14: /operations/active removed; SkipPaths entry removed)
-	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{"/api/v1/operations/events", "/api/v3/ops/events"},
-		// Masks ?token= / ?api_key= and similar values: ABS clients put the
-		// bearer credential (JWT or abk_ API key) in the URL, and gin's default
-		// line prints the path with its query string.
-		Formatter: servermiddleware.RedactingLogFormatter,
-	}))
-	// Not gin.Recovery(): its request dump keeps the query string, which carries
-	// ABS clients' ?token= credential (see RedactingRecovery).
-	router.Use(servermiddleware.RedactingRecovery())
-	router.Use(securityHeadersMiddleware())
-	router.Use(corsMiddleware())
 	router.Use(servermiddleware.BasicAuth())
-	// 🔴 /metrics MUST be excluded, not just "should be". promhttp.Handler()
-	// does its OWN gzip when the client sends Accept-Encoding: gzip, so leaving
-	// it in here compresses an already-compressed body. Prometheus gunzips once,
-	// finds gzip magic bytes underneath, and fails every scrape with:
-	//
-	//	expected a valid start token, got "\x1f" ("INVALID") while parsing: "\x1f"
-	//
-	// which reads like a corrupt exposition format rather than a transport bug.
-	// Observed in production 2026-08-02, immediately after /metrics was
-	// auth-gated made the target reachable again.
-	//
-	// /api/events is an SSE stream: buffering it through a compressor defeats
-	// incremental delivery, so events arrive only when the buffer flushes.
-	// Before compressionMiddleware: gin-contrib/gzip swaps c.Writer for a
-	// wrapper without Unwrap, after which no connection deadline can be set
-	// (the accept-invite body read deadline, setBodyReadDeadline).
+	// Keeps the connection's own writer for setBodyReadDeadline (the
+	// accept-invite body read deadline), reached through core's writers'
+	// Unwrap.
 	router.Use(captureRawResponseController())
-	router.Use(compressionMiddleware())
-	// OpenTelemetry instrumentation: create per-handler spans and record metrics.
-	// otelgin v0.72 records url.path only (no url.query / url.full /
-	// http.target), so query-string credentials never reach a span;
-	// TestOtelginSpansCarryNoQueryCredentials pins that across upgrades. url.path
-	// is the RAW path though, which carries invite tokens: see tracingMiddleware.
-	router.Use(tracingMiddleware()...)
 
 	// internal/metrics' families are registered on the App's Provider by
 	// AttachMetrics (books.Attach, after app.New), never on the default
@@ -1488,8 +1458,6 @@ type serverOrganizeHooks struct {
 
 // setupRoutes configures all the routes
 
-// corsMiddleware adds restrictive CORS headers.
-
 // filesCommonDir finds the common parent directory of all BookFile file paths.
 
 // isProtectedPath returns true if the given file path is under an import path
@@ -1728,48 +1696,6 @@ func (server *Server) ensureSingleFileBookFile(book *database.Book) (bool, error
 	return true, nil
 }
 
-// compressionMiddleware is the router-wide response compressor, shared with the
-// tests so they exercise the exact exclusions production uses.
-//
-// Excluded:
-//   - /metrics: promhttp compresses on its own (see the comment at the call site).
-//   - /api/events: an SSE stream; a compressor buffers it.
-//   - /api/v1/operations/v2/:id/logs/download: the handler streams its own
-//     .log.gz body. gin-contrib/gzip v1.2.7 wraps it anyway, and its "already
-//     gzip" check passes the first chunk through raw, strips Content-Encoding,
-//     then compresses every later chunk, so browsers saved a file gunzip rejects
-//     ("data stream error") on every operation's log download.
-//   - /api/v1/auth/accept-invite: its body is read under a connection read
-//     deadline (setBodyReadDeadline), and the gzip writer hides the
-//     connection; captureRawResponseController covers that too, so this is
-//     the second of two guards. Its response is a few bytes of JSON.
-//
-// Whether a response is compressed is compresses, which the perimeter shim
-// also applies to the answers core's router writes itself (R1-15 review m5).
-func compressionMiddleware() gin.HandlerFunc {
-	return gzip.Gzip(gzip.DefaultCompression,
-		gzip.WithCustomShouldCompressFn(func(c *gin.Context) bool { return compresses(c.Request) }))
-}
-
-var (
-	compressionExcludedPaths  = gzip.NewExcludedPaths([]string{"/api/events", "/metrics", "/api/v1/auth/accept-invite"})
-	compressionExcludedRegexs = gzip.NewExcludedPathesRegexs([]string{`^/api/v1/operations/v2/[^/]+/logs/download$`})
-)
-
-// compresses reports whether compressionMiddleware compresses r's response:
-// gin-contrib/gzip's own default test (the client accepts gzip, the request
-// is no connection upgrade, the path's extension is not an image the library
-// excludes) plus the paths listed on compressionMiddleware.
-func compresses(r *http.Request) bool {
-	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
-		strings.Contains(r.Header.Get("Connection"), "Upgrade") {
-		return false
-	}
-	p := r.URL.Path
-	return !gzip.DefaultExcludedExtentions.Contains(filepath.Ext(p)) &&
-		!compressionExcludedPaths.Contains(p) && !compressionExcludedRegexs.Contains(p)
-}
-
 // registerAll registers every operation the server owns, in the order that
 // existed before 05-PR7, and returns every failure (never just the first):
 //
@@ -1827,12 +1753,4 @@ func registerAll(s *Server, reg *opsregistry.Registry) []error {
 // port wave adds the fields its bundles use, taken from s.store here.
 func (s *Server) catalogDeps() opscatalog.Deps {
 	return opscatalog.Deps{}
-}
-
-// tracingMiddleware is the otelgin tracer with invite tokens kept out of the
-// recorded url.path (see servermiddleware.TraceWithRedactedInvitePath). It
-// returns a chain to install with router.Use(tracingMiddleware()...). opts are
-// otelgin options; production passes none, tests pass a tracer provider.
-func tracingMiddleware(opts ...otelgin.Option) []gin.HandlerFunc {
-	return servermiddleware.TraceWithRedactedInvitePath(otelgin.Middleware("audiobook-organizer", opts...))
 }
