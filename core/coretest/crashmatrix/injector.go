@@ -45,16 +45,16 @@ const readyMessage = "kernel: ready"
 type Injector struct {
 	f     Fixture
 	seams *bootseam.Seams
-	rec   *bootseamtest.Recorder // nil for a boot of the real filesystem
+	rec   *bootseamtest.Recorder // nil for a fixture-building boot (Boot)
 
 	mu    sync.Mutex
 	apps  []*app.App
 	ready int
 }
 
-// newInjector is a boot over rec (nil: the real filesystem).
-func newInjector(f Fixture, rec *bootseamtest.Recorder) *Injector {
-	s := &bootseam.Seams{FS: vfs.Default, BuildID: BuildID, Clock: Now}
+// newInjector is a boot over rec, or over fsys with no recorder.
+func newInjector(f Fixture, rec *bootseamtest.Recorder, fsys vfs.FS) *Injector {
+	s := &bootseam.Seams{FS: fsys, BuildID: BuildID, Clock: Now}
 	if rec != nil {
 		s = rec.Seams()
 		s.BuildID, s.Clock = BuildID, Now

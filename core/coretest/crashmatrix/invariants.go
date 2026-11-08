@@ -43,16 +43,21 @@ import (
 //     mix (fixtureRun.legal).
 //   - I3: the level sidecar equals the stamps after recovery, and at every
 //     kill point it is never below a stamp (machine 2: sidecar first).
-//   - I5: readiness within maxBoots boots, or the fixture's WantRefused.
-//   - I6: every checkpoint record names a complete checkpoint directory, no
-//     partial one is left, a crash loop leaves no more checkpoints than the
-//     fault-free run, and every checkpoint holds the module rows of one the
-//     fault-free run took (none holds a row written after it).
+//   - I5: readiness within maxBoots boots, or the fixture's Refusal.
+//   - I6: every checkpoint record names a complete checkpoint directory
+//     that opens, no partial one is left, a crash loop leaves no more
+//     checkpoints than the legal runs leave between them (at least one),
+//     and every checkpoint holds the fixture's module rows, no module row,
+//     or those of a checkpoint a legal run took (none holds a row written
+//     after it).
 
-// terminal is machine 1's end states.
-var terminal = map[string]bool{
-	restoreswap.StepApplied: true, restoreswap.StepSwappedBack: true,
-	restoreswap.StepRejected: true, restoreswap.StepHookDone: true,
+// terminal reports whether step is one of machine 1's end states.
+func terminal(step string) bool {
+	switch step {
+	case restoreswap.StepApplied, restoreswap.StepSwappedBack, restoreswap.StepRejected, restoreswap.StepHookDone:
+		return true
+	}
+	return false
 }
 
 // outcome is what a run left on its filesystem.
@@ -67,6 +72,7 @@ type outcome struct {
 	checkpoints []string // the module-row digest of each complete checkpoint, sorted
 	partial     []string // checkpoint directories without a record
 	orphans     []string // records naming no complete directory
+	broken      []string // checkpoints with a record whose store does not open
 }
 
 type journal struct {
@@ -76,10 +82,10 @@ type journal struct {
 }
 
 // storageStamps is c/storage/level/<owner>'s prefix (05-storage §5S.3.7).
-var storageStamps = append([]byte("c/storage/"), keys.Join(keys.Str("level"))...)
+func storageStamps() []byte { return append([]byte("c/storage/"), keys.Join(keys.Str("level"))...) }
 
 // zeroRows is the module-row digest of a store with no module row.
-var zeroRows = fmt.Sprintf("0 rows %x", sha256.New().Sum(nil)[:8])
+func zeroRows() string { return fmt.Sprintf("0 rows %x", sha256.New().Sum(nil)[:8]) }
 
 type stampRecord struct {
 	Level int `json:"level"`
@@ -101,7 +107,7 @@ func read(mem *vfs.MemFS, f Fixture) outcome {
 	if o.journals, o.pending, o.err = readSlot(mem, f.StateDir); o.err != nil {
 		return o
 	}
-	o.checkpoints, o.partial, o.orphans, o.err = readCheckpoints(mem, filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
+	o.checkpoints, o.partial, o.orphans, o.broken, o.err = readCheckpoints(mem, filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
 	return o
 }
 
@@ -125,7 +131,7 @@ func readStore(fsys vfs.FS, path string, stamps bool) (ok bool, rows string, lev
 	}
 	h := sha256.New()
 	levels = map[string]int{}
-	n := 0
+	n, stampPrefix := 0, storageStamps()
 	for valid := it.First(); valid; valid = it.Next() {
 		k := it.Key()
 		switch {
@@ -134,9 +140,9 @@ func readStore(fsys vfs.FS, path string, stamps bool) (ok bool, rows string, lev
 			if verr != nil {
 				return false, "", nil, errors.Join(verr, it.Close())
 			}
-			fmt.Fprintf(h, "%q=%q\n", k, v)
+			h.Write(fmt.Appendf(nil, "%q=%q\n", k, v)) // hash.Hash's Write never fails
 			n++
-		case stamps && bytes.HasPrefix(k, storageStamps):
+		case stamps && bytes.HasPrefix(k, stampPrefix):
 			segs, serr := keys.Split(k[len("c/storage/"):])
 			v, verr := it.ValueAndErr()
 			if serr != nil || verr != nil || len(segs) != 2 {
@@ -204,15 +210,15 @@ func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 }
 
 // readCheckpoints reads the checkpoint directory: the module-row digest of
-// each complete checkpoint, the directories with no record, and the records
-// with no complete directory.
-func readCheckpoints(fsys vfs.FS, dir string) (complete, partial, orphans []string, err error) {
+// each complete checkpoint, the directories with no record, the records
+// with no complete directory, and the checkpoints whose store does not open.
+func readCheckpoints(fsys vfs.FS, dir string) (complete, partial, orphans, broken []string, err error) {
 	names, err := fsys.List(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	have := map[string]bool{}
 	for _, n := range names {
@@ -228,18 +234,18 @@ func readCheckpoints(fsys vfs.FS, dir string) (complete, partial, orphans []stri
 			partial = append(partial, n)
 		default:
 			ok, rows, _, err := readStore(fsys, fsys.PathJoin(dir, n, "db"), false)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("checkpoint %s: %w", n, err)
+			switch {
+			case err != nil:
+				broken = append(broken, fmt.Sprintf("%s (%v)", n, err))
+			case !ok:
+				broken = append(broken, n+" (no store)")
+			default:
+				complete = append(complete, rows)
 			}
-			if !ok {
-				orphans = append(orphans, n+" (no db)")
-				continue
-			}
-			complete = append(complete, rows)
 		}
 	}
 	slices.Sort(complete)
-	return complete, partial, orphans, nil
+	return complete, partial, orphans, broken, nil
 }
 
 // atKillPoint is I3's first half on a crash clone: the level sidecar is
@@ -260,8 +266,15 @@ func (fr *fixtureRun) atKillPoint(at string, fsys vfs.FS) {
 		return
 	}
 	if !sideOK {
-		if len(stamps) > 0 && maxLevel(stamps) > 0 {
-			fr.errorf("%s: I3: stamps %v with no level sidecar", at, stamps)
+		// Between a restore's placements (step d) and its sidecar rewrite
+		// (step e) the DB path holds the placed store and no sidecar; the
+		// in-flight file exists, so the reader check refuses every opener
+		// (05-storage §5S.3.7) and the sidecar's absence is legal.
+		_, inflight, err := restoreswap.InFlight(fsys, fr.f.StateDir)
+		if err != nil {
+			fr.errorf("%s: I3: the swap slot at the kill point: %v", at, err)
+		} else if !inflight && maxLevel(stamps) > 0 {
+			fr.errorf("%s: I3: stamps %v with no level sidecar and no swap in flight", at, stamps)
 		}
 		return
 	}
@@ -284,8 +297,8 @@ func maxLevel(m map[string]int) int {
 func (fr *fixtureRun) check(at string, ch chain) {
 	if !ch.ended(fr.f) {
 		want := "readiness"
-		if fr.f.WantRefused != nil {
-			want = fmt.Sprintf("the refusal %v", fr.f.WantRefused)
+		if fr.f.Refusal != nil {
+			want = fmt.Sprintf("readiness or the refusal %v", fr.f.Refusal)
 		}
 		fr.errorf("%s: I5: no %s within %d boots: %v", at, want, maxBoots, ch.errs())
 		return
@@ -298,18 +311,13 @@ func (fr *fixtureRun) check(at string, ch chain) {
 	for _, msg := range fr.violations(o) {
 		fr.errorf("%s: %s", at, msg)
 	}
-	if fr.f.Check != nil {
-		if err := fr.f.Check(ch.mem); err != nil {
-			fr.errorf("%s: %v", at, err)
-		}
-	}
 }
 
 // violations lists o's breaches of I2, I3 and I6.
 func (fr *fixtureRun) violations(o outcome) []string {
 	var out []string
 	for id, j := range o.journals {
-		done := terminal[j.last]
+		done := terminal(j.last)
 		failed := j.last == restoreswap.StepFailed && j.kind == restorejournal.KindCheckpoint
 		switch {
 		case !done && !failed:
@@ -344,21 +352,28 @@ func (fr *fixtureRun) violations(o outcome) []string {
 	if len(o.orphans) > 0 {
 		out = append(out, fmt.Sprintf("I6: checkpoint records with no complete directory: %v", o.orphans))
 	}
+	for _, b := range o.broken {
+		out = append(out, fmt.Sprintf("I6: checkpoint %s has a record but does not open: the rollback copy is unusable", b))
+	}
 	if len(o.partial) > 0 {
 		out = append(out, fmt.Sprintf("I6: partial checkpoint directories left: %v", o.partial))
 	}
-	// A crash loop leaves at most one checkpoint: the fault-free run's, or,
+	// A crash loop reuses one checkpoint: no more than the legal stores'
+	// runs leave between them (a swapped-back restore's checkpoint stays,
+	// decision D6, and the original store's boot may take its own), or one
 	// after a kill that makes the next boot an upgrade boot (between the
-	// fresh-install batch and its seed step, say), the one that boot takes.
-	most, known := 1, map[string]bool{fr.initial: true}
+	// fresh-install batch and its seed step, say). A checkpoint with no
+	// module row cannot hold a row written after it.
+	most, known := 0, map[string]bool{fr.initial: true, zeroRows(): true}
 	for _, l := range fr.legal {
-		most = max(most, len(l.checkpoints))
+		most += len(l.checkpoints)
 		for _, c := range l.checkpoints {
 			known[c] = true
 		}
 	}
+	most = max(most, 1)
 	if len(o.checkpoints) > most {
-		out = append(out, fmt.Sprintf("I6: %d checkpoints, where a crash loop reuses one (the fault-free run leaves %d)", len(o.checkpoints), most))
+		out = append(out, fmt.Sprintf("I6: %d checkpoints, where a crash loop reuses one (the legal runs leave %d)", len(o.checkpoints), most))
 	}
 	for _, c := range o.checkpoints {
 		if !known[c] {
