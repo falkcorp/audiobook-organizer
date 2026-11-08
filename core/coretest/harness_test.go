@@ -1,7 +1,7 @@
 // file: core/coretest/harness_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2d3cedf2-afcc-4dd3-818a-7d6ca97695ab
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package coretest
 
@@ -571,14 +571,17 @@ func TestHarness_NoProcessGlobals(t *testing.T) {
 		return len(mfs)
 	}
 	before, g0 := families(), runtime.NumGoroutine()
-	for range 20 {
-		New(t, WithModules(hello.New()))
+	// Each boot is a subtest, so its cleanup closes the App (and the store
+	// hello's keyspace opened) before the count.
+	for i := range 20 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) { New(t, WithModules(hello.New())) })
 	}
 	if after := families(); after != before {
 		t.Errorf("Prometheus's default registry went from %d to %d families", before, after)
 	}
-	// Twenty boots leave no goroutine behind: nothing a harness boots runs on
-	// its own. The slack absorbs the runtime's own background goroutines.
+	// Twenty boots leave no goroutine behind once their cleanups have run:
+	// nothing a harness boots runs on its own, and closing the App stops
+	// Pebble's. The slack absorbs the runtime's own background goroutines.
 	if g1 := runtime.NumGoroutine(); g1 > g0+2 {
 		t.Errorf("goroutines went from %d to %d over 20 boots", g0, g1)
 	}
