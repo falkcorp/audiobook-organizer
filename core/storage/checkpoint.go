@@ -366,8 +366,12 @@ func (db *DB) copyStateFiles(dir string) ([]stateFileRecord, error) {
 			_ = src.Close()
 			return nil, fmt.Errorf("storage: checkpoint state file %s: %w", f.Label, err)
 		}
+		// The hash sees each chunk before the file does: a vfs.File may take
+		// ownership of a written buffer (pebble's MemFS scribbles over it
+		// under its invariants build), so hashing after the write would
+		// record bytes that were never copied.
 		h := sha256.New()
-		_, cerr := io.Copy(io.MultiWriter(dst, h), src)
+		_, cerr := io.Copy(io.MultiWriter(h, dst), src)
 		err = errors.Join(cerr, dst.Sync(), dst.Close(), src.Close())
 		if err != nil {
 			return nil, fmt.Errorf("storage: copy state file %s (%s): %w", f.Label, f.Path, err)
