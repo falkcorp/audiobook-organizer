@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/headers.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f94c1cdb-e7e5-4055-89fe-51f4c971d0ac
 // last-edited: 2026-11-08
 
@@ -14,6 +14,11 @@ import (
 // (server_middleware.go setSecurityHeaders); defaultCSP is 05-http-api
 // §4.2's policy for a response no owner supplied one for.
 const (
+	// reportGroup is the Reporting-Endpoints group stage 5 names: 05-http-api
+	// §4.2's csp="<owner's report URL>". An owner's CSP must name the same
+	// group in report-to; ABO's does (internal/server cspReportGroup,
+	// TestCSPReportGroupMatchesStage5).
+	reportGroup       = "csp"
 	defaultCSP        = "default-src 'none'; frame-ancestors 'self'"
 	permissionsPolicy = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 	hstsValue         = "max-age=31536000; includeSubDomains"
@@ -62,7 +67,7 @@ func (c *Chain) finishHeaders(h http.Header, r *http.Request) {
 		p = c.policyOf(r)
 	}
 	if p != nil && p.CSPReport != "" {
-		h.Set("Reporting-Endpoints", `csp="`+p.CSPReport+`"`)
+		h.Set("Reporting-Endpoints", reportGroup+`="`+p.CSPReport+`"`)
 	}
 	if h.Get("Content-Security-Policy") != "" {
 		return

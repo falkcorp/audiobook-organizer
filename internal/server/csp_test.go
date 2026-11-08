@@ -1,5 +1,5 @@
 // file: internal/server/csp_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a8dee6b8-6533-4d26-9f2c-34437fd9caa3
 // last-edited: 2026-11-08
 
@@ -41,6 +41,26 @@ func cspDirective(policy, name string) string {
 		}
 	}
 	return ""
+}
+
+// TestCSPReportGroupMatchesStage5: the group ABO's CSP names in report-to is
+// the group core's stage 5 writes in Reporting-Endpoints, which core hard
+// codes as "csp" (core/internal/httpmw headers.go reportGroup). If either
+// side renames it, Chromium, which prefers report-to, stops reporting.
+func TestCSPReportGroupMatchesStage5(t *testing.T) {
+	setAccessTeam(t, "")
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/shell", func(c *gin.Context) { c.String(http.StatusOK, "<html></html>") })
+	_, h := stagesOver(t, r, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/shell"})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/shell", nil))
+	group, _, ok := strings.Cut(w.Header().Get("Reporting-Endpoints"), "=")
+	require.True(t, ok, "no Reporting-Endpoints group: %q", w.Header().Get("Reporting-Endpoints"))
+	require.Equal(t, "csp", group, "stage 5's group")
+	require.Equal(t, "report-to "+group, cspDirective(w.Header().Get("Content-Security-Policy"), "report-to"),
+		"ABO's CSP names a report-to group stage 5 does not define")
+	require.Equal(t, cspReportGroup, group)
 }
 
 func TestSecurityHeaders_SendCSPAndPermissionsPolicy(t *testing.T) {

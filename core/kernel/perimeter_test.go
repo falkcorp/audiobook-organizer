@@ -1,5 +1,5 @@
 // file: core/kernel/perimeter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6a3f1c-8b2e-4f5a-9c7d-3e1b2a4c6f80
 // last-edited: 2026-11-08
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // TestPerimeterHonoursBlobOnlyValues: a perimeter value the app holds only
@@ -97,4 +98,61 @@ func TestPerimeter_BadAllowlistEntryFailsBoot(t *testing.T) {
 			t.Fatalf("the listener opened despite the bad entry: %v", rec.list())
 		}
 	})
+}
+
+// TestPerimeter_RateLimitSwitchEndToEnd: R1Values' rate-limit switch
+// reaches stage 10 through the kernel, on a RateDefault route of a legacy
+// mount: on at 1 a minute, the request after the burst (10, the floor) is
+// 429; off, no request is.
+func TestPerimeter_RateLimitSwitchEndToEnd(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		synctest.Test(t, func(t *testing.T) {
+			rec := &recorder{}
+			gcpd := mod("gcpd", func(r *module.Registrar) error {
+				r.MountLegacy(httpapi.LegacyMount{
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("Gordon")) }),
+					Auth:    httpapi.LegacyAuthGin,
+					Routes: func(yield func(httpapi.LegacyRoute) bool) {
+						yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault})
+					},
+				})
+				return nil
+			}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/api/v1/"} })
+			c := supervised(t, rec, gcpd)
+			c.LegacyAuthGinUntil = "gcpd"
+			c.R1Values = func() R1Values { return R1Values{RateLimitEnabled: enabled, RateLimitPerMinute: 1} }
+			var served atomic.Pointer[http.Handler]
+			c.Listen = func(_ httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (Server, error) {
+				served.Store(&h)
+				return &fakeServer{rec: rec, stopped: make(chan struct{})}, nil
+			}
+			k := mustNew(t, c)
+			ctx, cancel := context.WithCancel(t.Context())
+			done := run(ctx, k)
+			synctest.Wait()
+			hp := served.Load()
+			if hp == nil {
+				t.Fatal("the listener never opened")
+			}
+			limited := 0
+			for range 11 {
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/cases/42", nil)
+				req.RemoteAddr = "192.0.2.4:1000"
+				w := httptest.NewRecorder()
+				(*hp).ServeHTTP(w, req)
+				if w.Code == http.StatusTooManyRequests {
+					limited++
+				} else if w.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200 or 429", w.Code)
+				}
+			}
+			if want := map[bool]int{true: 1, false: 0}[enabled]; limited != want {
+				t.Errorf("enabled=%v: %d of 11 requests limited, want %d", enabled, limited, want)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run = %v", err)
+			}
+		})
+	}
 }
