@@ -49,14 +49,37 @@ var errRunTwice = errors.New("kernel: Run called more than once, or after Close"
 
 // Close releases what New built, for a Kernel that will not Run (coretest's
 // harness, a command that only boots): the metrics Provider, the store and
-// logging, in closeCore's order within the default shutdown budget. Once Run
-// has started, Run owns the shutdown and Close does nothing; a Run after
-// Close returns errRunTwice, and a second Close does nothing.
+// logging, in closeCore's order within core.shutdown.budget (R1Values, read
+// here as Run reads it at start step 7; a read that fails or a negative
+// budget is logged and the default used, since a close must not fail on a
+// value only Run acts on). Once Run has started, Run owns the shutdown and
+// Close does nothing; a Run after Close returns errRunTwice, and a second
+// Close does nothing.
 func (k *Kernel) Close(ctx context.Context) error {
 	if !k.ran.CompareAndSwap(false, true) {
 		return nil
 	}
-	return k.closeCore(ctx, time.Now().Add(defaultShutdownBudget))
+	v, err := k.r1Values()
+	if err != nil {
+		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
+	}
+	budget, berr := shutdownBudget(v)
+	if err = errors.Join(err, berr); err != nil {
+		k.log.WarnContext(ctx, "kernel: Close uses the default shutdown budget", "budget", budget, "err", err)
+	}
+	return k.closeCore(ctx, time.Now().Add(budget))
+}
+
+// shutdownBudget is core.shutdown.budget from v: zero is the default, and a
+// negative value is an error that leaves the default in force.
+func shutdownBudget(v R1Values) (time.Duration, error) {
+	switch {
+	case v.ShutdownBudget < 0:
+		return defaultShutdownBudget, fmt.Errorf("kernel: core.shutdown.budget %s is negative", v.ShutdownBudget)
+	case v.ShutdownBudget == 0:
+		return defaultShutdownBudget, nil
+	}
+	return v.ShutdownBudget, nil
 }
 
 // ReadinessNotifier receives the supervisor's readiness signals (05-health
@@ -182,17 +205,13 @@ func (k *Kernel) Run(ctx context.Context) error {
 	ws := k.startWorkers(ctx)
 	// (7) Listeners: R1Values once (05-config §1.12.1), then the listener.
 	v, err := k.r1Values()
-	budget := v.ShutdownBudget
-	if budget == 0 {
-		budget = defaultShutdownBudget
-	}
+	budget, berr := shutdownBudget(v)
 	var srv Server
 	switch {
 	case err != nil:
 		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
-	case budget < 0:
-		err = fmt.Errorf("kernel: core.shutdown.budget %s is negative", v.ShutdownBudget)
-		budget = defaultShutdownBudget
+	case berr != nil:
+		err = berr
 	default:
 		if srv, err = k.listen(httpapi.ListenOptions{Addr: v.Listen, TLSCertFile: v.TLSCertFile, TLSKeyFile: v.TLSKeyFile},
 			k.handler, k.coreLog("http")); err != nil {

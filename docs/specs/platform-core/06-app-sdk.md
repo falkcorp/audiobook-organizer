@@ -1032,8 +1032,10 @@ func (a *App) Run(ctx context.Context) error
 
 // Close releases what New built, for an App that never Ran (coretest's
 // harness, §6.4.8, and a command that only boots): core services' internal
-// goroutines, storage and logging, in reverse order, within the default
-// shutdown budget. It is a no-op once Run has started: Run owns the shutdown.
+// goroutines, storage and logging, in reverse order, within
+// core.shutdown.budget (read from Options.R1Values as Run reads it; a failed
+// read or a negative value is logged and the default used). It is a no-op
+// once Run has started: Run owns the shutdown.
 // Run after Close returns the kernel's errRunTwice ("Run called more than
 // once, or after Close"), and a second Close does nothing.
 func (a *App) Close(ctx context.Context) error
