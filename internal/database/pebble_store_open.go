@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_open.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
@@ -328,8 +328,10 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 }
 
 // DefaultCloseDrainTimeout bounds Close's wait for in-flight engine accesses.
-// The unit's TimeoutStopSec is 30s and the HTTP drain and ops registry spend
-// part of it before the store closes, so this leaves room for both.
+// serve closes the store after the stop hook, so this wait comes after the
+// kernel's whole shutdown budget, out of whatever margin the supervisor's stop
+// timeout leaves beyond it (under systemd, the unit's TimeoutStopSec, which the
+// deploy drop-in sets). It stays small so that margin can be small.
 const DefaultCloseDrainTimeout = 10 * time.Second
 
 var pebbleCloseLog = logger.New("database.pebble-close")

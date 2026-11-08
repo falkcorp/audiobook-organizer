@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.1
+// version: 4.67.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -186,9 +186,9 @@ func (s *Server) adoptSearchIndex(steps *startup.Steps) {
 }
 
 // deferredActivityFlushBudget bounds how long shutdown (or a failed Start)
-// waits for RecordDeferred entries to reach the store. The unit's
-// TimeoutStopSec is 30s and the HTTP drain and ops registry spend part of it
-// first, so this stays small.
+// waits for RecordDeferred entries to reach the store. Shutdown spends it
+// inside the kernel's shutdown budget, after the HTTP drain and the ops
+// registry have spent part of that budget, so it stays small.
 const deferredActivityFlushBudget = 5 * time.Second
 
 // flushDeferredActivity is for a failed Start. It waits, at most
