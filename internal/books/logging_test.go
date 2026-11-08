@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.3.0
+// version: 1.3.2
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 )
 
 // TestLogSettings: log_level / --log-level becomes the handler level; a level
@@ -125,7 +127,13 @@ func TestNoSecondDefaultLogger(t *testing.T) {
 	out := c.newLog.String()
 	assert.Contains(t, out, "batman default sentinel", "slog.Default is not the App's pipeline")
 	assert.Contains(t, out, "robin stdlib sentinel", "the stdlib log is not the App's pipeline")
-	assert.Contains(t, out, "module=core", "the default is not the pipeline's core root")
+	// The process default carries no module attribute (R1-15 review M2): its
+	// lines are the application's own, not core's.
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "sentinel") {
+			assert.NotContains(t, l, "module=", "the process default wrote a module attribute: %s", l)
+		}
+	}
 
 	// The writer is only a tap consumer: it has no stdout copy of these
 	// lines to print twice.
@@ -287,10 +295,22 @@ func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
 	lg.Scope("core", "http").Error("http: serve failed")
 	lg.Scope("core", "otel").Info("otel: exporter built")
 	lg.Module("books").Info("books module line")
+	// The OTel error handler logs through core's otel scope (the line R1-15's
+	// parity test used): printed with module=core, and no Activity entry.
+	otel.Handle(errors.New("the gotham exporter refused the batch"))
 	slog.Info("alfred marker")
 
 	e := nextActivity(t, c)
 	assert.Contains(t, e.Summary, "alfred marker", "a core-owned record became an Activity entry: %+v", e)
+
+	var otelLine string
+	for _, l := range strings.Split(c.newLog.String(), "\n") {
+		if strings.Contains(l, "gotham exporter") {
+			otelLine = l
+		}
+	}
+	require.NotEmpty(t, otelLine, "core's own line must still be printed:\n%s", c.newLog.String())
+	assert.Contains(t, otelLine, "module=core", "core's own line keeps its module")
 }
 
 // TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID: the operations
