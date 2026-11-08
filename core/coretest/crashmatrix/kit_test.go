@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package crashmatrix
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -139,6 +140,103 @@ func TestKitFailsOnUnmatchedWriters(t *testing.T) {
 				t.Errorf("Observed lacks the writer's label %q", tc.label)
 			}
 		})
+	}
+}
+
+// trickLabel is the trickster's writer label. The kit kills nested boots at
+// the swap's labels only (nested), so the trickster writes under one.
+const trickLabel = "swap.trickster"
+
+// trickster is a module whose Register leaves a mark while it works and
+// whose recovery from a mark it finds is not crash safe: it lays a trap
+// before it clears the mark, and a boot that finds the trap fails. The
+// recovery runs only in the boot after a broken one, so no census kill
+// reaches the window that leaves the trap; a nested kill does.
+type trickster struct{ dir string }
+
+func (j trickster) Manifest() module.Manifest {
+	return module.Manifest{
+		ID: "trickster", Version: "1.0.0", DisplayName: "Trickster", MinCoreVersion: "0.1.0", DefaultEnabled: true,
+		Storage: storage.Spec{Keyspace: true},
+	}
+}
+
+func (j trickster) Register(r *module.Registrar) error {
+	ctx := r.Context()
+	defer bootseam.Region(ctx, trickLabel)()
+	fs := bootseam.FS(ctx)
+	mark, trap := filepath.Join(j.dir, "trick-mark"), filepath.Join(j.dir, "trick-trap")
+	touch := func(p string) error {
+		f, err := fs.Create(p, vfs.WriteCategoryUnspecified)
+		if err != nil {
+			return err
+		}
+		if err := errors.Join(f.Sync(), f.Close()); err != nil {
+			return err
+		}
+		return syncDirOf(fs, p)
+	}
+	remove := func(p string) error {
+		if err := fs.Remove(p); err != nil {
+			return err
+		}
+		return syncDirOf(fs, p)
+	}
+	if _, err := fs.Stat(trap); err == nil {
+		return errors.New("trickster: the trap is sprung")
+	}
+	if _, err := fs.Stat(mark); err == nil {
+		for _, step := range []func() error{func() error { return touch(trap) }, func() error { return remove(mark) }, func() error { return remove(trap) }} {
+			if err := step(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := touch(mark); err != nil {
+		return err
+	}
+	return remove(mark)
+}
+
+func syncDirOf(fs vfs.FS, p string) error {
+	d, err := fs.OpenDir(filepath.Dir(p))
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
+// TestKitKillsTheBootAfterABrokenOne (R1-21 review M6): the boot after a
+// kill, and the rest of a boot after an injected error with its next boot,
+// are killed again at each of their nested kill points, so a recovery
+// writer that is not crash safe fails the run though no fault-free boot
+// runs it.
+func TestKitKillsTheBootAfterABrokenOne(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s := Scenario{
+		Build: func(_ testing.TB, inj *Injector) error {
+			_, err := inj.New(context.Background(), app.Options{AppID: "gotham", Logger: slog.New(slog.DiscardHandler)}, trickster{dir: dir})
+			return err
+		},
+		Fixtures: []Fixture{{Name: "arkham", StateDir: dir}},
+		Rows:     []Row{{Phase: "P5 (test)", Writer: "trickster: a mark and its unsafe recovery", Labels: []string{trickLabel}}},
+	}
+	rep := &reports{}
+	run(t, rep, s, modeFull)
+	got := strings.Join(rep.errs, "\n")
+	for _, want := range []string{
+		"then kill before reboot 1's " + trickLabel,
+		"then kill before boot 2's " + trickLabel,
+		"I5: no readiness",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the kit's reports lack %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "the fault-free boot") {
+		t.Fatalf("the fault-free boot failed, so the nested reports prove nothing:\n%s", got)
 	}
 }
 

@@ -1,12 +1,13 @@
 // file: core/internal/bootseam/bootseamtest/recorder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7088e36e-83e4-4533-b4d0-a40f7503e603
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package bootseamtest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -123,5 +124,33 @@ func TestRecorderClonesAndFails(t *testing.T) {
 	}
 	if !sawCreate {
 		t.Fatal("no clone before the create")
+	}
+}
+
+// TestRecorderCloneIf (R1-21 review M6): without Clones, CloneIf takes a
+// clone before each kill point it accepts and before no other operation.
+func TestRecorderCloneIf(t *testing.T) {
+	r := New(vfs.NewCrashableMem(), Options{CloneIf: func(ev Event) bool { return ev.Label == "swap.back.mv" }})
+	fs := r.FS()
+	if err := fs.MkdirAll("/cave", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := create(t, fs, "/cave/bat"); err != nil {
+		t.Fatal(err)
+	}
+	exit := r.Enter("swap.back.mv")
+	if err := create(t, fs, "/cave/robin"); err != nil {
+		t.Fatal(err)
+	}
+	exit()
+	var got []errorfs.OpKind
+	for _, c := range r.Clones() {
+		if c.Event.Label != "swap.back.mv" || c.Event.Path != "/cave/robin" {
+			t.Fatalf("a clone before %s %v, which CloneIf refuses", c.Event.Path, c.Event.Kind)
+		}
+		got = append(got, c.Event.Kind)
+	}
+	if want := []errorfs.OpKind{errorfs.OpCreate, errorfs.OpFileSync}; !slices.Equal(got, want) {
+		t.Fatalf("clones before %v, want one before each kill point of the accepted region %v", got, want)
 	}
 }
