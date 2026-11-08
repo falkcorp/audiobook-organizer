@@ -122,7 +122,7 @@ For a guest who lost the key, whose key was revoked, or who never got one
   proxy limit); past that it answers 202 and finishes in the background, and
   the list shows the result.
 - The same per-user record is reused (revoked -> pending); `reissued_at` shows
-  when. Audit entries: `guest-token:reissued` / `guest-token:reissue_failed`,
+  when. Audit entries: `guest_service_token_reissued` / `guest_service_token_reissue_failed`,
   with the user id and token id only.
 
 Every mint and revoke (and every failure) is written to the audit log with the
