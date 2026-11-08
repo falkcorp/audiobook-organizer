@@ -1,5 +1,5 @@
 // file: core/log/logging.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
 // last-edited: 2026-11-08
 
@@ -69,8 +69,9 @@ const (
 // rootModule is the module of core's own scopes (Scope("core", subsystem)).
 const rootModule = "core"
 
-// processModule is the module of the process default logger (Root and
-// Handler): none. Its records carry no module attribute, are counted under
+// processModule is the module of the process default logger (Root,
+// ProcessHandler, and Handler, which shares the scope but is not marked
+// Record.Process): none. Its records carry no module attribute, are counted under
 // this empty key, and reach taps with an empty Record.Module.
 const processModule = ""
 
