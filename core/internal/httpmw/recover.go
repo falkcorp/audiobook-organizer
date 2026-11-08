@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/recover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 502a11e1-d109-4b9b-945d-2f4bc6b0851c
 // last-edited: 2026-11-08
 
@@ -24,6 +24,12 @@ import (
 // net/http meaning and aborts the response. A panic after the response
 // started cannot become a 500, so it aborts the connection instead of
 // leaving a truncated answer that looks complete.
+//
+// The panic unwound past stage 4, so this stage writes the request's access
+// record on every path (emitAccess), as HEAD's gin logger, which ran
+// outside recovery, did: the 500, or the status already sent. The request
+// line is the access record's target (loggedTarget), so a credential after
+// a "?" sent as %3F is masked here as it is there.
 func (c *Chain) recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hw := newHookWriter(w, r, nil)
@@ -33,12 +39,15 @@ func (c *Chain) recovery(next http.Handler) http.Handler {
 				return
 			}
 			if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				c.emitAccess(r, hw.Status(), hw.n)
 				panic(rec)
 			}
-			line := r.Method + " " + c.deps.Redactor.URL(r.URL.RequestURI()) + " " + r.Proto
+			line := r.Method + " " + loggedTarget(c.deps.Redactor, r.URL) + " " + r.Proto
 			if err, ok := rec.(error); ok && (errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)) {
-				c.deps.Log.WarnContext(r.Context(), "httpapi: client connection lost", "error", err, "request", line,
+				c.deps.Log.WarnContext(r.Context(), "httpapi: client connection lost",
+					"error", c.deps.Redactor.String("error", err.Error()), "request", line,
 					"request_id", RequestID(r.Context()))
+				c.emitAccess(r, hw.Status(), hw.n)
 				return
 			}
 			st := From(r.Context())
@@ -54,6 +63,7 @@ func (c *Chain) recovery(next http.Handler) http.Handler {
 			}
 			c.inst.panicked(r.Context(), owner, route)
 			if hw.wrote || hw.hijacked {
+				c.emitAccess(r, hw.Status(), hw.n)
 				panic(http.ErrAbortHandler)
 			}
 			// What the handler set for its own answer does not describe this
@@ -63,6 +73,7 @@ func (c *Chain) recovery(next http.Handler) http.Handler {
 				h.Del(k)
 			}
 			c.ownAnswer(hw, r, http.StatusInternalServerError, "internal", nil)
+			c.emitAccess(r, http.StatusInternalServerError, hw.n)
 		}()
 		next.ServeHTTP(hw, r)
 	})
