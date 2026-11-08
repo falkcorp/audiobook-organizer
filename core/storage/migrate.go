@@ -1,5 +1,5 @@
 // file: core/storage/migrate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
 // last-edited: 2026-11-07
 
@@ -352,7 +352,9 @@ func (db *DB) Migrate(ctx context.Context) error {
 		st.opts.ExtendStart("storage.migration " + n.ref.String())
 		var err error
 		if n.legacy != nil {
-			err = db.runLegacy(ctx, n)
+			// A legacy step's Up writes through the owner's LegacyRange
+			// before its bookkeeping batch: the whole step is one row.
+			err = db.labelled(labelStepBatch, func() error { return db.runLegacy(ctx, n) })
 		} else {
 			err = db.runStep(ctx, n)
 		}
@@ -416,7 +418,7 @@ func (db *DB) runStep(ctx context.Context, n *stepNode) (err error) {
 	if n.mig.Compat == Breaking {
 		return db.commitWithRaise(ctx, b, o, n.mig.RaisesLevel)
 	}
-	return b.Commit(ctx, Sync)
+	return db.labelled(labelStepBatch, func() error { return b.Commit(ctx, Sync) })
 }
 
 // finish is §5S.4 step 9: one batch with the claim ledgers and the store
@@ -468,11 +470,11 @@ func (db *DB) finish(ctx context.Context) (err error) {
 			return fmt.Errorf("storage: clearing %s's migration marker: %w", o.owner, err)
 		}
 	}
-	if err := b.Commit(ctx, Sync); err != nil {
+	if err := db.labelled(labelFinishBatch, func() error { return b.Commit(ctx, Sync) }); err != nil {
 		return fmt.Errorf("storage: step 9: %w", err)
 	}
 	st.epochNew = false
-	if err := db.writeSidecars(); err != nil {
+	if err := db.labelled(labelFinishSidecars, db.writeSidecars); err != nil {
 		return err
 	}
 	if h := db.hooks.beforeComplete; h != nil {
@@ -480,11 +482,11 @@ func (db *DB) finish(ctx context.Context) (err error) {
 			return err
 		}
 	}
-	if err := db.completeCheckpoint(now); err != nil {
+	if err := db.labelled(labelCheckpointDone, func() error { return db.completeCheckpoint(now) }); err != nil {
 		return err
 	}
 	if st.cpName != "" {
-		if err := ks.Delete(ctx, attemptKey()); err != nil {
+		if err := db.labelled(labelAttemptClear, func() error { return ks.Delete(ctx, attemptKey()) }); err != nil {
 			return fmt.Errorf("storage: clearing the completed attempt: %w", err)
 		}
 	}
