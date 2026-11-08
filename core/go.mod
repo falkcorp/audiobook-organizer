@@ -22,6 +22,8 @@ ignore ./examples/hello/web
 
 require (
 	github.com/cockroachdb/pebble/v2 v2.1.7
+	github.com/go-logr/logr v1.4.4
+	github.com/go-logr/stdr v1.2.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/klauspost/compress v1.20.3
 	github.com/prometheus/client_golang v1.25.0
@@ -55,8 +57,6 @@ require (
 	github.com/cockroachdb/swiss v0.0.0-20260820225851-333444432258 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/getsentry/sentry-go v0.49.0 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
-	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

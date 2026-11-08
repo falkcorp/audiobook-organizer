@@ -87,7 +87,7 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 			return nil, err
 		}
 	}
-	if err := k.phase(phaseP5, func() error { return k.services(ctx) }); err != nil {
+	if err := k.phase(phaseP5, func() error { return k.services(ctx, describe) }); err != nil {
 		return nil, err
 	}
 	if err := k.storageMetrics(ctx); err != nil {
@@ -106,6 +106,13 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		return k, nil
 	}
 	if err := k.phase(phaseP8, k.handlerPhase); err != nil {
+		return nil, err
+	}
+	// A family refused through a Scope or the raw MeterProvider during
+	// Register fails boot (05-metrics §8); Run checks again before the
+	// listener for what the process-global install and the hooks' Starts
+	// created.
+	if err := k.familyTaken("during New"); err != nil {
 		return nil, err
 	}
 	return k, nil
@@ -137,7 +144,7 @@ func (k *Kernel) flushTimings() {
 // services is P5 at R1 (06 §6.5.1 P5, A8), in this fixed order: the metrics
 // Provider with its Prometheus registry (05-metrics §3), the kernel's own
 // scope and gauge, and the router. Logging is built before P2 (boot).
-func (k *Kernel) services(ctx context.Context) error {
+func (k *Kernel) services(ctx context.Context, describe bool) error {
 	ids := make([]string, 0, len(k.entries))
 	for _, e := range k.entries {
 		ids = append(ids, string(e.man.ID))
@@ -146,7 +153,7 @@ func (k *Kernel) services(ctx context.Context) error {
 	if serviceName == "" {
 		serviceName = k.cfg.AppID
 	}
-	p, err := metrics.New(ctx, metrics.Options{
+	mo := metrics.Options{
 		AppID:           k.cfg.AppID,
 		ServiceName:     serviceName,
 		MetricNamespace: k.cfg.MetricNamespace,
@@ -155,7 +162,15 @@ func (k *Kernel) services(ctx context.Context) error {
 		Prometheus:      true,
 		Redactor:        k.redactor,
 		Logger:          k.coreLog("metrics"),
-	})
+	}
+	// The app's OTLP push, span exporter and resource attributes (R1:
+	// app.Options.R1Telemetry; F3: core.metrics and core.tracing). Describe
+	// builds no exporter: it does no I/O (COR2-13).
+	if t := k.cfg.Telemetry; t != nil && !describe {
+		mo.OTLP, mo.Tracing = t.OTLP, t.Tracing
+		mo.Environment, mo.InstanceID = t.Environment, t.InstanceID
+	}
+	p, err := metrics.New(ctx, mo)
 	if err != nil {
 		return fmt.Errorf("kernel: metrics provider: %w", err)
 	}
