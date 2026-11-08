@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -234,13 +234,7 @@ func TestStoreGenerationBumpsOnSwap(t *testing.T) {
 
 	// A store at a level this build does not serve: P2 refuses it.
 	tooNew := filepath.Join(restorejournal.StagingDir(h.db, "r-too-new"), "main.pebble")
-	c := h.config(nil)
-	c.StoragePath, c.StateDir = tooNew, ""
-	c.Modules = []module.Module{storageMod("alfred", nil, seedStep(1, "cave"),
-		storage.Migration{Version: 2, Name: "raise", Compat: storage.Breaking, RaisesLevel: 2,
-			Up: func(context.Context, *storage.MigrationTx) error { return nil }}).
-		with(func(m *module.Manifest) { m.Storage.Level = 2 })}
-	h.close(h.mustBoot(c))
+	h.tooNewStore(tooNew)
 	h.stage("r-too-new", restorejournal.KindArchive, tooNew)
 	if _, err := h.boot(h.config(nil)); !errors.Is(err, ErrSwappedBack) || !errors.Is(err, storage.ErrKeyspaceTooNew) {
 		t.Fatalf("restore boot of a too-new store = %v, want ErrSwappedBack wrapping ErrKeyspaceTooNew", err)
@@ -251,6 +245,73 @@ func TestStoreGenerationBumpsOnSwap(t *testing.T) {
 	k = h.mustBoot(h.config(nil))
 	if got := generation(t, k); got != gen+1 {
 		t.Fatalf("generation after the swap-back = %d, want the original directory's %d", got, gen+1)
+	}
+}
+
+// tooNewStore writes a store at path at a level this build does not serve,
+// so P2 refuses it.
+func (h *swapHost) tooNewStore(path string) {
+	h.t.Helper()
+	c := h.config(nil)
+	c.StoragePath, c.StateDir = path, ""
+	c.Modules = []module.Module{storageMod("alfred", nil, seedStep(1, "cave"),
+		storage.Migration{Version: 2, Name: "raise", Compat: storage.Breaking, RaisesLevel: 2,
+			Up: func(context.Context, *storage.MigrationTx) error { return nil }}).
+		with(func(m *module.Manifest) { m.Storage.Level = 2 })}
+	h.close(h.mustBoot(c))
+}
+
+// TestSwapBackOverUnopenableOriginal (05-backup §5B.3.4 step x; R1-21 review
+// M2, probe 2 on the real filesystem): a restore whose store P2 refuses,
+// over an original that cannot be opened, swaps back in that boot and
+// frees the slot. Before the fix x5's sidecar rewrite failed on the
+// original and every later boot halted at P0a in step x. After it the next
+// boot meets the original as it was: an empty directory becomes a fresh
+// install, and a store with a truncated MANIFEST fails P2 on its own, with
+// nothing in flight, so another restore can be staged.
+func TestSwapBackOverUnopenableOriginal(t *testing.T) {
+	for _, original := range []string{"empty", "corrupt"} {
+		t.Run(original, func(t *testing.T) {
+			h := newSwapHost(t)
+			switch original {
+			case "empty":
+				if err := os.MkdirAll(h.db, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt":
+				h.close(h.mustBoot(h.config(nil)))
+				ms, _ := filepath.Glob(filepath.Join(h.db, "MANIFEST-*"))
+				for _, m := range ms {
+					fi, err := os.Stat(m)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Truncate(m, fi.Size()/2); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			const id = "r-too-new"
+			staged := filepath.Join(restorejournal.StagingDir(h.db, id), "main.pebble")
+			h.tooNewStore(staged)
+			h.stage(id, restorejournal.KindArchive, staged)
+			if _, err := h.boot(h.config(nil)); !errors.Is(err, ErrSwappedBack) {
+				t.Fatalf("restore boot = %v, want ErrSwappedBack", err)
+			}
+			if got := stepsOf(h.journal(id)); got[len(got)-1] != "swapped_back" {
+				t.Fatalf("journal %v, want swapped_back", got)
+			}
+			if _, ok, err := restoreswap.InFlight(vfs.Default, h.state); err != nil || ok {
+				t.Fatalf("in flight after the swap-back = %v, %v; want the slot free", ok, err)
+			}
+			_, err := h.boot(h.config(nil))
+			switch {
+			case original == "empty" && err != nil:
+				t.Fatalf("the next boot over the empty original = %v, want a fresh install", err)
+			case original == "corrupt" && (err == nil || errors.Is(err, ErrSwapInFlight) || errors.Is(err, ErrSwappedBack)):
+				t.Fatalf("the next boot over the corrupt original = %v, want P2's own refusal of it", err)
+			}
+		})
 	}
 }
 
