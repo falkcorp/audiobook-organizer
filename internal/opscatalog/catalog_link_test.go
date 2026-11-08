@@ -1,5 +1,5 @@
 // file: internal/opscatalog/catalog_link_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 671b8f3a-97bd-4eba-bc0d-4927cf15d05e
 // last-edited: 2026-11-08
 
@@ -20,14 +20,24 @@ import (
 
 const modulePath = "github.com/falkcorp/audiobook-organizer"
 
-// TestCatalogLinkedIntoBinary checks the server binary's real import graph --
-// `go list -deps` on the main package (the module root), which leaves out test
-// files -- for every package that exports a ServiceDefs function for the
-// service registry or defines Ops(...) ops.Bundle, and requires every Ops package to be listed in
-// All. A test-only import cannot satisfy it: that is how metafetch's ops passed
-// every test and were missing from prod for weeks. It replaces
-// internal/plugins TestEveryRegistryPluginIsLinkedIntoTheBinary, which checked
-// internal/plugins/* only.
+// TestCatalogLinkedIntoBinary checks two things for every package under
+// internal/.
+//
+// A package that defines Ops(...) ops.Bundle must be in All and linked into the
+// server binary, which is read from `go list -deps` on the main package (the
+// module root): that leaves out test files, so a test-only import cannot
+// satisfy it. That is how metafetch's ops passed every test and were missing
+// from prod for weeks.
+//
+// A package that exports func ServiceDefs() []serviceregistry.ServiceDef must
+// be called as pkg.ServiceDefs() in internal/server's serviceDefs, the one
+// explicit list the production container is built from. Being linked is not
+// enough: every other package an explicit list leaves out is linked by
+// something else, and no container builds its services. The list is read from
+// registry_wire.go the way All is read from catalog.go.
+//
+// It replaces internal/plugins TestEveryRegistryPluginIsLinkedIntoTheBinary,
+// which checked internal/plugins/* only.
 func TestCatalogLinkedIntoBinary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go list over the whole module")
@@ -51,8 +61,12 @@ func TestCatalogLinkedIntoBinary(t *testing.T) {
 		linked[line] = true
 	}
 	inAll := catalogEntries(t, "catalog.go")
+	inDefs := calledServiceDefs(t, filepath.Join("..", "server", "registry_wire.go"), "serviceDefs")
+	if len(inDefs) == 0 {
+		t.Fatal("serviceDefs calls no pkg.ServiceDefs(); the scan of registry_wire.go is broken")
+	}
 
-	problems, registrants := linkProblems(t, root, modulePath, linked, inAll)
+	problems, registrants := linkProblems(t, root, modulePath, linked, inAll, inDefs)
 	for _, p := range problems {
 		t.Error(p)
 	}
@@ -68,7 +82,7 @@ func TestCatalogLinkCheckFlagsUnlistedBundle(t *testing.T) {
 	root := filepath.Join("testdata", "linkfixture")
 	pkg := fixtureModule + "/internal/plugins/synthbundle"
 
-	problems, n := linkProblems(t, root, fixtureModule, map[string]bool{}, map[string]bool{})
+	problems, n := linkProblems(t, root, fixtureModule, map[string]bool{}, map[string]bool{}, map[string]bool{})
 	if n != 1 {
 		t.Fatalf("fixture scan found %d packages, want 1", n)
 	}
@@ -80,9 +94,49 @@ func TestCatalogLinkCheckFlagsUnlistedBundle(t *testing.T) {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
 	}
 
-	problems, _ = linkProblems(t, root, fixtureModule, map[string]bool{pkg: true}, map[string]bool{pkg: true})
+	problems, _ = linkProblems(t, root, fixtureModule, map[string]bool{pkg: true}, map[string]bool{pkg: true}, map[string]bool{})
 	if len(problems) != 0 {
 		t.Fatalf("a listed, linked bundle was flagged: %v", problems)
+	}
+}
+
+// The check goes red on a package that exports ServiceDefs and is missing from
+// serviceDefs even when the binary links it some other way, and green once the
+// list calls it. Linking does not matter for a ServiceDefs package: the
+// fixture is passed as linked in both runs.
+func TestCatalogLinkCheckFlagsServiceDefsMissingFromList(t *testing.T) {
+	const fixtureModule = "example.test/fixture"
+	root := filepath.Join("testdata", "deffixture")
+	pkg := fixtureModule + "/internal/synthdefs"
+	linked := map[string]bool{pkg: true}
+
+	problems, n := linkProblems(t, root, fixtureModule, linked, map[string]bool{}, map[string]bool{})
+	if n != 1 {
+		t.Fatalf("fixture scan found %d packages, want 1", n)
+	}
+	want := pkg + " exports ServiceDefs but internal/server's serviceDefs does not call it; add synthdefs.ServiceDefs() to serviceDefs in internal/server/registry_wire.go"
+	if len(problems) != 1 || problems[0] != want {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), want)
+	}
+
+	problems, _ = linkProblems(t, root, fixtureModule, linked, map[string]bool{}, map[string]bool{pkg: true})
+	if len(problems) != 0 {
+		t.Fatalf("a package serviceDefs calls was flagged: %v", problems)
+	}
+}
+
+// serviceDefs, read the way the check reads it, calls the packages the
+// production container is built from: at least one per registering package.
+func TestCalledServiceDefsReadsTheProductionList(t *testing.T) {
+	got := calledServiceDefs(t, filepath.Join("..", "server", "registry_wire.go"), "serviceDefs")
+	for _, want := range []string{
+		modulePath + "/internal/config",
+		modulePath + "/internal/plugins/dedup",
+		modulePath + "/internal/activity",
+	} {
+		if !got[want] {
+			t.Errorf("calledServiceDefs missed %s; got %d packages", want, len(got))
+		}
 	}
 }
 
@@ -133,6 +187,46 @@ func catalogEntries(t *testing.T, file string) map[string]bool {
 	return out
 }
 
+// calledServiceDefs returns the import paths whose ServiceDefs function the
+// function named fn in file calls as pkg.ServiceDefs(), wherever in its body
+// (inside slices.Concat, under a condition, ...).
+func calledServiceDefs(t *testing.T, file, fn string) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports := importNames(f)
+	out := map[string]bool{}
+	found := false
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil || fd.Name.Name != fn || fd.Body == nil {
+			continue
+		}
+		found = true
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "ServiceDefs" {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && imports[id.Name] != "" {
+				out[imports[id.Name]] = true
+			}
+			return true
+		})
+	}
+	if !found {
+		t.Fatalf("%s declares no func %s", file, fn)
+	}
+	return out
+}
+
 // importNames maps each import's local name to its path.
 func importNames(f *ast.File) map[string]string {
 	out := map[string]string{}
@@ -150,12 +244,13 @@ func importNames(f *ast.File) map[string]string {
 	return out
 }
 
-// linkProblems walks root/internal for packages whose non-test files call
-// declare ServiceDefs() []serviceregistry.ServiceDef or Ops(...) ops.Bundle,
-// and reports each
-// one that is not linked (or, for a bundle, not in inAll). It returns the
-// problems sorted and the number of such packages.
-func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bool) ([]string, int) {
+// linkProblems walks root/internal for packages whose non-test files declare
+// ServiceDefs() []serviceregistry.ServiceDef or Ops(...) ops.Bundle. It reports
+// each bundle package that is not in inAll or not linked, and each ServiceDefs
+// package that inDefs (the packages serviceDefs calls) lacks. A ServiceDefs
+// package's being linked proves nothing, so linked is not consulted for it. It
+// returns the problems sorted and the number of such packages.
+func linkProblems(t *testing.T, root, module string, linked, inAll, inDefs map[string]bool) ([]string, int) {
 	t.Helper()
 	var problems []string
 	found := 0
@@ -184,12 +279,12 @@ func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bo
 			problems = append(problems, pkg+" defines Ops(...) ops.Bundle but is not in opscatalog.All; add "+
 				filepath.Base(path)+".Ops to All in internal/opscatalog/catalog.go")
 		}
-		if !linked[pkg] {
-			what := "exports ServiceDefs for the service registry"
-			if bundle {
-				what = "defines Ops(...) ops.Bundle"
-			}
-			problems = append(problems, pkg+" "+what+" but is not linked into the server binary; reference it from internal/opscatalog/catalog.go")
+		if bundle && !linked[pkg] {
+			problems = append(problems, pkg+" defines Ops(...) ops.Bundle but is not linked into the server binary; reference it from internal/opscatalog/catalog.go")
+		}
+		if defsList && !inDefs[pkg] {
+			problems = append(problems, pkg+" exports ServiceDefs but internal/server's serviceDefs does not call it; add "+
+				filepath.Base(path)+".ServiceDefs() to serviceDefs in internal/server/registry_wire.go")
 		}
 		return nil
 	})
