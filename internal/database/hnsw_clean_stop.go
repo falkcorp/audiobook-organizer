@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-08
 
@@ -125,7 +125,8 @@ func (s *HNSWEmbeddingStore) MarkCleanStop(dir string) (written bool, reason str
 // it durably, so a crash later in this run cannot leave it vouching for a
 // snapshot the run lets fall behind. Every boot with an HNSW directory takes
 // it once: ImportWithStalenessCheck does, first thing, and the server calls
-// this directly when the HNSW store is not in use. A marker that cannot be
+// this directly when the HNSW store is not in use. An operation-runner child
+// takes neither path: the marker belongs to the parent. A marker that cannot be
 // removed is reported absent (the snapshot is then reconciled, the safe
 // direction) with an error saying it is still there.
 func TakeHNSWCleanStop(dir string) (bool, error) {

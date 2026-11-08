@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -137,5 +139,106 @@ func TestImportHNSWSnapshot_TakesTheMarkerFromTheHNSWStore(t *testing.T) {
 	}
 	if cleanStopMarkerExists(t, prev.hnswPersistDir) {
 		t.Error("the boot did not consume the marker")
+	}
+}
+
+// childModeFixture is a snapshot directory written by a previous parent
+// process, and an empty Pebble embedding store standing in for the truth
+// source. The snapshot records that store's count, so only the clean-stop
+// marker can make a parent boot reconcile it.
+type childModeFixture struct {
+	dir string
+	es  *database.EmbeddingStore
+}
+
+func newChildModeFixture(t *testing.T, cleanStop bool) childModeFixture {
+	t.Helper()
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	f := childModeFixture{dir: t.TempDir(), es: database.NewEmbeddingStore(database.NewGatedDB(db))}
+
+	prev := database.NewHNSWEmbeddingStore(4)
+	if err := prev.Upsert(context.Background(), "book", "the-court-of-owls", []float32{1, 0, 0, 0}, nil); err != nil {
+		t.Fatal(err)
+	}
+	prev.SetComplete(true)
+	if err := prev.ExportWithTruth(f.dir, f.es.CountByType); err != nil {
+		t.Fatal(err)
+	}
+	if cleanStop {
+		if written, reason, err := prev.MarkCleanStop(f.dir); err != nil || !written {
+			t.Fatalf("MarkCleanStop = %v, %q, %v", written, reason, err)
+		}
+	}
+	return f
+}
+
+// boot runs importHNSWSnapshot as a process of the given kind would at
+// NewServer, and returns the store it loaded into.
+func (f childModeFixture) boot(t *testing.T, child bool) *database.HNSWEmbeddingStore {
+	t.Helper()
+	old := isChildProcess
+	isChildProcess = func() bool { return child }
+	t.Cleanup(func() { isChildProcess = old })
+
+	store := database.NewHNSWEmbeddingStore(4)
+	c := serviceregistry.NewContainerFrom().
+		Override("chromemstore", store).
+		Override(serviceregistry.KeyEmbeddingStore, f.es)
+	if err := c.Build(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	importHNSWSnapshot(c, f.dir)
+	isChildProcess = old
+	return store
+}
+
+// TestImportHNSWSnapshot_ChildNeitherConsumesNorNeedsTheMarker: an
+// operation-runner child loads the snapshot as is. It leaves the parent's
+// marker where it is, and without one it does not reconcile, which would
+// otherwise repeat a full Pebble classification in every op subprocess.
+func TestImportHNSWSnapshot_ChildNeitherConsumesNorNeedsTheMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cleanStop bool
+	}{
+		{"marker present", true},
+		{"no marker", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newChildModeFixture(t, tc.cleanStop)
+			store := f.boot(t, true)
+
+			if store.NeedsReconcile() {
+				t.Error("an operation-runner child must not reconcile the snapshot")
+			}
+			if n, _ := store.CountByType(context.Background(), "book"); n != 1 {
+				t.Errorf("the child did not load the snapshot: CountByType(book) = %d", n)
+			}
+			if got := cleanStopMarkerExists(t, f.dir); got != tc.cleanStop {
+				t.Errorf("marker on disk after the child's boot = %v, want %v (the child must leave it alone)", got, tc.cleanStop)
+			}
+		})
+	}
+}
+
+// TestImportHNSWSnapshot_ParentReconcilesAfterAChildWithoutAMarker: a child
+// loading the snapshot does not stand in for a clean stop. With no marker on
+// disk, the parent's next boot still reconciles, though the counts match.
+func TestImportHNSWSnapshot_ParentReconcilesAfterAChildWithoutAMarker(t *testing.T) {
+	f := newChildModeFixture(t, false)
+	if child := f.boot(t, true); child.NeedsReconcile() {
+		t.Fatal("the child reconciled; the child-mode import is not in use")
+	}
+
+	parent := f.boot(t, false)
+	if !parent.NeedsReconcile() {
+		t.Error("with no clean-stop marker the parent's boot must reconcile, whatever a child did before it")
+	}
+	if cleanStopMarkerExists(t, f.dir) {
+		t.Error("a marker appeared on disk although no process stopped cleanly")
 	}
 }
