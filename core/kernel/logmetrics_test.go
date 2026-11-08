@@ -1,5 +1,5 @@
 // file: core/kernel/logmetrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b9d5e71-4c08-4a3f-8e6b-d0a7c3f15e82
 // last-edited: 2026-11-08
 
@@ -93,6 +93,29 @@ func TestLogMetrics_SeriesGolden(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Bruce") {
 		t.Errorf("the redacted value reached the output: %q", out.String())
+	}
+
+	// The process default logger counts under the empty module, served as the
+	// label "process": an empty label value would read as absent.
+	k.logging.Root().Info("the signal is lit")
+	if got := mustSample(t, k, "mediacore_log_records_total", map[string]string{"module": "process", "level": "INFO"}); got != 1 {
+		t.Errorf("records{process,INFO} = %v after one process record, want 1", got)
+	}
+	mfs, err := k.provider.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "mediacore_log_records_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if !slices.ContainsFunc(m.GetLabel(), func(lp *dto.LabelPair) bool {
+				return lp.GetName() == "module" && lp.GetValue() != ""
+			}) {
+				t.Errorf("a records series has no module label (an empty one reads as absent): %v", m.GetLabel())
+			}
+		}
 	}
 
 	// A tap whose function never returns: the queue (1) fills and the rest of
