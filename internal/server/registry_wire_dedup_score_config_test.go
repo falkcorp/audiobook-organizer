@@ -1,5 +1,5 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.0.3
+// version: 2.1.0
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
 // last-edited: 2026-11-08
 
@@ -96,83 +96,126 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	return dedupWiring{engine: eng, update: upd, pebble: pebble}, nil
 }
 
-// headSetNames is the set of names the production container resolved at R1-34's
-// base (R1-15's head, fc21cd0ca) with DatabasePath set: captured by resolving
-// that base's group-based container (the core, ai, scheduler and plugins groups,
-// plus activity) with NewServer's seven overrides, from a checkout of the base
-// and before any R1-34 edit. An earlier capture at b91bfec17 gave the same 45
-// names, so R1-15's review fixes and R1-20 changed neither services nor
-// overrides. Sorted.
-var headSetNames = []string{
-	"acoustidplugin",
-	"activity",
-	"activitystore",
-	"activitywriter",
-	"aijobsstore",
-	"aiscanstore",
+// headOrderWithDatabase is the order the production container resolved its 45
+// names at R1-34's base (R1-15's head, fc21cd0ca) with DatabasePath set. It is
+// Container.Names() unsorted, so it pins the build, start and stop order as well
+// as the set. Captured by resolving that base's group-based container (the
+// core, ai, scheduler and plugins groups, plus activity) with NewServer's seven
+// overrides, from a checkout of the base and before any R1-34 edit, three times
+// with identical output (the order is a topological sort with a lexically sorted
+// ready queue, so it does not depend on the order of the list). An earlier
+// capture at b91bfec17 gave the same 45 names, so R1-15's review fixes and R1-20
+// changed neither services nor overrides.
+var headOrderWithDatabase = []string{
 	"appversion",
-	"audiobook",
-	"batch",
-	"chromemstore",
 	"config",
-	"configupdate",
-	"dashboard",
-	"dedup",
-	"dedupplugin",
-	"delugeplugin",
-	"embedclient",
-	"embeddingstore",
+	"chromemstore",
 	"eventbus",
-	"filesystem",
-	"importpath",
-	"itunes",
-	"itunesplugin",
 	"llmparser",
-	"merge",
 	"metadatallmscorer",
-	"metadatascorer",
-	"metadatastate",
-	"metafetch",
-	"metafetchplugin",
-	"metricsstore",
 	"olservice",
 	"ophub",
 	"opregistry",
+	"searchindex",
+	"store",
+	"aijobsstore",
+	"aiscanstore",
+	"audiobook",
+	"batch",
+	"configupdate",
+	"dashboard",
+	"delugeplugin",
+	"embeddingstore",
+	"embedclient",
+	"filesystem",
+	"importpath",
+	"merge",
+	"dedup",
+	"acoustidplugin",
+	"dedupplugin",
+	"metadatascorer",
+	"metadatastate",
+	"metafetch",
+	"itunes",
+	"itunesplugin",
+	"metafetchplugin",
+	"metricsstore",
 	"organize",
 	"pebble-activitystore",
+	"activitystore",
+	"activity",
+	"activitywriter",
 	"pipelinemanager",
 	"quarantine",
 	"scan",
-	"searchindex",
-	"store",
 	"system",
 	"updater",
 	"updatescheduler",
 	"work",
 }
 
-// headSetActivityNames are the four defs of the activity group: present only
-// when DatabasePath is set.
-var headSetActivityNames = []string{"activity", "activitystore", "activitywriter", "pebble-activitystore"}
+// headOrderWithoutDatabase is the same capture with DatabasePath unset: the
+// four activity defs are absent. It is not headOrderWithDatabase minus those
+// names, because the sort is over the remaining graph.
+var headOrderWithoutDatabase = []string{
+	"appversion",
+	"config",
+	"chromemstore",
+	"eventbus",
+	"llmparser",
+	"metadatallmscorer",
+	"olservice",
+	"ophub",
+	"opregistry",
+	"searchindex",
+	"store",
+	"aijobsstore",
+	"aiscanstore",
+	"audiobook",
+	"batch",
+	"configupdate",
+	"dashboard",
+	"delugeplugin",
+	"embeddingstore",
+	"embedclient",
+	"filesystem",
+	"importpath",
+	"merge",
+	"dedup",
+	"acoustidplugin",
+	"dedupplugin",
+	"metadatascorer",
+	"metadatastate",
+	"metafetch",
+	"itunes",
+	"itunesplugin",
+	"metafetchplugin",
+	"metricsstore",
+	"organize",
+	"pipelinemanager",
+	"quarantine",
+	"scan",
+	"system",
+	"updater",
+	"updatescheduler",
+	"work",
+}
 
 // TestServiceDefs_BuildsHEADSet pins what the production container builds:
-// serviceDefs(true) resolves to exactly HEAD's 45 names and serviceDefs(false)
-// to the same minus the four activity names, with no def listed twice. The
-// container is made the way NewServer makes it, with the same seven
-// overrides, so the names include them.
+// serviceDefs(true) resolves to HEAD's 45 names in HEAD's order and
+// serviceDefs(false) to HEAD's 41, with no def listed twice. The container is
+// made the way NewServer makes it, with the same seven overrides, so the names
+// include them.
 func TestServiceDefs_BuildsHEADSet(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		databasePathSet bool
+		want            []string
 	}{
-		{"database path set", true},
-		{"database path unset", false},
+		{"database path set", true, headOrderWithDatabase},
+		{"database path unset", false, headOrderWithoutDatabase},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want := slices.Clone(headSetNames)
-			if !tc.databasePathSet {
-				want = slices.DeleteFunc(want, func(n string) bool { return slices.Contains(headSetActivityNames, n) })
-			}
 			defs := serviceDefs(tc.databasePathSet)
 			seen := map[string]bool{}
 			for _, d := range defs {
@@ -192,11 +235,8 @@ func TestServiceDefs_BuildsHEADSet(t *testing.T) {
 			if err := c.Resolve(); err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			got := c.Names()
-			slices.Sort(got)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Errorf("container resolves\n  %q\nwant HEAD's\n  %q", got, want)
+			if got := c.Names(); !slices.Equal(got, tc.want) {
+				t.Errorf("container resolves, in order,\n  %q\nwant HEAD's\n  %q", got, tc.want)
 			}
 			if seen["batchpoller"] {
 				t.Error("batchpoller is in the list: HEAD never built it (it carries no Groups)")
