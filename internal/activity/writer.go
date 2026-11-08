@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package activity
 
@@ -147,8 +147,18 @@ func (w *Writer) Start(ctx context.Context) error {
 // Write implements io.Writer. Always writes to stdout first, then parses
 // complete lines and sends ActivityEntry values to the background drain.
 func (w *Writer) Write(p []byte) (n int, err error) {
-	n, err = w.stdout.Write(p)
+	n, _ = w.stdout.Write(p) // a stdout failure never stops the activity feed
+	w.Feed(p)
+	return n, nil
+}
 
+// Feed parses complete lines of p into activity entries exactly as Write does
+// (they share the partial-line buffer), without copying p to stdout. It is for
+// a producer whose lines already reached stdout by another route: the log
+// pipeline's activity tap (internal/books) renders each record into it, and
+// the pipeline's primary output has printed that record, so Write's tee would
+// print it twice.
+func (w *Writer) Feed(p []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -167,7 +177,6 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 			w.sendEntry(line)
 		}
 	}
-	return n, nil
 }
 
 // sendEntry parses a single log line and enqueues an ActivityEntry.
