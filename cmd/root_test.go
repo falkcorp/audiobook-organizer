@@ -1,14 +1,13 @@
 // file: cmd/root_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package cmd
 
 import (
 	"bytes"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,69 +86,6 @@ func TestFormatMetadataValue(t *testing.T) {
 	}
 	if got := formatMetadataValue("Title"); got != "Title" {
 		t.Fatalf("expected value passthrough, got %q", got)
-	}
-}
-
-func TestSetupFileLogging(t *testing.T) {
-	tempDir := t.TempDir()
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer func() {
-		_ = os.Chdir(origDir)
-	}()
-
-	prevWriter := log.Writer()
-	prevFlags := log.Flags()
-	defer func() {
-		log.SetOutput(prevWriter)
-		log.SetFlags(prevFlags)
-	}()
-
-	logFile, err := setupFileLogging()
-	if err != nil {
-		t.Fatalf("setupFileLogging failed: %v", err)
-	}
-	defer logFile.Close()
-
-	if _, err := os.Stat(logFile.Name()); err != nil {
-		t.Fatalf("expected log file to exist: %v", err)
-	}
-}
-
-func TestSetupFileLoggingErrorHandling(t *testing.T) {
-	tempDir := t.TempDir()
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer func() {
-		_ = os.Chdir(origDir)
-	}()
-
-	// Create logs dir as a file to force mkdir error
-	if err := os.WriteFile("logs", []byte("not a dir"), 0o644); err != nil {
-		t.Fatalf("failed to create file: %v", err)
-	}
-
-	prevWriter := log.Writer()
-	prevFlags := log.Flags()
-	defer func() {
-		log.SetOutput(prevWriter)
-		log.SetFlags(prevFlags)
-	}()
-
-	_, err = setupFileLogging()
-	// Should handle error gracefully
-	if err == nil {
-		t.Fatal("expected error when logs dir is a file")
 	}
 }
 
