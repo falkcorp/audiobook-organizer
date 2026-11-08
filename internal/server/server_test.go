@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.16.2
+// version: 2.16.3
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -38,14 +38,21 @@ import (
 )
 
 // newTestServer is NewServer for tests. It registers a t.Cleanup that releases
-// what NewServer opened on its own and nothing else will close: see
-// releaseForTest. Every test in this package builds its server through here
-// (or through setupTestServer*, which call it) rather than calling NewServer
-// directly.
+// what NewServer opened on its own and nothing else will close
+// (releaseUnstarted, ReleaseUnstarted's body, run even when the test ran
+// StartHook). The teardown was added when NewServer's container opened the
+// SQLite activity store (removed 2026-10-19), whose WAL checkpointer
+// goroutine only Close stopped: every test server leaked one, and its late
+// WARN landed in whatever slog.Default the test running at that moment had
+// installed, which is how TestResolveVectorBackend_HNSWIsSilent raced on its
+// capture buffer. The bgWG goroutines can still write activity after a test
+// ends, so it stays. Every test in this package builds its server through
+// here (or through setupTestServer*, which call it) rather than calling
+// NewServer directly.
 func newTestServer(t testing.TB, store database.Store) *Server {
 	t.Helper()
 	s := NewServer(store)
-	t.Cleanup(s.releaseForTest)
+	t.Cleanup(s.releaseUnstarted)
 	attachTestMetrics(t, s)
 	return s
 }
@@ -60,42 +67,6 @@ func attachTestMetrics(t testing.TB, s *Server) *prometheus.Registry {
 		t.Fatalf("attach a test metrics registry: %v", err)
 	}
 	return reg
-}
-
-// releaseForTestBGWait bounds how long releaseForTest waits for bgWG.
-const releaseForTestBGWait = 10 * time.Second
-
-// releaseForTest tears down a server that was built but never Started.
-//
-// Production teardown lives at the end of Start, so a test server never runs
-// it. It was added when NewServer's container opened the SQLite activity store
-// (removed 2026-10-19), whose WAL checkpointer goroutine only Close stopped:
-// every test server leaked one, and its late WARN landed in whatever
-// slog.Default the test running at that moment had installed — which is how
-// TestResolveVectorBackend_HNSWIsSilent raced on its capture buffer. The bgWG
-// goroutines below can still write activity after a test ends, so the
-// teardown stays.
-//
-// Order follows Start's shutdown: cancel bgCtx and wait (bounded) for the
-// bgWG goroutines, which may still write activity, then close the activity
-// store. Both steps are idempotent, so the explicit call in
-// setupTestServerFS's cleanup and the t.Cleanup from newTestServer can both
-// run.
-func (s *Server) releaseForTest() {
-	s.releaseSearchAndAuthority()
-	if s.bgCancel != nil {
-		s.bgCancel()
-	}
-	done := make(chan struct{})
-	go func() {
-		s.bgWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(releaseForTestBGWait):
-	}
-	s.closeActivityStore()
 }
 
 // setupTestServer creates a test server with in-memory database
@@ -193,10 +164,10 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
 		}
-		// Close the activity store (releaseForTest) while tempDir still
+		// Close the activity store (releaseUnstarted) while tempDir still
 		// exists, so nothing is left holding files under a directory the
 		// cleanup is about to remove.
-		server.releaseForTest()
+		server.releaseUnstarted()
 		if store != nil {
 			database.SetGlobalStore(nil)
 			// NewServer also installs the store as the SCANNER package's

@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -60,7 +60,12 @@ type ServeInputs struct {
 //   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
 //     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
-//   - LogOutput: the activity feed's tee (see logTee).
+//   - LogOutput: the activity feed's tee (see logTee);
+//   - ProcessDefaults: serve calls app.InstallProcessDefaults, so New
+//     installs the OTel SDK's value-dropping logger and error handler before
+//     it builds the Provider and the OTLP exporters, which read OTEL_* from
+//     the environment (HEAD's InitOTEL installed its sink first for the same
+//     reason).
 func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	m, err := asBooks(mod)
 	if err != nil {
@@ -80,6 +85,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		R1Listen:              m.r1Listen,
 		R1Telemetry:           r1Telemetry(in.Telemetry),
 		LogOutput:             &m.logOut,
+		ProcessDefaults:       true,
 	}, nil
 }
 

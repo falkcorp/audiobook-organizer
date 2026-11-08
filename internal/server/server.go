@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.8
+// version: 2.114.9
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -417,6 +417,9 @@ type Server struct {
 	// the shutdown budget without stopping it (Stopped).
 	stopped  chan struct{}
 	stopOnce sync.Once
+	// startHookRan is set when StartHook begins: from then on its stop path
+	// owns the teardown, and ReleaseUnstarted does nothing.
+	startHookRan atomic.Bool
 	// streamsClosing is closed by the pre-drain step (closeStreams), before
 	// the listener drains, so the long-lived event streams (/api/events, the
 	// ops v2 events) end instead of holding the drain for its whole budget.

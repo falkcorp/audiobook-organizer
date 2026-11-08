@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -234,8 +234,23 @@ func asBooks(mod module.Module) (*booksModule, error) {
 	return m, nil
 }
 
+// Release tears down the server Register built when the App never started
+// it: boot failed after Register (app.New refusing at P7, the process
+// defaults or Attach failing), or Run failed before the start hook, so no
+// hook will stop it. Stopped is closed afterwards. It does nothing once the
+// start hook has begun, or when no server was built
+// (server.ReleaseUnstarted).
+func Release(mod module.Module) {
+	if m, err := asBooks(mod); err == nil {
+		if srv := m.srv.Load(); srv != nil {
+			srv.ReleaseUnstarted()
+		}
+	}
+}
+
 // Stopped is closed once books' server has stopped: its stop hook returned,
-// or its start hook failed (the kernel then calls no stop). It is closed at
+// its start hook failed (the kernel then calls no stop), or Release tore it
+// down unstarted. It is closed at
 // once when the server was never built (Register never ran: boot failed
 // earlier, or books is disabled). The kernel abandons a stop hook at the
 // budget, so serve waits on it before closing the store.
