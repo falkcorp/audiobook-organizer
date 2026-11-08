@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -180,6 +180,17 @@ func (w *perimeterWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// FlushError is what http.ResponseController looks for first, so a
+// handler's flush gets the connection's error through the shim; Flush has no
+// result and would drop it. A refused answer has nothing to flush.
+func (w *perimeterWriter) FlushError() error {
+	w.decide(http.StatusOK)
+	if w.refused {
+		return nil
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // Hijack implements http.Hijacker for the /socket.io upgrade, which gin
