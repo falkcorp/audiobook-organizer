@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -145,6 +145,11 @@ func (k *Kernel) flushTimings() {
 // Provider with its Prometheus registry (05-metrics §3), the kernel's own
 // scope and gauge, and the router. Logging is built before P2 (boot).
 func (k *Kernel) services(ctx context.Context, describe bool) error {
+	if f := k.cfg.BeforeTelemetry; f != nil && !describe {
+		if err := f(k.coreLog("otel")); err != nil {
+			return fmt.Errorf("kernel: before telemetry: %w", err)
+		}
+	}
 	ids := make([]string, 0, len(k.entries))
 	for _, e := range k.entries {
 		ids = append(ids, string(e.man.ID))

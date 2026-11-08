@@ -74,6 +74,13 @@ type Config struct {
 	// Exit ends the process after a restart request's stop order; nil =
 	// os.Exit. It is called with restartExitCode only, never 0.
 	Exit func(code int)
+	// BeforeTelemetry runs once in P5, after logging is built and before the
+	// metrics Provider (and with it the resource and any OTLP exporter), with
+	// core's "otel" logger. app.New sets it for Options.ProcessDefaults to
+	// install the OTel SDK's value-dropping logger and error handler before
+	// the SDK reads OTEL_* from the environment. An error fails boot.
+	// Describe never calls it.
+	BeforeTelemetry func(log *slog.Logger) error
 	// Telemetry is app.Options.R1Telemetry, converted: the part of the
 	// Provider's metrics.Options that F3's core.metrics and core.tracing
 	// sections will carry. nil = the Prometheus scrape only. Describe ignores

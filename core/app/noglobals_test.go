@@ -1,7 +1,7 @@
 // file: core/app/noglobals_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 68d64f45-c7be-4bf0-8c21-6be99047ed03
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
@@ -20,26 +20,33 @@ import (
 	"github.com/falkcorp/mediacore/archtest"
 )
 
-// processDefaultsExempt is what app.InstallProcessDefaults (R1-15) may call
-// and nothing else in core: the seven process installs 05-logging §10 lists
-// (05-metrics §12 names the three otel provider and propagator setters among
-// them), plus what its restore needs to put them back: the three otel getters
-// it reads the previous values with, and log.SetFlags, because slog.SetDefault
-// zeroes log's flags.
-func processDefaultsExempt() map[string]bool {
-	return map[string]bool{
-		"log/slog.SetDefault":                           true,
-		"log.SetOutput":                                 true,
-		"go.opentelemetry.io/otel.SetLogger":            true,
-		"go.opentelemetry.io/otel.SetErrorHandler":      true,
-		"go.opentelemetry.io/otel.SetMeterProvider":     true,
-		"go.opentelemetry.io/otel.SetTracerProvider":    true,
-		"go.opentelemetry.io/otel.SetTextMapPropagator": true,
-		// restore's reads and its one extra write
-		"go.opentelemetry.io/otel.GetMeterProvider":     true,
-		"go.opentelemetry.io/otel.GetTracerProvider":    true,
-		"go.opentelemetry.io/otel.GetTextMapPropagator": true,
-		"log.SetFlags": true,
+// processDefaultsExempt maps the two functions of package app that may touch
+// the process defaults (R1-15) to what each may call, and nothing else in core
+// may: the seven process installs 05-logging §10 lists (05-metrics §12 names
+// the three otel provider and propagator setters among them), split between
+// installOTelDiagnostics (the SDK logger and error handler, which New installs
+// before the Provider for Options.ProcessDefaults) and InstallProcessDefaults
+// (the other five), plus what InstallProcessDefaults' restore needs to put
+// them back: the three otel getters it reads the previous values with, and
+// log.SetFlags, because slog.SetDefault zeroes log's flags.
+func processDefaultsExempt() map[string]map[string]bool {
+	return map[string]map[string]bool{
+		"InstallProcessDefaults": {
+			"log/slog.SetDefault":                           true,
+			"log.SetOutput":                                 true,
+			"go.opentelemetry.io/otel.SetMeterProvider":     true,
+			"go.opentelemetry.io/otel.SetTracerProvider":    true,
+			"go.opentelemetry.io/otel.SetTextMapPropagator": true,
+			// restore's reads and its one extra write
+			"go.opentelemetry.io/otel.GetMeterProvider":     true,
+			"go.opentelemetry.io/otel.GetTracerProvider":    true,
+			"go.opentelemetry.io/otel.GetTextMapPropagator": true,
+			"log.SetFlags": true,
+		},
+		"installOTelDiagnostics": {
+			"go.opentelemetry.io/otel.SetLogger":       true,
+			"go.opentelemetry.io/otel.SetErrorHandler": true,
+		},
 	}
 }
 
@@ -80,9 +87,9 @@ func bannedGlobal(path, name string) (string, bool) {
 	return "", false
 }
 
-// noGlobalsFindings scans one parsed file. exemptFunc names the one function
-// whose calls processDefaultsExempt permits ("" = none in this file).
-func noGlobalsFindings(fset *token.FileSet, f *ast.File, exemptFunc string) []string {
+// noGlobalsFindings scans one parsed file. exempt maps a top-level function
+// name to the calls it may make (nil = none in this file).
+func noGlobalsFindings(fset *token.FileSet, f *ast.File, exempt map[string]map[string]bool) []string {
 	imports := make(map[string]string) // local name -> import path
 	for _, is := range f.Imports {
 		path, err := strconv.Unquote(is.Path.Value)
@@ -95,12 +102,11 @@ func noGlobalsFindings(fset *token.FileSet, f *ast.File, exemptFunc string) []st
 		}
 		imports[name] = path
 	}
-	exempt := processDefaultsExempt()
 	var out []string
 	for _, decl := range f.Decls {
-		inExempt := false
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && exemptFunc != "" && fd.Name.Name == exemptFunc {
-			inExempt = true
+		var allowed map[string]bool
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil {
+			allowed = exempt[fd.Name.Name]
 		}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			switch n := n.(type) {
@@ -114,7 +120,7 @@ func noGlobalsFindings(fset *token.FileSet, f *ast.File, exemptFunc string) []st
 					return true
 				}
 				why, banned := bannedGlobal(path, n.Sel.Name)
-				if banned && !(inExempt && exempt[path+"."+n.Sel.Name]) {
+				if banned && !allowed[path+"."+n.Sel.Name] {
 					out = append(out, fset.Position(n.Pos()).String()+": "+id.Name+"."+n.Sel.Name+": "+why)
 				}
 			case *ast.AssignStmt:
@@ -161,8 +167,9 @@ func rootSelector(e ast.Expr) *ast.SelectorExpr {
 // default ServeMux, no mutation of the default HTTP client, and no signal
 // handling outside a main (05-metrics §12, 05-logging §10, 06 §6.4.5). The
 // main packages under core/examples/*/cmd/ are process owners and skipped
-// (COR6-11); app.InstallProcessDefaults (R1-15) may make the seven process
-// installs and nothing else may.
+// (COR6-11); app.InstallProcessDefaults and app.installOTelDiagnostics
+// (R1-15) may make the seven process installs between them and nothing else
+// may.
 func TestNoGlobals(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -200,9 +207,9 @@ func TestNoGlobals(t *testing.T) {
 		if f.Name.Name == "main" && underExampleCmd(rel) {
 			return nil // a main is a process owner (COR6-11)
 		}
-		exempt := ""
+		var exempt map[string]map[string]bool
 		if filepath.Dir(rel) == "app" {
-			exempt = "InstallProcessDefaults"
+			exempt = processDefaultsExempt()
 		}
 		findings = append(findings, noGlobalsFindings(fset, f, exempt)...)
 		return nil
@@ -225,8 +232,8 @@ func underExampleCmd(rel string) bool {
 }
 
 // TestGlobalScan_FindsEachKind proves the scan is not blind: a file holding
-// every banned form yields one finding each, and the InstallProcessDefaults
-// exemption covers its seven installs only.
+// every banned form yields one finding each, and each exempt function's
+// exemption covers its own installs only.
 func TestGlobalScan_FindsEachKind(t *testing.T) {
 	const src = `package wayne
 
@@ -262,6 +269,12 @@ func InstallProcessDefaults() {
 	slog.SetDefault(nil)
 	otel.SetTracerProvider(nil)
 	_ = promhttp.Handler()
+	otel.SetLogger(nil)
+}
+
+func installOTelDiagnostics() {
+	otel.SetErrorHandler(nil)
+	otel.SetMeterProvider(nil)
 }
 `
 	fset := token.NewFileSet()
@@ -269,11 +282,21 @@ func InstallProcessDefaults() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := noGlobalsFindings(fset, f, ""); len(got) != 17 {
-		t.Fatalf("findings without the exemption = %d, want 17:\n%s", len(got), strings.Join(got, "\n"))
+	if got := noGlobalsFindings(fset, f, nil); len(got) != 20 {
+		t.Fatalf("findings without the exemption = %d, want 20:\n%s", len(got), strings.Join(got, "\n"))
 	}
-	got := noGlobalsFindings(fset, f, "InstallProcessDefaults")
-	if len(got) != 15 || !strings.Contains(got[len(got)-1], "promhttp.Handler") {
-		t.Fatalf("findings with the exemption = %d, want 15 (promhttp.Handler stays banned there):\n%s", len(got), strings.Join(got, "\n"))
+	// Exempt: InstallProcessDefaults' slog.SetDefault and SetTracerProvider,
+	// installOTelDiagnostics' SetErrorHandler. Each function's other calls
+	// stay banned: promhttp.Handler and SetLogger in the first,
+	// SetMeterProvider in the second.
+	got := noGlobalsFindings(fset, f, processDefaultsExempt())
+	want := []string{"promhttp.Handler", "otel.SetLogger", "otel.SetMeterProvider"}
+	if len(got) != 17 {
+		t.Fatalf("findings with the exemption = %d, want 17:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	for i, w := range want {
+		if g := got[len(got)-len(want)+i]; !strings.Contains(g, w) {
+			t.Errorf("finding %d = %q, want it to name %s", len(got)-len(want)+i, g, w)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: core/app/defaults.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d0f6c4e-8b1a-4e57-9f3c-6a2b7d9e1c40
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -41,36 +42,51 @@ var ErrProcessDefaultsTaken = errors.New("app: the process defaults are already 
 //     otel.SetTextMapPropagator to the App's Provider, so code that still
 //     creates instruments or spans through the globals binds to this App.
 //
+// An App built with Options.ProcessDefaults has had the logger and the error
+// handler since New, installed before its Provider (installOTelDiagnostics);
+// InstallProcessDefaults adopts them and installs the rest. Otherwise it
+// installs all seven here.
+//
 // It never touches the Prometheus default registry (05-metrics §6). restore
 // puts all seven back (tests); it is idempotent. The OTel logger has no
 // getter, so restore installs the SDK's own default (stdr to stderr) rather
 // than whatever was set before. A second call, for this App or another,
 // while the defaults are installed returns ErrProcessDefaultsTaken. The test
 // is stateless (core keeps no package state, 03 R5): the installed error
-// handler is this file's type until restore replaces it.
+// handler is this file's type until restore replaces it, and it records
+// whether InstallProcessDefaults has completed the set.
 func InstallProcessDefaults(a *App) (restore func(), err error) {
 	if a == nil || a.k == nil || a.k.Provider() == nil {
 		return nil, errors.New("app: InstallProcessDefaults needs an App returned by New")
 	}
-	if _, taken := otel.GetErrorHandler().(*processErrorHandler); taken {
+	cur, held := otel.GetErrorHandler().(*processErrorHandler)
+	d := a.otel
+	switch {
+	case d != nil && cur == d.handler:
+		// New's early install, still in place: adopt it, once.
+		if d.handler.complete.Load() {
+			return nil, ErrProcessDefaultsTaken
+		}
+	case held:
 		return nil, ErrProcessDefaultsTaken
+	default:
+		if d, err = installOTelDiagnostics(a.k.CoreLogger("otel")); err != nil {
+			return nil, err
+		}
 	}
 	p := a.k.Provider()
-	limiter := newClassLimiter(otelErrorLogInterval, time.Now, a.k.CoreLogger("otel"))
 
-	// What restore puts back. The getters are read here, in the one function
-	// allowed to write them (core/app/noglobals_test.go).
+	// What restore puts back. The getters are read here, in one of the two
+	// functions allowed to write them (core/app/noglobals_test.go).
 	prevSlog := slog.Default()
 	prevLogOut, prevLogFlags := stdlog.Writer(), stdlog.Flags()
-	prevHandler := otel.GetErrorHandler()
 	prevMP, prevTP, prevProp := otel.GetMeterProvider(), otel.GetTracerProvider(), otel.GetTextMapPropagator()
 
 	slog.SetDefault(a.k.RootLogger())
-	otel.SetLogger(logr.New(&sdkLogSink{h: limiter}))
-	otel.SetErrorHandler(&processErrorHandler{h: limiter})
 	otel.SetMeterProvider(p.MeterProvider())
 	otel.SetTracerProvider(p.TracerProvider())
 	otel.SetTextMapPropagator(p.Propagator())
+	d.handler.complete.Store(true)
 
 	var once sync.Once
 	return func() {
@@ -78,8 +94,8 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 			otel.SetTextMapPropagator(prevProp)
 			otel.SetTracerProvider(prevTP)
 			otel.SetMeterProvider(prevMP)
-			otel.SetErrorHandler(prevHandler)
-			otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+			d.handler.complete.Store(false)
+			d.restore()
 			slog.SetDefault(prevSlog)
 			// slog.SetDefault leaves log's output alone when the restored
 			// logger is slog's own default, so it is put back explicitly.
@@ -87,6 +103,39 @@ func InstallProcessDefaults(a *App) (restore func(), err error) {
 			stdlog.SetFlags(prevLogFlags)
 		})
 	}, nil
+}
+
+// otelDiagnostics is the OTel SDK logger and error handler one App
+// installed: the handler, whose type and identity are how an install is
+// recognised, and restore, which puts back the handler that was there before
+// and the SDK's default logger. restore is idempotent.
+type otelDiagnostics struct {
+	handler *processErrorHandler
+	restore func()
+}
+
+// installOTelDiagnostics installs the OTel SDK's logger (sdkLogSink, which
+// drops every value) and error handler (the class-keyed rate limiter), both
+// logging through log, unless an App holds them (ErrProcessDefaultsTaken).
+// New calls it before the Provider is built when Options.ProcessDefaults is
+// set; otherwise InstallProcessDefaults does.
+func installOTelDiagnostics(log *slog.Logger) (*otelDiagnostics, error) {
+	if _, taken := otel.GetErrorHandler().(*processErrorHandler); taken {
+		return nil, ErrProcessDefaultsTaken
+	}
+	limiter := newClassLimiter(otelErrorLogInterval, time.Now, log)
+	prevHandler := otel.GetErrorHandler()
+	d := &otelDiagnostics{handler: &processErrorHandler{h: limiter}}
+	otel.SetLogger(logr.New(&sdkLogSink{h: limiter}))
+	otel.SetErrorHandler(d.handler)
+	var once sync.Once
+	d.restore = func() {
+		once.Do(func() {
+			otel.SetErrorHandler(prevHandler)
+			otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+		})
+	}
+	return d, nil
 }
 
 // otelErrorLogInterval is the least gap between two logged lines of one
@@ -97,9 +146,14 @@ const otelErrorLogInterval = 10 * time.Minute
 // dropped first, then new classes share one "(other)" bucket.
 const maxErrorClasses = 32
 
-// processErrorHandler is the otel.ErrorHandler InstallProcessDefaults
-// installs. Its type is how a second install is recognised.
-type processErrorHandler struct{ h *classLimiter }
+// processErrorHandler is the otel.ErrorHandler installOTelDiagnostics
+// installs. Its type is how another App's install is recognised; complete is
+// set while InstallProcessDefaults' set is in place, which is how a second
+// install by the same App is.
+type processErrorHandler struct {
+	h        *classLimiter
+	complete atomic.Bool
+}
 
 // Handle implements otel.ErrorHandler.
 func (e *processErrorHandler) Handle(err error) {

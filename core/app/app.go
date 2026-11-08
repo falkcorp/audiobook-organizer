@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -34,7 +34,13 @@ import (
 )
 
 // App is one booted process: the kernel behind New.
-type App struct{ k *kernel.Kernel }
+type App struct {
+	k *kernel.Kernel
+	// otel is the OTel SDK logger and error handler New installed for
+	// Options.ProcessDefaults, which InstallProcessDefaults adopts; nil when
+	// New installed none.
+	otel *otelDiagnostics
+}
 
 // New runs the boot phases that exist at R1 (06 §6.5.1 P1, P2, P4a, P4b, P5,
 // P6, P7, P8): manifest validation and enablement, the store with its
@@ -53,11 +59,27 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	if c.StoragePath, err = storagePath(opts, mods); err != nil {
 		return nil, err
 	}
+	// The SDK's logger and error handler go in once the App's logging exists
+	// and before the Provider is built (Options.ProcessDefaults).
+	var diag *otelDiagnostics
+	if opts.ProcessDefaults {
+		c.BeforeTelemetry = func(log *slog.Logger) error {
+			d, err := installOTelDiagnostics(log)
+			if err != nil {
+				return err
+			}
+			diag = d
+			return nil
+		}
+	}
 	k, err := kernel.New(ctx, c)
 	if err != nil {
+		if diag != nil {
+			diag.restore()
+		}
 		return nil, err
 	}
-	return &App{k: k}, nil
+	return &App{k: k, otel: diag}, nil
 }
 
 // Run starts the app in the order of 06 §6.5.2; blocks until ctx is done or a
