@@ -1,5 +1,5 @@
 // file: internal/server/stophook_budget_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 877b968e-c9c6-4cac-b2e9-06bc892394d0
 // last-edited: 2026-11-08
 
@@ -46,7 +46,7 @@ func TestStopHook_WedgedStepsStayWithinTheBudget(t *testing.T) {
 			s.fileIOPool = p
 		}},
 		{"container", func(t *testing.T, s *Server, release chan struct{}) {
-			c := serviceregistry.NewContainer().Override("chromemstore", wedgedStopper{release: release})
+			c := serviceregistry.NewContainerFrom().Override("chromemstore", wedgedStopper{release: release})
 			if err := c.Build(context.Background()); err != nil {
 				t.Fatal(err)
 			}

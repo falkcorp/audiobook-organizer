@@ -1,5 +1,6 @@
 // file: internal/serviceregistry/graph_test.go
-// version: 1.0.0
+// version: 1.1.0
+// last-edited: 2026-11-08
 
 package serviceregistry
 
@@ -9,19 +10,18 @@ import (
 )
 
 func TestResolve_LexStableOrder(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	var defs []ServiceDef
 
-	// Register A, B, C, D all depending on nothing. Lex order should be A,B,C,D.
+	// Four defs with no Needs, given in no particular order. Resolve orders them lexically.
 	for _, name := range []string{"zebra", "alpha", "mike", "delta"} {
 		n := name
-		Register(ServiceDef{
+		defs = append(defs, ServiceDef{
 			Name:  n,
 			Build: func(c *Container) (any, error) { return n, nil },
 		})
 	}
 
-	c := NewContainer().IncludeAll()
+	c := NewContainerFrom(defs...)
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -38,13 +38,12 @@ func TestResolve_LexStableOrder(t *testing.T) {
 }
 
 func TestResolve_CycleDetected(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		{Name: "a", Needs: []string{"b"}, Build: func(c *Container) (any, error) { return nil, nil }},
+		{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) { return nil, nil }},
+	}
 
-	Register(ServiceDef{Name: "a", Needs: []string{"b"}, Build: func(c *Container) (any, error) { return nil, nil }})
-	Register(ServiceDef{Name: "b", Needs: []string{"a"}, Build: func(c *Container) (any, error) { return nil, nil }})
-
-	c := NewContainer().Include("a")
+	c := NewContainerFrom(defs...)
 	err := c.Resolve()
 	if !errors.Is(err, ErrCycle) {
 		t.Fatalf("expected ErrCycle, got %v", err)
@@ -52,28 +51,27 @@ func TestResolve_CycleDetected(t *testing.T) {
 }
 
 func TestResolve_UnknownDep(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		{Name: "a", Needs: []string{"nonexistent"}, Build: func(c *Container) (any, error) { return nil, nil }},
+	}
 
-	Register(ServiceDef{Name: "a", Needs: []string{"nonexistent"}, Build: func(c *Container) (any, error) { return nil, nil }})
-
-	c := NewContainer().Include("a")
+	c := NewContainerFrom(defs...)
 	err := c.Resolve()
 	if !errors.Is(err, ErrUnknownService) {
 		t.Fatalf("expected ErrUnknownService, got %v", err)
 	}
 }
 
-func TestResolve_TransitiveClosure(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+// Every def NewContainerFrom is given is in the build set, so the closure of
+// Needs is no longer what pulls a service in. The order still follows it.
+func TestResolve_NeedsChainOrder(t *testing.T) {
+	defs := []ServiceDef{
+		{Name: "leaf", Build: func(c *Container) (any, error) { return "leaf", nil }},
+		{Name: "mid", Needs: []string{"leaf"}, Build: func(c *Container) (any, error) { return "mid", nil }},
+		{Name: "top", Needs: []string{"mid"}, Build: func(c *Container) (any, error) { return "top", nil }},
+	}
 
-	Register(ServiceDef{Name: "leaf", Build: func(c *Container) (any, error) { return "leaf", nil }})
-	Register(ServiceDef{Name: "mid", Needs: []string{"leaf"}, Build: func(c *Container) (any, error) { return "mid", nil }})
-	Register(ServiceDef{Name: "top", Needs: []string{"mid"}, Build: func(c *Container) (any, error) { return "top", nil }})
-
-	// Include only "top" — should pull mid + leaf transitively.
-	c := NewContainer().Include("top")
+	c := NewContainerFrom(defs...)
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -85,15 +83,14 @@ func TestResolve_TransitiveClosure(t *testing.T) {
 }
 
 func TestResolve_OverrideIsLeaf(t *testing.T) {
-	ResetForTest()
-	t.Cleanup(ResetForTest)
+	defs := []ServiceDef{
+		// "real" needs "store"; "store" has no def, only an override.
+		{Name: "real", Needs: []string{"store"}, Build: func(c *Container) (any, error) {
+			return Get[string](c, "store"), nil
+		}},
+	}
 
-	// "real" needs "store"; "store" is not registered, only overridden.
-	Register(ServiceDef{Name: "real", Needs: []string{"store"}, Build: func(c *Container) (any, error) {
-		return Get[string](c, "store"), nil
-	}})
-
-	c := NewContainer().Override("store", "mock-store").Include("real")
+	c := NewContainerFrom(defs...).Override("store", "mock-store")
 	if err := c.Resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

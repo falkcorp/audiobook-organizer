@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 2.0.0
-// last-edited: 2026-10-19
+// version: 2.0.1
+// last-edited: 2026-11-08
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -29,101 +29,105 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-func init() {
-	// pebble-activitystore: PebbleDB-backed activity store, sharing the main
-	// PebbleDB instance. Built only when the main store is a *PebbleStore.
-	// Returns a nil *PebbleActivityStore on other backends; the activitystore
-	// build below turns that nil into a startup error.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "pebble-activitystore",
-		Needs:  []string{serviceregistry.KeyStore},
-		Groups: []string{serviceregistry.KeyActivity},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
-			// AsPebbleStore, not a bare assertion: a store can be
-			// decorated (the server did so with indexedStore in NewServer until
-			// 07-S3), and a bare store.(*database.PebbleStore) fails through a
-			// decorator --
-			// silently taking the "non-Pebble backend" branch below, which
-			// looks like a supported configuration rather than a bug. The
-			// FromStore constructor does that unwrap inside internal/database,
-			// so this package never names the concrete type. See
-			// database/store_capability.go.
-			s := database.NewPebbleActivityStoreFromStore(store)
-			if s == nil {
-				// Non-Pebble main store (a test double) — return nil pointer;
-				// the activitystore Build treats nil as a hard error (no fallback backend).
-				return (*database.PebbleActivityStore)(nil), nil
-			}
-			slog.Info("[activity] Pebble activity store initialised")
-			// The rollback guard for the source/type/level filter indexes (rows
-			// a rolled-back build wrote without filter keys) is not run from
-			// here: Server.startBackfills enqueues it as
-			// maintenance.activity-filter-index-backfill {"reconcile": true}
-			// (04-P6), where it shows on the Operations page, can be cancelled,
-			// and waits for the store's warmup. The store remembers the
-			// seen-through mark as of this construction for it
-			// (PebbleActivityStore.reconcileFrom, durable across a restart).
-			return s, nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		// pebble-activitystore: PebbleDB-backed activity store, sharing the main
+		// PebbleDB instance. Built only when the main store is a *PebbleStore.
+		// Returns a nil *PebbleActivityStore on other backends; the activitystore
+		// build below turns that nil into a startup error.
+		{
+			Name:   "pebble-activitystore",
+			Needs:  []string{serviceregistry.KeyStore},
+			Groups: []string{serviceregistry.KeyActivity},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
+				// AsPebbleStore, not a bare assertion: a store can be
+				// decorated (the server did so with indexedStore in NewServer until
+				// 07-S3), and a bare store.(*database.PebbleStore) fails through a
+				// decorator --
+				// silently taking the "non-Pebble backend" branch below, which
+				// looks like a supported configuration rather than a bug. The
+				// FromStore constructor does that unwrap inside internal/database,
+				// so this package never names the concrete type. See
+				// database/store_capability.go.
+				s := database.NewPebbleActivityStoreFromStore(store)
+				if s == nil {
+					// Non-Pebble main store (a test double) — return nil pointer;
+					// the activitystore Build treats nil as a hard error (no fallback backend).
+					return (*database.PebbleActivityStore)(nil), nil
+				}
+				slog.Info("[activity] Pebble activity store initialised")
+				// The rollback guard for the source/type/level filter indexes (rows
+				// a rolled-back build wrote without filter keys) is not run from
+				// here: Server.startBackfills enqueues it as
+				// maintenance.activity-filter-index-backfill {"reconcile": true}
+				// (04-P6), where it shows on the Operations page, can be cancelled,
+				// and waits for the store's warmup. The store remembers the
+				// seen-through mark as of this construction for it
+				// (PebbleActivityStore.reconcileFrom, durable across a restart).
+				return s, nil
+			},
 		},
-	})
 
-	// activitystore: Pebble-only activity log backend (NutsDB retired — see
-	// package doc). Returns nil when DatabasePath is unset — host code must
-	// Override serviceregistry.KeyActivityStore with a pre-built instance in
-	// that case (test paths).
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyActivityStore,
-		Needs:  []string{serviceregistry.KeyConfig, "pebble-activitystore"},
-		Groups: []string{serviceregistry.KeyActivity},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			if cfg.DatabasePath == "" {
-				return nil, fmt.Errorf("activitystore: DatabasePath not configured")
-			}
+		// activitystore: Pebble-only activity log backend (NutsDB retired — see
+		// package doc). Returns nil when DatabasePath is unset — host code must
+		// Override serviceregistry.KeyActivityStore with a pre-built instance in
+		// that case (test paths).
+		{
+			Name:   serviceregistry.KeyActivityStore,
+			Needs:  []string{serviceregistry.KeyConfig, "pebble-activitystore"},
+			Groups: []string{serviceregistry.KeyActivity},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				if cfg.DatabasePath == "" {
+					return nil, fmt.Errorf("activitystore: DatabasePath not configured")
+				}
 
-			// Validate before anything else: a conf that still names the
-			// removed SQLite backend must stop here with the reason, even on a
-			// host whose Pebble store is fine. Config.Validate refuses the same
-			// values at startup; this is the backstop for any path that builds
-			// the container without it (tests, tools).
-			if err := config.ValidateActivityBackend(cfg.ActivityBackend); err != nil {
-				return nil, fmt.Errorf("activitystore: %w", err)
-			}
+				// Validate before anything else: a conf that still names the
+				// removed SQLite backend must stop here with the reason, even on a
+				// host whose Pebble store is fine. Config.Validate refuses the same
+				// values at startup; this is the backstop for any path that builds
+				// the container without it (tests, tools).
+				if err := config.ValidateActivityBackend(cfg.ActivityBackend); err != nil {
+					return nil, fmt.Errorf("activitystore: %w", err)
+				}
 
-			pebbleStore, hasPebble := serviceregistry.TryGet[*database.PebbleActivityStore](c, "pebble-activitystore")
-			if !hasPebble || pebbleStore == nil {
-				// No more NutsDB fallback — a missing Pebble backend is now a
-				// hard error rather than a degraded mode.
-				return nil, fmt.Errorf("activitystore: pebble activity store not available")
-			}
-			slog.Info("[activity] Pebble activity store wired")
-			return pebbleStore, nil
+				pebbleStore, hasPebble := serviceregistry.TryGet[*database.PebbleActivityStore](c, "pebble-activitystore")
+				if !hasPebble || pebbleStore == nil {
+					// No more NutsDB fallback — a missing Pebble backend is now a
+					// hard error rather than a degraded mode.
+					return nil, fmt.Errorf("activitystore: pebble activity store not available")
+				}
+				slog.Info("[activity] Pebble activity store wired")
+				return pebbleStore, nil
+			},
 		},
-	})
 
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyActivity,
-		Needs:  []string{serviceregistry.KeyActivityStore},
-		Groups: []string{serviceregistry.KeyActivity},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			// Use the ActivityStorer interface: production wires the Pebble
-			// store, and tests override KeyActivityStore with their own doubles.
-			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
-			return NewService(store), nil
+		{
+			Name:   serviceregistry.KeyActivity,
+			Needs:  []string{serviceregistry.KeyActivityStore},
+			Groups: []string{serviceregistry.KeyActivity},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				// Use the ActivityStorer interface: production wires the Pebble
+				// store, and tests override KeyActivityStore with their own doubles.
+				store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
+				return NewService(store), nil
+			},
 		},
-	})
 
-	// activitywriter: io.Writer that tees log output to stdout and captures
-	// parsed entries into the activity store. Implements Starter and Stopper
-	// for lifecycle management. Depends on activity service for its store.
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "activitywriter",
-		Needs:  []string{serviceregistry.KeyActivity},
-		Groups: []string{serviceregistry.KeyActivity},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			activitySvc := serviceregistry.Get[*Service](c, serviceregistry.KeyActivity)
-			return NewWriter(activitySvc.Store(), 10000), nil
+		// activitywriter: io.Writer that tees log output to stdout and captures
+		// parsed entries into the activity store. Implements Starter and Stopper
+		// for lifecycle management. Depends on activity service for its store.
+		{
+			Name:   "activitywriter",
+			Needs:  []string{serviceregistry.KeyActivity},
+			Groups: []string{serviceregistry.KeyActivity},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				activitySvc := serviceregistry.Get[*Service](c, serviceregistry.KeyActivity)
+				return NewWriter(activitySvc.Store(), 10000), nil
+			},
 		},
-	})
+	}
 }
