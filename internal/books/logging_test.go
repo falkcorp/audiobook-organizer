@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -295,15 +295,23 @@ func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
 
 // TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID: the operations
 // registry is built inside NewServer, during the books module's Register, and
-// captures slog.Default() there. The pipeline must already be the process
-// default at that point (core/app installs it before any Register runs), or
-// the registry's logger would be the stock default: after the later install
+// captures the logger it is given there. Two things must hold of it.
+//
+// It must reach the pipeline with its level and attributes. If the pipeline
+// were not already the process default when Register ran (core/app installs it
+// first), the registry would hold the stock default: after the later install
 // every op line would reach the pipeline as one INFO record without its
-// attributes, an Activity row of level info with no operation, and op debug
-// lines would never reach the per-op log store.
+// attributes, and op debug lines would never reach the per-op log store.
+//
+// It must not feed the Activity tap. The registry logs several info lines per
+// op run; if its logger were the process default's every one would become a
+// system Activity row, which neither the base nor HEAD did (the registry then
+// logged to stdout and the file only). The op's structured rows come from the
+// registry's activity mirror, unchanged. The books module hands the registry its
+// module logger, whose records are not Process.
 //
 // The op below runs on the composed server's own registry, so its reporter
-// logger is the one built from what Register captured.
+// logger is built from what Register captured.
 func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
 	c := bootComposed(t, false, func(cfg *config.Config) { cfg.LogLevel = "debug" }, nil)
 	reg := c.srv.OpRegistry()
@@ -344,24 +352,7 @@ func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
 	assert.Contains(t, alarm, "wing=east", alarm)
 	assert.Contains(t, c.newLog.String(), "batcave debug trace", "the pipeline dropped the op's debug line")
 
-	// 2. The Activity row the tap made keeps the level and the operation.
-	deadline := time.After(10 * time.Second)
-	for {
-		select {
-		case e := <-c.srv.ActivityLogWriter().Chan():
-			if !strings.Contains(e.Summary, "batcave alarm raised") {
-				continue
-			}
-			assert.Equal(t, "warn", e.Level)
-			assert.Equal(t, opID, e.OperationID)
-			goto rowChecked
-		case <-deadline:
-			t.Fatal("the op warning made no Activity entry")
-		}
-	}
-rowChecked:
-
-	// 3. Both lines reach the per-op log store: fanoutHandler.Enabled asks
+	// 2. Both lines reach the per-op log store: fanoutHandler.Enabled asks
 	// the captured handler, which must be the pipeline at debug.
 	require.Eventually(t, func() bool {
 		rows, err := c.store.GetOpLogsV2(opID, 100)
@@ -375,4 +366,13 @@ rowChecked:
 		}
 		return debug && warn
 	}, 10*time.Second, 50*time.Millisecond, "the op's debug and warn lines are not both in the per-op log store")
+
+	// 3. None of the op's or the registry's lines is an Activity row. The
+	// marker, logged last through the process default, is the first entry
+	// that arrives: the tap's queue is FIFO, and everything logged before it
+	// is already queued ahead of it.
+	slog.Info("alfred marker after the op")
+	e := nextActivity(t, c)
+	assert.Contains(t, e.Summary, "alfred marker after the op",
+		"a registry or reporter line became an Activity row: %+v", e)
 }
