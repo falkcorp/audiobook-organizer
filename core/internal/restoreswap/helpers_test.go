@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 423994b8-e639-4aa4-b358-afa195f91d63
 // last-edited: 2026-11-07
 
@@ -115,7 +115,7 @@ func treeHash(t testing.TB, fs vfs.FS, path string) string {
 
 func writeFile(t testing.TB, fs vfs.FS, path, content string) {
 	t.Helper()
-	if err := writeFileAtomic(fs, path, []byte(content)); err != nil {
+	if err := writeFileAtomic(fs, path, []byte(content), privateFile); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -242,7 +242,7 @@ func fakeBoot(ctx context.Context, s *Swapper, mode bootMode) (bool, error) {
 		if mode == bootFailsAfter {
 			// P4b's checkpoint pointer, which the original store never had,
 			// then a failure: step x must not leave it beside the original.
-			if err := writeFileAtomic(s.fs, out.Intent.DBPath+restorejournal.CheckpointSuffix, []byte("pointer")); err != nil {
+			if err := writeFileAtomic(s.fs, out.Intent.DBPath+restorejournal.CheckpointSuffix, []byte("pointer"), privateFile); err != nil {
 				return false, err
 			}
 			return false, s.SwapBack(ctx, out.ID, errors.New("P4b failed on the restored store"))
@@ -253,7 +253,7 @@ func fakeBoot(ctx context.Context, s *Swapper, mode bootMode) (bool, error) {
 		if err := mkdirAllSynced(s.fs, out.Intent.DBPath); err != nil {
 			return false, err
 		}
-		if err := writeFileAtomic(s.fs, filepath.Join(out.Intent.DBPath, "fresh"), []byte("new install")); err != nil {
+		if err := writeFileAtomic(s.fs, filepath.Join(out.Intent.DBPath, "fresh"), []byte("new install"), privateFile); err != nil {
 			return false, err
 		}
 		if err := s.ResetApplied(ctx, out.ID); err != nil {

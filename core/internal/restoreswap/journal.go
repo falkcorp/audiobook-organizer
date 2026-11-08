@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
 // last-edited: 2026-11-07
 
@@ -140,6 +140,11 @@ func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Rec
 	var f vfs.File
 	if fresh {
 		f, err = s.fs.Create(path, vfs.WriteCategoryUnspecified)
+		if err == nil {
+			if cherr := chmod(s.fs, path, privateFile); cherr != nil {
+				return errors.Join(cherr, f.Close())
+			}
+		}
 	} else {
 		f, err = s.fs.OpenReadWrite(path, vfs.WriteCategoryUnspecified)
 	}
