@@ -1,5 +1,5 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
 // last-edited: 2026-11-07
 
@@ -287,13 +287,33 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 	// the key revoked. A revoked record means whoever revoked it already removed
 	// the key; an account that is no longer eligible leaves a live key nobody
 	// holds, which is revoked again here.
-	cur, _ := tokens.GetGuestServiceToken(userID)
-	if cur == nil || cur.Status != database.GuestTokenActive || cur.TokenID != issue.TokenID {
-		return nil, guestKeyBusy("the key was revoked, or the account deactivated, while the new key was being made; nothing was emailed")
+	//
+	// Fail closed: a record we cannot read, or one in any state other than
+	// active-with-this-token or already revoked, may still hold a live key that
+	// nobody will receive, so it is revoked here before anything is reported.
+	cur, curErr := tokens.GetGuestServiceToken(userID)
+	switch {
+	case curErr == nil && cur != nil && cur.Status == database.GuestTokenActive && cur.TokenID == issue.TokenID:
+		// Still ours: go on to the eligibility re-check and the email.
+	case curErr == nil && cur != nil && (cur.Status == database.GuestTokenRevoked || cur.Status == database.GuestTokenRevoking):
+		return nil, guestKeyBusy("the key was revoked while the new key was being made; nothing was emailed")
+	default:
+		reason := "the key record changed before the key was emailed"
+		if curErr != nil {
+			inviteAccessLog.Warn("guest key issue: re-reading the record for account %s failed: %v", userID, logger.SanitizeLogValue(curErr.Error()))
+			reason = "the key record could not be re-read before the key was emailed"
+		}
+		return nil, s.discardUnsentGuestKeyResult(parent, userID, actorID, res, reason)
 	}
-	fresh, _ := store.GetUserByID(userID)
+	fresh, freshErr := store.GetUserByID(userID)
+	if freshErr != nil {
+		inviteAccessLog.Warn("guest key issue: re-reading account %s failed: %v", userID, logger.SanitizeLogValue(freshErr.Error()))
+		return nil, s.discardUnsentGuestKeyResult(parent, userID, actorID, res, "the account could not be re-read before the key was emailed")
+	}
 	if why := guestKeyUserBlocked(store, fresh); why != "" {
-		s.discardUnsentGuestKey(parent, userID, actorID, res, "the account stopped being eligible before the key was emailed: "+why)
+		if err := s.discardUnsentGuestKey(parent, userID, actorID, res, "the account stopped being eligible before the key was emailed: "+why); err != nil {
+			return nil, guestKeyFailed(why + "; nothing was emailed, but the new key could not be revoked either, so it may still be active: use Revoke on its row")
+		}
 		return nil, guestKeyBlocked(why + "; the new key was revoked and nothing was emailed")
 	}
 
@@ -390,6 +410,15 @@ func (s *Server) emailGuestKey(parent context.Context, u *database.User, issue *
 // nobody has. It goes through the normal revoke path (record "revoked"), and the
 // reissue_failed audit entry names both ids. It returns the revoke's error: when
 // the revoke fails the record is "revoke_failed" and the admin retries it.
+// discardUnsentGuestKeyResult revokes a new key that will not be emailed and
+// returns the admin-facing failure, which says whether the revoke worked.
+func (s *Server) discardUnsentGuestKeyResult(parent context.Context, userID, actorID string, res *guestKeyResult, reason string) *guestKeyFailure {
+	if err := s.discardUnsentGuestKey(parent, userID, actorID, res, reason); err != nil {
+		return guestKeyFailed(reason + "; nothing was emailed, and the new key could not be revoked, so it may still be active: use Revoke on its row")
+	}
+	return guestKeyFailed(reason + "; the new key was revoked and nothing was emailed")
+}
+
 func (s *Server) discardUnsentGuestKey(parent context.Context, userID, actorID string, res *guestKeyResult, reason string) error {
 	err := s.revokeGuestServiceToken(parent, userID, reason, actorID)
 	detail := reason + ", by admin account " + actorID
