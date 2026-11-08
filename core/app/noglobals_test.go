@@ -1,5 +1,5 @@
 // file: core/app/noglobals_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 68d64f45-c7be-4bf0-8c21-6be99047ed03
 // last-edited: 2026-11-07
 
@@ -39,7 +39,7 @@ func processDefaultsExempt() map[string]bool {
 		"go.opentelemetry.io/otel.GetMeterProvider":     true,
 		"go.opentelemetry.io/otel.GetTracerProvider":    true,
 		"go.opentelemetry.io/otel.GetTextMapPropagator": true,
-		"log.SetFlags":                                  true,
+		"log.SetFlags": true,
 	}
 }
 
