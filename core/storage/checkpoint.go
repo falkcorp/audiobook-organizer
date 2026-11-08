@@ -134,14 +134,14 @@ type stateFileRecord struct {
 	SHA256 string `json:"sha256"`
 }
 
-// checkpointRecord is <name>.json (§5S.3.12 "How"). DirDev and DirIno are
+// checkpointRecord is <name>.json (§5S.3.12 "How"). DirFSID and DirIno are
 // the DB directory's identity at the boot that took it (osDirIdentity: the
 // filesystem ID and the inode), the identity its epoch was read against: with
 // Epoch they name the store the copy came from.
 type checkpointRecord struct {
 	InstallID   string            `json:"install_id"`
 	Epoch       uint64            `json:"epoch"`
-	DirDev      uint64            `json:"dir_dev"`
+	DirFSID     uint64            `json:"dir_fsid"`
 	DirIno      uint64            `json:"dir_ino"`
 	FromVector  vector            `json:"from_vector"`
 	FromRelease string            `json:"from_release"`
@@ -172,7 +172,7 @@ func (r checkpointRecord) open() bool { return r.pending() && r.ReadyAt == nil }
 // the record's install ID or reuses its checkpoint. Off unix the identity is
 // 0/0 and the match falls back to the epoch alone.
 func (r checkpointRecord) ofStore(e epochRecord) bool {
-	return r.Epoch == e.Epoch && r.DirDev == e.DirDev && r.DirIno == e.DirIno
+	return r.Epoch == e.Epoch && r.DirFSID == e.DirFSID && r.DirIno == e.DirIno
 }
 
 // checkpointPointer is <db path>.migration-checkpoint.
@@ -388,7 +388,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		return err
 	}
 	rec := checkpointRecord{
-		InstallID: st.installID, Epoch: st.epoch.Epoch, DirDev: st.epoch.DirDev, DirIno: st.epoch.DirIno,
+		InstallID: st.installID, Epoch: st.epoch.Epoch, DirFSID: st.epoch.DirFSID, DirIno: st.epoch.DirIno,
 		FromVector: cur, FromRelease: st.opts.FromRelease, StateFiles: files, TakenAt: now, Status: "open",
 	}
 	if err := db.writeRecord(name, rec); err != nil {

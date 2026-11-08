@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77194a40-fc27-4829-9543-097e945b3bdd
 // last-edited: 2026-11-08
 
@@ -424,7 +424,7 @@ func TestSwappedStoreDoesNotInheritOpenRecord(t *testing.T) {
 			}
 			old := readPointer(t, e).Name
 			oldRec := readRecord(t, e, old)
-			if !oldRec.open() || oldRec.DirDev != 7 || oldRec.DirIno != 1 {
+			if !oldRec.open() || oldRec.DirFSID != 7 || oldRec.DirIno != 1 {
 				t.Fatalf("the failed attempt's record = %+v, want open with dir identity 7/1", oldRec)
 			}
 			if tc.swap {
@@ -691,4 +691,48 @@ func TestUnreadableCheckpointRecordFailsBoot(t *testing.T) {
 	if !slices.Equal(before, after) {
 		t.Fatalf("checkpoint directory %v became %v: the refused boot wrote", before, after)
 	}
+}
+
+// TestStoreIdentityKeysAreDirFSID pins the wire names of the DB directory
+// identity in c/storage/epoch and in a checkpoint record: dir_fsid (statfs's
+// filesystem ID) and dir_ino, never dir_dev (coordinator: the key holds no
+// st_dev, so it is named for what it holds; 05-storage §5S.3.7, and 05-backup's
+// backup.location.json store block reads the same names).
+func TestStoreIdentityKeysAreDirFSID(t *testing.T) {
+	keysOf := func(t *testing.T, what string, raw []byte) {
+		t.Helper()
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		for _, k := range []string{"epoch", "dir_fsid", "dir_ino"} {
+			if _, ok := m[k]; !ok {
+				t.Errorf("%s has no %q key: %s", what, k, raw)
+			}
+		}
+		if _, ok := m["dir_dev"]; ok {
+			t.Errorf("%s still has a dir_dev key: %s", what, raw)
+		}
+	}
+	raw, err := json.Marshal(epochRecord{Epoch: 1, DirFSID: 7, DirIno: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keysOf(t, "c/storage/epoch", raw)
+
+	fs := vfs.NewMem()
+	e := headStore(t, fs, failingOwners()...)
+	if _, err := e.tryOpen(); err == nil {
+		t.Fatal("the failing upgrade succeeded")
+	}
+	name := readPointer(t, e).Name
+	f, err := fs.Open(filepath.Join(cpDir(e), name+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if raw, err = io.ReadAll(f); err != nil {
+		t.Fatal(err)
+	}
+	keysOf(t, "the checkpoint record", raw)
 }

@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F4-11-revocation-journal-integrity-reapply.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.0.3 -->
 <!-- guid: 9ad8da00-7eab-4236-a8f3-a0c03568e674 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # F4-11 — Revocation journal integrity and boot re-apply, dark: the authenticated journal format behind a derive-key seam, `backup.location.json` and `c/backup/served_boot`, the P4d step 2 re-apply and the P4d step 3 restore-hook runner as kernel functions F4-08 calls, the `revocation_journal_*` health tokens
 
@@ -44,7 +44,7 @@ functions until F4-08 wires them into boot.
    kernel injects (below). Verification walks the chain and reports where it breaks.
 2. **`backup.location.json` and `c/backup/served_boot`** (rows "Where", "Head in the store", "Content marker"): the
    one writer of `<state_dir>/backup.location.json` = `{backup_dir, journal, db_path, install_id, store: {epoch,
-   dir_dev, dir_ino}, served_boot: {n, nonce}, head: {seq, mac}}` (paths absolute), with one mutex across every
+   dir_fsid, dir_ino}, served_boot: {n, nonce}, head: {seq, mac}}` (paths absolute), with one mutex across every
    read-modify-write, temp file + fsync + rename; the committed-head anchor (rewritten after callers commit: at the next
    `Append`, on an in-process one-minute tick, at shutdown; never ahead of the store; frozen while a restore journal is
    between `swapped` and `applied`); the content marker `c/backup/served_boot` = `{n, nonce}` written with

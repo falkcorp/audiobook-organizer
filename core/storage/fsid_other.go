@@ -1,7 +1,7 @@
 // file: core/storage/fsid_other.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c16c0aef-e3f0-4ca6-b406-785d447e8c42
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 //go:build !unix
 
@@ -14,7 +14,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
-// osDirIdentity has no (device, inode) to read off unix: the generation then
+// osDirIdentity has no (filesystem ID, inode) to read off unix: the generation then
 // changes only when the epoch record is absent.
 func osDirIdentity(vfs.FS) func(string) (uint64, uint64, error) {
 	return func(string) (uint64, uint64, error) { return 0, 0, nil }
