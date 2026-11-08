@@ -464,7 +464,11 @@ func (db *DB) finish(ctx context.Context) (err error) {
 	if err := db.writeSidecars(); err != nil {
 		return err
 	}
-	return db.completeCheckpoint(now)
+	if err := db.completeCheckpoint(now); err != nil {
+		return err
+	}
+	st.finished = true
+	return nil
 }
 
 // breakingDeferred reports a deferred Breaking step of owner.

@@ -223,6 +223,7 @@ type bootState struct {
 	cpName    string
 	prepared  bool
 	migrated  bool
+	finished  bool // Migrate ran every step and step 9: the boot may reach readiness
 }
 
 // Opened is a store after §5S.4 steps 1-5 (06 P2): open, guarded and

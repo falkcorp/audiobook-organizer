@@ -185,7 +185,13 @@ func (k *Kernel) Run(ctx context.Context) error {
 	go func() { served <- srv.Serve() }()
 	k.log.InfoContext(ctx, "kernel: listening", "addr", srv.Addr().String())
 	// (8) Readiness. The readiness core and its /readyz arrive with health
-	// (F2); until then readiness is the notifier's READY=1.
+	// (F2); until then readiness is the notifier's READY=1. The checkpoint
+	// records' ready_at is written first, and a failure stops the app
+	// (markReady).
+	if err := k.markReady(time.Now()); err != nil {
+		k.log.ErrorContext(ctx, "kernel: not ready; stopping", "err", err)
+		return errors.Join(err, k.stop(ctx, time.Now().Add(budget), srv, served, false, ws, started))
+	}
 	k.signal(ctx, "ready", k.notifier.Ready())
 	k.log.InfoContext(ctx, "kernel: ready")
 	k.lifecycle.ready.Store(true)

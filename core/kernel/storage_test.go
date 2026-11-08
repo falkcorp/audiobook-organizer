@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -318,6 +319,126 @@ func TestCloseCoreAwaitsLateStops(t *testing.T) {
 		close(release)
 		if err := <-wrote; !errors.Is(err, storage.ErrClosed) {
 			t.Fatalf("the late Stop's write after the close = %v, want storage.ErrClosed", err)
+		}
+	})
+}
+
+// failedUpgrade boots a fresh store at a new path with alfred's seed, then an
+// upgrade whose step fails, and returns the path and the open checkpoint's
+// name.
+func failedUpgrade(t *testing.T) (path, name string) {
+	t.Helper()
+	path = tempStoragePath(t)
+	c := testConfig(t, storageMod("alfred", nil, seedStep(1, "cave")))
+	c.StoragePath = path
+	k := mustNew(t, c)
+	if err := k.closeCore(t.Context(), time.Now().Add(defaultShutdownBudget)); err != nil {
+		t.Fatal(err)
+	}
+	c.Modules = []module.Module{storageMod("alfred", nil, seedStep(1, "cave"), storage.Migration{
+		Version: 2, Name: "broken", Compat: storage.Additive,
+		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }})}
+	var failed *storage.ErrMigrationFailed
+	if _, err := New(t.Context(), c); !errors.As(err, &failed) {
+		t.Fatalf("the failing upgrade = %v, want *storage.ErrMigrationFailed", err)
+	}
+	raw, err := os.ReadFile(path + ".migration-checkpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" || p.State != "open" {
+		t.Fatalf("pointer = %s (%v), want an open checkpoint", raw, err)
+	}
+	return path, p.Name
+}
+
+// checkpointStatus reads a checkpoint record's status and ready_at.
+func checkpointStatus(path, name string) (status string, readyAt *time.Time, err error) {
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), ".mediacore-checkpoints", name+".json"))
+	if err != nil {
+		return "", nil, err
+	}
+	var rec struct {
+		Status  string     `json:"status"`
+		ReadyAt *time.Time `json:"ready_at"`
+	}
+	err = json.Unmarshal(raw, &rec)
+	return rec.Status, rec.ReadyAt, err
+}
+
+// readyProbe is the test notifier whose Ready runs probe first, so a test
+// sees the store as it was when READY=1 was sent.
+type readyProbe struct {
+	notifier
+	probe func()
+	ready chan struct{}
+}
+
+func (n readyProbe) Ready() error { n.probe(); close(n.ready); return nil }
+
+// previousBuild is the build before the failed upgrade's: alfred with its
+// seed only, so its boot runs no step and takes no checkpoint, then serves.
+func previousBuild(t *testing.T, path string, rec *recorder, probe func()) (*Kernel, chan struct{}) {
+	t.Helper()
+	c := supervised(t, rec, storageMod("alfred", nil, seedStep(1, "cave")))
+	ready := make(chan struct{})
+	c.Notifier = readyProbe{notifier: notifier{rec}, probe: probe, ready: ready}
+	c.StoragePath = path
+	return mustNew(t, c), ready
+}
+
+// TestReadinessMarksCheckpointServed (05-storage §5S.3.12 "Upgrade attempt
+// and reuse"; review BLOCKER-1): after a failed upgrade the previous build
+// boots and serves; by the time it sends READY=1 the open record carries
+// ready_at and status served, so the next upgrade takes its own checkpoint.
+// A record that cannot be written stops the app before READY=1.
+func TestReadinessMarksCheckpointServed(t *testing.T) {
+	t.Run("served", func(t *testing.T) {
+		path, name := failedUpgrade(t)
+		var status string
+		var readyAt *time.Time
+		var readErr error
+		k, ready := previousBuild(t, path, &recorder{}, func() { status, readyAt, readErr = checkpointStatus(path, name) })
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		<-ready
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		if readErr != nil || status != "served" || readyAt == nil {
+			t.Fatalf("the record at READY=1: status %q, ready_at %v (%v); want served with ready_at", status, readyAt, readErr)
+		}
+	})
+	t.Run("unwritable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root writes through a read-only directory")
+		}
+		path, name := failedUpgrade(t)
+		dir := filepath.Join(filepath.Dir(path), ".mediacore-checkpoints")
+		rec := &recorder{}
+		k, _ := previousBuild(t, path, rec, func() {})
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		// A Run that wrongly reaches readiness serves until ctx ends; the
+		// deadline turns that into a failure instead of a hang.
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		err := k.Run(ctx)
+		if err == nil || !strings.Contains(err.Error(), "ready_at") {
+			t.Fatalf("Run with an unwritable record = %v, want the readiness write's error", err)
+		}
+		if slices.Contains(rec.list(), "ready") {
+			t.Fatal("READY=1 was sent although ready_at was not written")
+		}
+		if status, readyAt, err := checkpointStatus(path, name); err != nil || status != "open" || readyAt != nil {
+			t.Fatalf("the record = %q, %v (%v); want it still open", status, readyAt, err)
 		}
 	})
 }

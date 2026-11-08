@@ -510,3 +510,36 @@ func (db *DB) completeCheckpoint(now time.Time) error {
 
 // CheckpointName is the checkpoint this boot took or reused; "" when none.
 func (db *DB) CheckpointName() string { return db.boot.cpName }
+
+// MarkReady is §5S.3.12's readiness write ("Upgrade attempt and reuse"): the
+// first boot that reaches readiness after a checkpoint was taken writes
+// ready_at = now and status served onto every open record of the live store
+// (this boot's install_id and epoch), each through WriteFileAtomic. From then
+// on the checkpoint predates writes this boot serves, so no later boot reuses
+// it: the next upgrade takes its own, and restoring this one needs
+// --accept-loss. The pointer is left alone (served is a state of the record
+// only). A store with no open record writes nothing, and a second call
+// changes nothing. The kernel calls it at start step 8, before it signals
+// readiness; a DB whose Migrate did not finish is refused.
+func (db *DB) MarkReady(now time.Time) error {
+	st := db.boot
+	if st == nil || !st.finished {
+		return errors.New("storage: MarkReady on a store whose boot did not finish Migrate")
+	}
+	recs, err := db.checkpointRecords()
+	if err != nil {
+		return err
+	}
+	now = now.UTC()
+	for _, r := range recs {
+		if r.rec.InstallID != st.installID || r.rec.Epoch != st.epoch.Epoch || !r.rec.open() {
+			continue
+		}
+		r.rec.ReadyAt, r.rec.Status = &now, "served"
+		if err := db.writeRecord(r.name, r.rec); err != nil {
+			return err
+		}
+		db.log.Info("storage: an open upgrade checkpoint was served past; it will not be reused", "name", r.name)
+	}
+	return nil
+}
