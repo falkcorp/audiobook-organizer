@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.2
+// version: 4.67.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1411,10 +1411,31 @@ const hnswUnmeasuredExport = 5 * time.Second
 // When the vector store is not the HNSW store, nothing is loaded, but the
 // clean-stop marker is still taken: this run lets the snapshot fall behind
 // Pebble, so a later HNSW run must not find a marker vouching for it.
+//
+// An operation-runner child (opsregistry.IsChildMode) loads the snapshot as
+// is: it neither takes the marker nor checks the truth counts. The marker is
+// the parent's, written by its clean stop for its own next boot, and the child
+// can never write the snapshot (it has no snapshotter and runs no StopHook), so
+// whatever its graph lacks ends with the child. Checking would only cost: the
+// parent took the marker at its own boot, so every child would find none and
+// run a full reconcile against Pebble for each op it runs.
 func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
 	var hnswStore *database.HNSWEmbeddingStore
 	if raw, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && raw != nil {
 		hnswStore, _ = raw.(*database.HNSWEmbeddingStore)
+	}
+	if isChildProcess() {
+		if hnswStore == nil {
+			return
+		}
+		if err := hnswStore.Import(hnswDir); err != nil {
+			if !errors.Is(err, database.ErrNoHNSWSnapshot) {
+				lifecycleLog.Warn("hnsw: import failed in an operation-runner child, will hydrate from PebbleDB: %v", err)
+			}
+			return
+		}
+		lifecycleLog.Info("hnsw: operation-runner child loaded the on-disk snapshot in %s as is", hnswDir)
+		return
 	}
 	if hnswStore == nil {
 		if _, err := database.TakeHNSWCleanStop(hnswDir); err != nil {
