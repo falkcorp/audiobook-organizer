@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -51,6 +51,16 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	c.StorageFS = opts.StorageFS
 	if c.StoragePath, err = storagePath(opts, mods); err != nil {
 		return nil, err
+	}
+	if c.StoragePath != "" {
+		// P0a's state directory (06 §6.5.1): resolved once, from pre-boot
+		// inputs only, even when <PREFIX>_CORE_STORAGE_PATH names the store.
+		if c.StateDir, err = ResolveStateDir(opts); err != nil {
+			return nil, err
+		}
+		if c.StateDir, err = filepath.Abs(c.StateDir); err != nil {
+			return nil, fmt.Errorf("app: state directory: %w", err)
+		}
 	}
 	k, err := kernel.New(ctx, c)
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-07
 
@@ -74,16 +74,23 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	// Before any module code runs, so a restart request refused before
 	// readiness is logged (Lifecycle.RequestRestart).
 	k.lifecycle.log = k.log
+	// P0a, the pre-boot swap, runs before anything opens the store (swap.go);
+	// each storage phase of a restore or reset boot then journals its step.
+	if k.swapWanted(describe) {
+		if err := k.phase(phaseP0a, func() error { return k.runP0a(ctx) }); err != nil {
+			return nil, err
+		}
+	}
 	if open, err := k.storageWanted(describe); err != nil {
 		return nil, err
 	} else if open {
-		if err := k.phase(phaseP2, func() error { return k.openStorage(ctx) }); err != nil {
+		if err := k.phase(phaseP2, k.swapPhase(ctx, phaseP2, func() error { return k.openStorage(ctx) })); err != nil {
 			return nil, err
 		}
-		if err := k.phase(phaseP4a, func() error { return k.prepareStorage(ctx) }); err != nil {
+		if err := k.phase(phaseP4a, k.swapPhase(ctx, phaseP4a, func() error { return k.prepareStorage(ctx) })); err != nil {
 			return nil, err
 		}
-		if err := k.phase(phaseP4b, func() error { return k.migrateStorage(ctx) }); err != nil {
+		if err := k.phase(phaseP4b, k.swapPhase(ctx, phaseP4b, func() error { return k.migrateStorage(ctx) })); err != nil {
 			return nil, err
 		}
 	}
