@@ -225,17 +225,17 @@ type runningApp struct {
 // test's end) cancels it.
 func runComposed(t *testing.T) *runningApp {
 	t.Helper()
-	return runComposedWith(t, nil, nil, nil)
+	return runComposedWith(t, nil, nil, nil, nil)
 }
 
-// runComposedWith is runComposed with pre and opt as bootComposedWith takes
-// them, and booted, when set, called with the composition after app.New and
-// before Run. When it returns, Run has opened the listener, so every start
-// hook has returned (06 §6.5.2 start steps (2) and (7)).
-func runComposedWith(t *testing.T, pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+// runComposedWith is runComposed with edit, pre and opt as bootComposedWith
+// takes them, and booted, when set, called with the composition after
+// app.New and before Run. When it returns, Run has opened the listener, so
+// every start hook has returned (06 §6.5.2 start steps (2) and (7)).
+func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
 	t.Helper()
 	addrs := make(chan net.Addr, 1)
-	c := bootComposedWith(t, false, nil, pre, func(o *app.Options) {
+	c := bootComposedWith(t, false, edit, pre, func(o *app.Options) {
 		if opt != nil {
 			opt(o)
 		}

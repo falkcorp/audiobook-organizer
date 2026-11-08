@@ -157,7 +157,7 @@ const flatEmbeddingBlob = `{"embedding_enabled":true,"embedding_model":"batcompu
 // boot's load finds the blob already in its new shape.
 func TestBooksConstructorWritesNothing(t *testing.T) {
 	var before uint64
-	r := runComposedWith(t,
+	r := runComposedWith(t, nil,
 		func(s *database.PebbleStore) {
 			require.NoError(t, s.SetSetting("config_blob", flatEmbeddingBlob, "json", false))
 			before = s.CommittedWrites()
