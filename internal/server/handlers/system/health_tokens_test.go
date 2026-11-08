@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/health_tokens_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 06a9de9e-cc8c-4b3d-ae81-fafb45892f6f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package system
 
@@ -38,7 +38,6 @@ import (
 // R0-05's token, listed now so its merge needs no edit here.
 var unauthenticatedTokenGolden = []string{
 	"memdb_warming",
-	"metrics_disabled",
 	"search_index",
 	"basic_gate_no_password",
 }
@@ -78,7 +77,6 @@ var tokenCells = []tokenCell{
 			m := systemmocks.NewMockSystemStore(t)
 			m.EXPECT().CountAuthors().Return(1, nil).Maybe()
 			steps := startup.New()
-			_ = steps.Run("InitOTEL", func() error { return errors.New("exporter down") })
 			_ = steps.Run("searchindex", func() error { return errors.New("index missing") })
 			config.AppConfig.AutoUpdate.Enabled = true
 			return tokenRaise{
@@ -86,7 +84,7 @@ var tokenCells = []tokenCell{
 				getDegraded: func() DegradedSource { return steps },
 			}
 		},
-		wantPublic:            []string{"memdb_warming", "metrics_disabled", "search_index"},
+		wantPublic:            []string{"memdb_warming", "search_index"},
 		wantAuthenticatedOnly: []string{DegradedAutoUpdatePaused},
 	},
 }

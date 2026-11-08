@@ -1,7 +1,7 @@
 // file: internal/startup/steps_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 225d8029-438d-4ff7-9896-03d376746519
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package startup
 
@@ -35,10 +35,10 @@ func TestRun_FatalReturnsErrorAndRecordsNoToken(t *testing.T) {
 
 func TestRun_DegradedReturnsNilAndRecordsToken(t *testing.T) {
 	st := New().SetErrorLog(t.Logf)
-	if err := st.Run("InitOTEL", func() error { return errors.New("exporter") }); err != nil {
+	if err := st.Run("searchindex", func() error { return errors.New("bleve closed") }); err != nil {
 		t.Fatalf("degraded step returned %v, want nil", err)
 	}
-	if got, want := st.Tokens(), []string{TokenMetricsDisabled}; !reflect.DeepEqual(got, want) {
+	if got, want := st.Tokens(), []string{TokenSearchIndex}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("tokens = %v, want %v", got, want)
 	}
 }
@@ -76,9 +76,8 @@ func TestRun_SameTokenTwiceAppearsOnce(t *testing.T) {
 	fail := func() error { return errors.New("x") }
 	_ = st.Run("searchindex", fail)
 	_ = st.Run("searchindex", fail)
-	_ = st.Run("InitOTEL", fail)
-	if got, want := st.Tokens(), []string{TokenMetricsDisabled, TokenSearchIndex}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("tokens = %v, want %v (sorted, deduplicated)", got, want)
+	if got, want := st.Tokens(), []string{TokenSearchIndex}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens = %v, want %v (deduplicated)", got, want)
 	}
 }
 

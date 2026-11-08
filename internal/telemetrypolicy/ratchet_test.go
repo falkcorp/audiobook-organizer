@@ -1,7 +1,7 @@
 // file: internal/telemetrypolicy/ratchet_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2b8e6f10-3c4d-4a7e-9f15-a0b1c2d3e4f5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package telemetrypolicy
 
@@ -64,14 +64,11 @@ func localImportName(f *ast.File, path string) string {
 func countFileFamilies(rel string, f *ast.File) int {
 	prom := localImportName(f, promImportPath)
 	promauto := localImportName(f, promautoImportPath)
-	bridgeFile := rel == bridgeHelper.file
 	n := 0
 	ast.Inspect(f, func(node ast.Node) bool {
-		// The sanctioned NewDescs live inside the helpers; their callers are
-		// counted instead (bridgeDesc: every use bridgeMisuses reports counts,
-		// so it fails the ratchet; the gathered-name call declares nothing).
-		if fd, ok := node.(*ast.FuncDecl); ok && fd.Recv == nil &&
-			(fd.Name.Name == pebbleDescHelper || (bridgeFile && fd.Name.Name == bridgeHelper.fn)) {
+		// The sanctioned NewDesc lives inside the helper; its callers are
+		// counted instead.
+		if fd, ok := node.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == pebbleDescHelper {
 			return false
 		}
 		call, ok := node.(*ast.CallExpr)
@@ -103,7 +100,7 @@ func countFileFamilies(rel string, f *ast.File) int {
 		}
 		return true
 	})
-	return n + len(bridgeMisuses(rel, f))
+	return n
 }
 
 // countClientGolangFamilies walks internal, pkg and cmd under root and returns
@@ -253,12 +250,6 @@ var d = newPebbleDesc("x")
 var e = prometheus.NewDesc("y", "", nil, nil)
 func f(n string) any { return newPebbleDesc(n) } // non-literal: not counted
 `)
-	writeBridgeFixtures(t, root)
-	// The same function name anywhere else is not exempt.
-	writeFixture(t, root, "internal/x/x.go", `package x
-import "github.com/prometheus/client_golang/prometheus"
-func bridgeDesc(name string) *prometheus.Desc { return prometheus.NewDesc(name, "", nil, nil) }
-`)
 	// Ignored: test file, testdata dir, file without the import.
 	writeFixture(t, root, "internal/a/a_test.go", `package a
 import "github.com/prometheus/client_golang/prometheus"
@@ -277,56 +268,17 @@ func init() { prometheus.NewCounter() }
 	return root
 }
 
-// bridgeFixtures are the registry bridge cases, shared by the ratchet and
-// TestDeclaredFamilies_BridgeMisuses: the helper's body is skipped, the one
-// gathered-name call in (*registryBridge).Collect declares nothing, and each
-// other use is a misuse (want per file).
-var bridgeFixtures = []struct {
-	rel, body string
-	want      int
-}{
-	{"internal/telemetry/telemetry.go", `package telemetry
-import "github.com/prometheus/client_golang/prometheus"
-type registryBridge struct{ g prometheus.Gatherer }
-func (b *registryBridge) Collect(ch chan<- prometheus.Metric) {
-	mfs, _ := b.g.Gather()
-	for _, mf := range mfs {
-		_ = bridgeDesc(mf.GetName(), mf.GetHelp()) // the sanctioned call
-		_ = bridgeDesc("batman_total", "")         // literal name
-	}
-}
-const robin = "robin_total"
-func bridgeDesc(name, help string) *prometheus.Desc { return prometheus.NewDesc(name, help, nil, nil) }
-func bridged(n string) any { return bridgeDesc(n, "") } // outside Collect
-var named = bridgeDesc(robin, "")                      // named constant
-var alias = bridgeDesc                                 // taken as a value
-`, 4},
-	// Another file of the package, no client_golang import of its own.
-	{"internal/telemetry/other.go", `package telemetry
-func joker() any { return bridgeDesc("joker_total", "") }
-`, 1},
-}
-
-func writeBridgeFixtures(t *testing.T, root string) {
-	t.Helper()
-	for _, fx := range bridgeFixtures {
-		writeFixture(t, root, fx.rel, fx.body)
-	}
-}
-
 func TestRatchetCounter_FixtureTree(t *testing.T) {
 	root := fixtureTree(t)
 	got, per, err := countClientGolangFamilies(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a.go 1, b.go 2, c.go: literal helper call 1 + stray NewDesc 1,
-	// telemetry.go: the four bridgeDesc misuses, other.go: 1, x.go: the
-	// unexempt NewDesc 1. The gathered-name call in Collect counts nothing.
-	if got != 11 {
-		t.Fatalf("fixture count = %d, want 11 (per file: %v)", got, per)
+	// a.go 1, b.go 2, c.go: literal helper call 1 + stray NewDesc 1.
+	if got != 5 {
+		t.Fatalf("fixture count = %d, want 5 (per file: %v)", got, per)
 	}
-	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2, "internal/telemetry/telemetry.go": 4, "internal/telemetry/other.go": 1, "internal/x/x.go": 1}
+	want := map[string]int{"internal/a/a.go": 1, "internal/b/b.go": 2, "pkg/c/c.go": 2}
 	for f, n := range want {
 		if per[f] != n {
 			t.Errorf("%s: got %d, want %d", f, per[f], n)

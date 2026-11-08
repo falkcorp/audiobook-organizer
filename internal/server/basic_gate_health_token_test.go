@@ -1,7 +1,7 @@
 // file: internal/server/basic_gate_health_token_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e4e0550a-a189-4939-ac92-8e07e8a78ac9
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package server
 
@@ -89,16 +89,16 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 	t.Run("source merges the startup runner", func(t *testing.T) {
 		s := &Server{}
 		steps := startup.New()
-		require.NoError(t, steps.Run("InitOTEL", func() error { return errors.New("meter provider") }))
+		require.NoError(t, steps.Run("searchindex", func() error { return errors.New("index missing") }))
 		s.startupStepsFor(ServerConfig{StartupSteps: steps})
 
 		setBasicGate(t, true, "admin", "", nil)
 		assert.ElementsMatch(t,
-			[]string{startup.TokenMetricsDisabled, servermiddleware.BasicGateNoPasswordToken},
+			[]string{startup.TokenSearchIndex, servermiddleware.BasicGateNoPasswordToken},
 			sourceTokens(s.startupDegradedSource()))
 
 		config.AppConfig.BasicAuthPassword = "secret"
-		assert.Equal(t, []string{startup.TokenMetricsDisabled}, sourceTokens(s.startupDegradedSource()))
+		assert.Equal(t, []string{startup.TokenSearchIndex}, sourceTokens(s.startupDegradedSource()))
 	})
 
 	t.Run("through the real /health wiring", func(t *testing.T) {
