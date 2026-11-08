@@ -75,7 +75,12 @@ func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
 func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
 
 // Handler is the fully assembled root handler (for tests and embedding in
-// another server). Valid after New.
+// another server). Valid after New. Embedding still needs Run: Handler alone
+// starts no hooks or workers and does not mark the store's open checkpoint
+// records served (06 §6.5.2 start step (0)), so a request served through it
+// before Run writes past an upgrade checkpoint the next upgrade could still
+// reuse. coretest's harness serves it without Run because a test store is
+// never rolled back.
 func (a *App) Handler() http.Handler { return a.k.Handler() }
 
 // Routes describes every route of the built handler: native routes, the

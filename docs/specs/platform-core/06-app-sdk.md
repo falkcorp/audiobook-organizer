@@ -1046,7 +1046,12 @@ func (a *App) Close(ctx context.Context) error
 type R1Values struct{ /* 05-config §1.12.1 */ }
 
 // Handler is the fully assembled root handler (for coretest and embedding in
-// another server). Valid after New.
+// another server). Valid after New. Embedding still needs Run: Handler alone
+// starts no hooks or workers and does not mark the store's open checkpoint
+// records served (§6.5.2 start step (0)), so a request served through it
+// before Run writes past an upgrade checkpoint the next upgrade could still
+// reuse (05-storage §5S.3.12). coretest's harness serves it without Run
+// because a test store is never rolled back.
 func (a *App) Handler() http.Handler
 
 // Routes describes every route of the built handler (httpapi.Router.Routes via
