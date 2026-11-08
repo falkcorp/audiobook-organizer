@@ -1,7 +1,7 @@
 // file: web/src/utils/apiFetch.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: c1d2e3f4-a5b6-7890-cdef-012345678901
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 /**
  * Thrown when a request is cut off by apiFetch's own `timeoutMs` deadline.
@@ -119,6 +119,106 @@ function assertNotAuthRedirect(requestUrl: string, response: Response): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The stale-build rule (07 §7.5.2; 09 §9.4 R1 "build identity").
+//
+// The server stamps every response with X-App-Build, the UI build ID of the
+// bundle it embeds, which `vite build` wrote into this page's
+// <meta name="mediacore-build"> (web/build-id.ts). A tab left open across an
+// upgrade, or across a rollback to a server that predates the header, holds a
+// bundle whose lazy chunks may be gone, so it is offered a reload. This is
+// the one place the rule runs for ABO's own calls; @mediacore/api-client's
+// checkBuild takes it over (R1-30) with the same signature shape.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a response says this tab's bundle is stale:
+ *  - `header-mismatch`: X-App-Build names a different bundle than this page's.
+ *  - `pre-r1-server`: the response carries `Reporting-Endpoints: csp=...`, so
+ *    it is the app's, but no X-App-Build, so the server predates the header
+ *    (an R1+ tab after a rollback to R0).
+ */
+export type StaleReason = 'header-mismatch' | 'pre-r1-server';
+
+const BUILD_META_SELECTOR = 'meta[name="mediacore-build"]';
+
+/**
+ * The only reader of this page's build ID: the content of
+ * `<meta name="mediacore-build">`, "" when the tag is absent. Read once, at
+ * load (below); a document without a tag reads as "".
+ */
+export function readPageBuildId(): string {
+  if (typeof document === 'undefined') return '';
+  return document.querySelector(BUILD_META_SELECTOR)?.getAttribute('content')?.trim() ?? '';
+}
+
+/** The page's build ID, read once at load. "" and "dev" never trigger the rule. */
+const pageBuildId = readPageBuildId();
+
+/** An ID that carries no identity: an absent tag, or `vite serve`'s `dev`. */
+function isUnknownBuildId(id: string): boolean {
+  return id === '' || id.toLowerCase() === 'dev';
+}
+
+/**
+ * checkBuild applies the rule to one response, headers only, and returns the
+ * reason it is stale or null. It never reads the body. A response double with
+ * no `headers` (several suites stub fetch that way) is never stale.
+ *
+ * `buildId` is a parameter, not a read of the meta, so the rule can be tested
+ * with any page ID; apiFetch passes the page's. A `buildId` of "" or "dev"
+ * never triggers it, and neither does a header of "" or "dev" (stage 5's
+ * "unknown", never a mismatch).
+ */
+export function checkBuild(response: Response, opts: { buildId: string }): StaleReason | null {
+  if (isUnknownBuildId(opts.buildId)) return null;
+  if (typeof response.headers?.get !== 'function') return null;
+
+  const header = (response.headers.get('X-App-Build') ?? '').trim();
+  let reason: StaleReason | null = null;
+  if (header !== '') {
+    if (!isUnknownBuildId(header) && header !== opts.buildId) reason = 'header-mismatch';
+  } else if (
+    (response.status ?? 200) < 500 &&
+    /(^|[\s,])csp\s*=/i.test(response.headers.get('Reporting-Endpoints') ?? '')
+  ) {
+    // The app's own answer (HEAD and every build since write the header) with
+    // no X-App-Build. A proxy's 502 or an Access interstitial has neither
+    // header and never counts.
+    reason = 'pre-r1-server';
+  }
+  if (reason) noteStale(reason);
+  return reason;
+}
+
+const detectedReasons: StaleReason[] = [];
+const staleListeners = new Set<(reason: StaleReason) => void>();
+
+function noteStale(reason: StaleReason): void {
+  if (detectedReasons.includes(reason)) return;
+  detectedReasons.push(reason);
+  for (const listener of [...staleListeners]) listener(reason);
+}
+
+/** The reasons detected on this page load, each once. */
+export function getStaleReasons(): readonly StaleReason[] {
+  return detectedReasons;
+}
+
+/**
+ * Subscribe to stale-build detections. The listener is called at once for each
+ * reason already detected (a banner that mounts after the first API response,
+ * the auth probe, still hears it) and then once per new reason. Returns the
+ * unsubscribe function.
+ */
+export function onStaleBuild(listener: (reason: StaleReason) => void): () => void {
+  staleListeners.add(listener);
+  for (const reason of [...detectedReasons]) listener(reason);
+  return () => {
+    staleListeners.delete(listener);
+  };
+}
+
 export interface ApiFetchOptions extends RequestInit {
   /**
    * Abort the request after this many milliseconds and reject with
@@ -177,6 +277,7 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
       signal: callerSignal,
     });
     assertNotAuthRedirect(url, response);
+    checkBuild(response, { buildId: pageBuildId });
     return response;
   }
 
@@ -210,6 +311,7 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
       signal: controller.signal,
     });
     assertNotAuthRedirect(url, response);
+    checkBuild(response, { buildId: pageBuildId });
     return response;
   } catch (err) {
     // Distinguish "we gave up" from "the caller gave up". Both surface as an
