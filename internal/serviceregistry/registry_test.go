@@ -1,11 +1,10 @@
 // file: internal/serviceregistry/registry_test.go
-// version: 1.1.0
+// version: 1.2.0
 // last-edited: 2026-11-08
 
 package serviceregistry
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -82,13 +81,5 @@ func TestNewContainerFrom_TwoContainersIsolated(t *testing.T) {
 	}
 	if got := Get[string](b, "batgirl"); got != "batgirl-b" {
 		t.Errorf("b batgirl = %q, want batgirl-b", got)
-	}
-}
-
-// Include still names a service; one with no def and no override is unknown.
-func TestNewContainerFrom_IncludeUnknownName(t *testing.T) {
-	c := NewContainerFrom(ServiceDef{Name: "robin", Build: okBuild}).Include("joker")
-	if err := c.Resolve(); !errors.Is(err, ErrUnknownService) {
-		t.Fatalf("expected ErrUnknownService, got %v", err)
 	}
 }

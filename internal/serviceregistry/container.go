@@ -1,5 +1,5 @@
 // file: internal/serviceregistry/container.go
-// version: 1.3.0
+// version: 1.4.0
 // last-edited: 2026-11-08
 
 package serviceregistry
@@ -36,8 +36,9 @@ type Container struct {
 }
 
 // NewContainerFrom creates a Container whose factory list is exactly defs
-// (06 §6.11.1 step 3). Every def passed is included in the build set; Include
-// and Override keep their meaning. With no defs it is the empty container.
+// (06 §6.11.1 step 3). Every def passed is in the build set, so there is
+// nothing to include by name; Override keeps its meaning. With no defs it is the
+// empty container.
 //
 // Panics on an empty Name, a nil Build or a duplicate Name among defs, so a
 // malformed list is caught when the container is made, never at runtime.
@@ -64,17 +65,8 @@ func NewContainerFrom(defs ...ServiceDef) *Container {
 	return c
 }
 
-// Include adds service names to the build set. Transitive deps are pulled
-// in at Resolve time. Chainable.
-func (c *Container) Include(names ...string) *Container {
-	for _, n := range names {
-		c.include[n] = true
-	}
-	return c
-}
-
 // Override substitutes an instance for the named service. Factory Build
-// is not called. The name is implicitly Included. Treated as a leaf in
+// is not called. The name is added to the build set. Treated as a leaf in
 // the dep graph (its declared Needs are ignored). Test-only.
 func (c *Container) Override(name string, instance any) *Container {
 	c.overrides[name] = instance
