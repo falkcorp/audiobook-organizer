@@ -1,5 +1,5 @@
 // file: cmd/root_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/spf13/viper"
 )
 
@@ -290,5 +293,65 @@ func TestScanCommandMissingRootDir(t *testing.T) {
 func TestMetadataInspectRequiresFile(t *testing.T) {
 	if err := metadataInspectCmd.RunE(metadataInspectCmd, nil); err == nil {
 		t.Fatal("expected error when file is missing")
+	}
+}
+
+// TestScanAndOrganizeLogToStdoutAtLogLevel: scan and organize have no App, so
+// slog's stock default (standard error, info) would take their lines. They
+// install a text handler on standard output at log_level for the length of the
+// command, and put the previous default back.
+func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
+	stubCommandDeps(t)
+	processBooks = func([]scanner.Book, logger.Logger) error {
+		slog.Debug("joker debug line")
+		slog.Info("penguin info line")
+		return nil
+	}
+	origConfig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = origConfig })
+	config.AppConfig.RootDir = t.TempDir()
+	config.AppConfig.PlaylistDir = t.TempDir()
+	config.AppConfig.DatabasePath = filepath.Join(t.TempDir(), "db")
+
+	for _, tc := range []struct {
+		name      string
+		run       func() error
+		level     string
+		wantDebug bool
+	}{
+		{"scan at debug", func() error { return scanCmd.RunE(scanCmd, nil) }, "debug", true},
+		{"scan at info", func() error { return scanCmd.RunE(scanCmd, nil) }, "info", false},
+		{"scan with a level slog does not know", func() error { return scanCmd.RunE(scanCmd, nil) }, "loud", false},
+		{"organize at debug", func() error { return organizeCmd.RunE(organizeCmd, nil) }, "debug", true},
+		{"organize at info", func() error { return organizeCmd.RunE(organizeCmd, nil) }, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config.AppConfig.LogLevel = tc.level
+			prev := slog.Default()
+
+			origStdout := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Stdout = w
+			runErr := tc.run()
+			os.Stdout = origStdout
+			_ = w.Close()
+			out, _ := io.ReadAll(r)
+
+			if runErr != nil {
+				t.Fatalf("command failed: %v", runErr)
+			}
+			if !strings.Contains(string(out), "penguin info line") {
+				t.Errorf("the command's info line is not on standard output:\n%s", out)
+			}
+			if got := strings.Contains(string(out), "joker debug line"); got != tc.wantDebug {
+				t.Errorf("debug line on stdout = %v, want %v at log_level %q", got, tc.wantDebug, tc.level)
+			}
+			if slog.Default() != prev {
+				t.Error("the command did not restore the previous default logger")
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package books
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -289,4 +291,88 @@ func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
 
 	e := nextActivity(t, c)
 	assert.Contains(t, e.Summary, "alfred marker", "a core-owned record became an Activity entry: %+v", e)
+}
+
+// TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID: the operations
+// registry is built inside NewServer, during the books module's Register, and
+// captures slog.Default() there. The pipeline must already be the process
+// default at that point (core/app installs it before any Register runs), or
+// the registry's logger would be the stock default: after the later install
+// every op line would reach the pipeline as one INFO record without its
+// attributes, an Activity row of level info with no operation, and op debug
+// lines would never reach the per-op log store.
+//
+// The op below runs on the composed server's own registry, so its reporter
+// logger is the one built from what Register captured.
+func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
+	c := bootComposed(t, false, func(cfg *config.Config) { cfg.LogLevel = "debug" }, nil)
+	reg := c.srv.OpRegistry()
+	require.NotNil(t, reg)
+
+	require.NoError(t, reg.RegisterOp(opsregistry.OperationDef{
+		ID:           "test.batcave-alarm",
+		Plugin:       "test",
+		DisplayName:  "Batcave alarm",
+		Liveness:     opsregistry.LivenessManual,
+		ResumePolicy: opsregistry.ResumeDrop,
+		Run: func(_ context.Context, _ json.RawMessage, rep opsregistry.Reporter) error {
+			rep.Logger().Debug("batcave debug trace")
+			rep.Logger().Warn("batcave alarm raised", "wing", "east")
+			return nil
+		},
+	}))
+	reg.Start(t.Context())
+	t.Cleanup(func() { _ = reg.Shutdown(context.Background()) })
+
+	opID, err := reg.EnqueueOp(t.Context(), "test.batcave-alarm", nil)
+	require.NoError(t, err)
+
+	// 1. The pipeline sees the op's warning as a WARN record with op_id as an
+	// attribute, and its debug line (the level is debug).
+	var alarm string
+	require.Eventually(t, func() bool {
+		for _, line := range strings.Split(c.newLog.String(), "\n") {
+			if strings.Contains(line, "batcave alarm raised") {
+				alarm = line
+				return true
+			}
+		}
+		return false
+	}, 10*time.Second, 20*time.Millisecond, "the op warning never reached the pipeline: %s", c.newLog.String())
+	assert.Contains(t, alarm, "level=WARN", "the op's level was lost: %s", alarm)
+	assert.Contains(t, alarm, "op_id="+opID, "the op_id attribute was lost: %s", alarm)
+	assert.Contains(t, alarm, "wing=east", alarm)
+	assert.Contains(t, c.newLog.String(), "batcave debug trace", "the pipeline dropped the op's debug line")
+
+	// 2. The Activity row the tap made keeps the level and the operation.
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case e := <-c.srv.ActivityLogWriter().Chan():
+			if !strings.Contains(e.Summary, "batcave alarm raised") {
+				continue
+			}
+			assert.Equal(t, "warn", e.Level)
+			assert.Equal(t, opID, e.OperationID)
+			goto rowChecked
+		case <-deadline:
+			t.Fatal("the op warning made no Activity entry")
+		}
+	}
+rowChecked:
+
+	// 3. Both lines reach the per-op log store: fanoutHandler.Enabled asks
+	// the captured handler, which must be the pipeline at debug.
+	require.Eventually(t, func() bool {
+		rows, err := c.store.GetOpLogsV2(opID, 100)
+		if err != nil {
+			return false
+		}
+		var debug, warn bool
+		for _, r := range rows {
+			debug = debug || (r.Level == "debug" && strings.Contains(r.Message, "batcave debug trace"))
+			warn = warn || (r.Level == "warn" && strings.Contains(r.Message, "batcave alarm raised"))
+		}
+		return debug && warn
+	}, 10*time.Second, 50*time.Millisecond, "the op's debug and warn lines are not both in the per-op log store")
 }
