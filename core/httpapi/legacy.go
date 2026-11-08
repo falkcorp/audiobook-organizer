@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
 // last-edited: 2026-11-07
 
@@ -681,8 +681,7 @@ func collisionPlan(nodes []*node) ([]registration, []error) {
 	for i := range parent {
 		parent[i] = i
 	}
-	var find func(int) int
-	find = func(i int) int {
+	find := func(i int) int {
 		for parent[i] != i {
 			parent[i] = parent[parent[i]]
 			i = parent[i]
