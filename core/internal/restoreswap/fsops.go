@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/fsops.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 441df42a-91a3-4c8c-ad83-3f4a17489cdf
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -90,19 +90,16 @@ func mkdirAllSynced(fs vfs.FS, dir string) error {
 //	no   no   the item never existed (an absent sidecar or location file)
 //	yes  yes  see below
 //
-// A POSIX rename never leaves both names. The in-memory crash model of the
-// kit does when a kill falls between the two directory fsyncs: each
-// directory's synced entries are cloned on their own. twin reports, from
-// state the caller proves durable, that the two are one item's two names;
-// then the destination is discarded and the rename redone, which is the
-// same end state whichever copy is kept. Without that proof boot halts with
-// ErrSwapAmbiguous naming both paths and deletes nothing. The destination's
-// directory is fsynced before the source's, so a kill between them leaves
-// both names (recoverable), never neither.
+// Both names present is decided by twinProven: when the two are proven one
+// item's two names, the destination is discarded and the rename redone,
+// which is the same end state whichever copy is kept; otherwise boot halts
+// with ErrSwapAmbiguous naming both paths and deletes nothing. The
+// destination's directory is fsynced before the source's, so a kill
+// between them leaves both names (recoverable), never neither.
 //
 // Every case is decided by an explicit Stat: an in-memory rename replaces
 // an existing destination silently, so Rename is never trusted to refuse.
-func mv(fs vfs.FS, src, dst string, twin func() (bool, error)) error {
+func mv(fs vfs.FS, src, dst string, ghost func() (bool, error)) error {
 	srcOK, err := exists(fs, src)
 	if err != nil {
 		return err
@@ -115,11 +112,9 @@ func mv(fs vfs.FS, src, dst string, twin func() (bool, error)) error {
 	case !srcOK:
 		return nil
 	case dstOK:
-		proven := false
-		if twin != nil {
-			if proven, err = twin(); err != nil {
-				return err
-			}
+		proven, err := twinProven(fs, src, dst, ghost)
+		if err != nil {
+			return err
 		}
 		if !proven {
 			return fmt.Errorf("%w: %s and %s", ErrSwapAmbiguous, src, dst)
@@ -143,11 +138,49 @@ func mv(fs vfs.FS, src, dst string, twin func() (bool, error)) error {
 	return syncDir(fs, filepath.Dir(src))
 }
 
-// always is mv's twin proof for a rename whose destination nothing else
-// ever writes (a path in the swap's private namespace).
-func always() (bool, error) { return true, nil }
+// twinProven reports whether src and dst, both present, are one item's two
+// names (R1-21 review M3).
+//
+// On the real filesystem (vfs.Root(fs) == vfs.Default) rename(2) is atomic
+// and never leaves both names, so both present means something else wrote
+// one of them: an older binary with no P0a that created a store at an empty
+// live path, an operator's copy. They are twins only when they are the same
+// inode (os.SameFile over Lstat, two hard links of one file), which a
+// directory never is; ghost is ignored, so no reasoning about what "cannot"
+// write a path ever discards the only copy of an original.
+//
+// Any other filesystem has no inode identity, and the crash-matrix kit's
+// crashable in-memory one is the only one that leaves both names: a kill
+// between the two directory fsyncs of a rename clones each directory's
+// synced entries on its own. There ghost, the caller's proof from state it
+// shows durable, decides; nil proves nothing.
+func twinProven(fs vfs.FS, src, dst string, ghost func() (bool, error)) (bool, error) {
+	if vfs.Root(fs) == vfs.Default {
+		a, err := os.Lstat(src)
+		if err != nil {
+			return false, fmt.Errorf("restoreswap: lstat %s: %w", src, err)
+		}
+		b, err := os.Lstat(dst)
+		if err != nil {
+			return false, fmt.Errorf("restoreswap: lstat %s: %w", dst, err)
+		}
+		return os.SameFile(a, b), nil
+	}
+	if ghost == nil {
+		return false, nil
+	}
+	return ghost()
+}
 
-// existsProof is mv's twin proof "path exists".
+// memGhost is mv's in-memory proof for a rename whose destination nothing
+// but this rename writes (a path in the swap's private namespace, or a live
+// path step x emptied): both names there are the crash model's second name.
+// On the real filesystem mv ignores it (twinProven).
+func memGhost() (bool, error) { return true, nil }
+
+// existsProof is mv's in-memory proof "path exists" (step d: the live path
+// beside its staged source is the source's second name only when step c
+// moved the live item away). On the real filesystem mv ignores it.
 func existsProof(fs vfs.FS, path string) func() (bool, error) {
 	return func() (bool, error) { return exists(fs, path) }
 }
