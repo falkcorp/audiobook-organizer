@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -100,9 +100,30 @@ type HNSWEmbeddingStore struct {
 	gen uint64
 	// complete reports that graphs/meta are a complete projection of the Pebble
 	// rows, so a snapshot of them is safe to reuse at the next boot. A new store
-	// starts false; a snapshot import sets it, a stale discard clears it, and the
-	// hydrate path sets it via SetComplete. Guarded by mu.
+	// starts false; a fresh snapshot import sets it, a stale import clears it
+	// until Reconcile finishes, and the hydrate path sets it via SetComplete.
+	// Guarded by mu.
 	complete bool
+	// damaged records that a recovered library panic may have left a graph
+	// part-mutated. SetComplete(true) and Reconcile refuse to mark a damaged
+	// graph complete, so it is never exported; only replacing the graphs
+	// (a snapshot install or DiscardForRebuild) clears it. Guarded by mu.
+	damaged bool
+
+	// pendingReconcile reports that a stale or unverifiable snapshot was
+	// installed: the graph serves queries, but it is incomplete until
+	// Reconcile has brought it up to date with the Pebble rows (see
+	// hnsw_reconcile.go). Guarded by mu.
+	pendingReconcile bool
+	// touched holds, per entity type, the keys a live Upsert or Delete wrote
+	// while a reconcile was pending. Reconcile leaves them alone: the live
+	// write is newer than the Pebble rows it read. Guarded by mu.
+	touched map[string]map[string]struct{}
+	// tombstones counts, per entity type, the keys whose metadata is the
+	// tombstone marker (see hnswTombstoneKey). They are still graph nodes,
+	// because coder/hnsw cannot delete safely, but FindSimilar, Get and
+	// CountByType treat them as absent. Guarded by mu.
+	tombstones map[string]int
 
 	// exportedGen is the gen the on-disk snapshot is known to describe: the gen
 	// read before the last successful export's truth reads, or the gen a fresh
@@ -134,9 +155,10 @@ type HNSWEmbeddingStore struct {
 // itself infers dimensionality from the first vector.
 func NewHNSWEmbeddingStore(dims int) *HNSWEmbeddingStore {
 	return &HNSWEmbeddingStore{
-		graphs: make(map[string]*hnsw.Graph[string]),
-		meta:   make(map[string]map[string]map[string]string),
-		dims:   dims,
+		graphs:     make(map[string]*hnsw.Graph[string]),
+		meta:       make(map[string]map[string]map[string]string),
+		tombstones: make(map[string]int),
+		dims:       dims,
 	}
 }
 
@@ -160,23 +182,16 @@ func (s *HNSWEmbeddingStore) graphFor(entityType string) *hnsw.Graph[string] {
 
 // Upsert stores or replaces an entity's vector + metadata.
 func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID string, vec []float32, meta map[string]string) error {
-	if entityID == "" {
-		return fmt.Errorf("hnsw upsert: empty entityID")
+	if err := s.checkVector("hnsw upsert", entityID, vec); err != nil {
+		return err
 	}
-	if len(vec) == 0 {
-		return fmt.Errorf("hnsw upsert %s: empty vector", entityID)
-	}
-	if s.dims > 0 && len(vec) != s.dims {
-		return fmt.Errorf("hnsw upsert %s: vector dim %d != store dim %d", entityID, len(vec), s.dims)
-	}
-	// Reject zero-magnitude vectors: cosine of a zero vector is NaN, which would
-	// poison FindSimilar's similarity sort (NaN comparisons are undefined).
-	if !hasNonZeroMagnitude(vec) {
-		return fmt.Errorf("hnsw upsert %s: zero-magnitude vector", entityID)
+	if _, reserved := meta[hnswTombstoneKey]; reserved {
+		return fmt.Errorf("hnsw upsert %s: metadata key %q is reserved", entityID, hnswTombstoneKey)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.touchLocked(entityType, entityID)
 	g := s.graphFor(entityType)
 	// coder/hnsw v0.6.1 Graph.Add has known crash bugs: it panics "node not
 	// added" (graph.go:405) on some re-insert / concurrent-mutation states, and
@@ -194,24 +209,88 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 		s.markDamaged(entityType, entityID, err)
 		return err
 	}
-	if meta == nil {
-		meta = map[string]string{}
-	}
-	// Store a defensive copy so the caller can't mutate our sidecar.
-	s.meta[entityType][entityID] = copyMeta(meta)
+	// Store a defensive copy so the caller can't mutate our sidecar. An
+	// upsert of a tombstoned key replaces the marker, so the key is live again.
+	s.setMetaLocked(entityType, entityID, metaOrEmpty(meta))
 	s.gen++
+	return nil
+}
+
+// checkVector rejects a vector the graph must never receive; op names the
+// caller in the error.
+func (s *HNSWEmbeddingStore) checkVector(op, entityID string, vec []float32) error {
+	if entityID == "" {
+		return fmt.Errorf("%s: empty entityID", op)
+	}
+	if len(vec) == 0 {
+		return fmt.Errorf("%s %s: empty vector", op, entityID)
+	}
+	if s.dims > 0 && len(vec) != s.dims {
+		return fmt.Errorf("%s %s: vector dim %d != store dim %d", op, entityID, len(vec), s.dims)
+	}
+	// Reject zero-magnitude vectors: cosine of a zero vector is NaN, which would
+	// poison FindSimilar's similarity sort (NaN comparisons are undefined).
+	if !hasNonZeroMagnitude(vec) {
+		return fmt.Errorf("%s %s: zero-magnitude vector", op, entityID)
+	}
 	return nil
 }
 
 // markDamaged records that a recovered library panic may have left the graph
 // part-mutated: the store stops being a complete projection, so no export
-// writes the damaged graph over the last good snapshot. Caller must hold s.mu
-// (write lock).
+// writes the damaged graph over the last good snapshot, and it cannot be
+// marked complete again until the graphs are replaced (see damaged). Caller
+// must hold s.mu (write lock).
 func (s *HNSWEmbeddingStore) markDamaged(entityType, entityID string, err error) {
-	if s.complete {
+	if !s.damaged {
 		hnswLog.Warn("hnsw: graph %s may be damaged after a recovered panic on %s; snapshots stop until it is rebuilt: %v", entityType, entityID, err)
 	}
 	s.complete = false
+	s.damaged = true
+}
+
+// touchLocked records a live write while a reconcile is pending, so Reconcile
+// does not override it. Caller must hold s.mu (write lock).
+func (s *HNSWEmbeddingStore) touchLocked(entityType, entityID string) {
+	if !s.pendingReconcile {
+		return
+	}
+	if s.touched == nil {
+		s.touched = make(map[string]map[string]struct{})
+	}
+	byID := s.touched[entityType]
+	if byID == nil {
+		byID = make(map[string]struct{})
+		s.touched[entityType] = byID
+	}
+	byID[entityID] = struct{}{}
+}
+
+// setMetaLocked stores m as entityID's metadata and keeps the tombstone count
+// in step. The entity type's meta map must exist (graphFor creates it).
+// Caller must hold s.mu (write lock).
+func (s *HNSWEmbeddingStore) setMetaLocked(entityType, entityID string, m map[string]string) {
+	byID := s.meta[entityType]
+	if old, ok := byID[entityID]; ok && isTombstone(old) {
+		s.tombstones[entityType]--
+	}
+	if isTombstone(m) {
+		s.tombstones[entityType]++
+	}
+	byID[entityID] = m
+}
+
+// dropMetaLocked removes entityID's metadata and keeps the tombstone count in
+// step. Caller must hold s.mu (write lock).
+func (s *HNSWEmbeddingStore) dropMetaLocked(entityType, entityID string) {
+	byID, ok := s.meta[entityType]
+	if !ok {
+		return
+	}
+	if old, ok := byID[entityID]; ok && isTombstone(old) {
+		s.tombstones[entityType]--
+	}
+	delete(byID, entityID)
 }
 
 // safeAdd wraps coder/hnsw Graph.Add so a library panic becomes an error rather
@@ -250,7 +329,7 @@ func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string)
 		return nil, nil
 	}
 	m, ok := byID[entityID]
-	if !ok {
+	if !ok || isTombstone(m) {
 		return nil, nil
 	}
 	return copyMeta(m), nil
@@ -265,6 +344,7 @@ func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gen++ // always: a delete removes meta even when the graph has no such key
+	s.touchLocked(entityType, entityID)
 	if g, ok := s.graphs[entityType]; ok {
 		if _, err := s.safeDelete(g, entityID); err != nil {
 			slog.Warn("hnsw delete: recovered library panic; continuing best-effort",
@@ -272,9 +352,7 @@ func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID stri
 			s.markDamaged(entityType, entityID, err)
 		}
 	}
-	if byID, ok := s.meta[entityType]; ok {
-		delete(byID, entityID)
-	}
+	s.dropMetaLocked(entityType, entityID)
 	return nil
 }
 
@@ -322,7 +400,9 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 	out := make([]ChromemSimilarityResult, 0, len(nodes))
 	for _, n := range nodes {
 		m := byID[n.Key]
-		if !metadataMatches(m, filter) {
+		// A tombstone is a node Reconcile could not delete safely; it is
+		// absent for every query, filtered or not.
+		if isTombstone(m) || !metadataMatches(m, filter) {
 			continue
 		}
 		// v0.6.1 Search returns no score — recompute cosine similarity.
@@ -350,6 +430,7 @@ func (s *HNSWEmbeddingStore) FindSimilar(
 }
 
 // CountByType returns the number of indexed entities of the given type.
+// Tombstoned nodes are not counted.
 func (s *HNSWEmbeddingStore) CountByType(_ context.Context, entityType string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -357,7 +438,7 @@ func (s *HNSWEmbeddingStore) CountByType(_ context.Context, entityType string) (
 	if !ok {
 		return 0, nil
 	}
-	return g.Len(), nil
+	return g.Len() - s.tombstones[entityType], nil
 }
 
 // Close is a no-op for the in-memory store.
@@ -383,6 +464,15 @@ func copyMeta(m map[string]string) map[string]string {
 	cp := make(map[string]string, len(m))
 	maps.Copy(cp, m)
 	return cp
+}
+
+// metaOrEmpty returns a copy of m, or an empty map for nil, which is what
+// Upsert has always stored for a nil metadata argument.
+func metaOrEmpty(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return copyMeta(m)
 }
 
 // metadataMatches reports whether m satisfies every key/value in filter.
@@ -419,19 +509,28 @@ type SnapshotCompleteness interface{ SetComplete(bool) }
 // of the Pebble rows; only a complete graph is exported.
 //
 // A new store starts incomplete. A successful snapshot Import marks it complete,
-// a stale discard marks it incomplete, and the hydrate-from-Pebble path calls
+// a stale import leaves it incomplete until Reconcile, and the hydrate-from-Pebble path calls
 // SetComplete(false) before it starts and SetComplete(true) only when it ran to
 // the end.
+//
+// SetComplete(true) is refused while the graph is damaged (a recovered library
+// panic during an Upsert or Delete since the graphs were last replaced): a
+// hydrate that finishes after such a panic must not re-enable exports of the
+// graph it may have left part-mutated.
 func (s *HNSWEmbeddingStore) SetComplete(complete bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if complete && s.damaged {
+		hnswLog.Warn("hnsw: graph stays marked incomplete: a recovered library panic may have damaged it; it is rebuilt at the next boot")
+		return
+	}
 	s.complete = complete
-	s.mu.Unlock()
 }
 
 // Export writes the HNSW graph and metadata sidecar for each entityType to dir.
 // Files: hnsw-<entityType>.bin (graph) + hnsw-<entityType>.meta.json (metadata).
-// It writes no truth sidecar, so the next ImportWithStalenessCheck discards the
-// result; the server uses ExportIfDirty (periodically, and at stop when the
+// It writes no truth sidecar, so the next ImportWithStalenessCheck treats the
+// result as stale and reconciles it; the server uses ExportIfDirty (periodically, and at stop when the
 // shutdown budget allows) so the next boot can skip hydration. Returns
 // ErrHNSWIncomplete for a graph that is not a complete projection.
 func (s *HNSWEmbeddingStore) Export(dir string) error {
@@ -465,7 +564,7 @@ type ExportResult struct {
 // ExportWithTruth is Export plus a record of the Pebble truth count per entity
 // type, which ImportWithStalenessCheck needs to decide whether the snapshot has
 // fallen behind. truth may be nil, in which case no sidecar is written and the
-// next import will treat the snapshot as unverifiable and discard it.
+// next import treats the snapshot as unverifiable, so it is reconciled.
 //
 // Returns ErrHNSWIncomplete, writing nothing, when the graph is not a complete
 // projection of the Pebble rows (see SetComplete).
@@ -689,7 +788,7 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	}
 
 	// Drop the previous truth sidecars before the new graph lands, so a crash
-	// between the renames and the new sidecar leaves "unverifiable, discard"
+	// between the renames and the new sidecar leaves "unverifiable, reconcile"
 	// rather than an old count paired with a new graph.
 	for _, p := range pending {
 		_ = os.Remove(truthPath(dir, p.entityType))
@@ -710,7 +809,7 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	syncDir(dir)
 
 	// Truth sidecars. Written last and best-effort: a missing sidecar makes the
-	// next import discard this snapshot (safe), whereas failing the whole export
+	// next import reconcile this snapshot (safe), whereas failing the whole export
 	// would throw away a good graph over a bookkeeping file.
 	for _, p := range pending {
 		if truth == nil {
@@ -822,16 +921,30 @@ func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[st
 }
 
 // installSnapshot swaps in decoded graphs/meta, bumps gen, and sets the
-// completeness flag, all under one write lock. A complete install came from a
-// snapshot on disk that describes it exactly, so that gen is the export
-// baseline and the first ExportIfDirty after boot does not rewrite the same
-// snapshot.
-func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete bool) {
+// completeness and pending-reconcile flags, all under one write lock. A
+// complete install came from a snapshot on disk that describes it exactly, so
+// that gen is the export baseline and the first ExportIfDirty after boot does
+// not rewrite the same snapshot. Replacing the graphs clears damaged, and the
+// touched set starts empty, so a pending install records every live write from
+// here on.
+func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete, pending bool) {
+	tombs := make(map[string]int, len(meta))
+	for entityType, byID := range meta {
+		for _, m := range byID {
+			if isTombstone(m) {
+				tombs[entityType]++
+			}
+		}
+	}
 	s.mu.Lock()
 	s.graphs = graphs
 	s.meta = meta
+	s.tombstones = tombs
 	s.gen++
 	s.complete = complete
+	s.damaged = false
+	s.pendingReconcile = pending
+	s.touched = nil
 	s.exportedGen, s.exportedValid = s.gen, complete
 	s.mu.Unlock()
 }
@@ -850,7 +963,7 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 	if err != nil {
 		return err
 	}
-	s.installSnapshot(graphs, meta, true)
+	s.installSnapshot(graphs, meta, true, false)
 	hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 	return nil
 }
@@ -859,26 +972,25 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 // decoding the on-disk snapshot, it compares each entity type's recorded Pebble
 // row count (the truth sidecar) against a caller-supplied current truth count
 // (e.g. EmbeddingStore.CountByType, the emb: keyspace's source-of-truth
-// count). The HNSW snapshot fast-path otherwise skips Pebble hydration
-// unconditionally — after any unclean shutdown, every vector upserted since
-// the last export would be silently and permanently missing from the graph. If
-// the counts differ for any entity type at all (there is no tolerance), the
-// ENTIRE snapshot (all entity types) is discarded, not just the stale one, so
-// the caller's existing hydrate-from-Pebble fallback (which runs when
-// CountByType("book")==0) runs normally; no new hydration mechanism is
-// introduced here. A fresh snapshot leaves the store complete; a discard leaves
-// it empty and incomplete.
+// count). If every count matches, the snapshot is installed as complete and
+// hydration is skipped.
 //
-// Discarding all-or-nothing (rather than per-entity-type) is deliberate:
-// dedup/lifecycle.go's PostInit gates hydration on the "book" count alone,
-// and internal/dedup/engine.go's HydrateChromem re-populates BOTH "book" and
-// "author" together when it runs. A per-type discard that kept a fresh
-// "author" graph while discarding a stale "book" graph would cause
-// HydrateChromem to Add authors on top of the already-populated author
-// graph — the same Delete+Add per-layer-invariant class of bug
-// (HNSW-CRASH-2026-06-18) that safeAdd/safeDelete guard against, just
-// reached via a different path. Discarding every entity type when any one is
-// stale keeps hydration's "populate from empty" precondition intact.
+// If any count differs (there is no tolerance), or a type has no usable truth
+// sidecar, the snapshot is stale: after an unclean shutdown it lacks every
+// write since its export. It is still installed, so the graph serves queries
+// at once, but incomplete and pending a reconcile (NeedsReconcile). The dedup
+// engine's PostInit then runs Reconcile, which adds the keys the graph is
+// missing, tombstones the keys Pebble no longer indexes, and asks for a full
+// rebuild only when an indexed key's vector changed (see hnsw_reconcile.go).
+// Before review B2 a stale snapshot was discarded and the whole graph rebuilt
+// from Pebble, about 4 ms per Add at 1024 dimensions.
+//
+// A stale snapshot whose metadata does not list exactly the graph's keys is
+// discarded instead (empty and incomplete, every entity type), because
+// Reconcile reads the graph's key set from the metadata. The all-types discard
+// keeps HydrateChromem's "populate from empty" precondition: it refills both
+// "book" and "author", and a re-Add of a key a kept graph already holds is the
+// Delete+Add per-layer-invariant crash (HNSW-CRASH-2026-06-18).
 //
 // truth may be nil, in which case the staleness check is skipped entirely
 // (e.g. callers/tests without a Pebble store handy) and Import's result is
@@ -889,7 +1001,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		return err
 	}
 	if truth == nil {
-		s.installSnapshot(graphs, meta, true)
+		s.installSnapshot(graphs, meta, true, false)
 		hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 		return nil
 	}
@@ -919,23 +1031,28 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		// the warning that fired was a permanent fixture rather than a signal.
 		recorded, rerr := readSnapshotTruth(dir, entityType)
 		if rerr != nil {
-			hnswLog.Warn("hnsw import: no usable truth sidecar for %s; discarding snapshot (the next export will write one): %v", entityType, rerr)
+			hnswLog.Warn("hnsw import: no usable truth sidecar for %s; the snapshot will be reconciled against Pebble: %v", entityType, rerr)
 			stale = true
 			continue
 		}
 		if currentTruth != recorded.TruthCount {
-			slog.Info("hnsw import: pebble row count moved since export; discarding snapshot (will rehydrate from pebble)",
-				"entity_type", entityType, "recorded_truth", recorded.TruthCount,
-				"current_truth", currentTruth, "graph_count", g.Len())
+			hnswLog.Info("hnsw import: pebble row count for %s moved since export (recorded %d, current %d, graph %d); the snapshot will be reconciled against Pebble",
+				entityType, recorded.TruthCount, currentTruth, g.Len())
 			stale = true
 		}
 	}
-	if stale {
-		s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false)
+	if !stale {
+		s.installSnapshot(graphs, meta, true, false)
+		hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 		return nil
 	}
-	s.installSnapshot(graphs, meta, true)
-	hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
+	if err := snapshotKeysConsistent(graphs, meta); err != nil {
+		hnswLog.Warn("hnsw import: stale snapshot in %s cannot be reconciled, discarding it (the index rebuilds from Pebble): %v", dir, err)
+		s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false, false)
+		return nil
+	}
+	s.installSnapshot(graphs, meta, false, true)
+	hnswLog.Info("hnsw: stale snapshot imported from %s: %d entity type(s); it serves queries now and is reconciled against Pebble in the background", dir, n)
 	return nil
 }
 
