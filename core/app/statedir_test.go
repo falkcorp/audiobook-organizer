@@ -57,7 +57,7 @@ func TestResolveStateDir_Env(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	opts := Options{AppID: "hello", StateDir: filepath.Join(blocker, "state"), Logger: capture.Logger()}
 
 	// An explicit value is used, and created 0700.

@@ -690,7 +690,7 @@ func TestOpenRefusesSymlinkOutOfDir(t *testing.T) {
 }
 
 func TestRecorderLogsThroughInjectedLogger(t *testing.T) {
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	r, _ := startRecorder(t, Config{Logger: capture.Logger().With("subsystem", "flight-recorder")})
 	r.Stop()
 
@@ -742,7 +742,7 @@ func (c errCloser) Close() error { return c.err }
 // with %q at the call site, so even a handler that writes the message as is
 // cannot be made to print a second line.
 func TestRecorderQuotesOutsideValues(t *testing.T) {
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	r := New(Config{Logger: capture.Logger()})
 	r.closeLogged(errCloser{err: errors.New("disk full\nlevel=INFO msg=forged")}, "joker\r.trace")
 

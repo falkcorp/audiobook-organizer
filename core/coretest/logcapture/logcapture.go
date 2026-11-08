@@ -3,7 +3,10 @@
 // guid: 155a2aa9-906e-487e-8f5d-2be349726953
 // last-edited: 2026-11-07
 
-// Package coretest holds test support for core's own tests.
+// Package logcapture records the slog records a logger writes, for tests.
+// It is a leaf: it imports only the standard library, so the internal
+// tests of every core package (kernel and app included) can use it, which
+// they cannot do with coretest, whose harness imports app (R1-37).
 package logcapture
 
 import (
@@ -14,28 +17,28 @@ import (
 	"testing"
 )
 
-// LogCapture records the slog records written through Logger. It never touches
+// Capture records the slog records written through Logger. It never touches
 // slog.Default (03 R5): the logger it returns is handed to the code under test.
-type LogCapture struct {
+type Capture struct {
 	mu    sync.Mutex
 	recs  []slog.Record
 	level slog.Level
 }
 
-// NewLogCapture returns an empty capture at level Debug. It holds no global
+// New returns an empty capture at level Debug. It holds no global
 // state, so it registers no cleanup.
-func NewLogCapture(tb testing.TB) *LogCapture {
+func New(tb testing.TB) *Capture {
 	tb.Helper()
-	return &LogCapture{level: slog.LevelDebug}
+	return &Capture{level: slog.LevelDebug}
 }
 
 // Logger returns a logger whose records are captured by c.
-func (c *LogCapture) Logger() *slog.Logger {
+func (c *Capture) Logger() *slog.Logger {
 	return slog.New(&captureHandler{c: c})
 }
 
 // Records returns copies of the captured records, in write order.
-func (c *LogCapture) Records() []slog.Record {
+func (c *Capture) Records() []slog.Record {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]slog.Record, len(c.recs))
@@ -46,7 +49,7 @@ func (c *LogCapture) Records() []slog.Record {
 }
 
 // Messages returns the message of each captured record, in write order.
-func (c *LogCapture) Messages() []string {
+func (c *Capture) Messages() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]string, len(c.recs))
@@ -56,11 +59,11 @@ func (c *LogCapture) Messages() []string {
 	return out
 }
 
-// captureHandler writes into its LogCapture. Handlers derived with WithAttrs
+// captureHandler writes into its Capture. Handlers derived with WithAttrs
 // or WithGroup share the same capture; the attrs and groups they add are
 // carried onto each record they write, nested as slog's contract describes.
 type captureHandler struct {
-	c      *LogCapture
+	c      *Capture
 	attrs  []slog.Attr // already nested under the groups open when they were added
 	groups []string    // open groups, outermost first
 }

@@ -25,7 +25,7 @@ import (
 // seed migration, settings and /api/core/v1/modules are added by the rows
 // that land storage, tasks, config and modulehttp.
 func TestHelloEndToEnd(t *testing.T) {
-	capture := logcapture.NewLogCapture(t)
+	capture := logcapture.New(t)
 	a, err := app.New(t.Context(), app.Options{
 		AppID:    "hello",
 		Logger:   capture.Logger(),
@@ -77,7 +77,7 @@ func TestHelloEndToEnd(t *testing.T) {
 }
 
 // listening waits for the kernel's "listening" record and returns its addr.
-func listening(t *testing.T, c *logcapture.LogCapture, done <-chan error) string {
+func listening(t *testing.T, c *logcapture.Capture, done <-chan error) string {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {

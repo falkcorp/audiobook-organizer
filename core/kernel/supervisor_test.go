@@ -263,7 +263,7 @@ func TestStopTimeoutAbandons(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				rec := &recorder{}
 				release := make(chan struct{})
-				capture := logcapture.NewLogCapture(t)
+				capture := logcapture.New(t)
 				joker := mod("joker", func(r *module.Registrar) error {
 					r.Hook(module.Hook{Name: "joker.laugh", Stop: func(context.Context) error {
 						rec.add("stop:joker.laugh")
@@ -587,7 +587,7 @@ func TestStartRollback_HungStartCapped(t *testing.T) {
 func TestRequestRestart_BeforeReadyIgnored(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := &recorder{}
-		capture := logcapture.NewLogCapture(t)
+		capture := logcapture.New(t)
 		var deps module.Deps
 		lucius := mod("lucius", func(r *module.Registrar) error {
 			deps = r.Deps()

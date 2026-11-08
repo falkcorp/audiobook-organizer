@@ -1,0 +1,250 @@
+// file: core/coretest/harness.go
+// version: 1.0.0
+// guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
+// last-edited: 2026-11-07
+
+// Package coretest is core's public test kit (06 §6.4.8): an in-process App
+// harness that boots core through app.New, a client that sends requests to
+// the App's handler, and the R6 and G1 assertions. It is test support: it
+// may import any core package, and no non-test core package imports it. The
+// internal tests of app, kernel and the packages below them cannot import it
+// either (Go refuses the cycle through app), so the log capture they share
+// lives in the leaf coretest/logcapture.
+package coretest
+
+import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
+	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
+)
+
+// harnessAppID is the AppID every harness boots with.
+const harnessAppID = "coretest"
+
+// Harness is an in-process App (06 §6.4.8): a temp state directory
+// (Options.StateDir), no listeners; requests go straight to App.Handler().
+//
+// At release R1 the App has no storage (the in-memory Pebble arrives with
+// R1-20's storage row), no config layer and no core authentication, and
+// app.New starts no hook, worker or listener (06 §6.5.2's start order is
+// Run's, and Run opens a listener). A harness therefore boots P1 to P8 and
+// serves requests; nothing it boots runs on its own. Each harness owns its
+// logger (a logcapture.Capture handed to the App as Options.Logger), its state
+// directory and its App: it never touches slog.Default or any other process
+// global (03 R5), so harnesses run in parallel tests.
+type Harness struct {
+	tb       testing.TB
+	app      *app.App
+	logs     *logcapture.Capture
+	stateDir string
+	mods     map[module.ID]module.Module  // every module passed to WithModules, by ID (the first of a duplicate)
+	watched  map[module.ID]*watchedModule // the modules that boot disabled, as handed to app.New
+	users    map[string][]rbac.Permission // WithUser's principals
+}
+
+// Option configures a Harness.
+type Option func(*settings)
+
+// settings is what the options record before Boot reads them.
+type settings struct {
+	mods     []module.Module
+	disabled []module.ID
+	config   map[string]any
+	users    map[string][]rbac.Permission
+}
+
+// WithModules adds modules to the App, in order. With none, the harness boots
+// core with zero modules (gate G7).
+func WithModules(mods ...module.Module) Option {
+	return func(s *settings) { s.mods = append(s.mods, mods...) }
+}
+
+// WithDisabled disables the named modules, which must also be passed to
+// WithModules. The spec sets core.modules.<id>.enabled=false in the boot
+// record; until config lands (F3) no layer can set that key and the kernel
+// reads only Manifest.DefaultEnabled, so at R1 the harness serves the
+// module's manifest with DefaultEnabled false. App.Modules reports the
+// module disabled with the reason "default"; F3 switches this to the boot
+// record and the reason to "config".
+func WithDisabled(ids ...module.ID) Option {
+	return func(s *settings) { s.disabled = append(s.disabled, ids...) }
+}
+
+// WithConfig is the config overrides layer. Core config lands at F3; until
+// then Boot refuses a non-empty map, naming its keys, because a setting the
+// App never reads would let a test pass for the wrong reason.
+func WithConfig(kv map[string]any) Option {
+	return func(s *settings) {
+		if s.config == nil {
+			s.config = map[string]any{}
+		}
+		maps.Copy(s.config, kv)
+	}
+}
+
+// WithUser pre-seeds a principal named name holding exactly perms. At R1 it
+// only records the principal: core authentication lands at R2's identity
+// flip, and until then As fails the test (see As).
+func WithUser(name string, perms ...rbac.Permission) Option {
+	return func(s *settings) {
+		if s.users == nil {
+			s.users = map[string][]rbac.Permission{}
+		}
+		s.users[name] = slices.Clone(perms)
+	}
+}
+
+// New boots core with the given options. With no WithModules option it boots
+// core with ZERO modules (gate G7). It fails the test on any boot error.
+//
+// The spec registers t.Cleanup for shutdown. At R1 there is nothing to
+// register: app.New starts no hook, worker or listener, and *app.App has no
+// method that closes what boot built. The metrics Provider P5 built stays
+// open until the App is garbage collected; it is pull-only (a Prometheus
+// registry of its own), so it holds no goroutine and touches no process
+// global. The row that gives the App a close path, or lets the harness Run
+// in process, registers the cleanup.
+func New(t testing.TB, opts ...Option) *Harness {
+	t.Helper()
+	h, err := Boot(t, opts...)
+	if err != nil {
+		t.Fatalf("coretest: boot: %v", err)
+	}
+	return h
+}
+
+// Boot is New without failing the test: it returns the boot error, for
+// validation tests that expect a *module.ValidationError. An error from
+// app.New is returned unwrapped; a nil module goes to app.New as given, so it
+// comes back as the kernel's *module.ValidationError too.
+func Boot(t testing.TB, opts ...Option) (*Harness, error) {
+	t.Helper()
+	var s settings
+	for _, o := range opts {
+		if o != nil {
+			o(&s)
+		}
+	}
+	if len(s.config) > 0 {
+		return nil, fmt.Errorf("coretest: WithConfig needs core config, which lands at F3 (keys %s)",
+			strings.Join(slices.Sorted(maps.Keys(s.config)), ", "))
+	}
+	h := &Harness{
+		tb:      t,
+		logs:    logcapture.New(t),
+		mods:    map[module.ID]module.Module{},
+		watched: map[module.ID]*watchedModule{},
+		users:   s.users,
+	}
+	// A nil module and a duplicate ID are the kernel's to refuse (a
+	// ValidationError), so every module goes to app.New; the map keeps the
+	// first module of an ID.
+	for _, m := range s.mods {
+		if m == nil {
+			continue
+		}
+		if id := m.Manifest().ID; h.mods[id] == nil {
+			h.mods[id] = m
+		}
+	}
+	disable := map[module.ID]bool{}
+	var errs []error
+	for _, id := range s.disabled {
+		if h.mods[id] == nil {
+			errs = append(errs, fmt.Errorf("coretest: WithDisabled(%q): no module with that ID was passed to WithModules", id))
+			continue
+		}
+		disable[id] = true
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	// Only a module that boots disabled is wrapped: one WithDisabled names,
+	// or one whose own manifest says DefaultEnabled false. An enabled module
+	// goes to app.New as the value the test passed.
+	mods := make([]module.Module, len(s.mods))
+	for i, m := range s.mods {
+		mods[i] = m
+		if m == nil {
+			continue
+		}
+		id := m.Manifest().ID
+		if h.mods[id] != m || !(disable[id] || !m.Manifest().DefaultEnabled) {
+			continue
+		}
+		w := &watchedModule{Module: m, disabled: disable[id]}
+		h.watched[id] = w
+		mods[i] = w
+	}
+	h.stateDir = t.TempDir()
+	appOpts := app.Options{
+		AppID:    harnessAppID,
+		StateDir: h.stateDir,
+		// Non-nil and empty, so nothing reads the process's flags or env.
+		Args:   []string{},
+		Env:    []string{},
+		Logger: h.logs.Logger(),
+	}
+	a, err := app.New(t.Context(), appOpts, mods...)
+	if err != nil {
+		return nil, err
+	}
+	h.app = a
+	return h, nil
+}
+
+// App returns the booted App.
+func (h *Harness) App() *app.App { return h.app }
+
+// As returns an authenticated client for a user seeded with WithUser. Core
+// authentication lands at R2's identity flip (F4-08 fills this body); until
+// then As fails the test.
+func (h *Harness) As(user string) *Client {
+	h.tb.Helper()
+	if _, ok := h.users[user]; !ok {
+		h.tb.Fatalf("coretest: As(%q): no WithUser seeded that user", user)
+		return nil
+	}
+	h.tb.Fatalf("coretest: As needs core authentication, which lands at R2's identity flip")
+	return nil
+}
+
+// Anonymous returns a client whose requests carry no principal.
+func (h *Harness) Anonymous() *Client { return &Client{handler: h.app.Handler()} }
+
+// watchedModule is a module that boots disabled, as the harness hands it to
+// app.New: it serves the manifest with DefaultEnabled false when WithDisabled
+// names it, and records whether the kernel called Register, which
+// AssertModuleInert reads (06 §6.3 A5: a disabled module's Register, and so
+// every hook and worker it would record, is never invoked). The kernel calls
+// only Manifest and Register; a later optional module interface the kernel
+// asserts of a disabled module must be forwarded here.
+type watchedModule struct {
+	module.Module
+	disabled   bool
+	registered atomic.Bool
+}
+
+// Manifest is the module's manifest, disabled when WithDisabled names it.
+func (w *watchedModule) Manifest() module.Manifest {
+	m := w.Module.Manifest()
+	if w.disabled {
+		m.DefaultEnabled = false
+	}
+	return m
+}
+
+// Register records the call and runs the module's Register.
+func (w *watchedModule) Register(r *module.Registrar) error {
+	w.registered.Store(true)
+	return w.Module.Register(r)
+}
