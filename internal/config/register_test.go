@@ -1,6 +1,6 @@
 // file: internal/config/register_test.go
-// version: 1.1.0
-// last-edited: 2026-08-23
+// version: 1.1.1
+// last-edited: 2026-11-08
 
 package config_test
 
@@ -14,9 +14,8 @@ import (
 )
 
 func TestConfigUpdateRegistration(t *testing.T) {
-	c := serviceregistry.NewContainer().
-		Override("store", mocks.NewMockStore(t)).
-		Include("configupdate")
+	c := serviceregistry.NewContainerFrom(config.ServiceDefs()...).
+		Override("store", mocks.NewMockStore(t))
 	if err := c.Build(t.Context()); err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -33,7 +32,7 @@ func TestConfigUpdateRegistration(t *testing.T) {
 // Override'd rather than built by a factory.
 func TestGetConfig_ReturnsOverriddenConfig(t *testing.T) {
 	want := &config.Config{RootDir: "/rootdir-marker"}
-	c := serviceregistry.NewContainer().Override(serviceregistry.KeyConfig, want)
+	c := serviceregistry.NewContainerFrom().Override(serviceregistry.KeyConfig, want)
 	if err := c.Build(t.Context()); err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -54,25 +53,19 @@ func TestGetConfig_ReturnsOverriddenConfig(t *testing.T) {
 // mistyped independently at the call site), not a change in runtime
 // behavior.
 func TestGetConfig_UndeclaredDepPanics(t *testing.T) {
-	// No serviceregistry.ResetForTest here: this test only adds a new,
-	// uniquely-named ServiceDef ("naughty-config-consumer") rather than
-	// re-registering anything that collides with — or needs to survive
-	// past — the package's real "configupdate" registration, so it
-	// doesn't disturb other tests in this binary that depend on it.
-	//
 	// "naughty" does NOT declare serviceregistry.KeyConfig in Needs but
-	// calls config.GetConfig during Build.
-	serviceregistry.Register(serviceregistry.ServiceDef{
+	// calls config.GetConfig during Build. Its container holds only this def
+	// and the config override.
+	naughty := serviceregistry.ServiceDef{
 		Name: "naughty-config-consumer",
 		Build: func(c *serviceregistry.Container) (any, error) {
 			_ = config.GetConfig(c)
 			return nil, nil
 		},
-	})
+	}
 
-	c := serviceregistry.NewContainer().
-		Override(serviceregistry.KeyConfig, &config.Config{}).
-		Include("naughty-config-consumer")
+	c := serviceregistry.NewContainerFrom(naughty).
+		Override(serviceregistry.KeyConfig, &config.Config{})
 	defer func() {
 		r := recover()
 		if r == nil {

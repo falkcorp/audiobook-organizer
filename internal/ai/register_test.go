@@ -1,12 +1,13 @@
 // file: internal/ai/register_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 7e1a4c9b-2d3f-4b8e-a6c5-0f9d8e7b6a51
-// last-edited: 2026-09-11
+// last-edited: 2026-11-08
 
 package ai
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,14 +16,21 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
+// defsNamed returns the package's own service defs whose names are listed, so a
+// test builds one service in isolation as the include-by-name container did.
+func defsNamed(names ...string) []serviceregistry.ServiceDef {
+	return slices.DeleteFunc(ServiceDefs(), func(d serviceregistry.ServiceDef) bool {
+		return !slices.Contains(names, d.Name)
+	})
+}
+
 // buildEmbedClient builds only the embedclient service against the given config,
 // with a nil embedding store override so no cache is wired.
 func buildEmbedClient(t *testing.T, cfg *config.Config) *EmbeddingClient {
 	t.Helper()
-	c := serviceregistry.NewContainer().
+	c := serviceregistry.NewContainerFrom(defsNamed("embedclient")...).
 		Override(serviceregistry.KeyConfig, cfg).
-		Override(serviceregistry.KeyEmbeddingStore, (*database.EmbeddingStore)(nil)).
-		Include("embedclient")
+		Override(serviceregistry.KeyEmbeddingStore, (*database.EmbeddingStore)(nil))
 	if err := c.Build(context.Background()); err != nil {
 		t.Fatalf("build embedclient: %v", err)
 	}
@@ -33,9 +41,8 @@ func buildEmbedClient(t *testing.T, cfg *config.Config) *EmbeddingClient {
 // buildLLMParser builds only the llmparser service against the given config.
 func buildLLMParser(t *testing.T, cfg *config.Config) *OpenAIParser {
 	t.Helper()
-	c := serviceregistry.NewContainer().
-		Override(serviceregistry.KeyConfig, cfg).
-		Include("llmparser")
+	c := serviceregistry.NewContainerFrom(defsNamed("llmparser")...).
+		Override(serviceregistry.KeyConfig, cfg)
 	if err := c.Build(context.Background()); err != nil {
 		t.Fatalf("build llmparser: %v", err)
 	}
