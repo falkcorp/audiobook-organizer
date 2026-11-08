@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -149,10 +149,12 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
-	// The search index opens in the start hook, a long step: it asks the
-	// service manager for start time through the kernel's Deps.ExtendStart,
-	// which also extends the hook's own start window (05-health §5H.3.4).
-	srv.SetStartExtender(r.Deps().ExtendStart)
+	// The search index opens in the start hook, a long step: it asks for
+	// start time through the kernel's Deps.ExtendStart, which extends the
+	// service manager's deadline and this hook's own start window (05-health
+	// §5H.3.4).
+	extendStart := r.Deps().ExtendStart
+	srv.SetStartExtender(extendStart)
 	// The drift check: the reviewed manifest must describe this engine
 	// exactly, and its routes must lie inside the prefixes Manifest declared
 	// (the router refuses a route outside them at P7).
@@ -181,7 +183,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		// HEAD's start up to the listener (the op gates, the service
 		// container, the search index, the warmers); the kernel opens the
 		// listener after it (start step 7).
-		Start: func(ctx context.Context) error { return srv.StartHook(ctx, cfg) },
+		Start: func(ctx context.Context) error {
+			// HEAD ran this start under the unit's TimeoutStartSec (300 s),
+			// and the kernel's own window is core.lifecycle.start_timeout
+			// (60 s): ask for the step budget up front so the whole hook,
+			// the op gates and the service container included, is not cut
+			// off sooner than HEAD's was. Later steps extend again.
+			extendStart("books server start")
+			return srv.StartHook(ctx, cfg)
+		},
 		// HEAD's stop after the listener drained, within the budget left.
 		Stop: srv.StopHook,
 	})
