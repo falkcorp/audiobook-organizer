@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_persist_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-11-08
 
@@ -73,10 +73,24 @@ func exportTestVec(rng *rand.Rand) []float32 {
 func newExportTestStore(t *testing.T, n int) *database.HNSWEmbeddingStore {
 	t.Helper()
 	rng := rand.New(rand.NewSource(42))
-	s := database.NewHNSWEmbeddingStore(exportTestDim)
+	s := newBoundImportStore(t)
 	for _, id := range batmanIDs[:n] {
 		require.NoError(t, s.Upsert(context.Background(), "book", id, exportTestVec(rng), map[string]string{"k": id}))
 	}
+	return s
+}
+
+// newBoundImportStore returns an empty store bound to a fresh in-memory
+// database and no embedding model, as the server binds the store it boots
+// with: a store with no database bound neither writes the clean-stop marker
+// nor trusts one (R1-15 round-2 review, S5).
+func newBoundImportStore(t *testing.T) *database.HNSWEmbeddingStore {
+	t.Helper()
+	ps, err := database.NewPebbleStoreInMemory("hnsw-persist")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	s := database.NewHNSWEmbeddingStore(exportTestDim)
+	s.BindTruthSource(ps.DB(), "")
 	return s
 }
 
@@ -229,7 +243,7 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		require.True(t, res.Exported)
 		requireCleanStop(t, s, dir)
 
-		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
+		fresh := newBoundImportStore(t)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
 		assert.False(t, fresh.NeedsReconcile(), "the snapshot is accepted as fresh")
 		n, err := fresh.CountByType(ctx, "book")
@@ -277,7 +291,7 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		// count alone cannot tell fresh from stale: NeedsReconcile does. The
 		// repaired snapshot is the graph, so a clean stop may vouch for it.
 		requireCleanStop(t, s, dir)
-		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
+		fresh := newBoundImportStore(t)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
 		assert.False(t, fresh.NeedsReconcile(), "the repaired snapshot is accepted as fresh")
 		n, err := fresh.CountByType(ctx, "book")
@@ -310,7 +324,7 @@ func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 	assert.ErrorIs(t, none.Export(t.TempDir()), database.ErrHNSWIncomplete)
 
 	// Fresh by the staleness check (clean stop, count unchanged): stays complete.
-	fresh := database.NewHNSWEmbeddingStore(exportTestDim)
+	fresh := newBoundImportStore(t)
 	require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return 4, nil }))
 	assert.False(t, fresh.NeedsReconcile())
 	n, err := fresh.CountByType(ctx, "book")
@@ -320,7 +334,7 @@ func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 
 	// Stale (the fresh import took the marker, and the count moved too):
 	// installed for queries, but incomplete and pending a reconcile.
-	stale := database.NewHNSWEmbeddingStore(exportTestDim)
+	stale := newBoundImportStore(t)
 	require.NoError(t, stale.ImportWithStalenessCheck(dir, func(string) (int, error) { return 5, nil }))
 	assert.True(t, stale.NeedsReconcile())
 	n, err = stale.CountByType(ctx, "book")
@@ -429,7 +443,7 @@ func TestExportIfDirty_CleanAfterFreshImport(t *testing.T) {
 	require.NoError(t, src.ExportWithTruth(dir, truth))
 	requireCleanStop(t, src, dir)
 
-	imp := database.NewHNSWEmbeddingStore(exportTestDim)
+	imp := newBoundImportStore(t)
 	require.NoError(t, imp.ImportWithStalenessCheck(dir, truth))
 	res, err := imp.ExportIfDirty(dir, truth)
 	require.NoError(t, err)

@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-11-08
 
@@ -517,7 +517,7 @@ func TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall(t *testing.T) 
 func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
-	s1 := NewHNSWEmbeddingStore(dim)
+	s1 := newBoundHNSW(t, dim)
 	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing
 	// A clean stop, so only the moved count can make the snapshot stale.
 	markCleanStop(t, s1, dir)
 
-	s2 := NewHNSWEmbeddingStore(dim)
+	s2 := newBoundHNSW(t, dim)
 	// Pebble now holds 5 — four upserts landed after the export.
 	truth := func(entityType string) (int, error) {
 		if entityType == "book" {
@@ -571,7 +571,7 @@ func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing
 func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
-	s1 := NewHNSWEmbeddingStore(dim)
+	s1 := newBoundHNSW(t, dim)
 	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T
 	}
 	markCleanStop(t, s1, dir) // the process stopped cleanly after that export
 
-	s2 := NewHNSWEmbeddingStore(dim)
+	s2 := newBoundHNSW(t, dim)
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}
@@ -646,7 +646,7 @@ func TestHNSW_ImportWithStalenessCheck_ReconcilesSnapshotWithoutTruthSidecar(t *
 func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
-	s1 := NewHNSWEmbeddingStore(dim)
+	s1 := newBoundHNSW(t, dim)
 	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert book: %v", err)
 	}
@@ -662,7 +662,7 @@ func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing
 	// A clean stop, so only the moved "book" count can make the snapshot stale.
 	markCleanStop(t, s1, dir)
 
-	s2 := NewHNSWEmbeddingStore(dim)
+	s2 := newBoundHNSW(t, dim)
 	// "book" is stale (truth moved 1 -> 5); "author" is fresh (1 == 1).
 	truth := func(entityType string) (int, error) {
 		if entityType == "book" {
@@ -694,7 +694,7 @@ func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing
 func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
-	s1 := NewHNSWEmbeddingStore(dim)
+	s1 := newBoundHNSW(t, dim)
 	if err := s1.Upsert(ctx, "book", "B1", []float32{1, 0, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	}
 	markCleanStop(t, s1, dir)
 
-	s2 := NewHNSWEmbeddingStore(dim)
+	s2 := newBoundHNSW(t, dim)
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}

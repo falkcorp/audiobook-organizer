@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_verdict_watch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f0c0b8e-6a0f-4a43-9d7e-2b8c1f4e9a61
 // last-edited: 2026-11-09
 
@@ -368,11 +368,11 @@ func TestCleanStop_AnotherEmbeddingModelReconciles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			src, truth := exportedRogues(t, dir)
-			src.BindTruthSource(nil, "bge-m3")
+			src.BindTruthSource(verdictCoreDB(t), "bge-m3")
 			markCleanStop(t, src, dir)
 
 			next := NewHNSWEmbeddingStore(4)
-			next.BindTruthSource(nil, tc.next)
+			next.BindTruthSource(verdictCoreDB(t), tc.next)
 			if err := next.ImportWithStalenessCheck(dir, truth); err != nil {
 				t.Fatal(err)
 			}
