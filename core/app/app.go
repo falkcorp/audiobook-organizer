@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -82,6 +82,19 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 // cancellation returns nil; a Stop hook's error or work abandoned at the
 // budget is returned joined with the cause of the stop.
 func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
+
+// Close releases what New built (the metrics Provider, then the App's
+// logging) for an App whose Run will not be called, because a step the
+// composition root runs between New and Run failed. Without it the
+// Provider's last OTLP export and span batch are dropped when the process
+// exits. It is the close Run's stop order ends with, bounded by ctx's
+// deadline (core.shutdown.budget's default without one) and given at least
+// the same floor.
+//
+// Once Run has begun, Close does nothing and returns nil, so a composition
+// root may defer it unconditionally. A Run after Close returns an error. It
+// does not undo InstallProcessDefaults; that call's restore does.
+func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New.

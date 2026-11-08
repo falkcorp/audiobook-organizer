@@ -1,7 +1,7 @@
 // file: core/kernel/supervisor_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: e9d797ab-e187-456c-b23a-12fae047e7b9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
 
@@ -424,6 +425,89 @@ func TestRunTwice(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// traced is c with an OTLP span exporter, so the Provider's TracerProvider
+// is the SDK's: its spans stop recording once the Provider has shut down,
+// which is how these tests see whether closeCore ran. The endpoint is
+// TEST-NET and never dialled: no span is ended while the exporter is live.
+func traced(c Config) Config {
+	c.Telemetry = &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}
+	return c
+}
+
+// recording reports whether a span started now on k's TracerProvider records.
+func recording(t *testing.T, k *Kernel) bool {
+	t.Helper()
+	_, span := k.Provider().TracerProvider().Tracer("batcomputer").Start(t.Context(), "probe")
+	return span.IsRecording()
+}
+
+// TestClose_WithoutRun (R1-15 review NIT): a composition root whose boot
+// fails between New and Run closes the kernel with Close, which runs the
+// close Run's stop order ends with: the Provider shuts down and its spans
+// stop recording. Run after Close is refused, and a second Close returns the
+// first one's result.
+func TestClose_WithoutRun(t *testing.T) {
+	k := mustNew(t, traced(testConfig(t)))
+	if !recording(t, k) {
+		t.Fatal("the SDK TracerProvider is not recording before Close")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := k.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if recording(t, k) {
+		t.Error("spans still record after Close: the Provider was not shut down")
+	}
+	if err := k.Run(t.Context()); !errors.Is(err, errRunAfterClose) {
+		t.Errorf("Run after Close = %v, want errRunAfterClose", err)
+	}
+	if err := k.Close(ctx); err != nil {
+		t.Errorf("second Close = %v, want the first one's nil", err)
+	}
+}
+
+// TestClose_AfterRunBegan: once Run has begun, Close returns nil and leaves
+// the close to Run's stop order, so a composition root may defer it
+// unconditionally. During the run the Provider keeps recording; after the
+// stop it does not, and Close then still returns nil.
+func TestClose_AfterRunBegan(t *testing.T) {
+	rec := &recorder{}
+	k := mustNew(t, traced(supervised(t, rec)))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := run(ctx, k)
+	deadline := time.Now().Add(10 * time.Second)
+	for rec.index("ready") < 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the kernel never became ready: %v", rec.list())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := k.Close(t.Context()); err != nil {
+		t.Fatalf("Close during Run = %v, want nil", err)
+	}
+	if !recording(t, k) {
+		t.Fatal("Close during Run shut the Provider down under the running app")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run never returned")
+	}
+	if recording(t, k) {
+		t.Error("spans still record after Run's stop: its close did not run")
+	}
+	if err := k.Close(t.Context()); err != nil {
+		t.Errorf("Close after Run = %v, want nil", err)
+	}
 }
 
 // TestStopBudget_LateHooksNotAwaited is the review's M1: with the budget

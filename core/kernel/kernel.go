@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -160,7 +160,7 @@ type Kernel struct {
 	workers   []moduleWorker
 	lifecycle *Lifecycle
 
-	ran       atomic.Bool
+	state     atomic.Int32 // stateNew, then stateRunning (Run) or stateClosed (Close), once
 	closeOnce sync.Once
 	closeErr  error
 }

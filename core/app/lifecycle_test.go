@@ -1,5 +1,5 @@
 // file: core/app/lifecycle_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7e3a9c51-2f8b-4d06-b1c4-5a9e0d7f3b28
 // last-edited: 2026-11-08
 
@@ -200,5 +200,37 @@ func TestTelemetry_TracingReachesProvider(t *testing.T) {
 	}
 	if slices.Contains(a.Metrics().Degraded(), metrics.DegradedTracingDisabled) {
 		t.Fatalf("tracing degraded: %v", a.Metrics().Degraded())
+	}
+}
+
+// TestClose_ReleasesAnAppThatNeverRan (R1-15 review NIT): serve's boot can
+// fail between New and Run (InstallProcessDefaults, books.Attach). Close is
+// how the composition root releases that App: its Provider shuts down, so
+// its spans stop recording, and a Run after Close is refused rather than
+// serving on a closed Provider.
+func TestClose_ReleasesAnAppThatNeverRan(t *testing.T) {
+	a, err := New(t.Context(), Options{AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{},
+		Telemetry: &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording := func() bool {
+		// Never ended, so the TEST-NET exporter is never dialled.
+		_, span := a.Metrics().TracerProvider().Tracer("batcomputer").Start(t.Context(), "probe")
+		return span.IsRecording()
+	}
+	if !recording() {
+		t.Fatal("the App's SDK TracerProvider is not recording before Close")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if recording() {
+		t.Error("spans still record after Close: the Provider was not shut down")
+	}
+	if err := a.Run(t.Context()); err == nil {
+		t.Error("Run after Close returned nil; want it refused")
 	}
 }

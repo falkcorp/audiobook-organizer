@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -46,10 +47,21 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 		return err
 	}
 	// A failure before Run leaves the server Register built with nothing to
-	// stop it: release it before the store closes. After the start hook has
-	// begun, Release does nothing.
-	defer books.Release(mod)
-	a, err := app.New(ctx, opts, mod)
+	// stop it, and the App's metrics Provider and logging open, so the OTLP
+	// export and the span batcher (the failing boot's last spans) would be
+	// dropped at exit. Release the server, then close the App, before the
+	// store closes: the order Run's own stop ends with (hooks, then core).
+	// Release after the start hook has begun, and Close after Run has begun,
+	// do nothing, because Run's stop order owns both, so this runs on every
+	// return.
+	var a *app.App
+	defer func() {
+		books.Release(mod)
+		if a != nil {
+			closeUnrunApp(a)
+		}
+	}()
+	a, err = app.New(ctx, opts, mod)
 	if err != nil {
 		return err
 	}
@@ -74,6 +86,21 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 		serveLog.Error("books' stop hook was still running at the end of the shutdown budget; closing the store under it")
 	}
 	return runErr
+}
+
+// unrunCloseWait bounds App.Close on a boot that failed before Run: the
+// Provider's last OTLP export and span flush to an unreachable collector
+// must not hold the failing process.
+const unrunCloseWait = 5 * time.Second
+
+// closeUnrunApp closes an App whose Run never began. After Run has begun,
+// App.Close does nothing and returns nil.
+func closeUnrunApp(a *app.App) {
+	ctx, cancel := context.WithTimeout(context.Background(), unrunCloseWait)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		serveLog.Warn("closing the app after a failed boot: %v", err)
+	}
 }
 
 // booksStopped reports whether books' server has finished its stop, without

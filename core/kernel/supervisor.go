@@ -1,7 +1,7 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -45,7 +45,19 @@ const (
 // observe it and it is not exported.
 var errRestartRequested = errors.New("kernel: restart requested")
 
-var errRunTwice = errors.New("kernel: Run called more than once")
+var (
+	errRunTwice      = errors.New("kernel: Run called more than once")
+	errRunAfterClose = errors.New("kernel: Run called after Close")
+)
+
+// The kernel's lifecycle (Kernel.state). New leaves it stateNew; Run moves it
+// to stateRunning and Close to stateClosed, whichever comes first, so exactly
+// one of them owns the final close (closeCore).
+const (
+	stateNew int32 = iota
+	stateRunning
+	stateClosed
+)
 
 // ReadinessNotifier receives the supervisor's readiness signals (05-health
 // §5H.3.4): Status while not ready (STATUS=), Ready once the listeners are up
@@ -123,6 +135,27 @@ type moduleWorker struct {
 	worker module.Worker
 }
 
+// Close releases what New built, the metrics Provider and then logging, for
+// a kernel whose Run will not be called: a step its caller runs between New
+// and Run failed. It is the close Run's stop order ends with (closeCore), so
+// the Provider's last export and span batch are flushed rather than dropped
+// at exit. It is bounded by ctx's deadline, or by defaultShutdownBudget
+// without one, and like Run's close it gets at least lateStopFloor.
+//
+// Once Run has begun, Close does nothing and returns nil: Run's stop order
+// closes the same things. A Run after Close returns errRunAfterClose. A
+// second Close returns the first one's result.
+func (k *Kernel) Close(ctx context.Context) error {
+	if !k.state.CompareAndSwap(stateNew, stateClosed) && k.state.Load() != stateClosed {
+		return nil
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(defaultShutdownBudget)
+	}
+	return k.closeCore(ctx, deadline)
+}
+
 // Run starts the app in the order of 06 §6.5.2 that exists at R1 (core
 // background services, module hooks, module workers, R1Values then the
 // listener, readiness), blocks until ctx is done, a StopAppOnExit worker
@@ -136,7 +169,10 @@ type moduleWorker struct {
 // If a hook's Start fails or outlives core.lifecycle.start_timeout, the hooks
 // already started are stopped in reverse and Run returns the joined error.
 func (k *Kernel) Run(ctx context.Context) error {
-	if !k.ran.CompareAndSwap(false, true) {
+	if !k.state.CompareAndSwap(stateNew, stateRunning) {
+		if k.state.Load() == stateClosed {
+			return errRunAfterClose
+		}
 		return errRunTwice
 	}
 	k.signal(ctx, "status", k.notifier.Status("starting"))
