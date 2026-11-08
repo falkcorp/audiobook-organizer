@@ -1,5 +1,5 @@
 // file: core/app/defaults_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b7c4e2a-91d3-4f58-a6e0-3c8d5f2b7a19
 // last-edited: 2026-11-08
 
@@ -355,5 +355,90 @@ func TestNew_ProcessDefaults_RestoredWhenBootFails(t *testing.T) {
 	}
 	if otel.GetErrorHandler() != otel.ErrorHandler(beforeHandler) {
 		t.Fatalf("a failed New left %T installed", otel.GetErrorHandler())
+	}
+}
+
+// TestNew_ProcessDefaults_PipelineIsDefaultBeforeRegister: with
+// Options.ProcessDefaults the pipeline is slog's default and the standard
+// library log's sink before a module's Register runs, so a logger a service
+// captures from slog.Default() during Register is the pipeline's: its warning
+// keeps its level and attributes after InstallProcessDefaults, rather than
+// reaching the pipeline later as one attribute-less info line through the
+// stock handler's log bridge. InstallProcessDefaults adopts the install: the
+// default is the same logger, and restore puts the previous one back. A New
+// that fails puts it back too.
+func TestNew_ProcessDefaults_PipelineIsDefaultBeforeRegister(t *testing.T) {
+	prevHandler := otel.GetErrorHandler()
+	t.Cleanup(func() {
+		otel.SetErrorHandler(prevHandler)
+		otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+	})
+	prevSlog := slog.Default()
+	prevLogOut, prevLogFlags := stdlog.Writer(), stdlog.Flags()
+
+	var captured *slog.Logger
+	m := testModule{id: "wayne", register: func(*module.Registrar) error {
+		captured = slog.Default()
+		stdlog.Print("alfred in register")
+		return nil
+	}}
+	var out syncBuffer
+	a, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out,
+		Env: []string{}, ProcessDefaults: true}, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Metrics().Shutdown(context.Background()) })
+	if captured == nil || captured == prevSlog {
+		t.Fatal("Register saw the stock default: the pipeline was not installed before it")
+	}
+	restore, err := InstallProcessDefaults(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	if slog.Default() != captured {
+		t.Error("InstallProcessDefaults replaced the default New installed instead of adopting it")
+	}
+
+	captured.Warn("batarang thrown", "op_id", "op-gotham", "password", "robin-is-hunter2")
+	got := out.String()
+	var warn string
+	for line := range strings.SplitSeq(got, "\n") {
+		if strings.Contains(line, "batarang thrown") {
+			warn = line
+		}
+	}
+	if !strings.Contains(warn, "level=WARN") || !strings.Contains(warn, "op_id=op-gotham") ||
+		strings.Contains(warn, "robin-is-hunter2") {
+		t.Errorf("the captured logger's warning lost its level or attrs, or was not redacted: %q", warn)
+	}
+	if !strings.Contains(got, "alfred in register") {
+		t.Errorf("a stdlib log line written during Register did not reach the pipeline:\n%s", got)
+	}
+
+	restore()
+	if slog.Default() != prevSlog || stdlog.Writer() != prevLogOut || stdlog.Flags() != prevLogFlags {
+		t.Fatal("restore did not put slog's default and the log package's output and flags back")
+	}
+}
+
+// TestNew_ProcessDefaults_SlogRestoredWhenBootFails: a New that made the
+// pipeline the default and then fails puts slog's and log's defaults back.
+func TestNew_ProcessDefaults_SlogRestoredWhenBootFails(t *testing.T) {
+	prevHandler := otel.GetErrorHandler()
+	t.Cleanup(func() {
+		otel.SetErrorHandler(prevHandler)
+		otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+	})
+	prevSlog := slog.Default()
+	prevLogOut, prevLogFlags := stdlog.Writer(), stdlog.Flags()
+	m := testModule{id: "wayne", register: func(*module.Registrar) error { return errors.New("Bane broke the module") }}
+	if _, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
+		Env: []string{}, ProcessDefaults: true}, m); err == nil {
+		t.Fatal("New with a failing Register succeeded")
+	}
+	if slog.Default() != prevSlog || stdlog.Writer() != prevLogOut || stdlog.Flags() != prevLogFlags {
+		t.Fatal("a failed New left the pipeline as slog's default")
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -92,6 +92,15 @@ type Config struct {
 	// the SDK reads OTEL_* from the environment. An error fails boot.
 	// Describe never calls it.
 	BeforeTelemetry func(log *slog.Logger) error
+	// ProcessLogging runs once in P5, right after BeforeTelemetry and so
+	// before any module's Register, with the App's root logger and the
+	// handler for the standard library log bridge. app.New sets it for
+	// Options.ProcessDefaults to make the pipeline the process default
+	// before module code builds its loggers: a service constructed during
+	// Register that captures slog.Default() must capture the pipeline, not
+	// the stock handler InstallProcessDefaults replaces afterwards. An error
+	// fails boot. Describe never calls it.
+	ProcessLogging func(root *slog.Logger, stdlib slog.Handler) error
 	// Telemetry is app.Options.R1Telemetry, converted: the part of the
 	// Provider's metrics.Options that F3's core.metrics and core.tracing
 	// sections will carry. nil = the Prometheus scrape only. Describe ignores
