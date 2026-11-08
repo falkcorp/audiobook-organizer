@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -105,7 +105,7 @@ type HNSWEmbeddingStore struct {
 	// exportMu serializes exports (they share the .tmp paths) and guards the
 	// fields below. Lock order: exportMu before mu.
 	exportMu      sync.Mutex
-	exportedGen   uint64        // gen captured when the last successful export began serializing
+	exportedGen   uint64        // gen read before the last successful export's truth reads
 	lastExportAt  time.Time     // zero until an export has succeeded in this process
 	lastExportDur time.Duration // wall time of the last successful export
 
@@ -519,14 +519,14 @@ func abortPending(pending []*pendingExport) {
 }
 
 // serializeSnapshot is the only part of an export that holds s.mu: it writes
-// every graph through a 1 MiB buffer to its .bin.tmp, marshals the metadata into
-// memory, and captures gen, all under one RLock so they describe the same
-// instant. Fsync, rename and the sidecars happen after the lock is released.
-func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingExport, gen uint64, err error) {
+// every graph through a 1 MiB buffer to its .bin.tmp and marshals the metadata
+// into memory, under one RLock so they describe the same instant. Fsync, rename
+// and the sidecars happen after the lock is released.
+func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingExport, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if !s.complete {
-		return nil, 0, ErrHNSWIncomplete
+		return nil, ErrHNSWIncomplete
 	}
 	defer func() {
 		if err != nil {
@@ -534,7 +534,6 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingEx
 			pending = nil
 		}
 	}()
-	gen = s.gen
 
 	for entityType, g := range s.graphs {
 		p := &pendingExport{
@@ -548,7 +547,7 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingEx
 
 		f, cerr := os.Create(p.binTmp)
 		if cerr != nil {
-			return pending, 0, fmt.Errorf("hnsw export: create %s: %w", p.binTmp, cerr)
+			return pending, fmt.Errorf("hnsw export: create %s: %w", p.binTmp, cerr)
 		}
 		p.f = f
 		pending = append(pending, p)
@@ -557,10 +556,10 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingEx
 		// each on an unbuffered *os.File), which dominated the export time.
 		bw := bufio.NewWriterSize(f, 1<<20)
 		if werr := g.Export(bw); werr != nil {
-			return pending, 0, fmt.Errorf("hnsw export: write graph %s: %w", entityType, werr)
+			return pending, fmt.Errorf("hnsw export: write graph %s: %w", entityType, werr)
 		}
 		if ferr := bw.Flush(); ferr != nil {
-			return pending, 0, fmt.Errorf("hnsw export: write graph %s: %w", entityType, ferr)
+			return pending, fmt.Errorf("hnsw export: write graph %s: %w", entityType, ferr)
 		}
 
 		m := s.meta[entityType]
@@ -569,11 +568,11 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingEx
 		}
 		b, merr := json.Marshal(m)
 		if merr != nil {
-			return pending, 0, fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, merr)
+			return pending, fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, merr)
 		}
 		p.metaBytes = b
 	}
-	return pending, gen, nil
+	return pending, nil
 }
 
 // writeFileSynced writes data to path and fsyncs it before closing.
@@ -597,16 +596,24 @@ func writeFileSynced(path string, data []byte) error {
 // which serializes exports because they share the .tmp paths. It returns the
 // wall time of the whole export and, on success, records exportedGen,
 // lastExportAt and lastExportDur.
+//
+// exportedGen is the gen read BEFORE the truth reads, not the one serialized.
+// A mutation that lands between the truth reads and the serialization is in
+// the snapshot but not in its truth count, so the next boot finds the snapshot
+// stale; recording the earlier gen keeps that mutation dirty, and the next
+// ExportIfDirty writes a snapshot whose count includes it.
 func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType string) (int, error)) (time.Duration, error) {
 	start := time.Now()
 
-	// Cheap early refusal, and the entity-type list the truth reads need. The
-	// authoritative completeness check is the one inside serializeSnapshot.
+	// Cheap early refusal, the gen this export will record, and the
+	// entity-type list the truth reads need. The authoritative completeness
+	// check is the one inside serializeSnapshot.
 	s.mu.RLock()
 	if !s.complete {
 		s.mu.RUnlock()
 		return 0, ErrHNSWIncomplete
 	}
+	gen := s.gen
 	types := make([]string, 0, len(s.graphs))
 	for et := range s.graphs {
 		types = append(types, et)
@@ -631,7 +638,7 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 		return 0, fmt.Errorf("hnsw export: mkdir: %w", err)
 	}
 
-	pending, gen, err := s.serializeSnapshot(dir)
+	pending, err := s.serializeSnapshot(dir)
 	if err != nil {
 		return 0, err
 	}

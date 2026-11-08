@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_persist_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package database_test
 
@@ -219,24 +219,51 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		assert.Equal(t, pebbleRows, n, "a snapshot accepted as fresh must contain every counted row")
 	})
 
-	t.Run("count read before the row lands: snapshot looks stale", func(t *testing.T) {
+	// The race the review found (M1): the count is read, then a row lands and
+	// is mirrored before the graph is serialized. The snapshot is stale (its
+	// count lacks the row), so the store must stay dirty and the next
+	// ExportIfDirty must write a snapshot whose count includes the row. Before
+	// the fix exportedGen was the serialized gen, the store reported Clean, and
+	// no later export repaired the stale snapshot.
+	t.Run("count read before the row lands: stays dirty, next export repairs", func(t *testing.T) {
 		s := newExportTestStore(t, 3)
 		s.SetComplete(true)
 		pebbleRows := 3
+		first := true
 		truth := func(string) (int, error) {
 			recorded := pebbleRows
-			require.NoError(t, s.Upsert(ctx, "book", "oswald-cobblepot", exportTestVec(rand.New(rand.NewSource(7))), nil))
-			pebbleRows++
+			if first {
+				first = false
+				require.NoError(t, s.Upsert(ctx, "book", "oswald-cobblepot", exportTestVec(rand.New(rand.NewSource(7))), nil))
+				pebbleRows++
+			}
 			return recorded, nil
 		}
 		dir := t.TempDir()
-		require.NoError(t, s.ExportWithTruth(dir, truth))
+		res, err := s.ExportIfDirty(dir, truth)
+		require.NoError(t, err)
+		require.True(t, res.Exported)
+		tc, gc := readTruthSidecar(t, dir)
+		require.Equal(t, 3, tc, "the first snapshot's count was read before the row landed")
+		require.Equal(t, 4, gc)
+
+		res, err = s.ExportIfDirty(dir, truth)
+		require.NoError(t, err)
+		assert.False(t, res.Clean, "a mutation after the truth reads must leave the store dirty")
+		assert.True(t, res.Exported, "the next ExportIfDirty must repair the stale snapshot")
+		tc, gc = readTruthSidecar(t, dir)
+		assert.Equal(t, 4, tc)
+		assert.Equal(t, 4, gc)
 
 		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
 		n, err := fresh.CountByType(ctx, "book")
 		require.NoError(t, err)
-		assert.Zero(t, n, "recorded count 3 vs current 4: the snapshot must be discarded as stale")
+		assert.Equal(t, 4, n, "the repaired snapshot is accepted as fresh")
+
+		res, err = s.ExportIfDirty(dir, truth)
+		require.NoError(t, err)
+		assert.True(t, res.Clean, "with no mutation since the repair, the store is clean")
 	})
 }
 
