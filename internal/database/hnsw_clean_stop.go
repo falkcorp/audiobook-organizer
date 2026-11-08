@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-08
 
@@ -37,7 +37,9 @@ import (
 //     flag or a cleanup op that deletes embedding rows.
 //
 // The marker records the embedding model the reconcile classified rows
-// against, and a boot that classifies against another model reconciles.
+// against, and a boot that classifies against another model reconciles. A
+// write the graph refused, or a mirror the dedup engine reports failed
+// (MarkDiverged), also stops the marker for the rest of the process.
 //
 // Not covered: a write to those keys from a process that opens Pebble without
 // a GatedDB (no production path does; the raw-pebble tools under cmd/ write
@@ -213,6 +215,8 @@ func (s *HNSWEmbeddingStore) MarkCleanStop(dir string) (written bool, reason str
 	switch {
 	case s.damaged:
 		return false, "a recovered library panic may have damaged the graph", nil
+	case s.diverged != "":
+		return false, "the graph missed a write that Pebble holds (" + s.diverged + ")", nil
 	case s.pendingReconcile:
 		return false, "the snapshot this process loaded is still being reconciled", nil
 	case !s.complete:

@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.96.5
+// version: 1.96.6
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-11-08
 
@@ -533,7 +533,8 @@ type HydrateStats struct {
 	// incremented the hydrated count and the summary log claimed a row was in
 	// the graph when it was not. It now returns that failure and this bucket
 	// counts it. This repo has seen exactly that failure in the wild —
-	// the `dedup chromem upsert author` warning chased through PRs
+	// the author-upsert warning (then logged as `dedup chromem upsert
+	// author`) chased through PRs
 	// #1862/#1865/#1866. Always actionable: a live book fell out of dedup.
 	BooksMirrorError int
 
@@ -2787,9 +2788,9 @@ func (de *Engine) prepBookEmbed(ctx context.Context, bookID string) (
 
 	existing, getErr := de.embedStore.Get("book", bookID)
 	if getErr == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
-		// Single-row path: the per-row Warn inside the mirror is adequate here,
-		// unlike HydrateChromem's 39K-row sweep, which counts the failure.
-		de.mirrorBookToChromem(ctx, book, existing.Vector) //nolint:errcheck // single-row path: the helper already logs a per-row Warn; only HydrateChromem's 39K-row sweep needs the count
+		// Single-row path: a failure marks the graph diverged (annMirrorMissed);
+		// HydrateChromem's sweep counts it instead.
+		de.annMirrorMissed(de.mirrorBookToChromem(ctx, book, existing.Vector))
 		return book, text, hash, EmbedStatusCached, true, nil
 	}
 	return book, text, hash, 0, false, nil
@@ -2883,7 +2884,7 @@ func (de *Engine) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]
 			logger.InfoCtx(ctx, "dedup upsert embedding for", "p", p.id, "upErr", upErr)
 			continue
 		}
-		de.mirrorBookToChromem(ctx, p.book, vecs[i]) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
+		de.annMirrorMissed(de.mirrorBookToChromem(ctx, p.book, vecs[i]))
 		results[p.id] = EmbedStatusEmbedded
 	}
 	return results, nil
@@ -2895,18 +2896,15 @@ func (de *Engine) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]
 // the dedup engine queries an empty (or stale) ANN store and either finds
 // nothing or returns wrong matches.
 //
-// Best-effort for most callers: chromem write failures are logged here and the
-// caller may drop them. The SQLite embedding row is the source of truth;
-// chromem is just an index.
+// Best-effort: a failed write is logged here and never fails the caller's
+// embed. The Pebble embedding row is the source of truth; the ANN store is
+// just an index.
 //
 // The failure is ALSO returned, because "best-effort" is not the same as
-// "unobservable". HydrateChromem's per-row counters would otherwise be a lie:
-// it increments BooksHydrated after this call, so a swallowed Upsert error
-// meant the summary log claimed a row reached the graph when it had not, and
-// books_skipped no longer equalled truth_count - graph_count. Single-row
-// callers that are content with the Warn above suppress the return with an
-// explained nolint:errcheck directive; a bare `_ =` is NOT an option here,
-// because .golangci.yml turns on errcheck's check-blank.
+// "unobservable". HydrateChromem counts it (BooksMirrorError keeps the graph
+// incomplete, so BooksHydrated means "reached the graph"), and every other
+// caller passes it to annMirrorMissed, which marks the graph diverged so its
+// clean-stop marker stops vouching for a graph that lacks the row.
 //
 // A nil chromemStore means no ANN index is configured and is not a failure.
 // Invalid input (nil book, empty vector) IS returned as an error rather than
@@ -2923,7 +2921,7 @@ func (de *Engine) mirrorBookToChromem(ctx context.Context, book *database.Book, 
 		return fmt.Errorf("chromem upsert book %s: empty vector", book.ID)
 	}
 	if err := de.chromemStore.Upsert(ctx, "book", book.ID, vec, bookANNMeta(book)); err != nil {
-		logger.WarnCtx(ctx, "dedup chromem upsert book", "book", book.ID, "err", err)
+		lifecycleLog.Warn("vector ANN store: upsert of book %s failed: %v", book.ID, err)
 		return fmt.Errorf("chromem upsert book %s: %w", book.ID, err)
 	}
 	return nil
@@ -2971,7 +2969,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 	if err == nil && existing != nil && existing.TextHash == hash && de.embeddingModelMatches(existing.Model) {
 		// Mirror to chromem on cache hits too — see mirrorBookToChromem
 		// for the rationale (keeps ANN index in sync with sqlite).
-		de.mirrorAuthorToChromem(ctx, entityID, existing.Vector) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
+		de.annMirrorMissed(de.mirrorAuthorToChromem(ctx, entityID, existing.Vector))
 		return nil
 	}
 
@@ -2989,7 +2987,7 @@ func (de *Engine) EmbedAuthor(ctx context.Context, authorID int) error {
 	}); err != nil {
 		return err
 	}
-	de.mirrorAuthorToChromem(ctx, entityID, vec) //nolint:errcheck // per-row Warn suffices here; see mirrorBookToChromem
+	de.annMirrorMissed(de.mirrorAuthorToChromem(ctx, entityID, vec))
 	return nil
 }
 
@@ -3076,10 +3074,25 @@ func (de *Engine) mirrorAuthorToChromem(ctx context.Context, authorID string, ve
 		return fmt.Errorf("chromem upsert author %s: empty vector", authorID)
 	}
 	if err := de.chromemStore.Upsert(ctx, "author", authorID, vec, nil); err != nil {
-		logger.WarnCtx(ctx, "dedup chromem upsert author", "authorID", authorID, "err", err)
+		lifecycleLog.Warn("vector ANN store: upsert of author %s failed: %v", authorID, err)
 		return fmt.Errorf("chromem upsert author %s: %w", authorID, err)
 	}
 	return nil
+}
+
+// annMirrorMissed records a failed mirror outside HydrateChromem: the Pebble
+// row is there and the graph lacks it (or holds a stale copy), so the graph's
+// clean-stop marker must not vouch for it. It marks the ANN store diverged
+// when the store tracks that (database.SnapshotDivergence; the HNSW store
+// does), and is a no-op for a nil error. The failure itself was logged where
+// it happened.
+func (de *Engine) annMirrorMissed(err error) {
+	if err == nil {
+		return
+	}
+	if d, ok := de.chromemStore.(database.SnapshotDivergence); ok {
+		d.MarkDiverged(err.Error())
+	}
 }
 
 // deleteBookFromChromem removes a book entry from the chromem ANN index.
@@ -3088,13 +3101,15 @@ func (de *Engine) mirrorAuthorToChromem(ctx context.Context, authorID string, ve
 // stale matches for a book that should no longer participate in dedup.
 //
 // chromem-go's Delete returns nil for missing IDs, so this is safe to call
-// even when the entry doesn't exist.
+// even when the entry doesn't exist. A failure is logged and marks the graph
+// diverged (annMirrorMissed): the graph may still hold a book Pebble dropped.
 func (de *Engine) deleteBookFromChromem(ctx context.Context, bookID string) {
 	if de.chromemStore == nil || bookID == "" {
 		return
 	}
 	if err := de.chromemStore.Delete(ctx, "book", bookID); err != nil {
-		logger.WarnCtx(ctx, "dedup chromem delete book", "bookID", bookID, "err", err)
+		lifecycleLog.Warn("vector ANN store: delete of book %s failed: %v", bookID, err)
+		de.annMirrorMissed(fmt.Errorf("chromem delete book %s: %w", bookID, err))
 	}
 }
 
