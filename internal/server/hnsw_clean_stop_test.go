@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -65,7 +65,7 @@ func TestMarkHNSWCleanStop(t *testing.T) {
 	t.Run("after a stop-time export", func(t *testing.T) {
 		s, _ := cleanStopServer(t)
 		s.stopHNSWSnapshot(context.Background())
-		s.markHNSWCleanStop()
+		s.markHNSWCleanStop(nil)
 		if !cleanStopMarkerExists(t, s.hnswPersistDir) {
 			t.Error("a stop whose export succeeded must leave the marker")
 		}
@@ -77,7 +77,7 @@ func TestMarkHNSWCleanStop(t *testing.T) {
 		s, _ := cleanStopServer(t)
 		s.exportHNSWSnapshot("periodic")
 		s.stopHNSWSnapshot(shortBudget(t))
-		s.markHNSWCleanStop()
+		s.markHNSWCleanStop(nil)
 		if !cleanStopMarkerExists(t, s.hnswPersistDir) {
 			t.Error("an unchanged graph whose snapshot is on disk must leave the marker")
 		}
@@ -90,17 +90,17 @@ func TestMarkHNSWCleanStop(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.stopHNSWSnapshot(shortBudget(t))
-		s.markHNSWCleanStop()
+		s.markHNSWCleanStop(nil)
 		if cleanStopMarkerExists(t, s.hnswPersistDir) {
 			t.Error("a graph that changed after its last snapshot must not leave the marker")
 		}
 	})
 
-	// The embed queue's drain can upsert after the marker: the marker goes.
+	// A writer the stop left running can upsert after the marker: the marker goes.
 	t.Run("write after the marker", func(t *testing.T) {
 		s, store := cleanStopServer(t)
 		s.stopHNSWSnapshot(context.Background())
-		s.markHNSWCleanStop()
+		s.markHNSWCleanStop(nil)
 		if err := store.Upsert(context.Background(), "book", "dark-victory", []float32{0, 1, 0, 0}, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +133,7 @@ func TestImportHNSWSnapshot_NonHNSWStoreTakesTheMarker(t *testing.T) {
 func TestImportHNSWSnapshot_TakesTheMarkerFromTheHNSWStore(t *testing.T) {
 	prev, _ := cleanStopServer(t)
 	prev.stopHNSWSnapshot(context.Background())
-	prev.markHNSWCleanStop()
+	prev.markHNSWCleanStop(nil)
 
 	next := database.NewHNSWEmbeddingStore(4)
 	c := serviceregistry.NewContainer().Override("chromemstore", next)
@@ -430,7 +430,7 @@ func TestHNSWCleanStop_APebbleOnlyMerge(t *testing.T) {
 				}
 			}
 			s.stopHNSWSnapshot(context.Background())
-			s.markHNSWCleanStop()
+			s.markHNSWCleanStop(nil)
 			prev.close(t)
 
 			next := f.open(t, "bge-m3")
@@ -467,7 +467,7 @@ func TestHNSWCleanStop_AnotherEmbeddingModelAfterTheRestart(t *testing.T) {
 			importHNSWSnapshot(prev.c, f.hnswDir)
 			prev.buildGraph(t, f)
 			s.stopHNSWSnapshot(context.Background())
-			s.markHNSWCleanStop()
+			s.markHNSWCleanStop(nil)
 			prev.close(t)
 			if !cleanStopMarkerExists(t, f.hnswDir) {
 				t.Fatal("the clean stop wrote no marker; the setup is wrong")

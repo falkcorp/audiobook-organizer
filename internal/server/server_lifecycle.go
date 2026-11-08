@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.4
+// version: 4.67.5
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -846,8 +846,14 @@ func stopWithin(ctx context.Context, d, reserve time.Duration, step string, fn f
 // increase down the order and the last is zero. Only the flight recorder's
 // own 5s cap and the plugins' Shutdown(ctx) are not clamped here. It closes
 // Stopped on return.
+//
+// The HNSW clean-stop marker is its last step, written only when every step
+// before it finished (markHNSWCleanStop): abandoned collects each step that
+// was left running at its share, or failed in a way that can leave its work
+// running.
 func (s *Server) StopHook(ctx context.Context) error {
 	defer s.markStopped()
+	var abandoned []string
 
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
 	// pinning this Server and its stores.
@@ -866,6 +872,7 @@ func (s *Server) StopHook(ctx context.Context) error {
 		regCtx, regCancel := context.WithTimeout(context.WithoutCancel(ctx), budgeted(ctx, 10*time.Second, 8*time.Second))
 		if err := s.opRegistry.Shutdown(regCtx); err != nil {
 			slog.Warn("ops registry shutdown", "err", err)
+			abandoned = append(abandoned, "ops registry ("+err.Error()+")")
 		}
 		regCancel()
 	}
@@ -896,10 +903,17 @@ func (s *Server) StopHook(ctx context.Context) error {
 	bgWait := budgeted(ctx, 30*time.Second, 5*time.Second)
 	select {
 	case <-bgDone:
-		slog.Info("Background goroutines stopped")
 	case <-time.After(bgWait):
+	}
+	// Decided by what is still running, not by which case won: once the
+	// budget is spent bgWait is 0, and the timer can win against goroutines
+	// that have all returned.
+	if running := s.bgWG.Running(); len(running) > 0 {
 		lifecycleLog.Warn("Background goroutines did not stop in %s (still running: %v) — proceeding with shutdown anyway",
-			bgWait, s.bgWG.Running())
+			bgWait, running)
+		abandoned = append(abandoned, fmt.Sprintf("background goroutines %v", running))
+	} else {
+		slog.Info("Background goroutines stopped")
 	}
 	// Whatever the index worker did not pop (wedged, or the wait above timed
 	// out) is only in memory; record it so the reconciler repairs it next boot.
@@ -910,7 +924,9 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// exits is re-queued at the next boot (RecoverInterruptedFileOps).
 	if p := s.fileIOPool; p != nil {
 		slog.Info("Waiting for file I/O operations to complete...")
-		stopWithin(ctx, 30*time.Second, 4*time.Second, "file I/O pool", func() { p.Stop() })
+		if !stopWithin(ctx, 30*time.Second, 4*time.Second, "file I/O pool", func() { p.Stop() }) {
+			abandoned = append(abandoned, "file I/O pool")
+		}
 	}
 
 	// Shut down the iTunes service (no-op in PR 1 since NewDisabled is
@@ -918,6 +934,7 @@ func (s *Server) StopHook(ctx context.Context) error {
 	if s.itunesSvc != nil {
 		if err := s.itunesSvc.Shutdown(budgeted(ctx, 30*time.Second, 4*time.Second)); err != nil {
 			slog.Warn("itunes service shutdown", "err", err)
+			abandoned = append(abandoned, "iTunes service ("+err.Error()+")")
 		}
 	}
 
@@ -942,12 +959,21 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// also runs under stopWithin.
 	if c := s.container; c != nil {
 		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), budgeted(ctx, 30*time.Second, 3*time.Second))
-		stopWithin(ctx, 30*time.Second, 3*time.Second, "container", func() {
-			if err := c.Stop(cctx); err != nil {
-				slog.Warn("container stop", "err", err)
+		var stopErr error
+		finished := stopWithin(ctx, 30*time.Second, 3*time.Second, "container", func() {
+			if stopErr = c.Stop(cctx); stopErr != nil {
+				slog.Warn("container stop", "err", stopErr)
 			}
 		})
 		ccancel()
+		// stopErr is read only once the step finished: an unfinished step
+		// may still write it.
+		switch {
+		case !finished:
+			abandoned = append(abandoned, "container")
+		case stopErr != nil:
+			abandoned = append(abandoned, "container ("+stopErr.Error()+")")
+		}
 	}
 
 	// Close the activity log store, after writing anything still queued by
@@ -987,10 +1013,6 @@ func (s *Server) StopHook(ctx context.Context) error {
 		ocancel()
 	}
 
-	// The writers this stop owns have stopped: mark the snapshot clean when
-	// it still describes the graph, so the next boot can skip the reconcile.
-	s.markHNSWCleanStop()
-
 	// Close embedding store
 	if s.embeddingStore != nil {
 		if err := s.embeddingStore.Close(); err != nil {
@@ -1013,7 +1035,12 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// The scheduler, ticker, snapshotter, watcher and session goroutines
 	// returned on shutdown (closed before the drain); wait for any task the
 	// scheduler was still running, with what is left of the budget.
-	stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() })
+	if !stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() }) {
+		abandoned = append(abandoned, "scheduler tasks")
+	}
+
+	// Last, so no step this stop waits for runs after it.
+	s.markHNSWCleanStop(abandoned)
 	slog.Info("Server exited")
 	return nil
 }
@@ -1573,15 +1600,29 @@ func (s *Server) stopHNSWSnapshot(ctx context.Context) {
 	s.exportHNSWSnapshot("stop")
 }
 
-// markHNSWCleanStop writes the HNSW clean-stop marker at the end of a stop,
-// after the stop-time snapshot attempt and once the embed queue has stopped.
-// MarkCleanStop writes it only when the snapshot on disk is exactly the graph
-// (the stop-time export succeeded, or was skipped or failed with nothing
-// changed since the last successful one); otherwise the next boot reconciles
-// the snapshot against Pebble, and the line says why.
-func (s *Server) markHNSWCleanStop() {
+// markHNSWCleanStop writes the HNSW clean-stop marker as the last step of a
+// stop, after every step StopHook waits for. It writes nothing when abandoned
+// names a step that did not finish: a writer that step owns may still be
+// running. Otherwise MarkCleanStop decides, and writes the marker only when
+// the snapshot on disk is exactly the graph (the stop-time export succeeded,
+// or was skipped or failed with nothing changed since the last successful
+// one) and no write since the store opened touched what the reconcile reads
+// in Pebble. Either way the line says why the next boot reconciles.
+//
+// The marker does not rest on the writers having stopped. A writer nothing
+// here waits for (a plugin's Shutdown reports nothing, and a goroutine started
+// outside the wait groups is never waited for) still removes the marker with
+// its next write: a Pebble write to an embedding or book row through the
+// verdict watch, a graph write through the store's generation (MarkCleanStop,
+// BindTruthSource).
+func (s *Server) markHNSWCleanStop(abandoned []string) {
 	hnswStore, _, ok := s.hnswSnapshotStore()
 	if !ok {
+		return
+	}
+	if len(abandoned) > 0 {
+		lifecycleLog.Info("hnsw: clean-stop marker not written, so the next boot reconciles the snapshot: stop steps did not finish: %s",
+			strings.Join(abandoned, "; "))
 		return
 	}
 	written, reason, err := hnswStore.MarkCleanStop(s.hnswPersistDir)
