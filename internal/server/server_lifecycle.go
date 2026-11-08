@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.5
+// version: 4.67.6
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1467,29 +1467,38 @@ const hnswUnmeasuredExport = 5 * time.Second
 // clean-stop marker is still taken: this run lets the snapshot fall behind
 // Pebble, so a later HNSW run must not find a marker vouching for it.
 //
-// An operation-runner child (opsregistry.IsChildMode) loads the snapshot as
-// is: it neither takes the marker nor checks the truth counts. The marker is
-// the parent's, written by its clean stop for its own next boot, and the child
-// can never write the snapshot (it has no snapshotter and runs no StopHook), so
-// whatever its graph lacks ends with the child. Checking would only cost: the
-// parent took the marker at its own boot, so every child would find none and
-// run a full reconcile against Pebble for each op it runs.
+// An operation-runner child (opsregistry.IsChildMode) neither takes the marker
+// nor needs it (R1-15 follow-up review, MINOR-3): it imports with the row
+// counts alone (ImportCountChecked), so a snapshot whose Pebble rows moved
+// since it was written is reconciled, and one whose counts match loads as is.
+// The marker is the parent's, written by its clean stop for its own next boot,
+// and the child can never write
+// the snapshot or a marker (it has no snapshotter and runs no StopHook), so
+// whatever its graph lacks ends with the child. Requiring the marker would
+// only cost: the parent took it at its own boot, so every child would find
+// none and run a full reconcile against Pebble for each op it runs.
 func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
 	var hnswStore *database.HNSWEmbeddingStore
 	if raw, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && raw != nil {
 		hnswStore, _ = raw.(*database.HNSWEmbeddingStore)
 	}
+	var truthCount func(string) (int, error)
+	var truthDB *database.GatedDB
+	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
+		truthCount = embStore.CountByType
+		truthDB = embStore.PebbleDB()
+	}
 	if isChildProcess() {
 		if hnswStore == nil {
 			return
 		}
-		if err := hnswStore.Import(hnswDir); err != nil {
+		if err := hnswStore.ImportCountChecked(hnswDir, truthCount); err != nil {
 			if !errors.Is(err, database.ErrNoHNSWSnapshot) {
 				lifecycleLog.Warn("hnsw: import failed in an operation-runner child, will hydrate from PebbleDB: %v", err)
 			}
 			return
 		}
-		lifecycleLog.Info("hnsw: operation-runner child loaded the on-disk snapshot in %s as is", hnswDir)
+		lifecycleLog.Info("hnsw: operation-runner child loaded the on-disk snapshot in %s by its row counts (reconcile_pending=%t)", hnswDir, hnswStore.NeedsReconcile())
 		return
 	}
 	if hnswStore == nil {
@@ -1497,12 +1506,6 @@ func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
 			lifecycleLog.Error("hnsw: the vector store is not HNSW and %v", err)
 		}
 		return
-	}
-	var truthCount func(string) (int, error)
-	var truthDB *database.GatedDB
-	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
-		truthCount = embStore.CountByType
-		truthDB = embStore.PebbleDB()
 	}
 	hnswStore.BindTruthSource(truthDB, annEmbeddingModel(c))
 	if err := hnswStore.ImportWithStalenessCheck(hnswDir, truthCount); err != nil {
