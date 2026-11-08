@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.3
+// version: 1.28.4
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -130,8 +130,8 @@ func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
 }
 
 // DegradedSource reports the fixed tokens of startup steps that failed but
-// were classified Degraded (startup.Table), e.g. "metrics_disabled" or
-// "search_index". Implemented by *startup.Steps; the handler sees only this.
+// were classified Degraded (startup.Table), e.g. "search_index".
+// Implemented by *startup.Steps; the handler sees only this.
 type DegradedSource interface {
 	Tokens() []string
 }
@@ -256,7 +256,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		degraded = append(degraded, DegradedMemdbWarming)
 	}
 	// Startup steps classified Degraded that failed (startup.Table): fixed
-	// tokens such as "metrics_disabled", never error text. Merged with
+	// tokens such as "search_index", never error text. Merged with
 	// memdb_warming and sorted so the list is stable across probes.
 	if h.getDegraded != nil {
 		if src := h.getDegraded(); src != nil {

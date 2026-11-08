@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_health_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f1b9d30-2c85-4e7a-9a43-b0d8e5c71f26
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package system_test
 
@@ -120,8 +120,7 @@ func TestHealthCheck_StoreErrorTextNeverAppears(t *testing.T) {
 // merged with memdb_warming, sorted, once, and with no error text.
 func TestHealthCheck_ReportsDegradedStartupSteps(t *testing.T) {
 	steps := startup.New()
-	_ = steps.Run("InitOTEL", func() error { return errors.New("exporter at /srv/x failed") })
-	_ = steps.Run("searchindex", func() error { return errors.New("bleve: no such file") })
+	_ = steps.Run("searchindex", func() error { return errors.New("bleve: no such file at /srv/x") })
 	_ = steps.Run("searchindex", func() error { return errors.New("again") })
 
 	m := systemmocks.NewMockSystemStore(t)
@@ -131,8 +130,8 @@ func TestHealthCheck_ReportsDegradedStartupSteps(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, code, "a degraded step leaves the server serving")
 	assert.JSONEq(t,
-		`{"status":"ok","ready":false,"memdb_ready":false,"degraded":["memdb_warming","metrics_disabled","search_index"]}`, body)
-	for _, leak := range []string{"exporter", "/srv", "bleve", "again"} {
+		`{"status":"ok","ready":false,"memdb_ready":false,"degraded":["memdb_warming","search_index"]}`, body)
+	for _, leak := range []string{"/srv", "bleve", "no such file", "again"} {
 		assert.NotContains(t, body, leak)
 	}
 }

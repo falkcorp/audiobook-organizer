@@ -1,7 +1,7 @@
 // file: internal/server/startup_steps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48ec603b-5b58-4cd0-855f-c07bd0cf0b6e
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package server
 
@@ -73,12 +73,12 @@ func TestHealth_ReportsDegradedStartupStepsThroughWiring(t *testing.T) {
 	}
 
 	// Before Start stores a runner: no startup tokens.
-	assert.NotContains(t, get(), startup.TokenMetricsDisabled)
+	assert.NotContains(t, get(), startup.TokenSearchIndex)
 
-	// What cmd does when metrics init fails, then hands the runner to Start.
+	// What cmd does when the search index fails to start, then hands the runner to Start.
 	steps := startup.New()
-	require.NoError(t, steps.Run("InitOTEL", func() error { return errors.New("meter provider") }))
+	require.NoError(t, steps.Run("searchindex", func() error { return errors.New("index missing") }))
 	srv.startupStepsFor(ServerConfig{StartupSteps: steps})
 
-	assert.Contains(t, get(), startup.TokenMetricsDisabled)
+	assert.Contains(t, get(), startup.TokenSearchIndex)
 }
