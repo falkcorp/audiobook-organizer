@@ -1,7 +1,7 @@
 // file: internal/server/search_observer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d7e3b1a4-6f28-4c95-b0a7-8e2f5c1d9a36
-// last-edited: 2026-11-04
+// last-edited: 2026-11-08
 
 package server
 
@@ -338,30 +338,53 @@ func TestReleaseSearchAndAuthority_IsByIdentity(t *testing.T) {
 	}
 }
 
-// Shutdown must detach the observer and the authority provider only after every
-// writer this server owns has stopped: a still-running op resolves credits and
-// writes books until then. Pinned by source order, because Shutdown cannot be
-// driven to a half-way state in a unit test.
+// StopHook, and releaseUnstarted for a server that never started, must detach
+// the observer and the authority provider only after every writer this server
+// owns has stopped: a still-running op or background goroutine resolves
+// credits and writes books until then. Pinned by source order within each
+// function, because neither can be driven to a half-way state in a unit test.
 func TestShutdown_ReleasesObserverAndProviderAfterWritersStop(t *testing.T) {
 	raw, err := os.ReadFile("server_lifecycle.go")
 	must(t, err)
 	src := string(raw)
-	release := strings.Index(src, "s.releaseSearchAndAuthority()")
-	if release < 0 {
-		t.Fatal("Shutdown no longer calls releaseSearchAndAuthority")
-	}
-	for _, earlier := range []string{"s.opRegistry.Shutdown(", "s.bgCancel()", "s.bgWG.Wait()", "p.Stop()", "s.pluginRegistry.ShutdownAll("} {
-		i := strings.Index(src, earlier)
-		if i < 0 {
-			t.Fatalf("Shutdown no longer contains %q; update this test", earlier)
+	body := func(sig string) string {
+		t.Helper()
+		start := strings.Index(src, sig)
+		if start < 0 {
+			t.Fatalf("server_lifecycle.go no longer declares %q; update this test", sig)
 		}
-		if i > release {
-			t.Fatalf("releaseSearchAndAuthority runs before %q: ops still running would resolve credits against no authority lists", earlier)
+		rest := src[start+len(sig):]
+		if end := strings.Index(rest, "\nfunc "); end >= 0 {
+			rest = rest[:end]
+		}
+		return rest
+	}
+	for _, c := range []struct {
+		sig     string
+		earlier []string
+	}{
+		{"func (s *Server) StopHook(", []string{"s.opRegistry.Shutdown(", "s.bgCancel()", "s.bgWG.Wait()", "p.Stop()", "s.pluginRegistry.ShutdownAll("}},
+		{"func (s *Server) releaseUnstarted(", []string{"s.bgCancel()", "s.bgWG.Wait()"}},
+	} {
+		fn := body(c.sig)
+		release := strings.Index(fn, "s.releaseSearchAndAuthority()")
+		if release < 0 {
+			t.Fatalf("%s no longer calls releaseSearchAndAuthority", c.sig)
+		}
+		for _, earlier := range c.earlier {
+			i := strings.Index(fn, earlier)
+			if i < 0 {
+				t.Fatalf("%s no longer contains %q; update this test", c.sig, earlier)
+			}
+			if i > release {
+				t.Fatalf("%s: releaseSearchAndAuthority runs before %q: writers still running would resolve credits against no authority lists", c.sig, earlier)
+			}
 		}
 	}
 	// What the worker did not pop is recorded only after the wait for it.
-	if mark, wait := strings.Index(src, "s.markPendingIndexDirty()"), strings.Index(src, "s.bgWG.Wait()"); mark < 0 || mark < wait {
-		t.Fatal("Shutdown must call markPendingIndexDirty after waiting for the background goroutines")
+	stop := body("func (s *Server) StopHook(")
+	if mark, wait := strings.Index(stop, "s.markPendingIndexDirty()"), strings.Index(stop, "s.bgWG.Wait()"); mark < 0 || mark < wait {
+		t.Fatal("StopHook must call markPendingIndexDirty after waiting for the background goroutines")
 	}
 }
 
