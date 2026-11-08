@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -9,7 +9,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +38,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/httpapi"
 )
 
 // freshProcessEnv names the test a child test process runs (inFreshProcess).
@@ -156,6 +161,65 @@ func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre fun
 	srv := mod.srv.Load()
 	require.NotNil(t, srv, "Register built no server")
 	return &composed{app: a, mod: mod, srv: srv, store: store, newLog: newLog}
+}
+
+// runningApp is a composition whose App runs as serve runs it, with its
+// listener on a loopback port opened by books' R1Listen.
+type runningApp struct {
+	*composed
+	addr   net.Addr
+	cancel context.CancelFunc
+	ran    chan error
+	once   sync.Once
+	runErr error
+}
+
+// runComposed boots the composition and runs the App until stop (or the
+// test's end) cancels it.
+func runComposed(t *testing.T) *runningApp {
+	t.Helper()
+	addrs := make(chan net.Addr, 1)
+	c := bootComposedWith(t, false, nil, nil, func(o *app.Options) {
+		listen := o.R1Listen
+		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
+			srv, err := listen(lo, h, l)
+			if err == nil {
+				addrs <- srv.Addr()
+			}
+			return srv, err
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &runningApp{composed: c, cancel: cancel, ran: make(chan error, 1)}
+	go func() { r.ran <- c.app.Run(ctx) }()
+	t.Cleanup(func() {
+		if err := r.stop(); err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	})
+	select {
+	case r.addr = <-addrs:
+	case err := <-r.ran:
+		r.once.Do(func() { r.runErr = err })
+		t.Fatalf("Run returned before the listener opened: %v", err)
+	case <-time.After(60 * time.Second):
+		t.Fatal("the App never opened its listener")
+	}
+	return r
+}
+
+// stop cancels Run and waits for it to return; later calls return the same
+// result.
+func (r *runningApp) stop() error {
+	r.once.Do(func() {
+		r.cancel()
+		select {
+		case r.runErr = <-r.ran:
+		case <-time.After(60 * time.Second):
+			r.runErr = errors.New("Run did not return after its context was cancelled")
+		}
+	})
+	return r.runErr
 }
 
 // serve sends one request through the App's root handler.
