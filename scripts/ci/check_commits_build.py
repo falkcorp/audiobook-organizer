@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/check_commits_build.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7d26abe4-c5f0-4c24-b79b-29c26b8ed14f
-# last-edited: 2026-11-06
+# last-edited: 2026-11-08
 """Every commit of a move PR builds, and every move is detectable (09 §9.2.1; MOD9-5).
 
 The repository merges by rebase, so each commit of a PR lands on ``main`` and is
@@ -10,7 +10,7 @@ seen by ``git bisect`` and ``auto-revert.yml``. A move PR that renames a file in
 ``core/`` in a commit that cannot compile would break both. For a PR whose diff
 renames a file into ``core/`` this script, for each commit of ``<base>..<head>``:
 
-  1. checks the commit out in a temporary detached worktree and runs
+  1. checks the commit out in one temporary detached worktree (reused for every commit) and runs
      ``go build ./...`` then ``go -C core build ./...`` (the root's ``./...`` never
      reaches the nested ``core/`` module), and reports every commit that fails;
   2. reports every moved file whose first-commit rename similarity is below 90 %
@@ -188,25 +188,27 @@ def run_build(cmd: list[str], cwd: pathlib.Path) -> tuple[bool, str]:
     return False, "\n".join(f"    {ln}" for ln in tail)
 
 
-def build_commit(commit: str, repo: pathlib.Path, scratch: pathlib.Path) -> list[str]:
-    """Build both modules at ``commit``; returns one message per failing module."""
-    wt = scratch / f"wt-{commit[:12]}"
-    git(["worktree", "add", "--detach", "--quiet", str(wt), commit], repo)
-    try:
-        failures = []
-        subject = git(["log", "-1", "--format=%s", commit], repo).strip()
-        ok, log = run_build(["go", "build", "./..."], wt)
+def build_commit(commit: str, repo: pathlib.Path, wt: pathlib.Path) -> list[str]:
+    """Build both modules at ``commit`` in worktree ``wt``; one message per failing module.
+
+    Every commit is built in the same worktree path (checked out in turn), not a
+    fresh ``wt-<sha>`` directory per commit: Go's build cache keys include the
+    package directory, so a new path per commit recompiled everything and a
+    33-commit PR (#4453) ran past the job's 30-minute timeout at ~1m48s a commit.
+    """
+    git(["checkout", "--quiet", "--force", "--detach", commit], wt)
+    failures = []
+    subject = git(["log", "-1", "--format=%s", commit], repo).strip()
+    ok, log = run_build(["go", "build", "./..."], wt)
+    if not ok:
+        failures.append(f"FAIL commit {commit[:12]} ({subject}): root go build ./...\n{log}")
+    if (wt / "core" / "go.mod").is_file():
+        ok, log = run_build(["go", "-C", "core", "build", "./..."], wt)
         if not ok:
-            failures.append(f"FAIL commit {commit[:12]} ({subject}): root go build ./...\n{log}")
-        if (wt / "core" / "go.mod").is_file():
-            ok, log = run_build(["go", "-C", "core", "build", "./..."], wt)
-            if not ok:
-                failures.append(
-                    f"FAIL commit {commit[:12]} ({subject}): core go -C core build ./...\n{log}"
-                )
-        return failures
-    finally:
-        git(["worktree", "remove", "--force", str(wt)], repo, check=False)
+            failures.append(
+                f"FAIL commit {commit[:12]} ({subject}): core go -C core build ./...\n{log}"
+            )
+    return failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -231,15 +233,18 @@ def main(argv: list[str] | None = None) -> int:
 
     problems = similarity_problems(first, net)
     scratch = pathlib.Path(tempfile.mkdtemp(prefix="check-commits-build-"))
+    wt = scratch / "wt"
     try:
-        for commit in commits:
-            print(f"building {commit[:12]} ...", flush=True)
-            try:
-                problems.extend(build_commit(commit, repo, scratch))
-            except GitError as err:
-                print(f"check_commits_build: {err}", file=sys.stderr)
-                return 2
+        try:
+            git(["worktree", "add", "--detach", "--quiet", str(wt), commits[0]], repo)
+            for commit in commits:
+                print(f"building {commit[:12]} ...", flush=True)
+                problems.extend(build_commit(commit, repo, wt))
+        except GitError as err:
+            print(f"check_commits_build: {err}", file=sys.stderr)
+            return 2
     finally:
+        git(["worktree", "remove", "--force", str(wt)], repo, check=False)
         git(["worktree", "prune"], repo, check=False)
         shutil.rmtree(scratch, ignore_errors=True)
 
