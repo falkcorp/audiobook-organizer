@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R1-27-deploy-and-rollback-tooling.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e981aa06-b2f6-4fd5-91ce-9cc3d994ad37 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # R1-27 — Deploy and rollback tooling: DEPLOY_READY_TIMEOUT, deploy-wait-ready.sh polling the unit over ssh, the unit's RestartPreventExitStatus=78 and stop settings, make rollback-restore with one in-flight probe, the README compose notes
 
@@ -21,6 +21,7 @@
 - `Makefile`
 - `Makefile.local.example`
 - `scripts/deploy-wait-ready.sh`
+- `scripts/storage_format_guard.py` (step 6; added by R1-23's review)
 - `deploy/audiobook-organizer.service`
 - `README.md`
 - `scripts/tests/test_deploy_wait_ready.py`
@@ -71,9 +72,20 @@ Deploy and rollback tooling that R1 and R2 need, tested against a fake host (09 
 5. **README compose notes**: the `/config` volume preparation (09 §9.4 R1) and the documented
    `docker run --stop-timeout 60` line (05-health §5H.4: the container's stop timeout must exceed the 25 s budget);
    `docs/system/deploy-and-gpu-ops.md` gains the sudoers lines the new ssh reads need.
+6. **The binary-swap guard** (05-storage §5S.3.7; R1-23 review S5): `scripts/storage_format_guard.py` compares only
+   the legacy projection today, which is right while no level is raised. Extend it as
+   `TestRollbackGuardRefusesAfterCutover` states, so the first release that raises a level cannot be rolled back by
+   a plain binary swap. R1-23 added `--print-storage-levels`; `make rollback` keeps its one in-flight probe.
 
 ## Tests this task owns (spec names)
 
+- `TestRollbackGuardRefusesAfterCutover` (05-storage §5S.3.7 "The binary-swap guard" and its test-table row; owned
+  here since R1-23's review, `todo.d/2026-11-08-rollback-guard-storage-levels.md`): `storage_format_guard.py` reads
+  `<db>.storage-levels` (falling back to `<db>.storage-format`) and asks `.prev --print-storage-levels` (falling back
+  to `--print-storage-format` for an R0 binary, whose cobra rejects the new flag). The spec row: it "passes an R1
+  store with an R0 `.prev`, refuses an R2 store with an R1 `.prev` naming `make rollback-restore`, refuses an
+  in-flight swap of any kind with no override, passes a pending intent, and refuses when the probe or a sudoers line
+  is missing, naming it (OPS8-7)". Over the fake-ssh harness, in `scripts/tests/test_make_rollback.py`.
 - `scripts/tests/test_deploy_wait_ready.py` (exit 78 included; 09 §9.4 R1 Verification): over `scripts/tests/fake_ssh.py`
   (a stub `ssh` on `PATH` that answers `systemctl show` from a scripted sequence) and a local HTTP server: `activating`
   for longer than TIMEOUT then `active` + ready passes; `failed` fails at once; rising `NRestarts` fails at once;
