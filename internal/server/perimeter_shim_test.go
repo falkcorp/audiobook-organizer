@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -54,12 +54,6 @@ type perimeterCase struct {
 	// peerRefused: the peer is outside the allow-list; only the refusal is
 	// compared.
 	peerRefused bool
-	// ginGateVary: gin's own Basic gate refused it with an allowed Origin and
-	// Accept-Encoding: gzip. HEAD's 401 kept CORS's Vary: Origin (its gate
-	// ran before gzip); stage 9 deletes it from R1's (deviation 16, until
-	// F3 moves the gate into stage 8). The difference is asserted, so a fix
-	// shows up here.
-	ginGateVary bool
 }
 
 // volatileHeaders differ between two runs of the same request. X-App-Build
@@ -97,11 +91,6 @@ func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 	for _, v := range volatileHeaders() {
 		gh.Del(v)
 		kh.Del(v)
-	}
-	if c.ginGateVary {
-		assert.Equal(t, []string{"Origin"}, gh.Values("Vary"), "%s: HEAD's Vary", c.name)
-		assert.Empty(t, kh.Values("Vary"), "%s: R1's Vary (deviation 16 fixed? drop ginGateVary)", c.name)
-		gh.Del("Vary")
 	}
 	if c.coreBody {
 		// Core's problem body brings its own Content-Type.
@@ -254,15 +243,16 @@ func TestPerimeter_ParityWithHEAD(t *testing.T) {
 		// CORS's Vary: Origin. headPerimeter, which does not compress, is an
 		// exact reference for a refused request, and only for one (an
 		// answer the gate lets through would be compressed), so the cases
-		// HEAD did not refuse are skipped. Stage 9 has run on core's answer
-		// before the shim refuses it, so the shim must undo it (review m1,
-		// m3).
+		// HEAD did not refuse are skipped. Stage 9 has run on the answer
+		// before the shim sees it, so the shim must undo it, on core's own
+		// answers (review m1, m3) and on gin's gate 401 alike (the last two
+		// cases).
 		gated := append(withHeader(perimeterCases(), "gated, gzip: ", "Accept-Encoding", "gzip"),
 			perimeterCase{name: "gated, gzip: API route, signed out, same origin", method: http.MethodGet,
-				path: "/api/v1/audiobooks", ginGateVary: true,
+				path:   "/api/v1/audiobooks",
 				header: map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}},
 			perimeterCase{name: "gated, gzip: SPA page, same origin", method: http.MethodGet,
-				path: "/library/riddler", ginGateVary: true,
+				path:   "/library/riddler",
 				header: map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}})
 		refused := 0
 		for _, c := range gated {
@@ -388,6 +378,35 @@ func TestPerimeterShim_GatesEveryCoreAnswer(t *testing.T) {
 			assert.NotEmpty(t, w.Header().Get("WWW-Authenticate"), "core status %d", c.status)
 			assert.Empty(t, w.Body.String(), "core status %d: the refusal carries core's body", c.status)
 		}
+	}
+}
+
+// TestPerimeterShim_HandlerOwn401KeepsNoVary: past the Basic gate, a
+// handler's own 401 (the API's "authentication required", with a body) gets
+// no Vary under gzip. HEAD's gzip middleware ran after the gate and deleted
+// every Vary value from an error it wrote a body for, as stage 9 does; only
+// the gate's own 401 kept CORS's Vary: Origin. The shim restores Origin on
+// the gate's 401 alone, told apart by perimeterGatePassed's mark.
+// headPerimeter does not compress, so it is no reference here.
+func TestPerimeterShim_HandlerOwn401KeepsNoVary(t *testing.T) {
+	f := legacyEngine(t, false, false)
+	_, _, r1 := perimeterStacks(t, f, "")
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.BasicAuthEnabled = true
+	config.AppConfig.BasicAuthUsername = "alfred"
+	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
+	origin := map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}
+	for _, c := range withHeader([]perimeterCase{
+		{name: "API route", method: http.MethodGet, path: "/api/v1/audiobooks", header: origin},
+		{name: "auth me", method: http.MethodGet, path: "/api/v1/auth/me", header: origin},
+	}, "signed in past the gate: ", "Authorization", basicCredentials()) {
+		w := serveCase(r1, c)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "%s: status", c.name)
+		assert.Empty(t, w.Header().Get("WWW-Authenticate"), "%s: the gate refused it; the case needs a handler's 401", c.name)
+		assert.Contains(t, w.Body.String(), "authentication required", "%s: body", c.name)
+		assert.Equal(t, "https://gotham.example", w.Header().Get("Access-Control-Allow-Origin"), "%s: ACAO", c.name)
+		assert.Empty(t, w.Header().Values("Vary"), "%s: Vary", c.name)
 	}
 }
 
