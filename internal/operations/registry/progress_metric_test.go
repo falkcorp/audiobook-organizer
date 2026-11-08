@@ -1,7 +1,7 @@
 // file: internal/operations/registry/progress_metric_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c1d9e7a-4b6f-4a2c-8e0d-5f9a1b2c3d4e
-// last-edited: 2026-07-18
+// last-edited: 2026-11-07
 
 package registry_test
 
@@ -25,21 +25,21 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// b2gaugeValue polls the global Prometheus DefaultGatherer for a gauge metric
+// b2gaugeValue polls the given gatherer for a gauge metric
 // family named `name` carrying label op_id=opID, returning (value, found).
 // Reading via Gather (rather than a package-level accessor) avoids the need
 // for any test-only export on the metrics package and — critically — never
 // creates a series as a side effect the way GaugeVec.WithLabelValues would,
 // so it can truthfully assert a series is ABSENT after ClearOpProgress.
 // Task-unique name (b2xxx) per the parallel-test-helper-collision rule.
-func b2gaugeValue(t *testing.T, name, opID string) (value float64, found bool) {
+func b2gaugeValue(t *testing.T, g prometheus.Gatherer, name, opID string) (value float64, found bool) {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
@@ -69,11 +69,11 @@ func b2metricHasLabel(m *dto.Metric, key, want string) bool {
 // fails the test after timeout). Used to assert ClearOpProgress ran — the
 // deletion happens synchronously inside registry.publishOpTerminal, but that
 // call itself happens on the worker goroutine racing this test goroutine.
-func b2waitGaugeAbsent(t *testing.T, name, opID string, timeout time.Duration) {
+func b2waitGaugeAbsent(t *testing.T, g prometheus.Gatherer, name, opID string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, found := b2gaugeValue(t, name, opID); !found {
+		if _, found := b2gaugeValue(t, g, name, opID); !found {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -86,7 +86,7 @@ func b2waitGaugeAbsent(t *testing.T, name, opID string, timeout time.Duration) {
 // audiobook_organizer_op_items_processed/_total, and once the op reaches a
 // terminal state ("completed") both series are gone.
 func TestProgressMetric_SetOnUpdateAndClearedOnTerminal(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -120,10 +120,10 @@ func TestProgressMetric_SetOnUpdateAndClearedOnTerminal(t *testing.T) {
 		t.Fatal("op never reported progress")
 	}
 
-	if got, found := b2gaugeValue(t, "audiobook_organizer_op_items_processed", opID); !found || got != 3 {
+	if got, found := b2gaugeValue(t, reg, "audiobook_organizer_op_items_processed", opID); !found || got != 3 {
 		t.Fatalf("op_items_processed{op_id=%q} = %v, found=%v; want 3, true", opID, got, found)
 	}
-	if got, found := b2gaugeValue(t, "audiobook_organizer_op_items_total", opID); !found || got != 10 {
+	if got, found := b2gaugeValue(t, reg, "audiobook_organizer_op_items_total", opID); !found || got != 10 {
 		t.Fatalf("op_items_total{op_id=%q} = %v, found=%v; want 10, true", opID, got, found)
 	}
 
@@ -131,14 +131,14 @@ func TestProgressMetric_SetOnUpdateAndClearedOnTerminal(t *testing.T) {
 	awaitStatus(t, store, opID, "completed", 5*time.Second)
 	bus.waitTerminal(t, opID, 5*time.Second)
 
-	b2waitGaugeAbsent(t, "audiobook_organizer_op_items_processed", opID, 2*time.Second)
-	b2waitGaugeAbsent(t, "audiobook_organizer_op_items_total", opID, 2*time.Second)
+	b2waitGaugeAbsent(t, reg, "audiobook_organizer_op_items_processed", opID, 2*time.Second)
+	b2waitGaugeAbsent(t, reg, "audiobook_organizer_op_items_total", opID, 2*time.Second)
 }
 
 // TestProgressMetric_ClearedOnCancel proves the cleanup path also fires on a
 // cancel-while-running terminal transition, not just normal completion.
 func TestProgressMetric_ClearedOnCancel(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 
 	store := newFakeStore()
 	bus := &t06TermBus{}
@@ -171,7 +171,7 @@ func TestProgressMetric_ClearedOnCancel(t *testing.T) {
 		t.Fatal("op did not start")
 	}
 
-	if _, found := b2gaugeValue(t, "audiobook_organizer_op_items_processed", opID); !found {
+	if _, found := b2gaugeValue(t, reg, "audiobook_organizer_op_items_processed", opID); !found {
 		t.Fatalf("op_items_processed{op_id=%q} not set before cancel", opID)
 	}
 
@@ -182,6 +182,6 @@ func TestProgressMetric_ClearedOnCancel(t *testing.T) {
 	awaitStatus(t, store, opID, "canceled", 5*time.Second)
 	bus.waitTerminal(t, opID, 5*time.Second)
 
-	b2waitGaugeAbsent(t, "audiobook_organizer_op_items_processed", opID, 2*time.Second)
-	b2waitGaugeAbsent(t, "audiobook_organizer_op_items_total", opID, 2*time.Second)
+	b2waitGaugeAbsent(t, reg, "audiobook_organizer_op_items_processed", opID, 2*time.Second)
+	b2waitGaugeAbsent(t, reg, "audiobook_organizer_op_items_total", opID, 2*time.Second)
 }

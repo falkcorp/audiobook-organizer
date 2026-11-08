@@ -1,7 +1,7 @@
 // file: internal/server/search_index_metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2024660e-31f9-4957-85ca-5e9d31589271
-// last-edited: 2026-08-22
+// last-edited: 2026-11-07
 //
 // Tests for updateSearchIndexMetrics (TODO L3433): the search index's own
 // document count, exported as search_index_docs_total so it can be graphed
@@ -15,17 +15,17 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
-// gatherSearchIndexDocsGauge reads search_index_docs_total from the DEFAULT
-// registry — the same registry /metrics serves — mirroring
+// gatherSearchIndexDocsGauge reads search_index_docs_total from the given
+// registry (the kind /metrics serves) — mirroring
 // gatherResumeFallbackCount in maintenance_resume_fallback_metric_test.go.
 // The gauge has no labels, so the first metric in the family is the value.
-func gatherSearchIndexDocsGauge(t *testing.T) (float64, bool) {
+func gatherSearchIndexDocsGauge(t *testing.T, g prometheus.Gatherer) (float64, bool) {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
@@ -54,10 +54,10 @@ func TestUpdateSearchIndexMetrics_NilIndexIsNoop(t *testing.T) {
 
 // TestUpdateSearchIndexMetrics_TracksDocCount is the acceptance-criteria
 // test: the scraped value must track the search index's actual DocCount(),
-// verified by comparing the default registry's gathered value (what a real
+// verified by comparing the registry's gathered value (what a real
 // /metrics scrape serves) against a direct s.searchIndex.DocCount() call.
 func TestUpdateSearchIndexMetrics_TracksDocCount(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	srv, store, idx := newDropOnlyServer(t)
 
 	books := coverageBooks()
@@ -73,9 +73,9 @@ func TestUpdateSearchIndexMetrics_TracksDocCount(t *testing.T) {
 
 	srv.updateSearchIndexMetrics()
 
-	got, ok := gatherSearchIndexDocsGauge(t)
+	got, ok := gatherSearchIndexDocsGauge(t, reg)
 	if !ok {
-		t.Fatal("audiobook_organizer_search_index_docs_total absent from the default registry after updateSearchIndexMetrics")
+		t.Fatal("audiobook_organizer_search_index_docs_total absent from the registry after updateSearchIndexMetrics")
 	}
 	if got != float64(want) {
 		t.Errorf("search_index_docs_total = %v, want %d (direct DocCount())", got, want)
@@ -95,7 +95,7 @@ func TestUpdateSearchIndexMetrics_TracksDocCount(t *testing.T) {
 	}
 
 	srv.updateSearchIndexMetrics()
-	got2, ok := gatherSearchIndexDocsGauge(t)
+	got2, ok := gatherSearchIndexDocsGauge(t, reg)
 	if !ok {
 		t.Fatal("audiobook_organizer_search_index_docs_total absent on second read")
 	}

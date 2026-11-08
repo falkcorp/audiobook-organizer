@@ -1,21 +1,21 @@
 // file: internal/operations/registry/register.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 
 package registry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
 // RegistryWrapper wraps *Registry to adapt its Start(ctx) (void) method to
-// the Starter interface's Start(ctx) error signature. The wrapper is registered
-// in the service registry and consumers can Get[*Registry] from the container.
+// the Starter interface's Start(ctx) error signature. NewService builds it;
+// the server's container holds it as the "opregistry" Override.
 type RegistryWrapper struct {
 	*Registry
 }
@@ -80,52 +80,47 @@ func (p *prodSchedulerStore) BookFiles(_ string) ([]string, error) {
 	return nil, nil
 }
 
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   serviceregistry.KeyOpHub,
-		Needs:  []string{},
-		Groups: []string{"scheduler"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			return NewEventHub(), nil
-		},
-	})
+// NewService builds the ops registry the server's service container holds
+// under "opregistry": the registry over store with eight workers, publishing
+// to hub, with the scan stand-down marker persisted when store can, the dep
+// book store and the DepsScheduler wired, wrapped for the container's
+// Start/Stop. hub is the container's serviceregistry.KeyOpHub value
+// (NewEventHub).
+//
+// It replaces this file's init() registration (R1-15): the composition root
+// constructs the registry explicitly and hands it to the container as an
+// Override, so importing this package no longer registers anything. store is
+// one value, so GetBookByID and the OpsV2Store methods come from the same
+// concrete *PebbleStore instance.
+func NewService(store database.Store, log *slog.Logger, hub *EventHub) (*RegistryWrapper, error) {
+	if store == nil || hub == nil {
+		return nil, errors.New("registry: NewService needs a store and an event hub")
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	reg := New(store, log, 8, hub)
 
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "opregistry",
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyOpHub},
-		Groups: []string{"scheduler"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			// One resolution of KeyStore, so GetBookByID and the OpsV2Store
-			// methods all come from the same concrete *PebbleStore instance.
-			store := serviceregistry.Get[opRegistryStore](c, serviceregistry.KeyStore)
-			hub := serviceregistry.Get[*EventHub](c, serviceregistry.KeyOpHub)
-			reg := New(store, slog.Default(), 8, hub)
+	// Persist the scan stand-down marker (reboot-safety). The concrete
+	// store is *PebbleStore, which implements GetSetting/SetSetting; the
+	// narrow opRegistryStore interface does not carry those methods, so
+	// type-assert rather than widen it. Must be set BEFORE Start().
+	if ss, ok := store.(standDownPersister); ok {
+		reg.SetScanStandDownStore(ss)
+	} else {
+		log.Warn("registry: store does not implement SettingsStore; " +
+			"scan stand-down marker will be in-memory only (NOT reboot-safe)")
+	}
 
-			// Persist the scan stand-down marker (reboot-safety). The concrete
-			// store is *PebbleStore, which implements GetSetting/SetSetting; the
-			// narrow opRegistryStore interface does not carry those methods, so
-			// type-assert rather than widen it. Must be set BEFORE Start().
-			if ss, ok := store.(standDownPersister); ok {
-				reg.SetScanStandDownStore(ss)
-			} else {
-				slog.Default().Warn("registry: store does not implement SettingsStore; " +
-					"scan stand-down marker will be in-memory only (NOT reboot-safe)")
-			}
+	// Wire the book store for dep evaluation (ReqFieldSet).
+	// prodSchedulerStore adds BookFiles (nil shim).
+	schedStore := &prodSchedulerStore{opRegistryStore: store, full: store}
+	reg.SetDepBookStore(schedStore)
 
-			// Wire the book store for dep evaluation (ReqFieldSet).
-			// prodSchedulerStore adds BookFiles (nil shim).
-			schedStore := &prodSchedulerStore{
-				opRegistryStore: store,
-				full:            serviceregistry.Get[database.Store](c, serviceregistry.KeyStore),
-			}
-			reg.SetDepBookStore(schedStore)
+	// Wire the DepsScheduler so waiting_deps ops are re-evaluated after
+	// op completions and on the periodic sweep tick.
+	sched := NewDepsScheduler(reg, schedStore)
+	reg.SetDepsScheduler(sched)
 
-			// Wire the DepsScheduler so waiting_deps ops are re-evaluated after
-			// op completions and on the periodic sweep tick.
-			sched := NewDepsScheduler(reg, schedStore)
-			reg.SetDepsScheduler(sched)
-
-			return &RegistryWrapper{Registry: reg}, nil
-		},
-	})
+	return &RegistryWrapper{Registry: reg}, nil
 }

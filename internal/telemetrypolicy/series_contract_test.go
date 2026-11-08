@@ -1,5 +1,5 @@
 // file: internal/telemetrypolicy/series_contract_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-11-07
 
@@ -40,7 +40,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -52,7 +51,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
+	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/coretest"
+	coremetrics "github.com/falkcorp/mediacore/metrics"
 )
 
 const (
@@ -68,6 +71,13 @@ const (
 // process_*, promhttp_* and scrape_* vary with the Go version and OS and are
 // not asserted on.
 var inScopePrefixes = []string{"audiobook_organizer_", "ai_dispatch_", "ai_", "http_server_"}
+
+// coreOwnedPrefixes are families the App's Provider serves that core owns:
+// <namespace>_<core subsystem>_* (05-metrics §2). Since R1-15 /metrics serves
+// the App's Provider, so the kernel's own series (boot_phase at R1) share the
+// namespace; core's tests contract them, so this contract skips them rather
+// than pinning core's names in ABO's golden.
+var coreOwnedPrefixes = []string{"audiobook_organizer_kernel_"}
 
 // targetInfo is the OTel exporter's resource family; it is in scope but not in
 // the golden (it carries the resource, not an instrument).
@@ -416,16 +426,40 @@ func seedOtelgin() error {
 }
 
 // ---------------------------------------------------------------------------
-// TestMain: the OTel meter provider first, then every seed.
+// TestMain: the App's Provider first, then every seed.
+
+// served is the served-metrics path of production for this test process: a
+// zero-module App's Provider built through coretest (06 §6.4.8) with ABO's
+// metric identity, installed as the OTel global meter provider (what
+// app.InstallProcessDefaults does in production), with internal/metrics'
+// families registered through internal/server's AttachMetrics on the
+// Provider's Registerer, and the handler the legacy gin /metrics route serves
+// (Server.MetricsHandler). Every scrape below goes through servedHandler.
+var (
+	servedProvider *coremetrics.Provider
+	servedHandler  http.Handler
+)
+
+// aboMetricIdentity is the metric identity books' app.Options carries
+// (internal/books): the audiobook_organizer namespace on every series.
+func aboMetricIdentity() app.Options {
+	return app.Options{AppID: "abo", MetricNamespace: "audiobook_organizer", ServiceName: "audiobook-organizer"}
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	shutdown, err := telemetry.InitOTEL(ctx, telemetry.LoadConfig("contract-test", ""))
+	p, err := coretest.NewMetricsProvider(ctx, aboMetricIdentity())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "InitOTEL:", err)
+		fmt.Fprintln(os.Stderr, "coretest.NewMetricsProvider:", err)
 		os.Exit(1)
 	}
-	metrics.Register()
+	otel.SetMeterProvider(p.MeterProvider())
+	srv := new(server.Server)
+	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
+		fmt.Fprintln(os.Stderr, "AttachMetrics:", err)
+		os.Exit(1)
+	}
+	servedProvider, servedHandler = p, srv.MetricsHandler()
 	aidispatch.RegisterMetrics()
 	for _, row := range seedingTable {
 		if err := row.seed(); err != nil {
@@ -434,7 +468,9 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
-	_ = shutdown(ctx)
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_ = p.Shutdown(sctx)
+	cancel()
 	os.Exit(code)
 }
 
@@ -447,20 +483,69 @@ type scrapedFamily struct {
 	les    map[float64]string // histogram bucket bounds (finite only) -> raw le text
 }
 
-// scrape serves one GET /metrics through promhttp.Handler() on the default
-// registry, exactly as the server mounts it, and parses the text exposition.
-func scrape(t *testing.T) map[string]*scrapedFamily {
+// scrapeServed serves one GET /metrics through servedHandler, the handler
+// the legacy gin /metrics route serves, and returns the response.
+func scrapeServed(t *testing.T) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	servedHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics returned %d: %s", rec.Code, rec.Body.String())
 	}
-	fams, err := parseExposition(rec.Body.String())
+	return rec
+}
+
+// scrape serves one GET /metrics through the served handler and parses the
+// text exposition.
+func scrape(t *testing.T) map[string]*scrapedFamily {
+	t.Helper()
+	fams, err := parseExposition(scrapeServed(t).Body.String())
 	if err != nil {
 		t.Fatalf("parse /metrics: %v", err)
 	}
 	return fams
+}
+
+// TestContractScrapesServedHandler (05-metrics §6, §12): the handler this
+// contract scrapes is the one the legacy gin /metrics route serves
+// (Server.MetricsHandler, bound by AttachMetrics to the App's
+// Provider.Handler(); the kernel's Router.Infra mount from F8). Before
+// AttachMetrics the route's handler answers 503, so a scrape that succeeds
+// read the attached registry; and it exposes exactly the families the
+// Provider's own handler does, including internal/metrics' client_golang
+// families registered through the Provider's Registerer and the OTel
+// families of the global meter provider.
+func TestContractScrapesServedHandler(t *testing.T) {
+	unattached := httptest.NewRecorder()
+	new(server.Server).MetricsHandler().ServeHTTP(unattached, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if unattached.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the route's handler before AttachMetrics answered %d, want 503", unattached.Code)
+	}
+
+	direct := httptest.NewRecorder()
+	servedProvider.Handler().ServeHTTP(direct, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	want, err := parseExposition(direct.Body.String())
+	if err != nil {
+		t.Fatalf("parse the Provider's scrape: %v", err)
+	}
+	got := scrape(t)
+	gotNames, wantNames := sortedKeys(familySet(got)), sortedKeys(familySet(want))
+	if !slices.Equal(gotNames, wantNames) {
+		t.Fatalf("the served handler and Provider.Handler() expose different families:\n served   %v\n provider %v", gotNames, wantNames)
+	}
+	for _, name := range []string{"audiobook_organizer_operations_started_total", "http_server_request_duration_seconds", targetInfo} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("the served handler does not expose %s", name)
+		}
+	}
+}
+
+func familySet(fams map[string]*scrapedFamily) map[string]bool {
+	out := make(map[string]bool, len(fams))
+	for name := range fams {
+		out[name] = true
+	}
+	return out
 }
 
 // parseExposition reads the Prometheus text format: "# TYPE name type" opens a
@@ -552,6 +637,11 @@ func parseLabels(s string) (map[string]string, error) {
 func inScope(name string) bool {
 	if name == targetInfo {
 		return true
+	}
+	for _, p := range coreOwnedPrefixes {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
 	}
 	for _, p := range inScopePrefixes {
 		if strings.HasPrefix(name, p) {
@@ -707,9 +797,7 @@ func TestReservedAISeries(t *testing.T) {
 // (_total on counters, _seconds with _bucket/_sum/_count on the histogram), the
 // label sets the dashboard and alert read, and no otel_scope_* label.
 func TestAIFamiliesOnScrape(t *testing.T) {
-	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	body := rec.Body.String()
+	body := scrapeServed(t).Body.String()
 	for _, line := range []string{
 		"ai_requests_total{",
 		"ai_request_duration_seconds_bucket{",

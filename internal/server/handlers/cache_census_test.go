@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache_census_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c670ed15-3169-4e19-8d06-5680b094bc8d
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 func metadataFetchStat(t *testing.T, h *CacheHandler) map[string]any {
@@ -43,14 +44,14 @@ func metadataFetchStat(t *testing.T, h *CacheHandler) map[string]any {
 }
 
 func TestHandleCacheStats_MetadataFetchSizeFromCensus(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	metrics.RecordCacheSet("metadata_fetch") // makes the cache appear in the gather
 	p := newCensusHandlerStore(t)
 	for i := range 50 {
 		putFetchCacheRow(t, p, i, time.Now())
 	}
 
-	stat := metadataFetchStat(t, NewCacheHandler(nil, p))
+	stat := metadataFetchStat(t, NewCacheHandler(nil, p, reg))
 	require.Equal(t, true, stat["size_estimated"])
 	require.Greater(t, stat["size"], float64(0))
 }
@@ -58,9 +59,9 @@ func TestHandleCacheStats_MetadataFetchSizeFromCensus(t *testing.T) {
 // A store without a census keeps the exact CountPrefix path and does not claim
 // an estimate.
 func TestHandleCacheStats_FallsBackToCountPrefix(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	metrics.RecordCacheSet("metadata_fetch")
-	stat := metadataFetchStat(t, NewCacheHandler(nil, countOnlyStore{n: 17}))
+	stat := metadataFetchStat(t, NewCacheHandler(nil, countOnlyStore{n: 17}, reg))
 	require.EqualValues(t, 17, stat["size"])
 	_, present := stat["size_estimated"]
 	require.False(t, present, "size_estimated is omitted when false")

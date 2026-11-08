@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/stats_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0a6d29c8-51b7-4e30-bf94-8c73e105ad62
-// last-edited: 2026-08-22
+// last-edited: 2026-11-07
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 // The listening-stats family used to answer 404 on purpose (spec §1.8.6). That was
@@ -131,7 +131,7 @@ func TestListeningStats_StaysGreenWhenTheStoreFails(t *testing.T) {
 // assert that the response is still 200 with totalTime:0 (keeping the connection
 // indicator green), and assert that the failure was logged and counted in the metric.
 func TestListeningStats_ReadFailureLogsAndCountsButReturns200(t *testing.T) {
-	metrics.Register() // idempotent (sync.Once); the counter must be registered to be gathered
+	reg := metricstest.Registry(t) // the counter must be registered to be gathered
 	seed := seedOracleLibrary(t)
 	broken := &fakeUserData{}
 	h := newHarness(t, "jwt", nil, withLibrary(seed), withUserData(broken))
@@ -139,9 +139,9 @@ func TestListeningStats_ReadFailureLogsAndCountsButReturns200(t *testing.T) {
 	tok := str(t, userObj(t, h.login(t, "oracle", "pw-pw-pw-pw")), "accessToken")
 	broken.err = errString("listening seconds read failed")
 
-	before := gatherABSListeningStatsFailureCount(t)
+	before := gatherABSListeningStatsFailureCount(t, reg)
 	rec, body := h.do(t, request{method: http.MethodGet, path: "/api/me/listening-stats", headers: bearer(tok)})
-	after := gatherABSListeningStatsFailureCount(t)
+	after := gatherABSListeningStatsFailureCount(t, reg)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200 — a 5xx turns the dot orange just like a 404 did", rec.Code)
@@ -152,16 +152,16 @@ func TestListeningStats_ReadFailureLogsAndCountsButReturns200(t *testing.T) {
 	if after != before+1 {
 		t.Fatalf("abs_listening_stats_read_failures counter went %v -> %v, want +1: the failure metric is not wired", before, after)
 	}
-	if !metricFamilyPresent(t, "audiobook_organizer_abs_listening_stats_read_failures_total") {
-		t.Fatal("metric family absent from the default registry — Register() does not include the ABS-N6 counter")
+	if !metricFamilyPresent(t, reg, "audiobook_organizer_abs_listening_stats_read_failures_total") {
+		t.Fatal("metric family absent from the registry — metrics.Register does not include the ABS-N6 counter")
 	}
 }
 
 // gatherABSListeningStatsFailureCount reads the ABS listening-stats read-failure
-// counter from the DEFAULT registry — the same registry /metrics serves.
-func gatherABSListeningStatsFailureCount(t *testing.T) float64 {
+// counter from the given gatherer, the kind of registry /metrics serves.
+func gatherABSListeningStatsFailureCount(t *testing.T, g prometheus.Gatherer) float64 {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
@@ -178,11 +178,11 @@ func gatherABSListeningStatsFailureCount(t *testing.T) float64 {
 	return 0
 }
 
-// metricFamilyPresent reports whether a metric family is present in the DEFAULT
-// registry, used to verify that a counter was properly registered.
-func metricFamilyPresent(t *testing.T, name string) bool {
+// metricFamilyPresent reports whether a metric family is present in the given
+// gatherer, used to verify that a counter was properly registered.
+func metricFamilyPresent(t *testing.T, g prometheus.Gatherer, name string) bool {
 	t.Helper()
-	families, err := prometheus.DefaultGatherer.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
