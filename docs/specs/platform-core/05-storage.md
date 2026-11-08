@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.14.2 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -1848,7 +1848,9 @@ var (
 	ErrSwapPending = restorejournal.ErrSwapPending
 	// ErrRenameRefused: a swap target fails the rename pre-check (another
 	// filesystem, read-only, a mount point or a single-file bind mount).
-	ErrRenameRefused = errors.New("storage: a swap target cannot be moved by rename")
+	// Defined in the L0 leaf restorejournal, whose Validate returns it, and
+	// re-exported here as ErrSwapPending is.
+	ErrRenameRefused = restorejournal.ErrRenameRefused
 	// ErrResetRefused wraps a reset hook's refusal at staging (books: a
 	// dangerous library RootDir); the route answers 400 and nothing is staged.
 	ErrResetRefused = errors.New("storage: the app refused the factory reset")
@@ -1955,7 +1957,12 @@ const (
 // steps are "staged", "set_aside_started", "moved", "set_aside", "applied",
 // "hook_done", "rejected". In every kind restore/<id>/inflight.json is
 // created by renaming pending.json before the first live item is renamed
-// (R9-7).
+// (R9-7). The journal is JSON Lines: each record is appended as one line
+// and fsynced before the swap goes on. A last line without
+// its newline, or one that does not decode, is a torn append that was never
+// acknowledged, and the next append overwrites it; a line before the last
+// that does not decode is corruption, and the boot halts naming the journal
+// (R1-21 D2).
 type Record struct {
 	At    time.Time `json:"at"`
 	Step  string    `json:"step"`
@@ -2193,7 +2200,12 @@ type Scenario struct {
 // Run breaks the boot at every durable write, rename and fsync between P0a
 // and readiness in two modes: a kill, and an error return (ENOSPC, then
 // EACCES) from that one operation with the boot continuing, so a non-crash
-// failure must also leave a legal state (R10-6, DATA10-4). It reboots the
+// failure must also leave a legal state (R10-6, DATA10-4). The error mode
+// skips Pebble's own files (its WAL, MANIFEST, tables and markers, a
+// labelled Sync batch's WAL write included): Pebble defines their failure as
+// fatal, a panic no recover reaches when it is on a background goroutine,
+// so the kill at the same operation covers the state it leaves (R1-21
+// D12). It reboots the
 // current build until readiness, then asserts I1–I6 below. It fails on any
 // durable operation that carries no writer-table label, and after each boot
 // it diffs the DB parent and state-directory trees against its label log, so
@@ -2213,7 +2225,7 @@ each kind without hooks (R1) and with hooks (R2); an offline restore from a chec
 completed, with kills before and after the journal reaches `swapped` and `applied_offline`, so the record
 is `consumed` exactly from then on) and from an archive; the escape from a `failed` checkpoint journal
 (`applied_offline` with `HooksOwed`); R3's `legacy-file-cleanup`; an error return on every operation from
-the in-flight rename to the first journalled move, for a restore and for a reset, which must end in
+the in-flight rename to the first journalled move (every non-Pebble operation of the matrix gets one; Pebble's own files are kill points only, R1-21 D12), for a restore and for a reset, which must end in
 `swapped_back` or `rejected` with the store untouched (DATA10-4); a restore and a reset with no
 `backup.location.json`; a `KindReset` of both kinds, with a reboot after `expires_at` and by another binary
 mid-set-aside (DATA9-4); an offline open followed by `serve`, and one killed before its close; and the
@@ -2753,7 +2765,7 @@ credentials.
 | `TestReadOnlyOpenRefusesWrites` | `storage.Admin.OpenReadOnly` writes nothing; every write through its `Legacy` and `Keyspace` handles fails with `ErrReadOnly`; the read-only native auth and role stores are built over it (COR7-8) |
 | `TestOfflineOpenRules` | `kernel.OpenOffline` refuses a store with a pending step (the cutover included), an empty store and a staged or in-flight swap of any kind; `readOnly` writes nothing; an offline revoking write is journaled (DATA7-11, DATA8-4) |
 | `TestFirstBootRefusesForeignKeys` | runtime `ErrForeignKeys` |
-| `TestBootCrashMatrix` (required; core, over hello, through the kit `coretest/crashmatrix`) | §5S.3.16: a kill and an error return at every durable write, rename and fsync from P0a to readiness of 06 §6.5.1's boot writers, in every scenario listed there; invariants I1–I6 hold (A-8, ADV-4, R9-7) |
+| `TestBootCrashMatrix` (required; core, over hello, through the kit `coretest/crashmatrix`) | §5S.3.16: a kill at every durable write, rename and fsync from P0a to readiness of 06 §6.5.1's boot writers, and an error return at each of them that is not Pebble's own file, in every scenario listed there; invariants I1–I6 hold (A-8, ADV-4, R9-7) |
 | `TestBootCrashMatrix_ABO` (ABO root module, required) | the same kit over ABO's full boot with books and the R0-written corpus: the cutover steps M1–M8 at every chunk, books' start hooks, the reset hook and `auth.BootWrites` (R9-7, COR9-5) |
 | `TestBootCrashMatrixCoversEveryWriter` (both instances) | a durable operation between P0a and readiness whose crash-point label is unregistered, or absent from 06 §6.5.1's boot-writer table, fails the kit; a new or changed file under the DB parent or the state directory that the after-boot tree diff finds without a label fails it too (A-8, COR9-5, COR10-7) |
 | `TestRestoreBootWithoutHooksReachesApplied` (R1) | a staged restore booted by a build without P4d steps 2–3 takes `opened --> marker_written --> applied` with `HooksOwed` and removes `inflight.json` (DATA9-5) |
@@ -3287,3 +3299,5 @@ Round 16 (2026-11-05): plan-gap fixes G6 (§5S.4 "Task kinds": `core.storage.com
 Round 16 (2026-11-05): review fixes X4 (§5S.4 "Task kinds": `storagetasks` is created dark by the T4 conversion and its kinds registered from F5; the key `core.storage.schedules.compact` is declared at F2 by the kernel's core-section list, and `storagetasks` only passes it to `ScheduleFromConfig` from F5).
 
 Owner answers (2026-11-05): D15 — §5S.3.13 and its tests: M8 has one fixed ID, `books.rewrite`, registered at F3 and kept last; the "second M8" journal rule and test cell removed (advisor S2); the R2 bullet of the migration lifecycle cites it.
+
+R1-21 (2026-11-08), the journaled swap and the crash-matrix kit: `storage.ErrRenameRefused` is restorejournal's sentinel re-exported, as `ErrSwapPending` is; `Record` states the journal's JSON Lines rule and its torn tail (D2); §5S.3.16 and the `TestBootCrashMatrix` row state that the error mode skips Pebble's own files, which are kill points only (D12).
