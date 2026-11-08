@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -57,7 +57,7 @@ var ErrJournalCorrupt = errors.New("restoreswap: swap journal is corrupt")
 // never acknowledged and is dropped; an undecodable line before it is
 // ErrJournalCorrupt. A missing journal is no records.
 func ReadJournal(fs vfs.FS, stateDir, id string) ([]restorejournal.Record, error) {
-	recs, _, err := readJournal(fs, journalPath(stateDir, id))
+	recs, _, _, err := readJournal(fs, journalPath(stateDir, id))
 	return recs, err
 }
 
@@ -65,25 +65,25 @@ func journalPath(stateDir, id string) string {
 	return filepath.Join(restorejournal.JournalDir(stateDir, id), restorejournal.JournalName)
 }
 
-// readJournal returns the records and the byte offset just past the last
-// acknowledged line, where the next append writes (over any torn tail).
-func readJournal(fs vfs.FS, path string) ([]restorejournal.Record, int64, error) {
+// readJournal returns the records, the bytes of every acknowledged line
+// (the file up to just past the last one, where the next append goes) and
+// whether a torn tail followed them and was dropped.
+func readJournal(fs vfs.FS, path string) (recs []restorejournal.Record, acked []byte, torn bool, err error) {
 	f, err := fs.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, 0, nil
+			return nil, nil, false, nil
 		}
-		return nil, 0, fmt.Errorf("restoreswap: open journal %s: %w", path, err)
+		return nil, nil, false, fmt.Errorf("restoreswap: open journal %s: %w", path, err)
 	}
-	b, err := io.ReadAll(f)
+	all, err := io.ReadAll(f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return nil, 0, fmt.Errorf("restoreswap: read journal %s: %w", path, err)
+		return nil, nil, false, fmt.Errorf("restoreswap: read journal %s: %w", path, err)
 	}
-	var recs []restorejournal.Record
-	var end int64
+	b, end := all, 0
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
 		if i < 0 {
@@ -95,13 +95,13 @@ func readJournal(fs vfs.FS, path string) ([]restorejournal.Record, int64, error)
 			if bytes.IndexByte(b[i+1:], '\n') < 0 {
 				break // the last line, torn mid-write
 			}
-			return nil, 0, fmt.Errorf("%w: %s line %d: %v", ErrJournalCorrupt, path, len(recs)+1, err)
+			return nil, nil, false, fmt.Errorf("%w: %s line %d: %v", ErrJournalCorrupt, path, len(recs)+1, err)
 		}
 		recs = append(recs, r)
-		end += int64(i + 1)
+		end += i + 1
 		b = b[i+1:]
 	}
-	return recs, end, nil
+	return recs, all[:end], end < len(all), nil
 }
 
 // lastStep is the journal's last step, "" when empty.
@@ -114,8 +114,10 @@ func lastStep(recs []restorejournal.Record) string {
 
 // appendRec appends one record to restore/<id>/journal.json and fsyncs it,
 // labelled swap.journal.<step>; the first append also fsyncs the journal's
-// directory so the file itself is durable. It writes at the end of the last
-// acknowledged line, over any torn tail.
+// directory so the file itself is durable. It writes just past the last
+// acknowledged line; a journal with a torn tail is rewritten instead
+// (rewriteJournal), so the file never holds bytes past its last line but
+// those of the one append in progress.
 func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Record) error {
 	exit := bootseam.Region(ctx, "swap.journal."+r.Step)
 	defer exit()
@@ -131,10 +133,14 @@ func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Rec
 	}
 	line = append(line, '\n')
 	path := journalPath(s.o.StateDir, id)
-	_, end, err := readJournal(s.fs, path)
+	_, acked, torn, err := readJournal(s.fs, path)
 	if err != nil {
 		return err
 	}
+	if torn {
+		return s.rewriteJournal(path, acked, line, r.Step)
+	}
+	end := int64(len(acked))
 	_, statErr := s.fs.Stat(path)
 	fresh := errors.Is(statErr, os.ErrNotExist)
 	var f vfs.File
@@ -161,4 +167,31 @@ func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Rec
 		return syncDir(s.fs, filepath.Dir(path))
 	}
 	return nil
+}
+
+// rewriteJournal replaces a journal whose torn tail readJournal dropped
+// with its acknowledged lines and line, through .journal.json.tmp renamed
+// over it and the directory synced (R1-21 review m6). Writing line over the
+// tail in place would leave the tail's stale bytes past a shorter line, and
+// a later torn append could join them into an undecodable line before the
+// last: ErrJournalCorrupt, which halts every boot. vfs.File has no truncate.
+// A kill before the rename leaves the journal as it was, the record not
+// acknowledged, and a temp the next rewrite overwrites.
+func (s *Swapper) rewriteJournal(path string, acked, line []byte, step string) error {
+	tmp := filepath.Join(filepath.Dir(path), "."+restorejournal.JournalName+".tmp")
+	f, err := s.fs.Create(tmp, vfs.WriteCategoryUnspecified)
+	if err != nil {
+		return fmt.Errorf("restoreswap: rewrite journal %s: %w", path, err)
+	}
+	cherr := chmod(s.fs, tmp, privateFile)
+	_, werr := f.Write(append(append([]byte{}, acked...), line...))
+	serr := f.Sync()
+	cerr := f.Close()
+	if err := errors.Join(cherr, werr, serr, cerr); err != nil {
+		return fmt.Errorf("restoreswap: rewrite journal %s for %s: %w", path, step, err)
+	}
+	if err := s.fs.Rename(tmp, path); err != nil {
+		return fmt.Errorf("restoreswap: rewrite journal %s for %s: %w", path, step, err)
+	}
+	return syncDir(s.fs, filepath.Dir(path))
 }
