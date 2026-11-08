@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
 // version: 1.0.0
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -202,19 +202,21 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	return nil
 }
 
-// markReady is 05-storage §5S.3.12's readiness write, at start step 8: ready_at
-// and status served on every open checkpoint record of the live store, so no
-// later boot reuses a checkpoint that predates what this boot serves. Run
-// calls it before READY=1, so READY=1 implies the write. A failure stops the
-// app: serving on with the record unwritten would let the next upgrade reuse
-// that checkpoint, and a rollback to it would drop every write made
-// meanwhile without asking for --accept-loss.
-func (k *Kernel) markReady(now time.Time) error {
+// markServed is 05-storage §5S.3.12's served write, before Run's start step
+// (1): ready_at and status served on every open checkpoint record of the live
+// store, so no later boot reuses a checkpoint that predates what this boot's
+// modules write. Run calls it before any module code that can write runs, so
+// a boot that writes from a start hook and dies before READY=1 has still
+// marked the record. A failure stops the app: running on with the record
+// unwritten would let the next upgrade reuse that checkpoint, and a rollback
+// to it would drop every write made meanwhile without asking for
+// --accept-loss.
+func (k *Kernel) markServed(now time.Time) error {
 	if k.store == nil || k.store.db == nil {
 		return nil
 	}
-	if err := k.store.db.MarkReady(now); err != nil {
-		return fmt.Errorf("kernel: storage readiness (ready_at, 05-storage §5S.3.12): %w", err)
+	if err := k.store.db.MarkServed(now); err != nil {
+		return fmt.Errorf("kernel: checkpoint served write (ready_at, 05-storage §5S.3.12): %w", err)
 	}
 	return nil
 }

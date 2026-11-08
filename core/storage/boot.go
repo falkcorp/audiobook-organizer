@@ -1,7 +1,7 @@
 // file: core/storage/boot.go
 // version: 1.0.0
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 

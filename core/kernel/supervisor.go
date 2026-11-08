@@ -1,7 +1,7 @@
 // file: core/kernel/supervisor.go
 // version: 1.0.3
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -123,9 +123,10 @@ type moduleWorker struct {
 	worker module.Worker
 }
 
-// Run starts the app in the order of 06 §6.5.2 that exists at R1 (core
-// background services, module hooks, module workers, R1Values then the
-// listener, readiness), blocks until ctx is done, a StopAppOnExit worker
+// Run starts the app in the order of 06 §6.5.2 that exists at R1 (the served
+// write on open checkpoint records, core background services, module hooks,
+// module workers, R1Values then the listener, readiness), blocks until ctx is
+// done, a StopAppOnExit worker
 // exits, the listener fails or a restart is requested, and then stops in the
 // reverse order within core.shutdown.budget (05-health §5H.4).
 //
@@ -140,6 +141,16 @@ func (k *Kernel) Run(ctx context.Context) error {
 		return errRunTwice
 	}
 	k.signal(ctx, "status", k.notifier.Status("starting"))
+	// Before step (1): every open checkpoint record of the live store is
+	// marked served (ready_at, 05-storage §5S.3.12) before any module code
+	// that can write runs, the first being step (2)'s hooks (Register writes
+	// nothing, 05-storage §5S.4 step 12). A boot that writes from a hook and
+	// dies before READY=1 has still served past the checkpoint, so the next
+	// upgrade takes its own. A failure stops here: nothing has started.
+	if err := k.markServed(time.Now()); err != nil {
+		k.log.ErrorContext(ctx, "kernel: checkpoint record not marked served; stopping", "err", err)
+		return errors.Join(err, k.closeCore(ctx, time.Now().Add(defaultShutdownBudget)))
+	}
 	// (1) Core background services: the metrics Provider has served since
 	// P5; the realtime hub lands with realtime.
 	// (2) Module hooks, modules in ID order, each module's in registration
@@ -186,12 +197,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	k.log.InfoContext(ctx, "kernel: listening", "addr", srv.Addr().String())
 	// (8) Readiness. The readiness core and its /readyz arrive with health
 	// (F2); until then readiness is the notifier's READY=1. The checkpoint
-	// records' ready_at is written first, and a failure stops the app
-	// (markReady).
-	if err := k.markReady(time.Now()); err != nil {
-		k.log.ErrorContext(ctx, "kernel: not ready; stopping", "err", err)
-		return errors.Join(err, k.stop(ctx, time.Now().Add(budget), srv, served, false, ws, started))
-	}
+	// records were marked served before step (1), so READY=1 implies it.
 	k.signal(ctx, "ready", k.notifier.Ready())
 	k.log.InfoContext(ctx, "kernel: ready")
 	k.lifecycle.ready.Store(true)

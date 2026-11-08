@@ -1,7 +1,7 @@
 // file: core/kernel/storage_test.go
 // version: 1.0.0
 // guid: 36b3a2eb-1f55-4a42-83bc-47c859649615
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,7 +19,10 @@ import (
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble/v2"
+
 	"github.com/falkcorp/mediacore/coretest/logcapture"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -393,9 +398,12 @@ func previousBuild(t *testing.T, path string, rec *recorder, probe func()) (*Ker
 
 // TestReadinessMarksCheckpointServed (05-storage §5S.3.12 "Upgrade attempt
 // and reuse"; review BLOCKER-1): after a failed upgrade the previous build
-// boots and serves; by the time it sends READY=1 the open record carries
-// ready_at and status served, so the next upgrade takes its own checkpoint.
-// A record that cannot be written stops the app before READY=1.
+// boots and serves; the open record carries ready_at and status served
+// before the first start hook runs, and so by READY=1, so the next upgrade
+// takes its own checkpoint. A boot that writes from a start hook and dies
+// before READY=1 (its listener fails) has still marked the record, and the
+// next upgrade's fresh checkpoint holds that write. A record that cannot be
+// written stops the app before anything starts.
 func TestReadinessMarksCheckpointServed(t *testing.T) {
 	t.Run("served", func(t *testing.T) {
 		path, name := failedUpgrade(t)
@@ -437,8 +445,94 @@ func TestReadinessMarksCheckpointServed(t *testing.T) {
 		if slices.Contains(rec.list(), "ready") {
 			t.Fatal("READY=1 was sent although ready_at was not written")
 		}
+		if got := rec.matching("listen:"); len(got) != 0 {
+			t.Fatalf("Run went on to the listener (%v) although ready_at was not written", got)
+		}
 		if status, readyAt, err := checkpointStatus(path, name); err != nil || status != "open" || readyAt != nil {
 			t.Fatalf("the record = %q, %v (%v); want it still open", status, readyAt, err)
 		}
 	})
+	t.Run("start-hook-write-then-death", func(t *testing.T) {
+		path, old := failedUpgrade(t)
+		var deps module.Deps
+		seen := make(chan string, 1)
+		alfred := storageMod("alfred", func(r *module.Registrar) error {
+			deps = r.Deps()
+			r.Hook(module.Hook{Name: "alfred.lamp", Start: func(ctx context.Context) error {
+				status, _, err := checkpointStatus(path, old)
+				if err != nil {
+					status = err.Error()
+				}
+				seen <- status
+				return deps.Storage.Keyspace.Set(ctx, []byte("batcave"), []byte("lit"))
+			}})
+			return nil
+		}, seedStep(1, "cave"))
+		rec := &recorder{}
+		c := supervised(t, rec, alfred)
+		c.Listen = func(httpapi.ListenOptions, http.Handler, *slog.Logger) (Server, error) {
+			return nil, errors.New("arkham is locked down")
+		}
+		c.StoragePath = path
+		k := mustNew(t, c)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		if err := k.Run(ctx); err == nil || !strings.Contains(err.Error(), "arkham is locked down") {
+			t.Fatalf("Run with a failing listener = %v, want the listener's error", err)
+		}
+		if slices.Contains(rec.list(), "ready") {
+			t.Fatal("READY=1 was sent although the listener failed")
+		}
+		select {
+		case status := <-seen:
+			if status != "served" {
+				t.Fatalf("the record when the start hook ran = %q, want served", status)
+			}
+		default:
+			t.Fatal("the start hook never ran")
+		}
+		// The fixed build's upgrade takes its own checkpoint, which holds the
+		// row the start hook wrote before the boot died.
+		c = testConfig(t, storageMod("alfred", nil, seedStep(1, "cave"), storage.Migration{
+			Version: 2, Name: "fixed", Compat: storage.Additive,
+			Up: func(_ context.Context, tx *storage.MigrationTx) error { return tx.Set([]byte("fixed"), []byte("1")) }}))
+		c.StoragePath = path
+		got := mustNew(t, c).store.db.CheckpointName()
+		if got == "" || got == old {
+			t.Fatalf("the upgrade after the dead boot used checkpoint %q, want a fresh one (not %q)", got, old)
+		}
+		if !checkpointHas(t, path, got, "m/alfred/batcave") {
+			t.Fatalf("checkpoint %s lacks the row the start hook wrote", got)
+		}
+	})
+}
+
+// checkpointHas reports whether checkpoint name's copy of the store holds the
+// raw key.
+func checkpointHas(t *testing.T, path, name, key string) bool {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(path), ".mediacore-checkpoints", name, "db")
+	db, err := cpebble.Open(dir, &cpebble.Options{ReadOnly: true, Logger: quietPebble{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, closer, err := db.Get([]byte(key))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = closer.Close()
+	return true
+}
+
+// quietPebble drops Pebble's informational logging in checkpointHas.
+type quietPebble struct{}
+
+func (quietPebble) Infof(string, ...any)  {}
+func (quietPebble) Errorf(string, ...any) {}
+func (quietPebble) Fatalf(format string, args ...any) {
+	panic(fmt.Sprintf(format, args...))
 }
