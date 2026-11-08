@@ -1,5 +1,5 @@
 // file: cmd/child_mode.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-08
 
@@ -69,8 +69,12 @@ func RunOperationRunner() {
 	})
 
 	// The HNSW clean-stop marker beside the database is the parent's: this
-	// open must not take it (database.DisableHNSWCleanStopClaim).
-	database.DisableHNSWCleanStopClaim()
+	// open must not take it (database.DisableHNSWCleanStopClaim). Every path
+	// out of this function exits the process today, so the deferred restore
+	// only matters to a future caller that returns; it keeps the switch from
+	// outliving the run.
+	restoreClaim := database.DisableHNSWCleanStopClaim()
+	defer restoreClaim()
 	snap := config.Snapshot()
 	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath)
 	if err != nil {
