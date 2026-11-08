@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 

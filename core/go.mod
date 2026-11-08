@@ -1,5 +1,5 @@
 // file: core/go.mod
-// version: 1.0.3
+// version: 1.0.4
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
 // last-edited: 2026-11-08
 
