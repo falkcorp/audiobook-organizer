@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
 // last-edited: 2026-11-08
 
@@ -123,7 +123,9 @@ type fixtureRun struct {
 	reports  int
 	census   chain
 	legal    []outcome
-	initial  string // the fixture store's module-row digest (no store: zero rows)
+	initial  string                 // the fixture store's module-row digest (no store: zero rows)
+	hadStore bool                   // a store was at the DB path before the first boot
+	intent   *restorejournal.Intent // the fixture's staged swap, nil when none
 	stats    stats
 }
 
@@ -166,19 +168,32 @@ func (fr *fixtureRun) run(m mode) {
 		fr.errorf("%v", err)
 		return
 	}
-	if _, fr.initial, _, err = readStore(mem, fr.f.dbPath(), false); err != nil {
+	if fr.hadStore, fr.initial, _, err = readStore(mem, fr.f.dbPath(), false); err != nil {
 		fr.errorf("reading the fixture's store: %v", err)
 		return
 	}
 	if fr.initial == "" {
 		fr.initial = zeroRows()
 	}
+	if fr.intent, err = stagedIntent(mem, fr.f.StateDir); err != nil {
+		fr.errorf("reading the fixture's staged intent: %v", err)
+		return
+	}
 	fr.census = fr.chain(mem, func(int) bootseamtest.Options { return bootseamtest.Options{Clones: m == modeFull} })
 	if !fr.census.ended(fr.f) {
 		fr.errorf("the fault-free boot does not reach readiness within %d boots: %v", maxBoots, fr.census.errs())
 		return
 	}
+	if fr.census.outcome.err != nil {
+		fr.errorf("reading the fault-free boot's result: %v", fr.census.outcome.err)
+		return
+	}
 	fr.legal = append(fr.legal, fr.census.outcome)
+	// The fault-free run is the yardstick: it is held to the same rules
+	// first, so a wrong end there cannot make itself legal.
+	for _, msg := range fr.violations(fr.census.outcome) {
+		fr.errorf("the fault-free boot: %s", msg)
+	}
 	if m == modeCensus {
 		return
 	}
@@ -213,6 +228,9 @@ func (fr *fixtureRun) untouched() bool {
 		fr.errorf("the store the swap would replace does not boot to readiness on its own: %v", u.errs())
 		return false
 	}
+	// With its slot removed the run has no journal; its store is what a
+	// rejected or swapped-back swap leaves live (I2's class "back").
+	u.outcome.end = endBack
 	fr.legal = append(fr.legal, u.outcome)
 	return true
 }
@@ -393,7 +411,7 @@ func (fr *fixtureRun) chain(mem *vfs.MemFS, opts func(boot int) bootseamtest.Opt
 			break
 		}
 	}
-	c.outcome = read(c.mem, fr.f)
+	c.outcome = read(c.mem, fr.f, fr.intent)
 	return c
 }
 

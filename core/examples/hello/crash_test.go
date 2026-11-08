@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-08
 
@@ -68,9 +68,12 @@ type namedScenario struct {
 // each run's in-memory filesystem.
 func crashScenarios(t *testing.T) []namedScenario {
 	t.Helper()
-	// A checkpoint restore whose P4b fails journals failed and refuses this
-	// binary (05-backup §5B.3.4's error table, DATA7-12): a legal end of an
-	// error injected into its migration list as well as of a failing step.
+	// A checkpoint restore whose migration step fails journals failed and
+	// refuses this binary (05-backup §5B.3.4's error table, DATA7-12). Only
+	// the step's own failure does (R1-21 review (f)): an I/O error in the
+	// migration bookkeeping halts at opened and the next boot retries, so
+	// the refusal is declared only on the fixture whose step fails, and I5
+	// accepts it only where the fault-free boot refuses too (review (d)).
 	refused := func(f crashmatrix.Fixture) crashmatrix.Fixture {
 		f.Refusal = kernel.ErrCheckpointRestoreFailedHere
 		return f
@@ -83,7 +86,7 @@ func crashScenarios(t *testing.T) []namedScenario {
 		upgradeFailed(t),
 		restore(t, "restore-archive", restorejournal.KindArchive, true, withTag("staged")),
 		restore(t, "restore-revert", restorejournal.KindRevert, false, withTag("staged")),
-		refused(restore(t, "restore-checkpoint", restorejournal.KindCheckpoint, false, withTag("staged"))),
+		restore(t, "restore-checkpoint", restorejournal.KindCheckpoint, false, withTag("staged")),
 		restore(t, "restore-bad-level", restorejournal.KindArchive, false, levelVariant()),
 		reset(t, restorejournal.ResetStore),
 		reset(t, restorejournal.ResetFactory),
