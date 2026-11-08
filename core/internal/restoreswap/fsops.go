@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/fsops.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 441df42a-91a3-4c8c-ad83-3f4a17489cdf
 // last-edited: 2026-11-08
 
@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // ErrSwapAmbiguous: an idempotent rename found its source and its
@@ -50,35 +52,9 @@ func syncDir(fs vfs.FS, dir string) error {
 	return nil
 }
 
-// mkdirAllSynced creates dir and its missing parents (0700) and fsyncs the
-// parent of every directory it created, so the chain survives a crash
-// before anything is renamed into it.
-func mkdirAllSynced(fs vfs.FS, dir string) error {
-	dir = filepath.Clean(dir)
-	var created []string
-	for d := dir; ; d = filepath.Dir(d) {
-		ok, err := exists(fs, d)
-		if err != nil {
-			return err
-		}
-		if ok || filepath.Dir(d) == d {
-			break
-		}
-		created = append(created, d)
-	}
-	if len(created) == 0 {
-		return nil
-	}
-	if err := fs.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("restoreswap: mkdir %s: %w", dir, err)
-	}
-	for _, d := range created {
-		if err := syncDir(fs, filepath.Dir(d)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// mkdirAllSynced is restorejournal.MkdirAllSynced: dir and its missing
+// parents (0700), the parent of each created directory fsynced.
+func mkdirAllSynced(fs vfs.FS, dir string) error { return restorejournal.MkdirAllSynced(fs, dir) }
 
 // mv is the idempotent rename of 05-backup §5B.3.4's step table: rename only
 // if the source exists and the destination does not.
