@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.9.2
+# version: 1.9.3
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-11-05
+# last-edited: 2026-11-08
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -65,7 +65,8 @@ DEPLOY_BIN := /usr/local/bin/audiobook-organizer
 DEPLOY_DB := /path/to/audiobooks.pebble
 
 # Base URL of the deployed server, used by the post-deploy readiness wait
-# (scripts/deploy-wait-ready.sh polls $(DEPLOY_URL)/health) and version check.
+# (scripts/deploy-wait-ready.sh polls $(DEPLOY_URL)/health). The version check
+# does not use it: it runs `--version-json` on the host over ssh.
 # Also required by the committed `make rollback` target. `user@` is stripped
 # from DEPLOY_HOST, as the committed Makefile's default does; an ssh alias
 # (a ~/.ssh/config Host name) does not resolve for curl, so write the real
@@ -98,13 +99,15 @@ deploy:
 	  sudo systemctl restart audiobook-organizer.service'
 	@echo "→ Waiting for /health to report ready (up to 300s; the in-memory warmup takes minutes)..."
 	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
-	@echo "→ Post-deploy: verifying deployed version matches git describe..."
+	@echo "→ Post-deploy: verifying the deployed binary's version (--version-json over ssh)..."
 	@expected="$(VERSION)"; \
-	  deployed=$$(curl -ksf $(DEPLOY_URL)/api/v1/system/version || echo "UNREACHABLE"); \
+	  deployed=$$(ssh $(DEPLOY_HOST) $(DEPLOY_BIN) --version-json 2>/dev/null | \
+	    python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || echo "UNREACHABLE"); \
 	  echo "   expected: $$expected"; \
 	  echo "   deployed: $$deployed"; \
 	  case "$$deployed" in \
-	    *"$$expected"*) echo "✅ Deployed version matches." ;; \
+	    UNREACHABLE) echo "❌ Could not read the deployed version over ssh."; exit 1 ;; \
+	    "$$expected"|"$${expected#v}") echo "✅ Deployed version matches." ;; \
 	    *) echo "❌ Deployed version does NOT match git describe — stale binary shipped?"; exit 1 ;; \
 	  esac
 	@echo "✅ Deployed to $(DEPLOY_HOST). Roll back with: make rollback DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_BIN=$(DEPLOY_BIN)"
