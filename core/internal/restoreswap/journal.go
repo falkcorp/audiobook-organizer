@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
 // last-edited: 2026-11-08
 
@@ -147,8 +147,10 @@ func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Rec
 	if fresh {
 		f, err = s.fs.Create(path, vfs.WriteCategoryUnspecified)
 		if err == nil {
-			if cherr := chmod(s.fs, path, privateFile); cherr != nil {
-				return errors.Join(cherr, f.Close())
+			// SEC-9: 0600 before the first byte; a journal that cannot be
+			// made private is removed, so the next append creates it again.
+			if cherr := restorejournal.ChmodFS(s.fs, path, privateFile); cherr != nil {
+				return errors.Join(fmt.Errorf("restoreswap: create journal %s: %w", path, cherr), f.Close(), s.fs.Remove(path))
 			}
 		}
 	} else {
@@ -205,18 +207,21 @@ func (s *Swapper) durableJournal(ctx context.Context, id string) ([]restorejourn
 // a later torn append could join them into an undecodable line before the
 // last: ErrJournalCorrupt, which halts every boot. vfs.File has no truncate.
 // A kill before the rename leaves the journal as it was, the record not
-// acknowledged, and a temp the next rewrite overwrites.
+// acknowledged, and a temp the next rewrite overwrites. A temp that cannot
+// be made 0600 (SEC-9) is removed with nothing written to it.
 func (s *Swapper) rewriteJournal(path string, acked, line []byte, step string) error {
 	tmp := filepath.Join(filepath.Dir(path), "."+restorejournal.JournalName+".tmp")
 	f, err := s.fs.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return fmt.Errorf("restoreswap: rewrite journal %s: %w", path, err)
 	}
-	cherr := chmod(s.fs, tmp, privateFile)
+	if err := restorejournal.ChmodFS(s.fs, tmp, privateFile); err != nil {
+		return errors.Join(fmt.Errorf("restoreswap: rewrite journal %s for %s: %w", path, step, err), f.Close(), s.fs.Remove(tmp))
+	}
 	_, werr := f.Write(append(append([]byte{}, acked...), line...))
 	serr := f.Sync()
 	cerr := f.Close()
-	if err := errors.Join(cherr, werr, serr, cerr); err != nil {
+	if err := errors.Join(werr, serr, cerr); err != nil {
 		return fmt.Errorf("restoreswap: rewrite journal %s for %s: %w", path, step, err)
 	}
 	if err := s.fs.Rename(tmp, path); err != nil {

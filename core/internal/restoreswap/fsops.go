@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/fsops.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 441df42a-91a3-4c8c-ad83-3f4a17489cdf
 // last-edited: 2026-11-08
 
@@ -162,70 +162,88 @@ func renameSynced(fs vfs.FS, src, dst string) error {
 }
 
 // twinProven reports whether src and dst, both present, are one item's two
-// names (R1-21 review M3).
+// names (R1-21 review M3), which mv may collapse by discarding dst. It
+// fails closed: what it cannot prove from the filesystem it is given is not
+// a twin, and mv halts with ErrSwapAmbiguous.
 //
 // On the real filesystem (vfs.Root(fs) == vfs.Default) rename(2) is atomic
 // and never leaves both names, so both present means something else wrote
 // one of them: an older binary with no P0a that created a store at an empty
-// live path, an operator's copy. They are twins only when they are the same
-// inode (os.SameFile over Lstat, two hard links of one file), which a
-// directory never is; ghost is ignored, so no reasoning about what "cannot"
-// write a path ever discards the only copy of an original.
+// live path, an operator's copy. They are twins only when they are two
+// links of one file: the same inode to Lstat, neither a directory, in two
+// directories (Stat of the parents, symlinks followed, differs). Two paths
+// to one directory entry (a symlinked ancestor, a case-insensitive
+// spelling) are the same inode as well, but one link: discarding "the
+// second name" would delete the only one. Every rename of the swap moves an
+// item to another directory, so two links in one directory are refused too.
+// A directory is never a twin: one bind-mounted into a second parent is the
+// same inode under two different parents, and RemoveAll of either name
+// empties both.
+// ghost is ignored, so no reasoning about what "cannot" write a path ever
+// discards the only copy of an original.
 //
-// Any other filesystem has no inode identity, and the crash-matrix kit's
-// crashable in-memory one is the only one that leaves both names: a kill
-// between the two directory fsyncs of a rename clones each directory's
-// synced entries on its own. There ghost, the caller's proof from state it
-// shows durable, decides; nil proves nothing.
+// The crash-matrix kit's crashable in-memory filesystem (vfs.Root(fs) is a
+// *vfs.MemFS) has no inode identity, and it is the only one that leaves
+// both names: a kill between the two directory fsyncs of a rename clones
+// each directory's synced entries on its own. There ghost, the caller's
+// proof from state it shows durable, decides; nil proves nothing.
+//
+// Any other filesystem proves nothing (R1-21 verification review): vfs.FS
+// has no Lstat, so identity through its Stat would follow a symlink at
+// either name and call it its target's twin, and its paths need not be
+// the operating system's, so os.Lstat would ask about other files.
 func twinProven(fs vfs.FS, src, dst string, ghost func() (bool, error)) (bool, error) {
-	if vfs.Root(fs) == vfs.Default {
-		a, err := os.Lstat(src)
-		if err != nil {
-			return false, fmt.Errorf("restoreswap: lstat %s: %w", src, err)
+	root := vfs.Root(fs)
+	if _, mem := root.(*vfs.MemFS); mem {
+		if ghost == nil {
+			return false, nil
 		}
-		b, err := os.Lstat(dst)
-		if err != nil {
-			return false, fmt.Errorf("restoreswap: lstat %s: %w", dst, err)
-		}
-		return os.SameFile(a, b), nil
+		return ghost()
 	}
-	if ghost == nil {
+	if root != vfs.Default {
 		return false, nil
 	}
-	return ghost()
+	a, err := os.Lstat(src)
+	if err != nil {
+		return false, fmt.Errorf("restoreswap: lstat %s: %w", src, err)
+	}
+	b, err := os.Lstat(dst)
+	if err != nil {
+		return false, fmt.Errorf("restoreswap: lstat %s: %w", dst, err)
+	}
+	if a.IsDir() || b.IsDir() || !os.SameFile(a, b) {
+		return false, nil
+	}
+	pa, err := os.Stat(filepath.Dir(src))
+	if err != nil {
+		return false, fmt.Errorf("restoreswap: stat %s: %w", filepath.Dir(src), err)
+	}
+	pb, err := os.Stat(filepath.Dir(dst))
+	if err != nil {
+		return false, fmt.Errorf("restoreswap: stat %s: %w", filepath.Dir(dst), err)
+	}
+	return !os.SameFile(pa, pb), nil
 }
 
 // memGhost is mv's in-memory proof for a rename whose destination nothing
 // but this rename writes (a path in the swap's private namespace, or a live
 // path step x emptied): both names there are the crash model's second name.
-// On the real filesystem mv ignores it (twinProven).
+// Only the in-memory filesystem reads it (twinProven).
 func memGhost() (bool, error) { return true, nil }
 
 // existsProof is mv's in-memory proof "path exists" (step d: the live path
 // beside its staged source is the source's second name only when step c
-// moved the live item away). On the real filesystem mv ignores it.
+// moved the live item away). Only the in-memory filesystem reads it
+// (twinProven).
 func existsProof(fs vfs.FS, path string) func() (bool, error) {
 	return func() (bool, error) { return exists(fs, path) }
 }
 
 // privateFile is the mode of every file the swap creates (SEC-9: state and
 // store copies, which can hold plaintext secrets, are 0600 in 0700
-// directories).
+// directories), set by restorejournal.ChmodFS before the first byte: on a
+// filesystem that is neither the real one nor in memory the create fails.
 const privateFile os.FileMode = 0o600
-
-// chmod sets mode on a file of the real filesystem before anything is
-// written to it; vfs.FS has no chmod, and an in-memory one has no modes. A
-// wrapper over the real filesystem (the crash-matrix kit's errorfs) is
-// unwrapped by vfs.Root.
-func chmod(fs vfs.FS, path string, mode os.FileMode) error {
-	if vfs.Root(fs) != vfs.Default {
-		return nil
-	}
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("restoreswap: chmod %s: %w", path, err)
-	}
-	return nil
-}
 
 // copyIfExists copies src to dst atomically (temp file + fsync, rename,
 // directory fsync) with src's permission bits, so step x's rename of the
@@ -275,8 +293,8 @@ func writeFileAtomic(fs vfs.FS, path string, data []byte, mode os.FileMode) erro
 	if err != nil {
 		return fmt.Errorf("restoreswap: create %s: %w", tmp, err)
 	}
-	if err := chmod(fs, tmp, mode); err != nil {
-		return errors.Join(err, f.Close(), fs.Remove(tmp))
+	if err := restorejournal.ChmodFS(fs, tmp, mode); err != nil {
+		return errors.Join(fmt.Errorf("restoreswap: create %s: %w", tmp, err), f.Close(), fs.Remove(tmp))
 	}
 	_, werr := f.Write(data)
 	serr := f.Sync()

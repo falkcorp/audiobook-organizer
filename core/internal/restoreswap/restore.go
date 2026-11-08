@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
 // last-edited: 2026-11-08
 
@@ -200,7 +200,8 @@ func (s *Swapper) forwardSteps(ctx context.Context, in restorejournal.Intent, la
 		for _, m := range asides {
 			// Before previous_moved nothing but this rename writes the
 			// destination, so in the crash model a second name is its twin
-			// (memGhost); on the real filesystem mv proves it by identity.
+			// (memGhost); on the real filesystem only two links of one file
+			// are, and on any other nothing is (twinProven).
 			if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, m.From, m.To, memGhost) }); err != nil {
 				return err
 			}
@@ -213,8 +214,8 @@ func (s *Swapper) forwardSteps(ctx context.Context, in restorejournal.Intent, la
 		// d: each staged item into place. In the crash model a live path
 		// present beside its staged source is the source's twin only when
 		// step c moved that live item away (existsProof); on the real
-		// filesystem only identity proves it. Otherwise boot halts naming
-		// both.
+		// filesystem only two links of one file are, and on any other
+		// nothing is (twinProven). Otherwise boot halts naming both.
 		for _, t := range in.Targets {
 			aside := restorejournal.SetAsideDest(s.o.StateDir, in.DBPath, in.ID, t.To)
 			if err := bootseam.Labelled(seams, "swap.place.mv", func() error {
@@ -338,8 +339,9 @@ func (s *Swapper) continueSwapBack(ctx context.Context, in restorejournal.Intent
 	// path that exists can only be the original's second name: x2 emptied
 	// every live path, or (before previous_moved) c's interrupted rename
 	// left both names. On the real filesystem a live path beside its
-	// set-aside original is a foreign write unless identity proves
-	// otherwise, and x halts naming both (mv, twinProven).
+	// set-aside original is a foreign write unless it is a second link of
+	// the original's file, on any other filesystem it is one regardless,
+	// and x halts naming both (mv, twinProven).
 	for _, m := range asides {
 		if err := bootseam.Labelled(seams, "swap.back.mv", func() error { return mv(s.fs, m.To, m.From, memGhost) }); err != nil {
 			return fmt.Errorf("restoreswap: step x of %s: move %s back to %s: %w", id, m.To, m.From, err)
