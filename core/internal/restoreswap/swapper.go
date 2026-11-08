@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -72,8 +72,9 @@ type Options struct {
 	// Recheck is step b (decision D4): nil checks that every placement's
 	// source exists and re-runs Validate; F8 installs the manifest re-hash.
 	Recheck func(ctx context.Context, in restorejournal.Intent) error
-	// Probe is the rename pre-check's device probe; nil skips the device
-	// and writability checks (an in-memory filesystem has neither).
+	// Probe is the device probe of the rename pre-check and of a reset's
+	// delete rule, at Stage and again at step a; nil skips the device and
+	// writability checks (an in-memory filesystem has neither).
 	Probe restorejournal.Probe
 	// Logger receives the swap's log lines; nil discards them.
 	Logger *slog.Logger
@@ -332,11 +333,14 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 
 // rejection is step a's one rule for every kind (05-backup §5B.3.4 a;
 // SEC7-5): an intent past its expires_at, with none, or staged by another
-// binary is rejected, and so is one whose targets Stage would have refused
-// (restorejournal.ValidateTargets, R1-21 review m4, m5: a stager that wrote
-// the slot without Stage never moves restore/ or a swap's undo). It reads
-// only pending.json: once the in-flight file exists no journal is rejected
-// by it.
+// binary is rejected, and so is one whose targets or delete entries Stage
+// would have refused (restorejournal.ValidateTargets, R1-21 review m4, m5;
+// restorejournal.ValidateDelete with Options.Probe, the verification
+// review): a stager that wrote the slot without Stage never moves restore/
+// or a swap's undo, and never deletes a kept path or, with a probe, an
+// entry on the DB's filesystem. It reads only pending.json: once the
+// in-flight file exists no journal is rejected by it, and ResetDone's own
+// kept-path skip is what still guards the delete entries.
 func (s *Swapper) rejection(in restorejournal.Intent) string {
 	switch {
 	case in.ExpiresAt.IsZero():
@@ -346,7 +350,8 @@ func (s *Swapper) rejection(in restorejournal.Intent) string {
 	case in.StagedByBuild != s.o.BuildID:
 		return fmt.Sprintf("the intent was staged by binary %q, not this one", in.StagedByBuild)
 	}
-	if err := restorejournal.ValidateTargets(s.o.StateDir, in, s.legacySuffixes()); err != nil {
+	if err := errors.Join(restorejournal.ValidateTargets(s.o.StateDir, in, s.legacySuffixes()),
+		restorejournal.ValidateDelete(s.o.Probe, s.o.StateDir, in, s.legacySuffixes())); err != nil {
 		return err.Error()
 	}
 	return ""

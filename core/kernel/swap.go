@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -100,6 +100,20 @@ func bootClock(ctx context.Context) func() time.Time {
 	return time.Now
 }
 
+// bootProbe is the swap's device probe for a boot over fs: the seam's
+// (bootseam.Seams.Probe, a test's model of a second filesystem), else the
+// operating system's on the real filesystem, else none, since an in-memory
+// filesystem has no devices.
+func bootProbe(ctx context.Context, fs vfs.FS) restorejournal.Probe {
+	if s := bootseam.From(ctx); s != nil && s.Probe != nil {
+		return s.Probe
+	}
+	if vfs.Root(fs) == vfs.Default {
+		return restorejournal.OSProbe()
+	}
+	return nil
+}
+
 // runP0a is boot phase P0a (06 §6.5.1; 05-backup §5B.3.4; 05-storage
 // §5S.3.15): the swapper resumes the swap whose in-flight file exists, else
 // applies the staged intent, before the store opens. It runs after P1 and
@@ -121,12 +135,8 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 		return err
 	}
 	clock := bootClock(ctx)
-	var probe restorejournal.Probe
-	if vfs.Root(fs) == vfs.Default {
-		probe = restorejournal.OSProbe()
-	}
 	sw, err := restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: clock,
-		Owners: k.storageOwners(), Probe: probe, Logger: k.coreLog("restoreswap")})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap")})
 	if err != nil {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}
