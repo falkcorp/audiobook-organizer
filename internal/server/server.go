@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.13
+// version: 2.114.14
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -820,6 +820,9 @@ func NewServer(store database.Store) *Server {
 	// writes itself, which the shim puts through the Basic gate.
 	router.Use(perimeterSeen())
 	router.Use(servermiddleware.BasicAuth())
+	// Right after the gate: marks a request it let through, so the shim
+	// tells the gate's own 401 from one a handler writes.
+	router.Use(perimeterGatePassed())
 	// Keeps the connection's own writer for setBodyReadDeadline (the
 	// accept-invite body read deadline), reached through core's writers'
 	// Unwrap.

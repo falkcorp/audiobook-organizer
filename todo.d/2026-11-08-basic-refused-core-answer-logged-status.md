@@ -11,11 +11,8 @@
       Accepted until F3, because the earlier fixes cost more: a new exported
       httpapi name for the outer writer to report the status it sent (the
       code contract forbids it), or ABO writing core's internal `State`. Add
-      a stage 4 test for the refused case when the gate moves. Also check
-      deviation 16: gin's own gate 401, with an allowed Origin and
-      `Accept-Encoding: gzip`, loses CORS's `Vary: Origin`, because stage 9
-      deletes every Vary value from a status of 400 or more, and HEAD's gate
-      ran before gzip. Once the gate is stage 8, its 401 must carry
-      `Vary: Origin` whenever stage 6 allowed the origin; drop the
-      `ginGateVary` cases in `TestPerimeter_ParityWithHEAD`, which assert
-      the difference today.
+      a stage 4 test for the refused case when the gate moves. The shim
+      also gives the gate's 401 back the `Vary: Origin` that stage 9 deletes
+      under gzip; once the gate is stage 8, its 401 must keep
+      `Vary: Origin` whenever stage 6 allowed the origin (the "gated, gzip"
+      cases of `TestPerimeter_ParityWithHEAD` check it).

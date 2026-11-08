@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"slices"
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +34,9 @@ import (
 //   - OPTIONS passes untouched: stage 6 answers every OPTIONS, as HEAD's CORS
 //     middleware did before the gate.
 //   - Any other request goes to the kernel with a perimeterState in its
-//     context. perimeterSeen, the engine's first middleware, marks it. When
+//     context. perimeterSeen, the engine's first middleware, marks it, and
+//     perimeterGatePassed, right after gin's BasicAuth, marks a request the
+//     gate let through. When
 //     the engine never ran, every answer core wrote itself is gated (fail
 //     closed: a native route added later cannot skip the gate) as for a
 //     request gin routed to no route (path exemptions only,
@@ -42,6 +45,8 @@ import (
 //     before the gate), drops what describes core's body, and writes the
 //     gate's 401. The shim also adds Alt-Svc to core's 404 and 405, where
 //     HEAD's late NoRoute middleware did.
+//   - When the engine ran, the answer passes untouched, except that gin's
+//     own gate 401 gets back the Vary: Origin stage 9 deleted (decide).
 //
 // The stages' own refusals are not gated (stageRefusal): stage 0's 403 and
 // its 425 for 0-RTT early data, stage 7's 403, stage 10's 429, stage 11's
@@ -53,8 +58,12 @@ import (
 // gate's 401, for a refused unrouted request: they run inside the kernel's
 // handler, outside which the shim sits. F3 removes the shim with the gate.
 
-// perimeterState records whether the gin engine ran for one request.
-type perimeterState struct{ gin atomic.Bool }
+// perimeterState records whether the gin engine ran for one request, and
+// whether gin's Basic gate let it through.
+type perimeterState struct {
+	gin    atomic.Bool
+	passed atomic.Bool
+}
 
 type perimeterKey struct{}
 
@@ -64,6 +73,18 @@ func perimeterSeen() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if st, ok := c.Request.Context().Value(perimeterKey{}).(*perimeterState); ok {
 			st.gin.Store(true)
+		}
+		c.Next()
+	}
+}
+
+// perimeterGatePassed is the gin engine's middleware right after BasicAuth:
+// a request that reaches it was let through by the gate, so the shim tells
+// the gate's 401 from a 401 a handler writes past it.
+func perimeterGatePassed() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if st, ok := c.Request.Context().Value(perimeterKey{}).(*perimeterState); ok {
+			st.passed.Store(true)
 		}
 		c.Next()
 	}
@@ -101,10 +122,24 @@ func (w *perimeterWriter) decide(status int) {
 		return
 	}
 	w.decided = true
-	if w.st.gin.Load() || stageRefusal(status) {
+	h := w.ResponseWriter.Header()
+	if w.st.gin.Load() {
+		// HEAD's gate ran after its CORS middleware and before its gzip
+		// middleware, so its 401 kept CORS's Vary: Origin, set with
+		// Access-Control-Allow-Origin. Stage 9 runs before this writer sees
+		// the answer, and deletes every Vary value from a status of 400 or
+		// more (gin-contrib/gzip's rule), so gin's gate 401 gets Origin
+		// back. A handler's own 401 past the gate (passed) is left alone:
+		// HEAD's gzip middleware deleted its Vary too.
+		if !w.st.passed.Load() && status == http.StatusUnauthorized &&
+			h.Get("Access-Control-Allow-Origin") != "" && !slices.Contains(h.Values("Vary"), "Origin") {
+			h.Add("Vary", "Origin")
+		}
 		return
 	}
-	h := w.ResponseWriter.Header()
+	if stageRefusal(status) {
+		return
+	}
 	if servermiddleware.BasicGateRefusesUnrouted(w.r) {
 		w.refused = true
 		// What core's answer set about its own body goes.
@@ -117,8 +152,7 @@ func (w *perimeterWriter) decide(status int) {
 		// core's answer: it added Vary: Accept-Encoding to a 301, and
 		// deleted every Vary value, Origin included, from a status of 400
 		// or more (gin-contrib/gzip's rule). So the refusal's Vary is
-		// rebuilt as HEAD's. gin's own gate 401 passes the shim untouched
-		// (gin ran), so it loses Vary: Origin under gzip (deviation 16).
+		// rebuilt as HEAD's.
 		h.Del("Vary")
 		if h.Get("Access-Control-Allow-Origin") != "" {
 			h.Set("Vary", "Origin")
