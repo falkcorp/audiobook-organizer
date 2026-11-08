@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- file: deploy/com.jdfalk.audiobook-organizer.plist -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.0.1 -->
 <!-- guid: 1f2e3d4c-5b6a-4789-90ab-cdef12345678 -->
 <!--
   macOS launchd plist for audiobook-organizer
@@ -50,6 +50,9 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Stop timeout: core's 25 s shutdown budget must finish first (05-health §5H.4) -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
 
     <!-- Logging -->
     <key>StandardOutPath</key>
