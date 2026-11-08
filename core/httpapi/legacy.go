@@ -1,7 +1,7 @@
 // file: core/httpapi/legacy.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package httpapi
 
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/mediacore/internal/httpmw"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -165,17 +166,16 @@ func LegacyMatchAgrees(ctx context.Context, method, ginPath string) (agrees, ok 
 	return slices.Contains(m.admits, ginRoute{method: method, path: ginPath}), true
 }
 
-// legacyHandler is the wrapper of one registered legacy pattern: it writes
-// the pattern into stage 2's route carrier like every route wrapper (§4.2
-// stage 2), puts the match in the context and calls the mount's handler.
-func legacyHandler(pattern, path string, admits []ginRoute, h http.Handler) http.Handler {
+// legacyHandler is the wrapper of one registered legacy pattern: through
+// the chain's route wrapper it records the pattern (spec.Pattern) and the
+// mount's policy in the request's State like every route wrapper (§4.2
+// stage 2) and runs stages 10-11, then puts the match in the context and
+// calls the mount's handler. r.mu is held.
+func (r *Router) legacyHandler(pattern string, admits []ginRoute, h http.Handler, spec httpmw.RouteSpec) http.Handler {
 	m := &legacyMatch{pattern: pattern, admits: admits}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if c := carrierFrom(req.Context()); c != nil {
-			c.set(path)
-		}
+	return r.chain.Route(spec, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		h.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), legacyMatchKey{}, m)))
-	})
+	}))
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +493,12 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 	}
 	for _, reg := range plan {
 		m := r.mounts[reg.mount]
-		if err := register(mux, reg.pat.String(), legacyHandler(reg.pat.String(), reg.pat.path(), reg.admits, m.Handler)); err != nil {
+		// The members of a generalised pattern share their RateClass and
+		// NoCompress (sameRequirements), so the first speaks for all.
+		first := reg.members[0].route
+		spec := httpmw.RouteSpec{Pattern: reg.pat.path(), Policy: mountPolicy(m, first.NoCompress),
+			Class: rateClassName(first.RateClass), MaxBody: -1}
+		if err := register(mux, reg.pat.String(), r.legacyHandler(reg.pat.String(), reg.admits, m.Handler, spec)); err != nil {
 			errs = append(errs, err)
 		}
 		for _, mem := range reg.members {
@@ -520,12 +525,22 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 // route. r.mu is held.
 func (r *Router) rootHandler() http.Handler {
 	h, owner := r.rootOwner()
-	if h == nil || owner == "core" {
-		return h
+	if h == nil {
+		return nil
 	}
-	// Path "": the "/" owner's pages record no http.route (05-http-api §4.2
-	// stage 2), and the carrier reads "" back as none.
-	return legacyHandler("", "", []ginRoute{{method: http.MethodGet, path: "/"}, {method: http.MethodHead, path: "/"}}, h)
+	// Pattern "": the "/" owner's pages record no http.route (05-http-api
+	// §4.2 stage 2), and the "/" owner runs no rate or body limit.
+	spec := httpmw.RouteSpec{Class: rateClassName(RateExempt), MaxBody: -1}
+	if owner == "core" {
+		spec.Policy = &httpmw.Policy{Owner: "core"}
+		return r.chain.Route(spec, h)
+	}
+	for _, m := range r.mounts {
+		if m.ServesSPA {
+			spec.Policy = mountPolicy(m, false)
+		}
+	}
+	return r.legacyHandler("", []ginRoute{{method: http.MethodGet, path: "/"}, {method: http.MethodHead, path: "/"}}, h, spec)
 }
 
 // nativeNodes are the routes Build registered itself, as graph nodes.

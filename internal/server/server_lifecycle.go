@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.0
+// version: 4.67.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1176,15 +1176,31 @@ func (s *Server) R1Listen(cfg ServerConfig) func(o httpapi.ListenOptions, h http
 	}
 }
 
+// apiGroupHookForTest, when set, runs first in the /api/v1 and /api/v3
+// groups' chain: the routes HEAD's /api rate limiter covered, which the
+// manifest's RateClass records (TestLegacyManifest_MatchesGinRoutes).
+var apiGroupHookForTest gin.HandlerFunc
+
+// chainHandlers runs a then b as one gin handler.
+func chainHandlers(a, b gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		a(c)
+		if !c.IsAborted() {
+			b(c)
+		}
+	}
+}
+
 // listenR1 binds the main listener for o (and loads its TLS key pair) and
-// prepares HTTP/3 and the redirect for cfg, serving inner behind the
-// perimeter shim (perimeter_shim.go) and the peer allow-list. A port in use, an unreadable key pair or a refused peer
+// prepares HTTP/3 and the redirect for cfg, serving inner (the kernel's
+// handler, core's perimeter stages included) behind the perimeter shim
+// (perimeter_shim.go). A port in use, an unreadable key pair or a refused peer
 // allow-list is returned, before anything serves. When the cert or key file is
 // missing it falls back to HTTP-only, as HEAD did.
 func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.Handler) (*R1Listener, error) {
-	// Every listener's handler is wrapped by the peer allow-list, outside the
-	// router, so a peer that is not allowed never reaches routing
-	// (peer_allowlist.go).
+	// ALLOWED_PEER_CIDRS is checked here as HEAD did, for the port-80
+	// redirect's gate (peer_allowlist.go); the kernel has already refused
+	// boot on an entry core's stage 0 cannot use.
 	if err := startupPeerAllowList(); err != nil {
 		return nil, err
 	}
@@ -1213,7 +1229,10 @@ func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" && cfg.HTTP3Port != "" {
 		altSvc = fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port)
 	}
-	gate := newPeerAllowListHandler(s.perimeterShim(inner, altSvc))
+	// Core's stage 0 runs the peer allow-list for the main and HTTP/3
+	// listeners (R1-17); the port-80 redirect, which core does not serve,
+	// keeps ABO's (redirectServerHandler).
+	gate := s.perimeterShim(inner, altSvc)
 	// The Handler is set in the literal: a Server with none serves
 	// http.DefaultServeMux, where net/http/pprof registers its handlers
 	// (pprof_guard_test.go).
@@ -2270,23 +2289,16 @@ func (s *Server) setupRoutes() {
 	jsonLimitBytes := int64(config.AppConfig.JSONBodyLimitMB) * 1024 * 1024
 	uploadLimitBytes := int64(config.AppConfig.UploadBodyLimitMB) * 1024 * 1024
 
-	// Rate limiting is opt-in. Default 0 means disabled (local/single-user server).
-	// EnableRateLimit is the master switch and APIRateLimitPerMinute is the
-	// threshold: both must hold for the real limiter to be installed, so
-	// EnableRateLimit=false always yields the passthrough handler regardless
-	// of what APIRateLimitPerMinute is set to.
-	apiRateLimiter := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
-		rpm := config.AppConfig.APIRateLimitPerMinute
-		burst := max(rpm/5, 10)
-		limiter := servermiddleware.NewIPRateLimiter(rpm, burst)
-		// SV-04: idle-entry eviction runs on a background ticker instead of
-		// the request path. bgCtx is cancelled by the s.bgCancel() call in
-		// Start's shutdown sequence, which ends the sweeper goroutine.
-		limiter.Start(s.bgCtx)
-		apiRateLimiter = limiter.Middleware()
-	}
+	// The /api rate limit is core's stage 10 (R1-17): books' r1Values hands it
+	// EnableRateLimit and APIRateLimitPerMinute, with HEAD's rule that both
+	// must hold, and each legacy route's RateClass says whether it is limited.
+	// The body limits stay here until F3: HEAD's per-path limits (the
+	// fingerprint worker's, the 20 GB Open Library upload) and its 413
+	// envelope are not stage 11's content-type classes.
 	bodyLimitMiddleware := servermiddleware.MaxRequestBodySize(jsonLimitBytes, uploadLimitBytes)
+	if apiGroupHookForTest != nil {
+		bodyLimitMiddleware = chainHandlers(apiGroupHookForTest, bodyLimitMiddleware)
+	}
 	authMiddleware := gin.HandlerFunc(func(c *gin.Context) {
 		c.Next()
 	})
@@ -2309,15 +2321,15 @@ func (s *Server) setupRoutes() {
 	// default; registers nothing unless ABS_API_ENABLED is set. See wire_abs_routes.go.
 	s.wireABSRoutes()
 
-	// API routes (auth + rate limits + request-size limits). The Cloudflare Access
+	// API routes (auth + request-size limits; the rate limit is core's). The Cloudflare Access
 	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
 	// present it binds the resolved user so the downstream RequireAuth skips its
 	// session check; otherwise it passes through. Harmless on public routes.
 	api := s.router.Group("/api/v1")
 	if cfMW != nil {
-		api.Use(apiRateLimiter, bodyLimitMiddleware, cfMW)
+		api.Use(bodyLimitMiddleware, cfMW)
 	} else {
-		api.Use(apiRateLimiter, bodyLimitMiddleware)
+		api.Use(bodyLimitMiddleware)
 	}
 	{
 		protected := api.Group("")
@@ -2575,9 +2587,9 @@ func (s *Server) setupRoutes() {
 	// its own version prefix.
 	apiV3 := s.router.Group("/api/v3")
 	if cfMW != nil {
-		apiV3.Use(apiRateLimiter, bodyLimitMiddleware, cfMW)
+		apiV3.Use(bodyLimitMiddleware, cfMW)
 	} else {
-		apiV3.Use(apiRateLimiter, bodyLimitMiddleware)
+		apiV3.Use(bodyLimitMiddleware)
 	}
 	protectedV3 := apiV3.Group("")
 	protectedV3.Use(authMiddleware)

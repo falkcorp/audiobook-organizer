@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -140,6 +140,7 @@ type R1Values struct {
 	TLSCertFile, TLSKeyFile      string
 	PeerAllowlist                []string
 	TrustedProxies               []string
+	ClientIPHeader               string
 	RateLimitEnabled             bool
 	RateLimitPerMinute           int
 	JSONMaxBytes, UploadMaxBytes int64

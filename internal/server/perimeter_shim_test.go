@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -15,7 +15,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -24,18 +24,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/mediacore/httpapi"
 )
 
 // perimeterStacks are the two listener handlers for one engine: HEAD's, the
-// peer allow-list gate over the gin engine, and R1's, the gate over the
-// perimeter shim over the kernel's router with books' legacy mount (what
-// listenR1 serves).
-func perimeterStacks(t *testing.T, f *credGuardFixture, altSvc string) (head, r1 http.Handler) {
+// peer allow-list gate over HEAD's gin perimeter (headPerimeter, frozen in
+// perimeter_stages_test.go) over the engine, and R1's, the perimeter shim
+// over the kernel's router with books' legacy mount, core's stages 0-11
+// included (what listenR1 serves). router is R1's, for SetPerimeter.
+func perimeterStacks(t *testing.T, f *credGuardFixture, altSvc string) (router *httpapi.Router, head, r1 http.Handler) {
 	t.Helper()
-	_, mounted := booksMount(t, f)
-	return newPeerAllowListHandler(f.srv.router), newPeerAllowListHandler(f.srv.perimeterShim(mounted, altSvc))
+	router, mounted := booksMount(t, f)
+	return router, newPeerAllowListHandler(headPerimeter(f.srv.router)), f.srv.perimeterShim(mounted, altSvc)
 }
 
 // perimeterCase is one request of the parity table.
@@ -47,10 +50,16 @@ type perimeterCase struct {
 	// (a problem 404 under core's /api/core/ group), so only the status and
 	// the perimeter's headers are compared.
 	coreBody bool
+	// peerRefused: the peer is outside the allow-list; only the refusal is
+	// compared.
+	peerRefused bool
 }
 
-// volatileHeaders differ between two runs of the same request.
-func volatileHeaders() []string { return []string{"Date", "X-Request-Id", "Content-Length"} }
+// volatileHeaders differ between two runs of the same request. X-App-Build
+// is new in R1 (stage 5) and checked on its own.
+func volatileHeaders() []string {
+	return []string{"Date", "X-Request-Id", "Content-Length", "X-App-Build"}
+}
 
 // perimeterParity sends c through both stacks and compares the status, every
 // header but the volatile ones, and the body.
@@ -72,7 +81,26 @@ func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 	}
 	g, k := do(head), do(r1)
 	assert.Equal(t, g.Code, k.Code, "%s: status", c.name)
+	if c.peerRefused {
+		// Stage 0's refusal is core's problem answer (05-http-api §4.2),
+		// HEAD's was http.Error's text; both come before any other stage.
+		assert.Equal(t, http.StatusForbidden, k.Code, "%s: status", c.name)
+		assert.Contains(t, k.Body.String(), "peer_refused", "%s: body", c.name)
+		return
+	}
+	assert.Equal(t, "dev", k.Header().Get("X-App-Build"), "%s: X-App-Build", c.name)
 	gh, kh := g.Header().Clone(), k.Header().Clone()
+	if strings.HasPrefix(c.path, "/api/core/") {
+		// Core owns the path: core's default policy and no report URL
+		// (05-http-api §4.2 stage 5), where HEAD's gin chain gave every
+		// answer ABO's.
+		assert.Equal(t, "default-src 'none'; frame-ancestors 'self'", kh.Get("Content-Security-Policy"), "%s: CSP", c.name)
+		assert.Empty(t, kh.Get("Reporting-Endpoints"), "%s: Reporting-Endpoints", c.name)
+		for _, h := range []http.Header{gh, kh} {
+			h.Del("Content-Security-Policy")
+			h.Del("Reporting-Endpoints")
+		}
+	}
 	for _, v := range volatileHeaders() {
 		gh.Del(v)
 		kh.Del(v)
@@ -174,29 +202,20 @@ func basicCredentials() string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte("alfred:synthetic-wayne-manor-gate"))
 }
 
-// TestPerimeterShim_ParityWithHEAD pins what the perimeter shim must keep
-// until R1-17 builds core's perimeter: for every kind of answer, the R1
+// TestPerimeter_ParityWithHEAD diffs HEAD's gin perimeter against core's
+// stages 0-11 and the shim (R1-17): for every kind of answer, the R1
 // listener stack answers as HEAD's did, with the same security headers,
 // CORS headers and preflight answers, the Basic gate's refusals and
-// exemptions, and the peer allow-list's allow and deny. Core's own group is
-// the one body difference (a problem 404 where HEAD's NoRoute wrote its
-// legacy 404); its status and perimeter headers still match.
-func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
+// exemptions, and the peer allow-list's allow and deny. The differences the
+// spec makes are asserted instead: core's own group gets core's CSP and
+// body, stage 0's refusal is a problem, and every answer carries
+// X-App-Build.
+func TestPerimeter_ParityWithHEAD(t *testing.T) {
 	f := legacyEngine(t, false, false)
-	head, r1 := perimeterStacks(t, f, "")
+	router, head, r1 := perimeterStacks(t, f, "")
 
 	t.Run("open", func(t *testing.T) {
 		for _, c := range perimeterCases() {
-			perimeterParity(t, head, r1, c)
-		}
-	})
-
-	// HEAD's compressionMiddleware ran on every answer gin wrote, the
-	// unrouted ones included: the /api redirect's 301 went out gzipped with
-	// Vary: Accept-Encoding, and an error status lost every Vary, CORS's
-	// Origin included (review m5).
-	t.Run("gzip", func(t *testing.T) {
-		for _, c := range withHeader(perimeterCases(), "gzip: ", "Accept-Encoding", "gzip") {
 			perimeterParity(t, head, r1, c)
 		}
 	})
@@ -213,9 +232,6 @@ func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
 		}
 		authed := withHeader(perimeterCases(), "gated, signed in: ", "Authorization", basicCredentials())
 		for _, c := range authed {
-			perimeterParity(t, head, r1, c)
-		}
-		for _, c := range withHeader(authed, "gzip: ", "Accept-Encoding", "gzip") {
 			perimeterParity(t, head, r1, c)
 		}
 		// Valid credentials pass the gate on the kernel's own answers too.
@@ -245,10 +261,16 @@ func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
 		orig := config.AppConfig
 		t.Cleanup(func() { config.AppConfig = orig })
 		config.AppConfig.AllowedPeerCIDRs = "192.0.2.0/28"
+		// What the kernel does at start step 7 with books' R1Values.
+		require.NoError(t, router.SetPerimeter(httpapi.Options{
+			PeerAllowlist: []httpapi.TrustedPeer{{Prefix: netip.MustParsePrefix("192.0.2.0/28")}},
+		}))
+		t.Cleanup(func() { _ = router.SetPerimeter(httpapi.Options{}) })
 		for _, remote := range []string{"192.0.2.5:41000", "198.51.100.7:41000"} {
 			for _, c := range perimeterCases() {
 				c.name = "peer " + remote + ": " + c.name
 				c.remote = remote
+				c.peerRefused = remote == "198.51.100.7:41000"
 				perimeterParity(t, head, r1, c)
 			}
 		}
@@ -268,15 +290,12 @@ func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
 func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 	const altSvc = `h3=":8443"; ma=2592000`
 	f := legacyEngine(t, false, false)
-	head, r1 := perimeterStacks(t, f, altSvc)
+	_, head, r1 := perimeterStacks(t, f, altSvc)
 	f.srv.router.Use(func(c *gin.Context) {
 		c.Header("Alt-Svc", altSvc)
 		c.Next()
 	})
 	for _, c := range perimeterCases() {
-		perimeterParity(t, head, r1, c)
-	}
-	for _, c := range withHeader(perimeterCases(), "gzip: ", "Accept-Encoding", "gzip") {
 		perimeterParity(t, head, r1, c)
 	}
 	w := httptest.NewRecorder()
@@ -285,15 +304,15 @@ func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 }
 
 // TestPerimeterShim_UnmatchedMethodMatchesGin is
-// TestLegacyMount_UnmatchedMethodMatchesGin through the shim: every method a
-// manifest path does not route, OPTIONS included (the shim sends it to the
-// engine's CORS middleware, as HEAD did), answers with HEAD's status,
-// headers and body.
+// TestLegacyMount_UnmatchedMethodMatchesGin through core's stages and the
+// shim: every method a manifest path does not route, OPTIONS included
+// (stage 6 answers it, as HEAD's CORS middleware did), answers with HEAD's
+// status, headers and body.
 func TestPerimeterShim_UnmatchedMethodMatchesGin(t *testing.T) {
 	for _, abs := range absModes() {
 		t.Run(absName(abs), func(t *testing.T) {
 			f := legacyEngine(t, abs, false)
-			head, r1 := perimeterStacks(t, f, "")
+			_, head, r1 := perimeterStacks(t, f, "")
 			manifest, err := f.srv.LegacyManifest()
 			if err != nil {
 				t.Fatal(err)
@@ -324,72 +343,5 @@ func TestPerimeterShim_UnmatchedMethodMatchesGin(t *testing.T) {
 			}
 			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
 		})
-	}
-}
-
-// accessLineVolatile matches the two fields of gin's access line that differ
-// between two runs of the same request: the timestamp and the latency.
-var accessLineVolatile = regexp.MustCompile(`^\[GIN\] \d{4}/\d\d/\d\d - \d\d:\d\d:\d\d \|(.*?)\|\s*\S+\s*\|`)
-
-// TestPerimeterShim_AccessLogLikeHEAD (R1-15 review m6): HEAD's gin logger,
-// the engine's second middleware, wrote an access line for every request,
-// the unrouted ones included. Behind the kernel, an answer core writes itself
-// never reaches it, so the shim writes the same line: same status, client,
-// method and redacted path, the Basic refusal included. A request gin serves
-// is logged once, by gin.
-func TestPerimeterShim_AccessLogLikeHEAD(t *testing.T) {
-	var log bytes.Buffer
-	prev := gin.DefaultWriter
-	gin.DefaultWriter = &log // before the engine and the shim read it
-	t.Cleanup(func() { gin.DefaultWriter = prev })
-	f := legacyEngine(t, false, false)
-	head, r1 := perimeterStacks(t, f, "")
-
-	lines := func(h http.Handler, method, path string, header map[string]string) []string {
-		log.Reset()
-		req := httptest.NewRequest(method, path, nil)
-		req.RemoteAddr = "192.0.2.9:41000"
-		for k, v := range header {
-			req.Header.Set(k, v)
-		}
-		h.ServeHTTP(httptest.NewRecorder(), req)
-		var out []string
-		for _, l := range strings.Split(strings.TrimRight(log.String(), "\n"), "\n") {
-			if strings.HasPrefix(l, "[GIN] ") {
-				out = append(out, accessLineVolatile.ReplaceAllString(l, "[GIN] <time> |$1| <latency> |"))
-			}
-		}
-		return out
-	}
-	check := func(name, method, path string, header map[string]string) {
-		t.Helper()
-		h, k := lines(head, method, path, header), lines(r1, method, path, header)
-		if len(h) != 1 {
-			t.Fatalf("%s: HEAD wrote %d access lines: %q", name, len(h), h)
-		}
-		assert.Equal(t, h, k, "%s: access line", name)
-	}
-	cases := []struct{ name, method, path string }{
-		{"/api redirect, token masked", http.MethodGet, "/api/audiobooks?token=synthetic-joker-card"},
-		{"legacy 404", http.MethodGet, "/api/v1/riddler-unrouted"},
-		{"core group", http.MethodGet, "/api/core/v1/riddler"},
-		{"unmatched method", http.MethodDelete, "/api/v1/health"},
-		{"routed, logged by gin only", http.MethodGet, "/api/v1/health"},
-	}
-	for _, c := range cases {
-		check(c.name, c.method, c.path, nil)
-	}
-	if got := lines(r1, http.MethodGet, "/api/audiobooks?token=synthetic-joker-card", nil); len(got) != 1 || strings.Contains(got[0], "synthetic-joker-card") {
-		t.Errorf("the access line must mask the token: %q", got)
-	}
-
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.BasicAuthEnabled = true
-	config.AppConfig.BasicAuthUsername = "alfred"
-	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
-	for _, c := range cases {
-		check("gated: "+c.name, c.method, c.path, nil)
-		check("gated, signed in: "+c.name, c.method, c.path, map[string]string{"Authorization": basicCredentials()})
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/server/client_trust.go
-// version: 1.19.2
+// version: 1.20.0
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
-// last-edited: 2026-10-22
+// last-edited: 2026-11-08
 
 package server
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
 )
 
@@ -797,6 +798,16 @@ func isLANAddr(a netip.Addr) bool {
 // per-client layer, and the bootstrap limiter uses the fixed
 // untrustedLocalClientKey.
 func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
+	// Core's stage 0 resolved the client address once for the request
+	// (05-http-api §8.1 R1 "Client address", SEC2-19): CF-Connecting-IP from
+	// a configured connector (core.http.trusted_proxies, which books fills
+	// from TUNNEL_CONNECTOR_ADDRS). This function starts from that value;
+	// what follows is HEAD's derivation, for a request stage 0 did not
+	// attribute (no trusted header, or one served without the kernel's
+	// stages), with its "local peer + verified Access assertion" branch.
+	if a, attributed := httpapi.ClientAddrFrom(c.Request.Context()); attributed {
+		return a.String(), true
+	}
 	a, parsed := peerKeyAddr(c)
 	if !parsed {
 		return "", false

@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -205,14 +205,15 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 			return err
 		}
 	}
-	httpScope, err := p.Core("http")
+	httpScope, err := p.Core("http", "owner", "route", "class")
 	if err != nil {
 		return fmt.Errorf("kernel: http metrics scope: %w", err)
 	}
 	k.router = httpapi.NewRouter(httpapi.Options{
 		ServerName: serviceName,
 		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.cfg.AppID + "_session"},
-	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider()})
+	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider(),
+		TracerProvider: p.TracerProvider(), Propagator: p.Propagator(), Redactor: k.redactor})
 	// Core's group claims /api/core/ now, before any module registers, so a
 	// module's legacy prefix over it collides at P7 (05-http-api §4.9). Core
 	// routes join it as their packages land.

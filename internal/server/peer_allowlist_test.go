@@ -1,7 +1,7 @@
 // file: internal/server/peer_allowlist_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 89583aea-53c7-4ab3-9f35-dea7d459f40f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/mediacore/httpapi"
 )
 
 // 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 are the RFC 5737 TEST-NET
@@ -244,9 +245,24 @@ func TestRedirectServerHandler_IsGatedAndRedirects(t *testing.T) {
 	require.Equal(t, "https://192.0.2.1:8484/library?x=1", w.Header().Get("Location"))
 }
 
-// The gate replaces gin's handler on EVERY serving listener. Each is driven
-// with a peer that is not allowed; a listener still serving s.router directly
-// would answer 200.
+// gatedInner is the kernel's handler for listenR1 as the kernel builds it
+// since R1-17: core's stages over s.router, stage 0 enforcing the allow-list
+// the kernel hands the router at start step 7 (books' R1Values from
+// ALLOWED_PEER_CIDRS).
+func gatedInner(t *testing.T, s *Server, allow string) http.Handler {
+	t.Helper()
+	router, h := stagesOver(t, s.router, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/ping"})
+	require.NoError(t, router.SetPerimeter(httpapi.Options{
+		PeerAllowlist: []httpapi.TrustedPeer{{Prefix: netip.MustParsePrefix(allow)}},
+	}))
+	return h
+}
+
+// EVERY serving listener refuses a peer that is not allowed: the main and
+// HTTP/3 listeners through core's stage 0 in the kernel's handler, the
+// port-80 redirect, which core does not serve, through ABO's gate. Each is
+// driven with a peer that is not allowed; a listener serving the engine
+// ungated would answer 200.
 func TestListenR1_EveryListenerIsGatedByThePeerAllowList(t *testing.T) {
 	setAllowedPeerCIDRs(t, "192.0.2.0/24")
 	certPath, keyPath, _ := writeSelfSignedCert(t)
@@ -255,7 +271,9 @@ func TestListenR1_EveryListenerIsGatedByThePeerAllowList(t *testing.T) {
 	cfg.HTTP3Port = "0"
 
 	s := listenTestServer()
-	require.NoError(t, s.startListenersForTest(cfg))
+	ln, err := s.listenR1(cfg, listenOptionsFor(cfg), gatedInner(t, s, "192.0.2.0/24"))
+	require.NoError(t, err)
+	go func() { _ = ln.serveListeners() }()
 	t.Cleanup(func() {
 		_ = s.httpServer.Close()
 		if s.http3Server != nil {
@@ -291,7 +309,10 @@ func TestListenR1_EveryListenerIsGatedByThePeerAllowList(t *testing.T) {
 func TestListenR1_PlainHTTPListenerIsGated(t *testing.T) {
 	setAllowedPeerCIDRs(t, "192.0.2.0/24")
 	s := listenTestServer()
-	require.NoError(t, s.startListenersForTest(listenTestConfig("0")))
+	cfg := listenTestConfig("0")
+	ln, err := s.listenR1(cfg, listenOptionsFor(cfg), gatedInner(t, s, "192.0.2.0/24"))
+	require.NoError(t, err)
+	go func() { _ = ln.serveListeners() }()
 	t.Cleanup(func() { _ = s.httpServer.Close() })
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	req.RemoteAddr = "8.8.8.8:5000"

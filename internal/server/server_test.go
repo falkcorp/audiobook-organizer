@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.16.3
+// version: 2.16.4
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-11-08
 
@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/rbac"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -808,15 +810,17 @@ func TestExportMetadata(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestCORSMiddleware tests CORS headers
-func TestCORSMiddleware(t *testing.T) {
+// TestCORSPreflight: a preflight with no Origin is answered 204 with no
+// CORS headers, by core's stage 6 since R1-17 (HEAD's corsMiddleware).
+func TestCORSPreflight(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	_, h := stagesOver(t, server.router, httpapi.Deps{}, httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/health", Perm: rbac.Public, Public: true})
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
