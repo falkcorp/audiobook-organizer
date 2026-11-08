@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.60.0
+// version: 3.61.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package registry
 
@@ -47,6 +47,12 @@ var ErrOpActive = errors.New("registry: operation is still active; cancel it fir
 type Registry struct {
 	mu   sync.RWMutex
 	defs map[string]OperationDef
+	// defsPersisted is set by Start once it has written every registered def
+	// to op_definitions_v2; a def registered after that is written by
+	// RegisterOp itself. Before Start nothing is written, so building the
+	// registry (books' P6 constructor, which registers every op) writes
+	// nothing (05-storage §5S.4 step 12). Under mu.
+	defsPersisted bool
 	// v3defs holds the ops.Definition of every def registered through the v3
 	// adapter (v3_adapter.go Register), under r.mu, so Catalog can return
 	// native defs as authored rather than re-wrapped.
@@ -663,6 +669,9 @@ func (r *Registry) Start(ctx context.Context) {
 		r.logger.Warn("OPERATIONS ARE PAUSED — item dispatch is held until a resume",
 			"reason", st.Reason, "by", st.By, "since", st.Since)
 	}
+	// Write every def registered so far to op_definitions_v2 (RegisterOp
+	// writes the later ones), before resume reads the store.
+	r.persistRegisteredDefs()
 	// Resume must complete before the dispatcher starts accepting new work.
 	r.resumeAfterStartup(ctx)
 	// Reload any journaled batch buckets from the previous run and re-arm their
@@ -859,14 +868,18 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	// function instead.
 	r.defs[def.ID] = def
 	r.publishAliasesLocked(def)
+	persist := r.defsPersisted
 	r.mu.Unlock()
 	// def_id is a closed label set (spec 11 rule C1): only registered defs
 	// get their own series, anything else folds into "other".
 	opsmetrics.RegisterDefID(def.ID)
 
-	// Persist to op_definitions_v2. Best-effort; log on error.
-	if err := r.upsertDefToDB(def); err != nil {
-		r.logger.Warn("registry: failed to upsert op_definitions_v2", "id", def.ID, "error", err)
+	// Persist to op_definitions_v2 once the registry has started (Start
+	// writes every def registered before it). Best-effort; log on error.
+	if persist {
+		if err := r.upsertDefToDB(def); err != nil {
+			r.logger.Warn("registry: failed to upsert op_definitions_v2", "id", def.ID, "error", err)
+		}
 	}
 
 	// Log the opted-out set at WARN on every boot. An op that never reports is
@@ -881,6 +894,30 @@ func (r *Registry) RegisterOp(def OperationDef) error {
 	r.logger.Info("registry: registered op", "id", def.ID, "plugin", def.Plugin,
 		"liveness", def.Liveness.String())
 	return nil
+}
+
+// persistRegisteredDefs writes every registered def to op_definitions_v2 and
+// marks the registry so RegisterOp writes later ones itself. The snapshot and
+// the mark are taken under one lock, so a def registered concurrently is
+// written exactly by one side. Best-effort per def, as RegisterOp's write.
+func (r *Registry) persistRegisteredDefs() {
+	r.mu.Lock()
+	if r.defsPersisted {
+		r.mu.Unlock()
+		return
+	}
+	r.defsPersisted = true
+	defs := make([]OperationDef, 0, len(r.defs))
+	for _, d := range r.defs {
+		defs = append(defs, d)
+	}
+	r.mu.Unlock()
+	slices.SortFunc(defs, func(a, b OperationDef) int { return strings.Compare(a.ID, b.ID) })
+	for _, def := range defs {
+		if err := r.upsertDefToDB(def); err != nil {
+			r.logger.Warn("registry: failed to upsert op_definitions_v2", "id", def.ID, "error", err)
+		}
+	}
 }
 
 // upsertDefToDB writes the def to op_definitions_v2.

@@ -1,7 +1,7 @@
 // file: internal/server/auto_organize_pipeline_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c30f8a4-97b1-4de2-8f05-c4e2b16a73d9
-// last-edited: 2026-10-09
+// last-edited: 2026-11-08
 
 package server
 
@@ -33,7 +33,6 @@ func autoOrganizeTestStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

@@ -1,7 +1,7 @@
 // file: internal/database/extra_coverage_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0102030405
-// last-edited: 2026-10-18
+// last-edited: 2026-11-08
 
 // Package database — extra tests to lift coverage of 0%-covered functions.
 // Covers: APIKeyToken helpers, PebbleStore book/tag/user/activity/metadata
@@ -395,11 +395,11 @@ func TestSQLiteStore_CountPrefix(t *testing.T) {
 	s := store.(*PebbleStore)
 
 	// CountPrefix uses the kv_store table
-	require.NoError(t, s.SetRaw("test_prefix:a", []byte("1")))
-	require.NoError(t, s.SetRaw("test_prefix:b", []byte("2")))
-	require.NoError(t, s.SetRaw("other_prefix:c", []byte("3")))
+	require.NoError(t, s.SetRaw("split_book_candidate:a", []byte("1")))
+	require.NoError(t, s.SetRaw("split_book_candidate:b", []byte("2")))
+	require.NoError(t, s.SetRaw("rejected_candidate:c", []byte("3")))
 
-	n, err := s.CountPrefix("test_prefix:")
+	n, err := s.CountPrefix("split_book_candidate:")
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 }
@@ -791,7 +791,7 @@ func TestCountCachedMetadataFetches(t *testing.T) {
 	s := store.(*PebbleStore)
 	require.NoError(t, s.SetRaw("metadata_fetch_cache:book-1:audible", []byte(`{"results":[]}`)))
 	require.NoError(t, s.SetRaw("metadata_fetch_cache:book-2:openlibrary", []byte(`{"results":[]}`)))
-	require.NoError(t, s.SetRaw("other_prefix:key", []byte(`irrelevant`)))
+	require.NoError(t, s.SetRaw("quick_query_cache:key", []byte(`irrelevant`)))
 
 	count2, err := CountCachedMetadataFetches(store)
 	require.NoError(t, err)

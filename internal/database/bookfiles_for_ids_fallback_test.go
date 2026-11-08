@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package database
 
@@ -114,6 +114,6 @@ func TestMetadataCacheGeneration_MovesOnBookWritesThatChangeTheRow(t *testing.T)
 
 	require.NoError(t, store.SetRaw("metadata_cache:raw", []byte("{}")))
 	require.NoError(t, store.DeleteRaw("metadata_cache:raw"))
-	require.NoError(t, store.SetRaw("other:raw", []byte("{}")))
+	require.NoError(t, store.SetRaw("quick_query_cache:raw", []byte("{}")))
 	require.Equal(t, g+3, store.MetadataCacheGeneration(), "raw writes count only under the prefix")
 }

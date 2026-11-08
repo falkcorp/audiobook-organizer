@@ -170,13 +170,6 @@ func (c *journalClock) persistHigh(persist func(ceiling int64) error) error {
 	return nil
 }
 
-// high is the last sequence handed out (or the seed).
-func (c *journalClock) high() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.hw
-}
-
 // settle lowers the persisted ceiling to the high-water mark (a clean Close),
 // so a restart starts at the actual mark and not a window past it.
 func (c *journalClock) settle(persist func(ceiling int64) error) error {

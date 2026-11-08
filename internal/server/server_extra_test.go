@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package server
 
@@ -423,8 +423,6 @@ func TestVersionEndpoints(t *testing.T) {
 func TestBlockedHashEndpoints(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-
-	require.NoError(t, database.RunMigrations(database.GetGlobalStore()))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocked-hashes", nil)
 	w := httptest.NewRecorder()

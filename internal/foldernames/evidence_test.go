@@ -1,7 +1,7 @@
 // file: internal/foldernames/evidence_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 6cbae67b-604d-4b23-be02-29ef9669f74f
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package foldernames
 
@@ -27,9 +27,6 @@ func newLibrary(t *testing.T) *library {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if err := database.RunMigrations(store); err != nil {
-		t.Fatal(err)
-	}
 	return &library{t: t, store: store}
 }
 

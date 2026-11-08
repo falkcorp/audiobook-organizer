@@ -1,7 +1,7 @@
 // file: internal/server/organize_row_writers_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7f4c1a92-53d8-4a06-9c7e-1b0d2e6f84a3
-// last-edited: 2026-10-09
+// last-edited: 2026-11-08
 
 package server
 
@@ -100,7 +100,6 @@ func rowWritersStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

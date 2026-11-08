@@ -84,6 +84,10 @@ var errNoSSTables = errors.New("pebble store: sstable listings are not available
 type legacyBackend struct {
 	r     storage.LegacyRange
 	admin atomic.Pointer[storageAdmin]
+	// commits counts the non-empty writes committed through this handle:
+	// the store-wide "did anything get written" signal tests read where the
+	// raw backend has pebble's WAL byte counter.
+	commits atomic.Uint64
 	// closeStore closes what the opener opened (the standalone opener owns
 	// its core DB); nil when the kernel owns the store and closes it itself.
 	closeStore func() error
@@ -147,7 +151,14 @@ func (l *legacyBackend) write(o *pebble.WriteOptions, fn func(b *storage.Batch) 
 	if err := fn(b); err != nil {
 		return legacyErr(err)
 	}
-	return legacyErr(b.Commit(context.Background(), durability(o)))
+	n := b.Count()
+	if err := b.Commit(context.Background(), durability(o)); err != nil {
+		return legacyErr(err)
+	}
+	if n > 0 {
+		l.commits.Add(1)
+	}
+	return nil
 }
 
 // scanOptions converts pebble iterator options. Only the bounds have a core

@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.10
+// version: 1.28.11
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -300,11 +300,6 @@ var serveCmd = &cobra.Command{
 		// list, and startup continues. The same value is handed to the server
 		// (cfg.StartupSteps) for the steps that run inside Start.
 		steps := startup.New().SetErrorLog(logger.New("startup").Error)
-
-		// The store's long open and migration steps ask the service manager
-		// for start time (Type=notify). The store opens before app.New, so
-		// the stateless app.ExtendStart is what they are given.
-		injectStartExtender()
 
 		// Initialize database. Capture the returned Store so we can pass
 		// it explicitly down the call chain (SERVER-GLOBAL-STORE-AUDIT).

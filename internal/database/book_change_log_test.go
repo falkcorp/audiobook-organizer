@@ -1,7 +1,7 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package database
 
@@ -155,9 +155,9 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 	require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: "x"}))
 	require.NoError(t, s.DeleteMetadataCache("y"))
 	require.NoError(t, s.SetRaw("metadata_cache:raw1", []byte(`{"book_id":"raw1"}`)))
-	require.NoError(t, s.SetRaw("not_cache:raw1", []byte("ignored")))
+	require.NoError(t, s.SetRaw("quick_query_cache:raw1", []byte("ignored")))
 	require.NoError(t, s.DeleteRaw("metadata_cache:raw2"))
-	require.NoError(t, s.DeleteRawBatch([]string{"metadata_cache:raw3", "other:raw3", "metadata_cache:raw4"}))
+	require.NoError(t, s.DeleteRawBatch([]string{"metadata_cache:raw3", "quick_query_cache:raw3", "metadata_cache:raw4"}))
 	ids, upTo, ok := s.MetadataCacheChangedSince(from)
 	require.True(t, ok)
 	require.Equal(t, []string{"x", "y", "raw1", "raw2", "raw3", "raw4"}, ids)

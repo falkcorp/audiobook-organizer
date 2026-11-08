@@ -663,6 +663,12 @@ type tableInfo struct {
 // asks core's admin surface (storage.Admin.Tables).
 func (d *GatedDB) tables(ctx context.Context, withProps bool, lo, hi []byte, span bool) ([]tableInfo, error) {
 	if d.lr != nil {
+		// Leased like every other engine call, so Close's drain sees a
+		// listing in flight and a store already closing refuses it.
+		if err := d.gate.acquire(); err != nil {
+			return nil, err
+		}
+		defer d.gate.release()
 		a, err := d.lr.adminOf()
 		if err != nil {
 			return nil, err
@@ -809,7 +815,7 @@ func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 // does.
 func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
 	if d.lr != nil {
-		return &GatedBatch{lb: d.lr.r.NewBatch(), gate: d.gate}
+		return newCoreBatch(d.lr, d.lr.r.NewBatch(), false, d.gate)
 	}
 	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate}
 }
@@ -818,7 +824,7 @@ func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
 // lease; Commit and Get do.
 func (d *GatedDB) NewIndexedBatch() *GatedBatch {
 	if d.lr != nil {
-		return &GatedBatch{lb: d.lr.r.NewIndexedBatch(), indexed: true, gate: d.gate}
+		return newCoreBatch(d.lr, d.lr.r.NewIndexedBatch(), true, d.gate)
 	}
 	return &GatedBatch{b: d.db.NewIndexedBatch(), indexed: true, gate: d.gate}
 }
@@ -1078,8 +1084,27 @@ type GatedBatch struct {
 	b       *pebble.Batch
 	lb      *storage.Batch
 	rec     *[]batchOp
+	trace   *[]batchOp     // a core batch's staged writes, only under traceBatchWrites
+	commits *atomic.Uint64 // the core backend's commit count (legacyBackend.commits)
 	indexed bool
 	gate    *dbGate
+}
+
+// traceBatchWrites (tests only; a count, so parallel tests can each hold it)
+// makes every core batch built while it is above zero keep a copy of each
+// write it stages, in GatedBatch.trace. A pebble batch
+// can be read back (Batch.Reader); a core batch cannot, and the tests that
+// pin which keys a write path stages (a rewrite nobody needed, a delete of a
+// key that was never there) need to see them.
+var traceBatchWrites atomic.Int32
+
+// newCoreBatch wraps a core batch, traced when traceBatchWrites is set.
+func newCoreBatch(l *legacyBackend, lb *storage.Batch, indexed bool, gate *dbGate) *GatedBatch {
+	b := &GatedBatch{lb: lb, indexed: indexed, gate: gate, commits: &l.commits}
+	if traceBatchWrites.Load() > 0 {
+		b.trace = &[]batchOp{}
+	}
+	return b
 }
 
 // errRecordingBatch is returned by an engine call on a recording batch.
@@ -1095,7 +1120,14 @@ func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
 	}
 	defer b.gate.release()
 	if b.lb != nil {
-		return legacyErr(b.lb.Commit(context.Background(), durability(o)))
+		n := b.lb.Count()
+		if err := b.lb.Commit(context.Background(), durability(o)); err != nil {
+			return legacyErr(err)
+		}
+		if n > 0 {
+			b.commits.Add(1)
+		}
+		return nil
 	}
 	return b.b.Commit(o)
 }
@@ -1152,7 +1184,19 @@ func (b *GatedBatch) Apply(other *GatedBatch, _ *pebble.WriteOptions) error {
 // record appends one write to a recording batch, copying its bytes (pebble
 // batches copy too, so callers may reuse their buffers).
 func (b *GatedBatch) record(kind uint8, key, value []byte) {
-	*b.rec = append(*b.rec, batchOp{kind: kind, key: append([]byte(nil), key...), value: append([]byte(nil), value...)})
+	appendOp(b.rec, kind, key, value)
+}
+
+// staged notes a write a core batch accepted, when it is traced.
+func (b *GatedBatch) staged(err error, kind uint8, key, value []byte) error {
+	if err == nil && b.trace != nil {
+		appendOp(b.trace, kind, key, value)
+	}
+	return legacyErr(err)
+}
+
+func appendOp(ops *[]batchOp, kind uint8, key, value []byte) {
+	*ops = append(*ops, batchOp{kind: kind, key: append([]byte(nil), key...), value: append([]byte(nil), value...)})
 }
 
 // Set, Delete, DeleteRange, Close, Len, Count, Empty and Indexed are process
@@ -1165,7 +1209,7 @@ func (b *GatedBatch) Set(key, value []byte, opts *pebble.WriteOptions) error {
 		b.record(batchOpSet, key, value)
 		return nil
 	case b.lb != nil:
-		return legacyErr(b.lb.Set(key, value))
+		return b.staged(b.lb.Set(key, value), batchOpSet, key, value)
 	}
 	return b.b.Set(key, value, opts)
 }
@@ -1176,7 +1220,7 @@ func (b *GatedBatch) Delete(key []byte, opts *pebble.WriteOptions) error {
 		b.record(batchOpDelete, key, nil)
 		return nil
 	case b.lb != nil:
-		return legacyErr(b.lb.Delete(key))
+		return b.staged(b.lb.Delete(key), batchOpDelete, key, nil)
 	}
 	return b.b.Delete(key, opts)
 }
@@ -1187,7 +1231,7 @@ func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) e
 		b.record(batchOpDeleteRange, start, end)
 		return nil
 	case b.lb != nil:
-		return legacyErr(stageClaimedDeleteRange(b.lb, start, end))
+		return b.staged(stageClaimedDeleteRange(b.lb, start, end), batchOpDeleteRange, start, end)
 	}
 	return b.b.DeleteRange(start, end, opts)
 }

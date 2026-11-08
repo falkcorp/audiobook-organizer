@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/integration_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 69ad37a4-c90e-4dc4-92a5-155b51f85263
-// last-edited: 2026-09-19
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): Ported from NewSQLiteStore to NewPebbleStore.
 
@@ -24,7 +24,6 @@ func TestIntegration_SubmitDispatchRoundTrip(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	defer store.Close()
-	require.NoError(t, database.RunMigrations(store))
 
 	ClearRegistryForTest()
 	applied := 0
@@ -71,7 +70,6 @@ func TestIntegration_SubmitFailureMarksRowFailed(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	defer store.Close()
-	require.NoError(t, database.RunMigrations(store))
 
 	ClearRegistryForTest()
 	client := &fakeIntClient{uploadErr: assert.AnError}

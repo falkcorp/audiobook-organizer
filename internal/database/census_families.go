@@ -1,7 +1,7 @@
 // file: internal/database/census_families.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c3f3063e-7a83-4402-9443-4ec19031525d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 

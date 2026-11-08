@@ -1,7 +1,7 @@
 // file: internal/database/book_file_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-08
 
 package database
 
@@ -20,11 +20,6 @@ import (
 func newTestStoreWithBook(t *testing.T) (Store, string, func()) {
 	t.Helper()
 	store, cleanup := setupTestDB(t)
-
-	if err := RunMigrations(store); err != nil {
-		cleanup()
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	book := &Book{
 		Title:    "Test Book",

@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -128,7 +128,6 @@ func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre fun
 		scanner.SetStore(nil)
 		_ = store.Close()
 	})
-	require.NoError(t, database.RunMigrations(store))
 	_, _, err = auth.SeedRoles(store)
 	require.NoError(t, err)
 	if pre != nil {

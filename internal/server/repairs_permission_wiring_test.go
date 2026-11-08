@@ -1,7 +1,7 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // The Repairs lane's per-fixer permission check as the server wires it
 // (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
@@ -48,7 +48,6 @@ func repairsPermServer(t *testing.T, enableAuth, withUsers bool) (srv *Server, e
 	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
-	require.NoError(t, database.RunMigrations(store))
 	if withUsers {
 		_, _, err = auth.SeedRoles(store)
 		require.NoError(t, err)

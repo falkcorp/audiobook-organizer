@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_match4_versiongroup_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7669f76e-d58c-4ea7-9a18-44badb294ca5
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package metafetch
 
@@ -30,7 +30,6 @@ func newMatch4Fixture(t *testing.T) *match4Fixture {
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	orig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = orig })

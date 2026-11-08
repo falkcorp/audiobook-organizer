@@ -1,7 +1,7 @@
 // file: cmd/diagnostics_test.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 func TestTruncateString(t *testing.T) {
@@ -323,14 +325,18 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("raw close: %v", err)
 	}
+	// The projection's sidecar is the guard's input on a core build.
+	if err := os.WriteFile(database.StorageFormatSidecarPath(dbPath), fmt.Appendf(nil, "%d\n", database.SupportedStorageFormat+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Premise: the guard refuses this store.
 	if s, err := database.NewPebbleStore(dbPath); err == nil {
 		_ = s.Close()
 		t.Fatal("NewPebbleStore opened a store stamped newer than this build")
 	} else {
-		if _, ok := errors.AsType[*database.StorageFormatTooNewError](err); !ok {
-			t.Fatalf("NewPebbleStore: want *StorageFormatTooNewError, got %T: %v", err, err)
+		if _, ok := errors.AsType[*storage.LevelTooNewError](err); !ok {
+			t.Fatalf("NewPebbleStore: want *storage.LevelTooNewError, got %T: %v", err, err)
 		}
 	}
 

@@ -5847,23 +5847,13 @@ func (p *PebbleStore) Reset() error {
 			return fmt.Errorf("failed to initialize counter %s: %w", counter, err)
 		}
 	}
-	// The wipe deletes the storage format stamp, and a reset store is empty,
-	// so it is restamped at the build's format in the same batch: there is no
-	// moment at which the reset store is durable without a stamp. The stamp
-	// takes preference ID 1, so the preference counter starts at 2.
-	stampRecord, err := storageFormatStampRecord(1, buildStorageFormat)
-	if err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: %w", err)
-	}
-	if err := batch.Set([]byte("counter:preference"), []byte("2"), pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: stage preference counter: %w", err)
-	}
-	if err := batch.Set([]byte("preference:"+storageFormatPreferenceKey), stampRecord, pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: stage storage format stamp: %w", err)
-	}
+	// The wipe deletes books' legacy projection rows (the storage format
+	// stamp and migration marker) with everything else, and writes none back:
+	// those rows are written only through books' LegacyGuard.Stage, by a
+	// level step (05-storage §5S.3.7), and no level is raised at R1, so the
+	// projection stays 1, which HEAD reads from a store with data and no
+	// stamp. The level stamps and sidecars are core's (c/), outside books'
+	// claims, and survive the wipe.
 	// The wipe removed every ident: row with the books and cache rows they
 	// described, so the identification index of the reset store is the empty
 	// one: stamped built in the same batch, with every counter zero (absent).

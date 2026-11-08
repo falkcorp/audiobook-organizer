@@ -40,7 +40,7 @@ const (
 const (
 	censusNoteKeyDefinition = "estimated census: keys = sstable entries minus deletions; overwritten versions not yet compacted count once each; per-family figures are apportioned by span bytes within shared tables (error_bound_keys bounds the error); exact per-family counts are in last_exact, written by the maintenance.db-census-exact op"
 	censusNoteMemdbCold     = "memdb not warm: retired and signal counts unavailable"
-	censusNoteHiddenSystem   = "some system records live inside other families and are counted there: settings-backed markers under setting: (repairs_last_*_op:, *_index_v1_done flags), the _system user's records under pref:_system: (broken out below it by sub-prefix), and global preferences under preference:"
+	censusNoteHiddenSystem  = "some system records live inside other families and are counted there: settings-backed markers under setting: (repairs_last_*_op:, *_index_v1_done flags), the _system user's records under pref:_system: (broken out below it by sub-prefix), and global preferences under preference:"
 
 	censusCacheTTL = 5 * time.Minute
 	// censusColdCacheTTL caches a census taken while memdb is still cold

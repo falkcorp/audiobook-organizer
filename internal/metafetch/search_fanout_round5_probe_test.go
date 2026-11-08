@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round5_probe_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0b6f2a8e-4c1d-4e7a-9f35-8d2c61e0a4b7
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package metafetch
 
@@ -359,7 +359,6 @@ func TestGetCachedCandidates_EveryOldRowIsFiltered(t *testing.T) {
 func BenchmarkGetCachedCandidates(b *testing.B) {
 	store, err := database.NewPebbleStore(b.TempDir())
 	require.NoError(b, err)
-	require.NoError(b, database.RunMigrations(store))
 	b.Cleanup(func() { _ = store.Close() })
 	mfs := NewService(store)
 	bk, err := store.CreateBook(&database.Book{Title: "Rogue Ascension 8", FilePath: "/lib/ra/book.m4b"})

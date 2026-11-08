@@ -1,7 +1,7 @@
 // file: internal/server/transcription_identity_parity_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0c9b742a-6fd1-4ae1-bd10-454a241b3df7
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 //
 // maintenance.auto-match-transcribed's apply (ApplyTranscriptionCandidate)
 // must judge a cached row's identity exactly as the bulk-apply planner
@@ -35,7 +35,6 @@ func newParityFixture(t *testing.T, results []metadata.BookMetadata) *parityFixt
 	t.Helper()
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	mfs := metafetch.NewService(store)
 	mfs.SetOverrideSources([]metadata.MetadataSource{&countingSource{name: "Src", results: results}})
