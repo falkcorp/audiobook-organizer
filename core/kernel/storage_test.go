@@ -222,3 +222,103 @@ func TestUnservedModuleHeld(t *testing.T) {
 		t.Fatal("holding a module logged nothing")
 	}
 }
+
+// readySignal is the test notifier with Ready closing a channel, so a test
+// outside a synctest bubble can cancel Run once the app is ready.
+type readySignal struct {
+	notifier
+	ready chan struct{}
+}
+
+func (n readySignal) Ready() error { close(n.ready); return nil }
+
+// lateStopKernel boots gcpd with two hooks and a shutdown budget of budget.
+// Stops run in reverse registration order: gordon's Stop holds until the
+// budget is spent, so bullock's is reached after it and stopHooks hands it to
+// the background with an expired ctx. bullock's Stop waits for release, then
+// writes its keyspace and sends the result to wrote.
+func lateStopKernel(t *testing.T, path string, budget time.Duration, release <-chan struct{}, wrote chan<- error) (*Kernel, *module.Deps, *logcapture.Capture, chan struct{}) {
+	t.Helper()
+	deps := new(module.Deps)
+	gcpd := storageMod("gcpd", func(r *module.Registrar) error {
+		*deps = r.Deps()
+		r.Hook(module.Hook{Name: "gcpd.bullock", Stop: func(context.Context) error {
+			<-release
+			err := deps.Storage.Keyspace.Set(context.Background(), []byte("report"), []byte("filed"))
+			wrote <- err
+			return err
+		}})
+		r.Hook(module.Hook{Name: "gcpd.gordon", Stop: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}})
+		return nil
+	})
+	rec := &recorder{}
+	capture := logcapture.New(t)
+	c := supervised(t, rec, gcpd)
+	c.Logger = capture.Logger()
+	ready := make(chan struct{})
+	c.Notifier = readySignal{notifier: notifier{rec}, ready: ready}
+	c.R1Values = func() R1Values { return R1Values{Listen: "localhost:0", ShutdownBudget: budget} }
+	c.StoragePath = path
+	return mustNew(t, c), deps, capture, ready
+}
+
+// TestCloseCoreAwaitsLateStops (R1-13 seams, verification review MINOR-2;
+// 06 §6.5.2): a hook Stop that runs in the background after the shutdown
+// budget still reaches its storage when it finishes within closeCore's
+// floor, because closeCore waits for it before the store closes. One still
+// running at the floor is logged at ERROR, and the store closes regardless.
+func TestCloseCoreAwaitsLateStops(t *testing.T) {
+	const budget = 300 * time.Millisecond
+
+	t.Run("finishes-within-the-floor", func(t *testing.T) {
+		path := tempStoragePath(t)
+		release, wrote := make(chan struct{}), make(chan error, 1)
+		k, _, _, ready := lateStopKernel(t, path, budget, release, wrote)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		<-ready
+		// bullock writes a fifth of a floor after it is called: long after
+		// a close that did not wait, well inside one that does.
+		go func() { time.Sleep(lateStopFloor / 5); close(release) }()
+		cancel()
+		<-done
+		if err := <-wrote; err != nil {
+			t.Fatalf("the late Stop's write = %v, want it to land before the store closed", err)
+		}
+		// Run closed the store, so the same directory boots again.
+		re := mustNew(t, Config{AppID: "gotham", Logger: logcapture.New(t).Logger(),
+			Modules: []module.Module{storageMod("gcpd", nil)}, StoragePath: path})
+		ks, _ := re.store.db.Keyspace("gcpd")
+		if v, err := ks.Get(t.Context(), []byte("report")); err != nil || string(v) != "filed" {
+			t.Fatalf("the late Stop's row after a reboot = %q, %v; want filed", v, err)
+		}
+	})
+
+	t.Run("still-running-at-the-floor", func(t *testing.T) {
+		release, wrote := make(chan struct{}), make(chan error, 1)
+		k, deps, capture, ready := lateStopKernel(t, tempStoragePath(t), budget, release, wrote)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		<-ready
+		begin := time.Now()
+		cancel()
+		<-done
+		took := time.Since(begin)
+		if took < budget+lateStopFloor || took > budget+lateStopFloor+5*time.Second {
+			t.Fatalf("Run returned after %s, want the budget %s plus one floor %s", took, budget, lateStopFloor)
+		}
+		if _, err := deps.Storage.Keyspace.Get(t.Context(), []byte("report")); !errors.Is(err, storage.ErrClosed) {
+			t.Fatalf("a read after Run returned = %v, want storage.ErrClosed: the store closes regardless", err)
+		}
+		if !slices.ContainsFunc(capture.Records(), func(r slog.Record) bool { return strings.Contains(r.Message, "still running at the close floor") }) {
+			t.Fatal("a late Stop left running at the floor logged nothing")
+		}
+		close(release)
+		if err := <-wrote; !errors.Is(err, storage.ErrClosed) {
+			t.Fatalf("the late Stop's write after the close = %v, want storage.ErrClosed", err)
+		}
+	})
+}

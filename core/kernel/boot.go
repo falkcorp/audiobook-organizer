@@ -268,7 +268,10 @@ func listenHTTP(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (Server
 // closeCore closes what boot built, in reverse: the metrics Provider, the
 // store, then logging last (05-logging §4 step 4). It runs once, after the
 // shutdown budget if need be (06 §6.5.2: storage, and so everything after
-// it, closes regardless), with at least lateStopFloor to finish.
+// it, closes regardless), with at least lateStopFloor to finish. Before the
+// store closes it waits, within that floor, for the hook Stops still
+// running in the background (awaitLateStops); without a store there is
+// nothing for them to lose, so it does not wait.
 func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 	k.closeOnce.Do(func() {
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
@@ -278,6 +281,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 			if err := k.provider.Shutdown(cctx); err != nil {
 				errs = append(errs, fmt.Errorf("kernel: metrics shutdown: %w", err))
 			}
+		}
+		if k.store != nil {
+			k.awaitLateStops(cctx)
 		}
 		if err := k.closeStorage(); err != nil {
 			errs = append(errs, err)
