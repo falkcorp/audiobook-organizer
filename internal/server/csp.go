@@ -1,13 +1,15 @@
 // file: internal/server/csp.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 95fa1ac8-51ae-43a4-8c85-5055eef7c9dd
-// last-edited: 2026-10-21
+// last-edited: 2026-11-08
 
 package server
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"html"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -50,10 +52,11 @@ import (
 //   - nothing else: no fonts from a CDN, no workers, no frames, no plugins.
 //
 // The policy is sent on every response, not only the HTML shell: a browser
-// ignores it on JSON, and it covers an HTML file served as a download. A
-// handler that sets its own Content-Security-Policy (the OIDC browser hop, the
-// Cloudflare recovery page) wins, because the middleware sets the header before
-// the handler runs and header Set replaces.
+// ignores it on JSON, and it covers an HTML file served as a download. Core's
+// stage 5 sends it (R1-17): books gives the legacy mount LegacyPerimeter's
+// policy as its DefaultCSP, and stage 5 adds it when the response is written
+// unless the handler set its own Content-Security-Policy (the OIDC browser
+// hop, the Cloudflare recovery page), which wins.
 const cspBase = "default-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob: https:; " +
@@ -164,5 +167,46 @@ func inlineScriptHashSources(html []byte) []string {
 func setSPAInlineScripts(indexHTML []byte) int {
 	hashes := inlineScriptHashSources(indexHTML)
 	cspHeader.Store(newCSPState(hashes, cspAccessTeam(config.CFAccessTeam())))
+	spaBuildID.Store(new(buildIDFromIndex(indexHTML)))
 	return len(hashes)
+}
+
+// spaBuildID is the build ID of the index.html the binary serves, "" when it
+// has none (setSPAInlineScripts).
+var spaBuildID atomic.Pointer[string]
+
+// buildIDMetaRE matches the bundle's build-ID tag, <meta name="mediacore-build"
+// content="...">, with its attributes in either order.
+var buildIDMetaRE = regexp.MustCompile(`(?is)<meta\b[^>]*\bname\s*=\s*["']mediacore-build["'][^>]*>`)
+
+var metaContentRE = regexp.MustCompile(`(?is)\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+
+// buildIDFromIndex returns the content of index.html's mediacore-build meta
+// tag, "" when there is none (05-http-api stage 5: the embedded bundle is the
+// build ID's one source; the build writes the tag, R1-19).
+func buildIDFromIndex(indexHTML []byte) string {
+	tag := buildIDMetaRE.Find(indexHTML)
+	if tag == nil {
+		return ""
+	}
+	m := metaContentRE.FindSubmatch(tag)
+	if m == nil {
+		return ""
+	}
+	v := m[1]
+	if len(v) == 0 {
+		v = m[2]
+	}
+	return strings.TrimSpace(html.UnescapeString(string(v)))
+}
+
+// LegacyPerimeter returns the legacy mount's stage 5 values (05-http-api
+// §4.2, §8.2): its DefaultCSP, evaluated per response; the CSP report URL
+// for Reporting-Endpoints; and the build ID of the embedded index.html for
+// X-App-Build ("" when the bundle has none: stage 5 then sends "dev").
+func (s *Server) LegacyPerimeter() (csp func(*http.Request) string, report, buildID string) {
+	if p := spaBuildID.Load(); p != nil {
+		buildID = *p
+	}
+	return func(*http.Request) string { return contentSecurityPolicy() }, cspReportPath, buildID
 }

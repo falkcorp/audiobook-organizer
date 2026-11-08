@@ -1,7 +1,7 @@
 // file: internal/realtime/events_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package realtime
 
@@ -526,7 +526,7 @@ func TestHandleSSE_BasicConnection(t *testing.T) {
 		t.Error("Expected Connection: keep-alive")
 	}
 	// HandleSSE must not set its own Access-Control-Allow-Origin: CORS is
-	// corsMiddleware's job (internal/server/server_middleware.go). Since
+	// the job of core's CORS stage (stage 6, mediacore/httpapi). Since
 	// nothing pre-set the header in this test, it must stay unset.
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Expected HandleSSE to leave Access-Control-Allow-Origin unset, got %q", got)
@@ -544,13 +544,13 @@ func TestHandleSSE_BasicConnection(t *testing.T) {
 
 // TestHandleSSE_PreservesUpstreamCORSHeader is a regression test for SV-03:
 // HandleSSE used to unconditionally set Access-Control-Allow-Origin: "*",
-// silently overwriting the allowlisted origin that corsMiddleware
+// silently overwriting the allowlisted origin that the CORS stage
 // (internal/server/server_middleware.go) already set earlier in the chain
 // for GET /api/events. Because gin.Context.Header is a Set (not Add), that
 // wiped the middleware's restrictive value while leaving
-// Access-Control-Allow-Credentials: true (also set by corsMiddleware) in
+// Access-Control-Allow-Credentials: true (also set by the CORS stage) in
 // place -- an invalid "*"+credentials:true combination. This test simulates
-// corsMiddleware having already run and asserts HandleSSE leaves its headers
+// the CORS stage having already run and asserts HandleSSE leaves its headers
 // alone.
 func TestHandleSSE_PreservesUpstreamCORSHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -560,7 +560,7 @@ func TestHandleSSE_PreservesUpstreamCORSHeader(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/events", nil)
 
-	// Simulate corsMiddleware having already set an allowlisted origin plus
+	// Simulate the CORS stage having already set an allowlisted origin plus
 	// credentials, as it does for GET /api/events before HandleSSE runs.
 	const allowedOrigin = "https://192.0.2.10"
 	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)

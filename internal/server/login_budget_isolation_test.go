@@ -1,7 +1,7 @@
 // file: internal/server/login_budget_isolation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d59a407-dbd7-4beb-9b1b-344f246c9fbd
-// last-edited: 2026-10-22
+// last-edited: 2026-11-08
 
 package server
 
@@ -184,7 +184,7 @@ func TestLoginCeiling_StalledBodiesHoldNoInFlightSlot(t *testing.T) {
 	l := newLoginCeiling()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(captureRawResponseController(), compressionMiddleware()) // the production writer chain
+	r.Use(captureRawResponseController()) // the production writer chain in gin (stage 9 compresses outside it)
 	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) { c.Status(http.StatusUnauthorized) })
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

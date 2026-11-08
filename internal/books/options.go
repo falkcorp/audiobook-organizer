@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -93,15 +93,20 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 
 // r1Values maps serve's flags and the effective config onto R1Values (05-config
 // §1.12.1): HEAD's --host/--port and TLS flags, ALLOWED_PEER_CIDRS,
-// TUNNEL_CONNECTOR_ADDRS, the rate limit and the body limits (MiB to bytes).
+// TUNNEL_CONNECTOR_ADDRS with the header they set, the rate limit and the body
+// limits (MiB to bytes).
 func r1Values(cfg server.ServerConfig, c config.Config) app.R1Values {
 	return app.R1Values{
-		Listen:             net.JoinHostPort(cfg.Host, cfg.Port),
-		TLSCertFile:        cfg.TLSCertFile,
-		TLSKeyFile:         cfg.TLSKeyFile,
-		PeerAllowlist:      splitList(c.AllowedPeerCIDRs),
-		TrustedProxies:     splitList(c.TunnelConnectorAddrs),
-		RateLimitEnabled:   c.EnableRateLimit,
+		Listen:         net.JoinHostPort(cfg.Host, cfg.Port),
+		TLSCertFile:    cfg.TLSCertFile,
+		TLSKeyFile:     cfg.TLSKeyFile,
+		PeerAllowlist:  splitList(c.AllowedPeerCIDRs),
+		TrustedProxies: splitList(c.TunnelConnectorAddrs),
+		// The connectors set CF-Connecting-IP (client_trust.go).
+		ClientIPHeader: "CF-Connecting-IP",
+		// HEAD's rule: enable_rate_limit is the switch and a positive
+		// api_rate_limit_per_minute the threshold; both must hold.
+		RateLimitEnabled:   c.EnableRateLimit && c.APIRateLimitPerMinute > 0,
 		RateLimitPerMinute: c.APIRateLimitPerMinute,
 		JSONMaxBytes:       int64(c.JSONBodyLimitMB) << 20,
 		UploadMaxBytes:     int64(c.UploadBodyLimitMB) << 20,

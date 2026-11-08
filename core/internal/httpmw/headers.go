@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/headers.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f94c1cdb-e7e5-4055-89fe-51f4c971d0ac
 // last-edited: 2026-11-08
 
@@ -57,6 +57,10 @@ func (c *Chain) finishHeaders(h http.Header, r *http.Request) {
 	if st := From(r.Context()); st != nil {
 		p = st.Policy()
 	}
+	if p == nil {
+		// Answered before the router picked an owner: the path's owner.
+		p = c.policyOf(r)
+	}
 	if p != nil && p.CSPReport != "" {
 		h.Set("Reporting-Endpoints", `csp="`+p.CSPReport+`"`)
 	}
@@ -70,6 +74,14 @@ func (c *Chain) finishHeaders(h http.Header, r *http.Request) {
 		}
 	}
 	h.Set("Content-Security-Policy", csp)
+}
+
+// policyOf is Deps.PolicyOf, nil when unset.
+func (c *Chain) policyOf(r *http.Request) *Policy {
+	if c.deps.PolicyOf == nil {
+		return nil
+	}
+	return c.deps.PolicyOf(r)
 }
 
 // fromTrustedProxy reports a TCP peer in the trusted proxies.

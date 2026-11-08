@@ -1,5 +1,5 @@
 // file: core/httpapi/perimeter/perimeter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9328a91c-0e8b-4b68-b822-f6d8af5531f2
 // last-edited: 2026-11-08
 
@@ -177,6 +177,12 @@ func (c *capture) WithAttrs([]slog.Attr) slog.Handler { return c }
 func (c *capture) WithGroup(string) slog.Handler      { return c }
 
 // access returns the attributes of the access-log records.
+func (c *capture) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = nil
+}
+
 func (c *capture) access() []map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -252,6 +258,30 @@ func TestRequestID_GeneratedAndPropagated(t *testing.T) {
 	}
 }
 
+// TestAccessLog_RedactsPathCredentials: stage 4 writes the request target
+// under the Redactor with a "?" that arrived as %3F kept as %3F, so a
+// credential after it (/x/cover%3Ftoken=..., which URL.Path decodes into
+// path text) is masked as a real query's would be, and the line's first "?"
+// is always the real query delimiter (HEAD's RedactLogRequestPath cases).
+func TestAccessLog_RedactsPathCredentials(t *testing.T) {
+	const cred = "abk_penguin-umbrella-key"
+	f := newFixture(t)
+	for _, c := range []struct{ target, want string }{
+		{"/api/v1/cases/7%3Ftoken=" + cred, "/api/v1/cases/7%3Ftoken=[REDACTED]"},
+		{"/api/v1/cases/7%3Fwidth=4&token=" + cred + "?w=1", "/api/v1/cases/7%3Fwidth=4&token=[REDACTED]?w=1"},
+		{"/api/v1/cases/7%3Fq=1?token=" + cred, "/api/v1/cases/7%3Fq=1?token=[REDACTED]"},
+		{"/api/v1/cases/7?token=" + cred, "/api/v1/cases/7?token=[REDACTED]"},
+		{"/api/v1/cases/7?q=1", "/api/v1/cases/7?q=1"},
+	} {
+		f.logs.reset()
+		f.do(http.MethodGet, c.target)
+		logs := f.logs.access()
+		if len(logs) != 1 || logs[0]["path"] != c.want {
+			t.Errorf("%s: access log = %v, want path %q", c.target, logs, c.want)
+		}
+	}
+}
+
 // TestCSP_DefaultPerOwner: the legacy mount's responses (its SPA page
 // included) carry DefaultCSP and Reporting-Endpoints; a native route gets
 // core's default policy; a handler-set CSP is kept (FE-4, FE2-1).
@@ -283,6 +313,43 @@ func TestCSP_DefaultPerOwner(t *testing.T) {
 		}
 		if rec.Header().Get("Strict-Transport-Security") != "" {
 			t.Errorf("%s: HSTS over plain HTTP from an untrusted peer", c.target)
+		}
+	}
+	// Answers written before routing (stage 6's preflight, stage 7's
+	// refusal) carry the policy of the path's owner, not core's default.
+	preflight := func(r *http.Request) {
+		r.Header.Set("Origin", "http://"+r.Host) // httptest's Host: same-origin, allowed
+		r.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	}
+	foreignPreflight := func(r *http.Request) {
+		r.Header.Set("Origin", "https://penguin.example.test")
+		r.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	}
+	crossSite := func(r *http.Request) {
+		r.Header.Set("Origin", "https://joker.example.test")
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+	}
+	for _, c := range []struct {
+		method, target string
+		mutate         func(*http.Request)
+		status         int
+		csp, report    string
+	}{
+		{http.MethodOptions, "/api/v1/cases/7", preflight, http.StatusNoContent, legacyCSP, `csp="/api/v1/csp-report"`},
+		{http.MethodOptions, "/api/batcave/v1/gadgets/batarang", preflight, http.StatusNoContent, "default-src 'none'; frame-ancestors 'self'", ""},
+		{http.MethodOptions, "/api/v1/cases/7", foreignPreflight, http.StatusForbidden, legacyCSP, `csp="/api/v1/csp-report"`},
+		{http.MethodPost, "/api/v1/cases/7", crossSite, http.StatusForbidden, legacyCSP, `csp="/api/v1/csp-report"`},
+		{http.MethodPost, "/api/batcave/v1/gadgets/batarang", crossSite, http.StatusForbidden, "default-src 'none'; frame-ancestors 'self'", ""},
+	} {
+		rec := f.do(c.method, c.target, c.mutate)
+		if rec.Code != c.status {
+			t.Errorf("%s %s = %d, want %d", c.method, c.target, rec.Code, c.status)
+		}
+		if got := rec.Header().Get("Content-Security-Policy"); got != c.csp {
+			t.Errorf("%s %s: CSP = %q, want %q", c.method, c.target, got, c.csp)
+		}
+		if got := rec.Header().Get("Reporting-Endpoints"); got != c.report {
+			t.Errorf("%s %s: Reporting-Endpoints = %q, want %q", c.method, c.target, got, c.report)
 		}
 	}
 }

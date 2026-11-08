@@ -1,7 +1,7 @@
 // file: internal/telemetry/views.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9154168b-56f2-4d06-bb53-f0b09d8954fa
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package telemetry
 
@@ -31,11 +31,12 @@ import (
 // generated with the same prometheus.ExponentialBuckets call the constructors
 // use, so the float64 values are bit-identical rather than retyped decimals.
 //
-// The http.server.* entries copy the boundaries otelgin produced before this
-// table existed (the semconv advice for request duration, the SDK default for
-// body sizes), which otelgin's instruments still get without a view.
+// The http.server.* entries copy the boundaries the HTTP server instruments
+// have had since before this table existed (the semconv advice for request
+// duration, the SDK default for body sizes); core's stage 2 (mediacore/httpapi)
+// records them since R1-17, as gin's tracing middleware did before.
 // TestEveryHistogramHasAView compares every served histogram's `le` set with
-// this table, so an otelgin upgrade that changes its defaults fails there
+// this table, so a core or semconv change to those defaults fails there
 // instead of passing through; change these lists on purpose.
 var histogramBuckets = map[string][]float64{
 	// internal/metrics/metrics.go operationDuration.
@@ -61,7 +62,7 @@ var histogramBuckets = map[string][]float64{
 	"audiobook_organizer.ops.schedule_lag":    {1, 5, 15, 60, 300, 900, 3600, 21600, 86400},
 	"ai.request.duration":                     {0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300},
 
-	// otelgin (server.go router.Use(otelgin.Middleware(...))).
+	// core's stage 2 (mediacore/httpapi), the HTTP server instruments.
 	"http.server.request.duration":   {0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10},
 	"http.server.request.body.size":  {0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000},
 	"http.server.response.body.size": {0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000},

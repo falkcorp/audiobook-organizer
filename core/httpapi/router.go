@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-08
 
@@ -698,11 +698,11 @@ func (r *Router) newChain() *httpmw.Chain {
 		Problem: func(w http.ResponseWriter, req *http.Request, status int, code string, h http.Header) {
 			writeProblem(req.Context(), w, req, Problem{Status: status, Code: code}, h, logger)
 		},
-		BuildID: r.buildID(),
-		Observe: r.observe,
-		Trace:   r.trace,
-		Inner:   r.stage,
-		OwnerOf: r.ownerOf(),
+		BuildID:  r.buildID(),
+		Observe:  r.observe,
+		Trace:    r.trace,
+		Inner:    r.stage,
+		PolicyOf: r.policyOf(),
 	}
 	if r.deps.MeterProvider != nil {
 		d.Meter = r.deps.MeterProvider.Meter("httpapi")
@@ -729,25 +729,36 @@ func (r *Router) buildID() string {
 	return ""
 }
 
-// ownerOf names the owner whose claim covers a request's path, "core" for
-// none: the owner label of a refusal before routing (stage 7). r.mu is held.
-func (r *Router) ownerOf() func(*http.Request) string {
+// policyOf returns the response policy of the owner whose claim covers a
+// request's path, or of the "/" owner for a path outside /api; nil is core's
+// own. Stage 5 writes it on an answer given before routing (stage 6's
+// preflight, stage 7's refusal), so a legacy path's preflight carries the
+// mount's DefaultCSP as HEAD's gin-written one did; stage 7 labels its
+// refusal with its Owner. r.mu is held.
+func (r *Router) policyOf() func(*http.Request) *httpmw.Policy {
 	claims := slices.Clone(r.claims)
-	rootOwner := ""
-	if _, owner := r.rootOwner(); owner != "" {
-		rootOwner = owner
+	policies := r.legacyPolicies()
+	var root *httpmw.Policy
+	if _, owner := r.rootOwner(); owner != "" && owner != "core" {
+		root = policies[owner]
 	}
-	return func(req *http.Request) string {
+	of := func(owner string) *httpmw.Policy {
+		if p := policies[owner]; p != nil {
+			return p
+		}
+		return &httpmw.Policy{Owner: owner}
+	}
+	return func(req *http.Request) *httpmw.Policy {
 		p := req.URL.Path
 		for _, c := range claims {
 			if p == strings.TrimSuffix(c.prefix, "/") || (strings.HasSuffix(c.prefix, "/") && strings.HasPrefix(p, c.prefix)) || p == c.prefix {
-				return c.owner
+				return of(c.owner)
 			}
 		}
-		if rootOwner != "" && firstSegment(p) != "api" {
-			return rootOwner
+		if root != nil && firstSegment(p) != "api" {
+			return root
 		}
-		return "core"
+		return nil
 	}
 }
 

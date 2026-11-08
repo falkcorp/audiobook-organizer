@@ -1,7 +1,7 @@
 // file: internal/server/oplog_download_gzip_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f8e1c52-7a4d-4b96-9e0c-5d2a8b61f7c3
-// last-edited: 2026-10-24
+// last-edited: 2026-11-08
 
 package server
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,8 +27,9 @@ import (
 // "data stream error" (prod, 2026-09-19). The handler streams its own gzip body
 // and the router-wide compressor wrapped it a second time while dropping
 // Content-Encoding. The handler-level test calls DownloadOperationLogs with no
-// middleware, so it could never see this; this one goes through the production
-// compressor with the request a browser sends.
+// middleware, so it could never see this; this one goes through core's
+// stages, the production compressor since R1-17 (stage 9), with the request a
+// browser sends and the route's manifest entry (NoCompress).
 func TestOperationLogDownload_BrowserSavesAValidGzip(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -50,9 +52,11 @@ func TestOperationLogDownload_BrowserSavesAValidGzip(t *testing.T) {
 	store.EXPECT().GetOpLogsV2("op1", 0).Return(rows, nil)
 
 	h := handlers.NewOperationsV2Handler(store, nil, nil, false)
-	r := gin.New()
-	r.Use(compressionMiddleware())
-	r.GET("/api/v1/operations/v2/:id/logs/download", h.DownloadOperationLogs)
+	engine := gin.New()
+	engine.GET("/api/v1/operations/v2/:id/logs/download", h.DownloadOperationLogs)
+	_, r := stagesOver(t, engine, httpapi.Deps{}, httpapi.LegacyRoute{
+		Method: http.MethodGet, GinPath: "/api/v1/operations/v2/:id/logs/download", NoCompress: true,
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/operations/v2/op1/logs/download", nil)
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")

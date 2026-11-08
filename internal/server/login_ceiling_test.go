@@ -1,7 +1,7 @@
 // file: internal/server/login_ceiling_test.go
-// version: 4.3.1
+// version: 4.3.2
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
-// last-edited: 2026-10-22
+// last-edited: 2026-11-08
 
 package server
 
@@ -586,8 +586,9 @@ func TestLoginCeiling_StalledBodyHoldsNoSlotAndTimesOut(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	reached := make(chan struct{}, 1)
-	// The production writer chain: raw controller captured, then gzip.
-	r.Use(captureRawResponseController(), compressionMiddleware())
+	// The production writer chain in gin: the raw controller captured (core's
+	// stage 9 compresses outside the engine since R1-17).
+	r.Use(captureRawResponseController())
 	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) { reached <- struct{}{}; c.Status(http.StatusUnauthorized) })
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

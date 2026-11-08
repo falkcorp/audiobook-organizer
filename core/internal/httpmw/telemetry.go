@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/telemetry.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8eea62e4-d3d4-438b-8c9a-12b63a3dcf84
 // last-edited: 2026-11-08
 
@@ -320,14 +320,15 @@ func (c *Chain) metricAttrs(r *http.Request, status int, route string) []attribu
 }
 
 // requestAttrs are the span's start attributes: otelgin's request set with
-// the URL redacted by the kernel's Redactor (SEC-22) and the request ID
-// (§4.7).
+// the URL redacted by the kernel's Redactor (SEC-22; url.path through
+// redactedPath, so a credential after a decoded %3F is masked too) and the
+// request ID (§4.7).
 func (c *Chain) requestAttrs(r *http.Request, st *State) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		semconv.ServerAddress(c.deps.ServerName),
 		semconv.HTTPRequestMethodKey.String(standardMethod(r.Method)),
 		semconv.URLScheme(scheme(r)),
-		semconv.URLPath(c.deps.Redactor.Path(r.URL.Path)),
+		semconv.URLPath(redactedPath(c.deps.Redactor, r.URL.Path)),
 	}
 	if standardMethod(r.Method) != r.Method {
 		attrs = append(attrs, semconv.HTTPRequestMethodOriginal(r.Method))

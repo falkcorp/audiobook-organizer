@@ -1,7 +1,7 @@
 // file: internal/server/csp_report_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b0cfe71e-4a49-4714-bc3b-9cbae5c214f5
-// last-edited: 2026-10-22
+// last-edited: 2026-11-08
 
 package server
 
@@ -301,14 +301,16 @@ func TestCSPReportHandler_RateLimited(t *testing.T) {
 	require.Zero(t, rep.dropped.Load(), "the drop count was reported and reset")
 }
 
-// The real router serves the route without any login, ahead of the auth chain.
+// The real router serves the route without any login, ahead of the auth chain,
+// behind core's stages as the kernel serves it (stage 5 sends the policy).
 func TestCSPReportRoute_IsPublicOnTheRealRouter(t *testing.T) {
 	fx := setupCredGuardServerWith(t, nil)
+	_, h := booksMount(t, fx)
 	req := httptest.NewRequest(http.MethodPost, cspReportPath, strings.NewReader(`{"csp-report":{"violated-directive":"img-src","blocked-uri":"inline"}}`))
 	req.Header.Set("Content-Type", "application/csp-report")
 	req.RemoteAddr = "192.0.2.5:4000"
 	w := httptest.NewRecorder()
-	fx.srv.router.ServeHTTP(w, req)
+	h.ServeHTTP(w, req)
 	require.Equal(t, http.StatusNoContent, w.Code)
 	require.Contains(t, w.Header().Get("Content-Security-Policy"), "report-uri "+cspReportPath)
 }

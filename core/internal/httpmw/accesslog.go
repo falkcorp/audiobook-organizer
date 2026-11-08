@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/accesslog.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0a02b49d-7162-47dd-a1e6-c0a0254b3766
 // last-edited: 2026-11-08
 
@@ -8,7 +8,11 @@ package httpmw
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/falkcorp/mediacore/log"
 )
 
 // AccessMessage is the message of every access-log record stage 4 writes,
@@ -43,7 +47,7 @@ func (c *Chain) accessLog(next http.Handler) http.Handler {
 		}
 		attrs := []slog.Attr{
 			slog.String("method", r.Method),
-			slog.String("path", c.deps.Redactor.URL(r.URL.RequestURI())),
+			slog.String("path", loggedTarget(c.deps.Redactor, r.URL)),
 			slog.Int("status", hw.Status()),
 			slog.Duration("duration", time.Since(start)),
 			slog.Int64("bytes", hw.n),
@@ -75,4 +79,24 @@ func securityEvent(r *http.Request, event string) {
 	if st := From(r.Context()); st != nil {
 		st.event.Store(&event)
 	}
+}
+
+// redactedPath is a decoded request path under rd: the path rules (an
+// invite token), then the URL rules over what follows a "?" in it. A "?"
+// that arrived as %3F is path text once URL.Path decodes it, and a client
+// can still put a credential after it (/x/cover%3Ftoken=...); the URL rules
+// mask it as they would a real query's (HEAD's RedactLogRequestPath).
+func redactedPath(rd *log.Redactor, p string) string {
+	return rd.URL(rd.Path(p))
+}
+
+// loggedTarget is the request target stage 4 writes: the redacted decoded
+// path with every "?" left in it written as %3F, so the line's first "?" is
+// always the real query delimiter, then the raw query under rd.
+func loggedTarget(rd *log.Redactor, u *url.URL) string {
+	p := strings.ReplaceAll(redactedPath(rd, u.Path), "?", "%3F")
+	if u.RawQuery == "" {
+		return p
+	}
+	return rd.URL(p + "?" + u.RawQuery)
 }

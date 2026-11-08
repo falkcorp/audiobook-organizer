@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/chain.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 43e0ed35-4635-49ca-aaab-d5bfe2f6fa1b
 // last-edited: 2026-11-08
 
@@ -63,9 +63,13 @@ type Deps struct {
 	// Inner, when set, wraps the router inside stage 9 (a test seam: a
 	// stage between stage 2 and the mux that clones the request).
 	Inner func(http.Handler) http.Handler
-	// OwnerOf names the owner of a request no route has claimed yet, for
-	// the owner label of a refusal before routing (stage 7); nil = "core".
-	OwnerOf func(*http.Request) string
+	// PolicyOf is the response policy of the owner of a request's path, for
+	// an answer written before the router picked an owner (stage 6's
+	// preflight answer, stage 7's refusal, a stage 3 panic): stage 5 writes
+	// that owner's CSP (05-http-api §4.2 stage 5: "the owner's policy") and
+	// stage 7 labels its refusal with the owner. nil, or a nil result, is
+	// core's.
+	PolicyOf func(*http.Request) *Policy
 }
 
 // Peer is a prefix or a single address that may carry an IPv6 zone

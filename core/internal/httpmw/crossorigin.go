@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/crossorigin.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 03f287e3-84eb-434a-81b9-03db6734d39c
 // last-edited: 2026-11-08
 
@@ -36,8 +36,8 @@ func (c *Chain) crossOrigin(next http.Handler) http.Handler {
 		}
 		if err := cp.cop.Check(check); err != nil {
 			owner := "core"
-			if c.deps.OwnerOf != nil {
-				owner = c.deps.OwnerOf(r)
+			if p := c.policyOf(r); p != nil && p.Owner != "" {
+				owner = p.Owner
 			}
 			securityEvent(r, "cross_origin_rejected")
 			c.inst.crossOrigin(r.Context(), owner)

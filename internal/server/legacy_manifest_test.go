@@ -173,10 +173,12 @@ var publicHandlerRefusals = map[string]string{
 // then answer 429: the ones whose chain includes it.
 func rateLimitedRoutes(t *testing.T, abs bool) map[string]bool {
 	t.Helper()
-	f := legacyEngine(t, abs, true)
-	for range 20 {
-		probe(f.srv.router, http.MethodGet, "/api/v1/auth/status", "")
-	}
+	// HEAD installed its /api rate limiter on the /api/v1 and /api/v3 groups;
+	// since R1-17 core's stage 10 limits by RateClass, and the hook marks the
+	// routes those groups cover, the set the limiter covered.
+	apiGroupHookForTest = func(c *gin.Context) { c.AbortWithStatus(http.StatusTooManyRequests) }
+	f := legacyEngine(t, abs, false) // the hook is read once, by setupRoutes
+	apiGroupHookForTest = nil
 	out := map[string]bool{}
 	for _, r := range f.srv.router.Routes() {
 		if probe(f.srv.router, r.Method, legacyConcretePath(r.Path), "").Code == http.StatusTooManyRequests {
@@ -326,12 +328,14 @@ func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handle
 		require.NoError(t, r.Claim("books", c))
 	}
 	r.AllowAuthMethods("books", absAuthMethod)
+	csp, report, build := f.srv.LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
 		Owner: "books", Handler: f.srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
 		Routes:      slices.Values(manifest),
 		Redirects:   f.srv.LegacyRedirects(),
 		TopSegments: LegacyTopSegments(),
 		SPAShared:   LegacySPAShared(),
+		DefaultCSP:  csp, CSPReport: report, BuildID: build,
 	}))
 	h, err := r.Build()
 	require.NoError(t, err)
@@ -508,9 +512,10 @@ func TestLegacyMount_MuxAndGinAgreeOnEncodedSlash(t *testing.T) {
 // 404, never core's problem 405; GET /login, whose only route is POST, is the
 // SPA's page (06 §6.10 TestReservedSegmentsDisjointFromNonSPA, request half).
 // Every manifest path is tried with every method gin has no route for.
-// Headers are not compared: gin's security headers and Basic gate are
-// perimeter stages 5 and 8, which R1-17 puts in front of the mux. OPTIONS is
-// the one known status difference (CORS, stage 6, also R1-17).
+// Headers are not compared here (TestPerimeter_ParityWithHEAD does). OPTIONS
+// is answered by core's stage 6 before routing since R1-17, so its reference
+// is gin behind HEAD's frozen perimeter (headPerimeter), whose CORS
+// middleware answered it.
 func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 	for _, abs := range absModes() {
 		t.Run(absName(abs), func(t *testing.T) {
@@ -535,18 +540,11 @@ func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 						continue
 					}
 					n++
-					g, mt := probe(f.srv.router, m, p, ""), probe(h, m, p, "")
+					ref := http.Handler(f.srv.router)
 					if m == http.MethodOptions {
-						// Known difference until R1-17 (review M1): gin's CORS
-						// middleware answers every OPTIONS 204 before routing;
-						// core has no CORS stage yet (05-http-api §4.2 stage 6),
-						// so the mount answers it as an unmatched method. R1-17
-						// puts stage 6 in front of the mux and this branch
-						// becomes the plain comparison below.
-						assert.Equal(t, http.StatusNoContent, g.Code, "gin OPTIONS %s", p)
-						assert.NotEqual(t, http.StatusNoContent, mt.Code, "OPTIONS %s now matches gin: R1-17's stage 6 landed, drop this branch", p)
-						continue
+						ref = headPerimeter(f.srv.router)
 					}
+					g, mt := probe(ref, m, p, ""), probe(h, m, p, "")
 					assert.Equal(t, g.Code, mt.Code, "%s %s", m, p)
 					assert.Equal(t, g.Header().Get("Content-Type"), mt.Header().Get("Content-Type"), "%s %s", m, p)
 					assert.Equal(t, g.Body.String(), mt.Body.String(), "%s %s", m, p)
