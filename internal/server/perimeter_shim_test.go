@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -53,6 +53,12 @@ type perimeterCase struct {
 	// peerRefused: the peer is outside the allow-list; only the refusal is
 	// compared.
 	peerRefused bool
+	// ginGateVary: gin's own Basic gate refused it with an allowed Origin and
+	// Accept-Encoding: gzip. HEAD's 401 kept CORS's Vary: Origin (its gate
+	// ran before gzip); stage 9 deletes it from R1's (deviation 16, until
+	// F3 moves the gate into stage 8). The difference is asserted, so a fix
+	// shows up here.
+	ginGateVary bool
 }
 
 // volatileHeaders differ between two runs of the same request. X-App-Build
@@ -65,21 +71,7 @@ func volatileHeaders() []string {
 // header but the volatile ones, and the body.
 func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 	t.Helper()
-	do := func(h http.Handler) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(c.method, c.path, nil)
-		req.Host = "gotham.example"
-		req.RemoteAddr = "127.0.0.1:41000"
-		if c.remote != "" {
-			req.RemoteAddr = c.remote
-		}
-		for k, v := range c.header {
-			req.Header.Set(k, v)
-		}
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		return w
-	}
-	g, k := do(head), do(r1)
+	g, k := serveCase(head, c), serveCase(r1, c)
 	assert.Equal(t, g.Code, k.Code, "%s: status", c.name)
 	if c.peerRefused {
 		// Stage 0's refusal is core's problem answer (05-http-api §4.2),
@@ -105,6 +97,11 @@ func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 		gh.Del(v)
 		kh.Del(v)
 	}
+	if c.ginGateVary {
+		assert.Equal(t, []string{"Origin"}, gh.Values("Vary"), "%s: HEAD's Vary", c.name)
+		assert.Empty(t, kh.Values("Vary"), "%s: R1's Vary (deviation 16 fixed? drop ginGateVary)", c.name)
+		gh.Del("Vary")
+	}
 	if c.coreBody {
 		// Core's problem body brings its own Content-Type.
 		gh.Del("Content-Type")
@@ -115,6 +112,22 @@ func perimeterParity(t *testing.T, head, r1 http.Handler, c perimeterCase) {
 	if !maps.EqualFunc(gh, kh, slices.Equal) {
 		t.Errorf("%s: headers differ\nHEAD: %v\nR1:   %v", c.name, gh, kh)
 	}
+}
+
+// serveCase sends c's request through h.
+func serveCase(h http.Handler, c perimeterCase) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(c.method, c.path, nil)
+	req.Host = "gotham.example"
+	req.RemoteAddr = "127.0.0.1:41000"
+	if c.remote != "" {
+		req.RemoteAddr = c.remote
+	}
+	for k, v := range c.header {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
 }
 
 // readableBody is a response body as the parity check compares and prints
@@ -234,6 +247,31 @@ func TestPerimeter_ParityWithHEAD(t *testing.T) {
 		for _, c := range authed {
 			perimeterParity(t, head, r1, c)
 		}
+		// With Accept-Encoding: gzip, HEAD's refusal was the same as without
+		// it: the gate ran after CORS and before gin-contrib/gzip, so its 401
+		// had no Content-Encoding and no Vary: Accept-Encoding and kept
+		// CORS's Vary: Origin. headPerimeter, which does not compress, is an
+		// exact reference for a refused request, and only for one (an
+		// answer the gate lets through would be compressed), so the cases
+		// HEAD did not refuse are skipped. Stage 9 has run on core's answer
+		// before the shim refuses it, so the shim must undo it (review m1,
+		// m3).
+		gated := append(withHeader(perimeterCases(), "gated, gzip: ", "Accept-Encoding", "gzip"),
+			perimeterCase{name: "gated, gzip: API route, signed out, same origin", method: http.MethodGet,
+				path: "/api/v1/audiobooks", ginGateVary: true,
+				header: map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}},
+			perimeterCase{name: "gated, gzip: SPA page, same origin", method: http.MethodGet,
+				path: "/library/riddler", ginGateVary: true,
+				header: map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}})
+		refused := 0
+		for _, c := range gated {
+			if serveCase(head, c).Code != http.StatusUnauthorized {
+				continue
+			}
+			refused++
+			perimeterParity(t, head, r1, c)
+		}
+		assert.GreaterOrEqual(t, refused, 10, "too few refused gzip cases; the gate is not on")
 		// Valid credentials pass the gate on the kernel's own answers too.
 		for p, want := range map[string]int{"/api/core/v1/riddler": http.StatusNotFound,
 			"/api/audiobooks": http.StatusMovedPermanently, "/api/v1/riddler-unrouted": http.StatusNotFound} {
