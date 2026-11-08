@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -8,13 +8,13 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
 )
@@ -25,6 +25,9 @@ import (
 // store under it would turn its remaining writes into Pebble's
 // use-after-close panic.
 const storeCloseWait = 30 * time.Second
+
+// serveLog logs the composed serve path.
+var serveLog = logger.New("serve")
 
 // runComposedApp is serve's composition root (06 §6.11.1 step 2): with
 // serve's pre-server steps done and store open, it builds
@@ -77,8 +80,7 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 	select {
 	case <-books.Stopped(mod):
 	case <-time.After(storeCloseWait):
-		slog.Error("serve: books' server had not finished stopping; closing the store anyway",
-			"waited", storeCloseWait.String())
+		serveLog.Error("books' server had not finished stopping after %s; closing the store anyway", storeCloseWait)
 	}
 	return runErr
 }

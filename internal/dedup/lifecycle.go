@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -22,9 +22,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
+
+// lifecycleLog logs the engine's lifecycle hooks.
+var lifecycleLog = logger.New("dedup")
 
 // defaultHydrationStopTimeout is the default maximum time Stop waits for
 // the chromem hydration goroutine to finish after its context is canceled.
@@ -171,8 +175,7 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 					"author_rows", stats.AuthorRows, "authors_skipped", stats.AuthorsSkipped())
 				if completeness != nil {
 					if reason := hydrateIncompleteReason(de, stats); reason != "" {
-						slog.Warn("[dedup] vector ANN store stays marked incomplete; no snapshot will be exported until it is rebuilt",
-							"reason", reason)
+						lifecycleLog.Warn("vector ANN store stays marked incomplete; no snapshot will be exported until it is rebuilt: %s", reason)
 					} else {
 						completeness.SetComplete(true)
 					}
