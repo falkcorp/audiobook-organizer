@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_reconcile_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7ffad9f5-a4f3-49fd-b4ee-3f8b2d043e26
 // last-edited: 2026-11-08
 
@@ -50,7 +50,7 @@ func newStaleFixture(t *testing.T, bookIDs []string) staleFixture {
 // importStale imports f with a Pebble count that moved, so the snapshot is stale.
 func importStale(t *testing.T, f staleFixture) *database.HNSWEmbeddingStore {
 	t.Helper()
-	s := database.NewHNSWEmbeddingStore(exportTestDim)
+	s := newBoundImportStore(t)
 	require.NoError(t, s.ImportWithStalenessCheck(f.dir, func(string) (int, error) { return 101, nil }))
 	require.True(t, s.NeedsReconcile(), "a stale snapshot is installed pending a reconcile")
 	assert.ErrorIs(t, s.Export(t.TempDir()), database.ErrHNSWIncomplete, "a pending snapshot is not exported")
@@ -127,7 +127,7 @@ func TestReconcile_MissingKeysReplayed(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, s.ExportWithTruth(dir, func(string) (int, error) { return 101, nil }))
 	requireCleanStop(t, s, dir)
-	next := database.NewHNSWEmbeddingStore(exportTestDim)
+	next := newBoundImportStore(t)
 	require.NoError(t, next.ImportWithStalenessCheck(dir, func(string) (int, error) { return 101, nil }))
 	assert.False(t, next.NeedsReconcile())
 	n, err = next.CountByType(ctx, "book")
@@ -165,7 +165,7 @@ func TestReconcile_DeletedKeysTombstonedAndFiltered(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, s.ExportWithTruth(dir, func(string) (int, error) { return 11, nil }))
 	requireCleanStop(t, s, dir)
-	next := database.NewHNSWEmbeddingStore(exportTestDim)
+	next := newBoundImportStore(t)
 	require.NoError(t, next.ImportWithStalenessCheck(dir, func(string) (int, error) { return 11, nil }))
 	require.False(t, next.NeedsReconcile())
 	assertGone(t, next)
@@ -285,7 +285,7 @@ func TestReconcile_TombstoneRestoredWhenRowReturns(t *testing.T) {
 	// Export the tombstone, then boot stale again with the row back in Pebble.
 	dir := t.TempDir()
 	require.NoError(t, s.ExportWithTruth(dir, func(string) (int, error) { return 11, nil }))
-	next := database.NewHNSWEmbeddingStore(exportTestDim)
+	next := newBoundImportStore(t)
 	require.NoError(t, next.ImportWithStalenessCheck(dir, func(string) (int, error) { return 12, nil }))
 	require.True(t, next.NeedsReconcile())
 
@@ -383,7 +383,7 @@ func TestImport_StaleSnapshotWithMismatchedMetaIsDiscarded(t *testing.T) {
 	f := newStaleFixture(t, batmanIDs[:4])
 	require.NoError(t, os.WriteFile(filepath.Join(f.dir, "hnsw-book.meta.json"), []byte(`{"bruce-wayne":{}}`), 0o644))
 
-	s := database.NewHNSWEmbeddingStore(exportTestDim)
+	s := newBoundImportStore(t)
 	require.NoError(t, s.ImportWithStalenessCheck(f.dir, func(string) (int, error) { return 101, nil }))
 	assert.False(t, s.NeedsReconcile())
 	n, err := s.CountByType(ctx, "book")
