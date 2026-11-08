@@ -1,7 +1,7 @@
 // file: internal/server/middleware/basicauth.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-05
+// last-edited: 2026-11-07
 
 package middleware
 
@@ -112,90 +112,108 @@ func BasicGateUsesEnvPassword() bool { return currentBasicGate().usesEnvPassword
 // settings once, from one config.Snapshot() (currentBasicGate).
 func BasicAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		gate := currentBasicGate()
-		if !gate.enabled {
-			c.Next()
-			return
-		}
-
-		path := c.Request.URL.Path
-
-		// Exempt health endpoints
-		if path == "/api/health" || path == "/api/v1/health" {
-			c.Next()
-			return
-		}
-
-		// Exempt static assets (Vite-built frontend files)
-		if strings.HasPrefix(path, "/assets/") ||
-			path == "/favicon.ico" ||
-			strings.HasSuffix(path, ".js") ||
-			strings.HasSuffix(path, ".css") ||
-			strings.HasSuffix(path, ".png") ||
-			strings.HasSuffix(path, ".svg") ||
-			strings.HasSuffix(path, ".woff2") {
-			c.Next()
-			return
-		}
-
-		// Exempt ABS routes that run ABSRequireAuth, by design rather than by
-		// oversight: Basic Auth and ABS bearer auth both live in the single
-		// Authorization header, so an ABS client cannot present both, and with
-		// Basic Auth on, every ABS route would otherwise be unreachable.
-		//
-		// The test is "does the route gin matched run ABS token auth later in its
-		// own chain", not a path prefix, so the exempt set is a subset of the
-		// token-enforced set by construction:
-		//   - /api/items/:id is exempt; /api/items/:id/cover (no ABS auth) is
-		//     not. A path prefix cannot express that split.
-		//   - /ping, /status, /login, /auth/refresh, /auth/openid*, the cover
-		//     routes and /public/session/:id/track/:index carry no ABSRequireAuth,
-		//     so Basic Auth remains their only gate and they stay challenged.
-		//   - No request path is compared, so ".." segments, %2e%2e or any
-		//     other spelling cannot widen the exemption: the decision follows
-		//     the handler chain gin will actually run.
-		//   - A new ABS route added with ABSRequireAuth is exempted
-		//     automatically; one added without it stays behind Basic Auth.
-		if routeEnforcesABSAuth(c) {
-			c.Next()
-			return
-		}
-
-		// Fail closed on an enabled gate with no effective password, whatever
-		// the request sends: comparing two empty strings would admit
-		// "<username>:" (05-authn §11.1 item 5). This covers a password cleared
-		// by any means (an operator, the key-regeneration delete path, a
-		// partial reset); BasicGateNoPassword raises the health token for it.
-		if gate.noPassword() {
+		if basicGateRefuses(c.Request, func() bool { return routeEnforcesABSAuth(c) }) {
 			refuseBasicAuth(c)
 			return
 		}
-		if gate.usesEnvPassword() {
-			basicGateEnvWarnOnce.Do(func() { basicGateLog.Warn(BasicGateEnvPasswordWarning) })
-		}
-
-		user, pass, ok := c.Request.BasicAuth()
-		if !ok {
-			refuseBasicAuth(c)
-			return
-		}
-
-		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(gate.username)) == 1
-		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(gate.password)) == 1
-
-		if !userMatch || !passMatch {
-			refuseBasicAuth(c)
-			return
-		}
-
 		c.Next()
 	}
+}
+
+// BasicGateRefusesUnrouted reports whether the Basic gate refuses r when no
+// legacy route serves it: a response core's router writes itself (a legacy
+// 404, the /api redirect, a problem 404), which the perimeter shim gates as
+// HEAD's gin did for a request it routed to no route (FullPath "", so the ABS
+// route exemption never applies). WriteBasicChallenge writes the refusal.
+func BasicGateRefusesUnrouted(r *http.Request) bool {
+	return basicGateRefuses(r, func() bool { return false })
+}
+
+// WriteBasicChallenge writes the gate's refusal: 401 with its Basic
+// challenge and no body, as refuseBasicAuth does through gin.
+func WriteBasicChallenge(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", basicChallenge)
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+// basicChallenge is the gate's one WWW-Authenticate value.
+const basicChallenge = `Basic realm="Audiobook Organizer"`
+
+// basicGateRefuses is the gate's decision for r. routeExempt reports whether
+// the route gin matched runs ABS token auth later in its own chain; it is
+// asked only when the path exemptions do not apply.
+func basicGateRefuses(r *http.Request, routeExempt func() bool) bool {
+	gate := currentBasicGate()
+	if !gate.enabled {
+		return false
+	}
+
+	path := r.URL.Path
+
+	// Exempt health endpoints
+	if path == "/api/health" || path == "/api/v1/health" {
+		return false
+	}
+
+	// Exempt static assets (Vite-built frontend files)
+	if strings.HasPrefix(path, "/assets/") ||
+		path == "/favicon.ico" ||
+		strings.HasSuffix(path, ".js") ||
+		strings.HasSuffix(path, ".css") ||
+		strings.HasSuffix(path, ".png") ||
+		strings.HasSuffix(path, ".svg") ||
+		strings.HasSuffix(path, ".woff2") {
+		return false
+	}
+
+	// Exempt ABS routes that run ABSRequireAuth, by design rather than by
+	// oversight: Basic Auth and ABS bearer auth both live in the single
+	// Authorization header, so an ABS client cannot present both, and with
+	// Basic Auth on, every ABS route would otherwise be unreachable.
+	//
+	// The test is "does the route gin matched run ABS token auth later in its
+	// own chain", not a path prefix, so the exempt set is a subset of the
+	// token-enforced set by construction:
+	//   - /api/items/:id is exempt; /api/items/:id/cover (no ABS auth) is
+	//     not. A path prefix cannot express that split.
+	//   - /ping, /status, /login, /auth/refresh, /auth/openid*, the cover
+	//     routes and /public/session/:id/track/:index carry no ABSRequireAuth,
+	//     so Basic Auth remains their only gate and they stay challenged.
+	//   - No request path is compared, so ".." segments, %2e%2e or any
+	//     other spelling cannot widen the exemption: the decision follows
+	//     the handler chain gin will actually run.
+	//   - A new ABS route added with ABSRequireAuth is exempted
+	//     automatically; one added without it stays behind Basic Auth.
+	if routeExempt() {
+		return false
+	}
+
+	// Fail closed on an enabled gate with no effective password, whatever
+	// the request sends: comparing two empty strings would admit
+	// "<username>:" (05-authn §11.1 item 5). This covers a password cleared
+	// by any means (an operator, the key-regeneration delete path, a
+	// partial reset); BasicGateNoPassword raises the health token for it.
+	if gate.noPassword() {
+		return true
+	}
+	if gate.usesEnvPassword() {
+		basicGateEnvWarnOnce.Do(func() { basicGateLog.Warn(BasicGateEnvPasswordWarning) })
+	}
+
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		return true
+	}
+
+	userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(gate.username)) == 1
+	passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(gate.password)) == 1
+	return !userMatch || !passMatch
 }
 
 // refuseBasicAuth answers 401 with the gate's Basic challenge. Every refusal of
 // the gate goes through it, so the challenge stays one value.
 func refuseBasicAuth(c *gin.Context) {
-	c.Header("WWW-Authenticate", `Basic realm="Audiobook Organizer"`)
+	c.Header("WWW-Authenticate", basicChallenge)
 	c.AbortWithStatus(http.StatusUnauthorized)
 }
 

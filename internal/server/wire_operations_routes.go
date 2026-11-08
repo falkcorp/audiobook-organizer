@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -22,7 +22,9 @@ func (s *Server) wireOperationsRoutes(
 ) {
 	// Operations v2 (UOS-06)
 	protected.GET("/operations/timeline", s.perm(auth.PermLibraryView), opsV2H.GetOperationTimeline)
-	protected.GET("/operations/events", s.perm(auth.PermLibraryView), opsV2H.OperationsSSE)
+	// The stream ends when the stop closes the event streams, before the
+	// listener drains (endStreamsOnShutdown, R1-15).
+	protected.GET("/operations/events", s.endStreamsOnShutdown(), s.perm(auth.PermLibraryView), opsV2H.OperationsSSE)
 	protected.GET("/operations/v2/:id/logs/download", s.perm(auth.PermLibraryView), opsV2H.DownloadOperationLogs)
 	protected.GET("/operations/v2/:id", s.perm(auth.PermLibraryView), opsV2H.GetOperationV2)
 	protected.DELETE("/operations/v2/:id", s.perm(auth.PermSettingsManage), opsV2H.CancelOperationV2)

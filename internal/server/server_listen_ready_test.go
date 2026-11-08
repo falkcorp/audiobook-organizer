@@ -1,7 +1,7 @@
 // file: internal/server/server_listen_ready_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b665aef1-a25e-4d51-a7fe-4069066fd9e4
-// last-edited: 2026-10-12
+// last-edited: 2026-11-07
 
 //go:build !windows
 
@@ -83,7 +83,19 @@ func nextStateNotify(t *testing.T, conn *net.UnixConn, timeout time.Duration) st
 	}
 }
 
-// listenTestServer is a Server with only what configureAndStartHTTP touches.
+// startListenersForTest binds cfg's listener stack (listenR1) with the
+// engine as the root handler and serves it, without the post-listen start:
+// the listener half of Start, which HEAD's configureAndStartHTTP was.
+func (s *Server) startListenersForTest(cfg ServerConfig) error {
+	ln, err := s.listenR1(cfg, listenOptionsFor(cfg), s.router)
+	if err != nil {
+		return err
+	}
+	go func() { _ = ln.serveListeners() }()
+	return nil
+}
+
+// listenTestServer is a Server with only what listenR1 touches.
 func listenTestServer() *Server {
 	r := gin.New()
 	r.GET("/ping", func(c *gin.Context) { c.String(http.StatusOK, "pong") })
@@ -141,12 +153,12 @@ func writeSelfSignedCert(t *testing.T) (string, string, *x509.CertPool) {
 	return certPath, keyPath, pool
 }
 
-// TestConfigureAndStartHTTPListenBindsBeforeReturning: when the function
+// TestListenR1BindsBeforeReturning: when the function
 // returns nil the port already accepts connections, which is what makes it
 // safe for Start to send READY=1 right after it.
-func TestConfigureAndStartHTTPListenBindsBeforeReturning(t *testing.T) {
+func TestListenR1BindsBeforeReturning(t *testing.T) {
 	s := listenTestServer()
-	require.NoError(t, s.configureAndStartHTTP(listenTestConfig("0")))
+	require.NoError(t, s.startListenersForTest(listenTestConfig("0")))
 	t.Cleanup(func() { _ = s.httpServer.Close() })
 
 	addr := s.httpBoundAddr.Load()
@@ -158,21 +170,21 @@ func TestConfigureAndStartHTTPListenBindsBeforeReturning(t *testing.T) {
 	require.Equal(t, "pong", string(body))
 }
 
-// TestConfigureAndStartHTTPListenFailsOnPortInUse: a bind failure is returned
+// TestListenR1FailsOnPortInUse: a bind failure is returned
 // to the caller (so the Fatal "http" step fails Start) instead of exiting the
 // process from a goroutine.
-func TestConfigureAndStartHTTPListenFailsOnPortInUse(t *testing.T) {
+func TestListenR1FailsOnPortInUse(t *testing.T) {
 	s := listenTestServer()
-	err := s.configureAndStartHTTP(listenTestConfig(occupiedPort(t)))
+	err := s.startListenersForTest(listenTestConfig(occupiedPort(t)))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bind HTTP listener")
 	require.Nil(t, s.httpBoundAddr.Load())
 }
 
-// TestConfigureAndStartHTTPListenTLSServesLoadedKeyPair covers the TLS
+// TestListenR1TLSServesLoadedKeyPair covers the TLS
 // branch: the key pair is loaded before the bind and served through
 // ServeTLS(ln, "", ""), and the port-80 redirect stays non-fatal.
-func TestConfigureAndStartHTTPListenTLSServesLoadedKeyPair(t *testing.T) {
+func TestListenR1TLSServesLoadedKeyPair(t *testing.T) {
 	// Hold 127.0.0.1:80 if this process may bind it, so the server's redirect
 	// listener takes its non-fatal failure path and no socket outlives the
 	// test. Where binding :80 is not permitted the server's attempt fails the
@@ -185,7 +197,7 @@ func TestConfigureAndStartHTTPListenTLSServesLoadedKeyPair(t *testing.T) {
 	cfg.TLSCertFile, cfg.TLSKeyFile = certPath, keyPath
 
 	s := listenTestServer()
-	require.NoError(t, s.configureAndStartHTTP(cfg))
+	require.NoError(t, s.startListenersForTest(cfg))
 	t.Cleanup(func() {
 		_ = s.httpServer.Close()
 		if s.httpRedirectServer != nil {
@@ -208,9 +220,9 @@ func TestConfigureAndStartHTTPListenTLSServesLoadedKeyPair(t *testing.T) {
 	require.Equal(t, 2, resp.ProtoMajor, "TLS listener did not negotiate HTTP/2")
 }
 
-// TestConfigureAndStartHTTPListenTLSBadKeyPairFails: an unreadable key pair is
+// TestListenR1TLSBadKeyPairFails: an unreadable key pair is
 // a startup error, returned before anything is bound.
-func TestConfigureAndStartHTTPListenTLSBadKeyPairFails(t *testing.T) {
+func TestListenR1TLSBadKeyPairFails(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
 	require.NoError(t, os.WriteFile(certPath, []byte("not a cert"), 0o600))
@@ -219,7 +231,7 @@ func TestConfigureAndStartHTTPListenTLSBadKeyPairFails(t *testing.T) {
 	cfg.TLSCertFile, cfg.TLSKeyFile = certPath, keyPath
 
 	s := listenTestServer()
-	err := s.configureAndStartHTTP(cfg)
+	err := s.startListenersForTest(cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "load TLS key pair")
 	require.Nil(t, s.httpBoundAddr.Load())

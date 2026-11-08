@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.3
+// version: 4.66.4
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-07
 
@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -180,7 +182,7 @@ const deferredActivityFlushBudget = 5 * time.Second
 // flushDeferredActivity is for a failed Start. It waits, at most
 // deferredActivityFlushBudget, for the flush goroutine to write every entry
 // still queued by Service.RecordDeferred. It deliberately does not close the
-// store: on the configureAndStartHTTP failure the container, and with it the
+// store: on the listener failure ("http" step) the container, and with it the
 // activity Writer, is still running and may still write through the store,
 // so closing here would open exactly the write-after-close race Shutdown
 // avoids. Start's caller exits right after, and SQLite recovers the WAL on the
@@ -284,11 +286,101 @@ func logBasicGateAtStartup() {
 	}
 }
 
+// lifecycleRun is the state one run of the server's lifecycle shares between
+// StartHook, the post-listen start (afterListen), the pre-drain steps
+// (beforeDrain) and StopHook. Since R1-15 the kernel owns the order (06
+// §6.5.2): books' start hook is StartHook, the listener is R1Listener (step
+// 7, behind app.Options.R1Listen), the listener's drain runs beforeDrain
+// first, and books' stop hook is StopHook. Start composes the same pieces in
+// the same order without the kernel.
+type lifecycleRun struct {
+	cfg ServerConfig
+
+	// shutdown is closed by beforeDrain: the scheduler, the 5 s status
+	// ticker, the cache snapshotter, the watcher supervisor and the session
+	// cleanup return on it (HEAD closed it right after the signal).
+	shutdown      chan struct{}
+	closeShutdown sync.Once
+	backgroundWG  sync.WaitGroup
+	watchers      *watcher.Supervisor
+	// afterListenRan is set by afterListen; StopHook skips what only a
+	// served run started.
+	afterListenRan atomic.Bool
+}
+
+// Start runs the server's whole lifecycle without the kernel: StartHook, the
+// listener stack (R1Listener, serving s.router behind the peer allow-list, as
+// HEAD did), the post-listen start, then a wait for SIGINT or SIGTERM, then
+// the drain and StopHook with HEAD's own waits (no shutdown budget). The
+// process entry point no longer calls it: serve runs app.New with
+// books.Module, whose hooks and R1Listen are these same pieces (R1-15). Tests
+// drive it as the single-call lifecycle.
 func (s *Server) Start(cfg ServerConfig) error {
-	// Every step below runs through the process's startup runner, which
-	// applies the step's class from startup.Table (Fatal returns the error,
-	// Degraded records a /health token and continues).
+	if err := s.StartHook(context.Background(), cfg); err != nil {
+		return err
+	}
+	// Fatal, as HEAD's "http" step: the listener stack binds synchronously,
+	// so a port in use or an unreadable cert fails Start.
+	var ln *R1Listener
+	if err := s.life.cfg.StartupSteps.Run("http", func() error {
+		var err error
+		ln, err = s.listenR1(cfg, listenOptionsFor(cfg), s.router)
+		return err
+	}); err != nil {
+		s.flushDeferredActivity()
+		s.flight.Stop()
+		return err
+	}
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
+	served := make(chan error, 1)
+	go func() { served <- ln.Serve() }()
+	// Everything is started once the post-listen start has run; the only
+	// thing left is the signal. Announce that so a test can send SIGTERM the
+	// moment it is safe (TASK-205).
+	go func() {
+		select {
+		case <-ln.afterDone:
+			s.armShutdown.Do(func() { close(s.shutdownArmed) })
+		case <-s.stopped:
+		}
+	}()
+	var serveErr error
+	select {
+	case <-quit:
+	case serveErr = <-served:
+		if serveErr != nil {
+			lifecycleLog.Error("HTTP server stopped serving: %v", serveErr)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := ln.Shutdown(ctx); err != nil {
+		slog.Warn("HTTP server forced shutdown", "err", err)
+	}
+	// A listener that stopped serving is the run's failure (HEAD exited the
+	// process with status 1 there); the stop still runs first.
+	return errors.Join(serveErr, s.StopHook(context.Background()))
+}
+
+// listenOptionsFor is the listener address and TLS files of cfg, the values
+// books' R1Values hands the kernel in production.
+func listenOptionsFor(cfg ServerConfig) httpapi.ListenOptions {
+	return httpapi.ListenOptions{Addr: net.JoinHostPort(cfg.Host, cfg.Port), TLSCertFile: cfg.TLSCertFile, TLSKeyFile: cfg.TLSKeyFile}
+}
+
+// StartHook is books' start hook (06 §6.5.2 start step 2): HEAD's Start up to
+// the listener. Every step runs through the process's startup runner
+// (cfg.StartupSteps), which applies the step's class from startup.Table
+// (Fatal returns the error, Degraded records a /health token and continues).
+// A failure flushes the deferred activity entries and stops the flight
+// recorder; the kernel then does not call StopHook.
+func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 	steps := s.startupStepsFor(cfg)
+	cfg.StartupSteps = steps
+	s.life.cfg = cfg
+	s.life.shutdown = make(chan struct{})
 	logBasicGateAtStartup()
 
 	// Refuse to serve with a hole in the operations registry, before touching
@@ -301,11 +393,13 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Start the runtime flight recorder before the container starts the ops
 	// registry's watchdog, so its first strike already has a trace to save.
 	s.startFlightRecorder()
-	// Every return below that is not the normal shutdown (a failed container
-	// start, a failed step) must not leave the runtime recorder tracing in
-	// the process. Stop is idempotent; the shutdown path still stops it
-	// explicitly, ahead of the background-goroutine wait.
-	defer s.flight.Stop()
+	// A failed start must not leave the runtime recorder tracing in the
+	// process. Stop is idempotent; StopHook stops it on the normal path.
+	defer func() {
+		if err != nil {
+			s.flight.Stop()
+		}
+	}()
 
 	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
 
@@ -363,16 +457,16 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// redundant HydrateChromem walk. Nothing to do here. (HNSW-CRASH-2026-06-18)
 
 	s.startCacheWarmers()
+	return nil
+}
 
-	// Fatal. configureAndStartHTTP binds the main listener (and loads the
-	// TLS key pair) synchronously, so a port in use or an unreadable cert
-	// returns here and Start fails instead of a goroutine exiting the
-	// process after the fact. Only a Serve error AFTER a successful bind
-	// still exits from its goroutine (H113).
-	if err := steps.Run("http", func() error { return s.configureAndStartHTTP(cfg) }); err != nil {
-		s.flushDeferredActivity()
-		return err
-	}
+// afterListen is HEAD's Start after the main listener bound: R1Listener.Serve
+// runs it once, concurrently with serving, as HEAD ran these steps while its
+// serve goroutine accepted connections.
+func (s *Server) afterListen() {
+	s.life.afterListenRan.Store(true)
+	shutdown := s.life.shutdown
+	backgroundWG := &s.life.backgroundWG
 
 	// The last Fatal step has passed and the port accepts connections: tell
 	// systemd (Type=notify) the service is started. This is deliberately
@@ -380,6 +474,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// slow disk into a start timeout and a restart loop; /health reports
 	// `ready` for that and the deploy waits on it. A notify failure is
 	// logged, never fatal: under Type=simple there is no socket at all.
+	// sdnotify moves into core with R1-16.
 	if err := sdnotify.Ready(); err != nil {
 		lifecycleLog.Warn("systemd readiness notification failed: %v", err)
 	}
@@ -405,18 +500,12 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Operations interrupted by a previous shutdown/crash are resumed by the
 	// operations registry: Registry.Start runs resumeAfterStartup, which reads
 	// ListResumableOperationsV2 and applies each def's declared ResumePolicy.
-	// A v1 sweep used to run here as well; it was deleted on 2026-09-07 because
-	// its only candidate source was the `operation:` keyspace, whose minter was
-	// retired 2026-08-23.
 
 	// Recover interrupted file I/O operations (cover embed, tag write, rename)
 	RecoverInterruptedFileOps(s.fileIOPool)
 
 	// Interrupted metadata candidate fetches are resumed by the operations
-	// registry, not from here: metadata.candidate-fetch declares
-	// ResumePolicy=ResumeRestart and its Run skips books that already have
-	// result rows. The hand-rolled resume that used to run here read the v1
-	// interrupted-ops list, which no longer has rows for this op.
+	// registry (metadata.candidate-fetch declares ResumePolicy=ResumeRestart).
 
 	s.startBackfills()
 
@@ -424,15 +513,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// once, in the background (purge_replay_boot.go).
 	s.startPurgeJournalReplay()
 
-	// Stale transcode temp files under the import paths are swept by the
-	// hourly transcode_temp_cleanup scheduler task (maintenance.temp-file-cleanup
-	// with import_paths_only), not by goroutines started here.
-
-	// Heartbeat: push periodic system.status events via SSE (every 5s) while running
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	shutdown := make(chan struct{})
-	var backgroundWG sync.WaitGroup
+	// The HNSW snapshot is written in the background whenever the graph
+	// changed, so a stop that has no budget left for it still finds a recent
+	// snapshot on disk (R1-15; hnsw_snapshot.go).
+	s.startHNSWSnapshotter()
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
 	s.scheduler = scheduler.NewTaskScheduler(s.schedulerDeps())
@@ -442,8 +526,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if err := s.scheduler.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
 		lifecycleLog.Warn("ops.Schedule registration: %v", err)
 	}
-	s.scheduler.Start(shutdown, &backgroundWG)
+	s.scheduler.Start(shutdown, backgroundWG)
 
+	// Heartbeat: push periodic system.status events via SSE (every 5s) while running
 	ticker := time.NewTicker(5 * time.Second)
 	libraryCountTick, bookCount, folderCount := 0, 0, 0 // the counts are re-read once a minute, re-sent every tick
 	backgroundWG.Go(func() {
@@ -490,31 +575,21 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	})
 
-	// Persist cache observability snapshots to SQLite every 5 minutes so
-	// hit/miss trends survive restarts. PebbleDB-backed deployments skip
-	// persistence inside runCacheStatsSnapshotter.
+	// Persist cache observability snapshots every 5 minutes so hit/miss
+	// trends survive restarts.
 	backgroundWG.Go(func() {
 		s.runCacheStatsSnapshotter(shutdown)
 	})
 
 	// Start auto-scan file watchers if enabled. ONE watcher per enabled
-	// import path — previously only the first enabled path was watched,
-	// so users with multiple import locations had silent blind spots on
-	// every path after the first.
-	//
-	// Enumeration used to happen exactly ONCE here, from a boot-time snapshot,
-	// so an import path added later got no watcher until the process was
-	// restarted; and the read was `if err == nil && len(importPaths) > 0`,
-	// which turned a failed GetAllImportPaths into zero watchers with no log
-	// line at all. Both are now handled by watcher.Supervisor, which re-reads
-	// the desired set on a ticker and reports every failure.
+	// import path, supervised by watcher.Supervisor, which re-reads the
+	// desired set on a ticker and reports every failure.
 	//
 	// These watchers remain the LOW-LATENCY path only. The guaranteed
 	// catch-all is the periodic scheduled scan (scheduled.library_scan):
 	// fsnotify does not see writes made by remote NFS/SMB clients and can
 	// exhaust the inotify watch limit on a large tree, so it must never be
 	// the only discovery mechanism.
-	var watcherSupervisor *watcher.Supervisor
 	if config.AppConfig.AutoScanEnabled && s.Ops() != nil {
 		debounce := 5 * time.Second
 		if config.AppConfig.AutoScanDebounceSeconds > 0 {
@@ -556,14 +631,15 @@ func (s *Server) Start(cfg ServerConfig) error {
 			}
 			return enabled, nil
 		}
-		watcherSupervisor = watcher.NewSupervisor(paths, cb, debounce, 0)
-		watcherSupervisor.SetErrorHook(func(err error) {
+		ws := watcher.NewSupervisor(paths, cb, debounce, 0)
+		ws.SetErrorHook(func(err error) {
 			// Surfaced in the activity log too, so an operator sees it in the
 			// UI rather than only in journalctl.
 			watchLog.Error("Auto-scan watcher problem: %v", err)
 		})
+		s.life.watchers = ws
 		backgroundWG.Go(func() {
-			watcherSupervisor.Run(shutdown)
+			ws.Run(shutdown)
 		})
 	}
 
@@ -583,23 +659,24 @@ func (s *Server) Start(cfg ServerConfig) error {
 			}
 		})
 	}
+}
 
-	// Everything is started; the only thing left is the signal. Announce that
-	// so a test can send SIGTERM the moment it is safe (TASK-205).
-	s.armShutdown.Do(func() { close(s.shutdownArmed) })
-
-	// Wait for interrupt signal to gracefully shutdown the server
-	<-quit
-	// Tell systemd the stop has begun before anything slow runs (the client
-	// broadcast below sleeps, the registry drain can take 10 s).
+// beforeDrain is the stop's first steps, which R1Listener.Shutdown runs before
+// the HTTP drain (HEAD's order): tell systemd the stop has begun, stop the
+// scheduler, tickers and watchers, tell the connected clients, and end the
+// long-lived event streams so the drain does not wait on them for its whole
+// budget (/api/events, the ops v2 and v3 event streams).
+func (s *Server) beforeDrain() {
+	// Tell systemd the stop has begun before anything slow runs.
 	if err := sdnotify.Stopping(); err != nil {
 		lifecycleLog.Warn("systemd stopping notification failed: %v", err)
 	}
 	if err := sdnotify.Status("Shutting down"); err != nil {
 		lifecycleLog.Warn("systemd status notification failed: %v", err)
 	}
-	close(shutdown)
-	signal.Stop(quit)
+	if s.life.shutdown != nil {
+		s.life.closeShutdown.Do(func() { close(s.life.shutdown) })
+	}
 
 	slog.Info("Shutting down server...")
 
@@ -615,28 +692,69 @@ func (s *Server) Start(cfg ServerConfig) error {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// End the v3 operations event streams, or the graceful HTTP shutdown
-	// below waits on them for its whole timeout.
-	s.closeOpsV3Streams()
+	// End the event streams, or the graceful HTTP shutdown waits on them for
+	// its whole timeout.
+	s.closeStreams()
+}
 
-	// Stop accepting HTTP requests BEFORE closing any stores.
-	// This prevents panics from requests hitting closed PebbleDB instances.
-	slog.Info("Stopping HTTP servers...")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if s.http3Server != nil {
-		if err := s.http3Server.Close(); err != nil {
-			slog.Warn("HTTP/3 server close error", "err", err)
-		}
+// closeStreams ends every long-lived event stream: the v3 operations streams
+// (closeOpsV3Streams) and the streams endStreamsOnShutdown wraps.
+func (s *Server) closeStreams() {
+	s.closeOpsV3Streams()
+	if s.streamsClosing != nil {
+		s.closeStreamsOnce.Do(func() { close(s.streamsClosing) })
 	}
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		slog.Warn("HTTP server forced shutdown", "err", err)
+}
+
+// endStreamsOnShutdown is the middleware of a long-lived event-stream route
+// whose handler ends only when its request context does (/api/events, the ops
+// v2 events): the request context is cancelled when closeStreams runs, before
+// the listener drains (R1-15).
+func (s *Server) endStreamsOnShutdown() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithCancel(c.Request.Context())
+		defer cancel()
+		closing := s.streamsClosing
+		go func() {
+			select {
+			case <-closing:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
 	}
-	if s.httpRedirectServer != nil {
-		if err := s.httpRedirectServer.Shutdown(ctx); err != nil {
-			lifecycleLog.Warn("HTTP->HTTPS redirect server forced shutdown: %v", err)
-		}
+}
+
+// Stopped is closed when StopHook has returned. The kernel abandons a stop
+// hook that outlives the shutdown budget without stopping it, so the
+// composition root waits on this before closing the store.
+func (s *Server) Stopped() <-chan struct{} { return s.stopped }
+
+// budgeted is d, or the time left before ctx's deadline less reserve when that
+// is shorter (never below zero): a stop step's own wait clamped to the
+// shutdown budget, leaving reserve for the steps after it.
+func budgeted(ctx context.Context, d, reserve time.Duration) time.Duration {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return d
 	}
+	left := time.Until(dl) - reserve
+	if left < 0 {
+		left = 0
+	}
+	return min(d, left)
+}
+
+// StopHook is books' stop hook: HEAD's shutdown after the HTTP drain, in
+// HEAD's order. ctx carries the kernel's shutdown deadline (06 §6.5.2,
+// 05-health §5H.4); every bounded wait is clamped to it (budgeted), and the
+// steps whose APIs take no deadline (the file I/O pool, the plugin and
+// container stops) run in order regardless. It closes Stopped on return.
+func (s *Server) StopHook(ctx context.Context) error {
+	defer s.stopOnce.Do(func() { close(s.stopped) })
+
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
 	// pinning this Server and its stores.
 	s.unregisterPebbleMetricsSources()
@@ -651,20 +769,19 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Drain the UOS-02 operations registry before canceling bgCtx so that
 	// in-flight ops get a clean shutdown signal via their per-run ctx.
 	if s.opRegistry != nil {
-		regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer regCancel()
+		regCtx, regCancel := context.WithTimeout(context.WithoutCancel(ctx), budgeted(ctx, 10*time.Second, 8*time.Second))
 		if err := s.opRegistry.Shutdown(regCtx); err != nil {
 			slog.Warn("ops registry shutdown", "err", err)
 		}
+		regCancel()
 	}
 
 	// Cancel fire-and-forget background work (embedding backfill, async
-	// dedup scans) and wait for it to return. This MUST happen before
-	// embeddingStore.Close() and before Start() returns (which triggers
-	// the deferred closeStore() in cmd/root.go). Without it, the backfill
-	// goroutine keeps iterating Pebble while CloseStore runs, and Pebble's
-	// FileCache.Unref panics with "element has outstanding references"
-	// during shutdown — which has been killing every restart mid-cycle.
+	// dedup scans, the HNSW snapshotter) and wait for it to return. This MUST
+	// happen before embeddingStore.Close() and before the store closes:
+	// otherwise a backfill keeps iterating Pebble while CloseStore runs, and
+	// Pebble's FileCache.Unref panics with "element has outstanding
+	// references".
 	if s.bgCancel != nil {
 		slog.Info("Canceling background goroutines...")
 		s.bgCancel()
@@ -682,12 +799,13 @@ func (s *Server) Start(cfg ServerConfig) error {
 		s.bgWG.Wait()
 		close(bgDone)
 	}()
+	bgWait := budgeted(ctx, 30*time.Second, 5*time.Second)
 	select {
 	case <-bgDone:
 		slog.Info("Background goroutines stopped")
-	case <-time.After(30 * time.Second):
-		slog.Warn("Background goroutines did not stop within 30s — proceeding with shutdown anyway",
-			"still_running", s.bgWG.Running())
+	case <-time.After(bgWait):
+		slog.Warn("Background goroutines did not stop in time — proceeding with shutdown anyway",
+			"waited", bgWait.String(), "still_running", s.bgWG.Running())
 	}
 	// Whatever the index worker did not pop (wedged, or the wait above timed
 	// out) is only in memory; record it so the reconciler repairs it next boot.
@@ -702,7 +820,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// Shut down the iTunes service (no-op in PR 1 since NewDisabled is
 	// always used; PR 2 onward may have live sub-components to flush).
 	if s.itunesSvc != nil {
-		if err := s.itunesSvc.Shutdown(30 * time.Second); err != nil {
+		if err := s.itunesSvc.Shutdown(budgeted(ctx, 30*time.Second, 4*time.Second)); err != nil {
 			slog.Warn("itunes service shutdown", "err", err)
 		}
 	}
@@ -715,25 +833,16 @@ func (s *Server) Start(cfg ServerConfig) error {
 
 	// Detach from the store and from credit resolution only now that every
 	// writer this server owns has stopped (ops drained or timed out, background
-	// work and the file I/O pool waited for, plugins shut down): an op still
-	// running after the registry's bounded shutdown resolves credits against the
-	// authority lists and writes books through the observer until here. Both are
+	// work and the file I/O pool waited for, plugins shut down). Both are
 	// released by identity, so neither removes what a newer server registered.
 	s.releaseSearchAndAuthority()
 
-	// Search index is closed by Container.Stop below — IndexService.Stop
-	// runs in reverse-resolved order alongside the other registered
-	// Stoppers and clears its handle so a double-call is a no-op.
-
-	// SERVER-LIFECYCLE-FLIP: drive remaining Stoppers via the container.
-	// Runs in reverse resolved order; covers activityWriter (replaces
-	// the inline Stop here pre-flip), updateScheduler (previously never
-	// stopped — a leak), and any future Stopper additions. Inline Stops
-	// above remain the source of truth for the carefully-sequenced
-	// teardown (opRegistry drain before bgCancel, etc.); Container.Stop is idempotent on
-	// already-stopped services for those.
+	// SERVER-LIFECYCLE-FLIP: drive remaining Stoppers via the container, in
+	// reverse resolved order (the search index, the activity writer, the
+	// update scheduler, the ops registry, ...). Container.Stop is idempotent
+	// on services already stopped above.
 	if s.container != nil {
-		if err := s.container.Stop(context.Background()); err != nil {
+		if err := s.container.Stop(context.WithoutCancel(ctx)); err != nil {
 			slog.Warn("container stop", "err", err)
 		}
 	}
@@ -745,44 +854,26 @@ func (s *Server) Start(cfg ServerConfig) error {
 	s.closeActivityStore()
 
 	// Stop every file watcher (one per import path). The supervisor goroutine
-	// has already returned via `shutdown`; this only tears down the live
+	// has already returned via shutdown; this only tears down the live
 	// watchers it left running.
-	if watcherSupervisor != nil {
-		stopped := len(watcherSupervisor.WatchedPaths())
-		watcherSupervisor.StopAll()
+	if ws := s.life.watchers; ws != nil {
+		stopped := len(ws.WatchedPaths())
+		ws.StopAll()
 		if stopped > 0 {
 			slog.Info("File watchers stopped", "fileWatchers_count", stopped)
 		}
 	}
 
-	// Persist HNSW snapshot for fast next-boot startup (before embedding store
-	// closes so the graph data is still intact and consistent).
-	if s.hnswPersistDir != "" {
-		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore"); ok && raw != nil {
-			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
-				// Record the Pebble truth count alongside the graph. Without it
-				// the next boot cannot tell a fresh snapshot from a stale one
-				// and must discard it — the graph is a filtered projection of
-				// the emb: rows, so its own size proves nothing about currency.
-				var truthCount func(string) (int, error)
-				if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](s.container, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
-					truthCount = embStore.CountByType
-				}
-				if err := hnswStore.ExportWithTruth(s.hnswPersistDir, truthCount); err != nil {
-					slog.Error("hnsw: export failed", "err", err)
-				} else {
-					slog.Info("hnsw: snapshot saved", "dir", s.hnswPersistDir)
-				}
-			}
-		}
-	}
+	// Persist the HNSW snapshot when the budget leaves room for it (before
+	// the embedding store closes, so the graph is still intact).
+	s.stopHNSWSnapshot(ctx)
 
 	// Stop embed queue and Ollama daemon.
 	if s.embedQueue != nil {
 		s.embedQueue.Stop()
 	}
 	if s.ollamaDaemon != nil {
-		if err := s.ollamaDaemon.StopWhenIdle(context.Background()); err != nil {
+		if err := s.ollamaDaemon.StopWhenIdle(context.WithoutCancel(ctx)); err != nil {
 			slog.Warn("ollama: stop failed", "err", err)
 		}
 	}
@@ -806,7 +897,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 		s.aiScanStore = nil
 	}
 
-	backgroundWG.Wait()
+	// The scheduler, ticker, snapshotter, watcher and session goroutines
+	// returned on shutdown (closed before the drain); wait for any task the
+	// scheduler was still running.
+	s.life.backgroundWG.Wait()
 	slog.Info("Server exited")
 	return nil
 }
@@ -932,173 +1026,338 @@ func (s *Server) startCacheWarmers() {
 	})
 }
 
-// configureAndStartHTTP builds s.httpServer (and, when TLS is configured,
-// s.http3Server plus the HTTP->HTTPS redirect listener), binds the listeners
-// and launches their Serve goroutines. cfg is taken by value so the local
-// TLS-fallback mutations stay scoped to this phase.
-//
-// The main listener is bound HERE, synchronously, and the TLS key pair is
-// loaded here too. That gives two guarantees Start relies on: a port in use
-// or an unreadable key pair is returned as a startup error instead of a
-// goroutine exiting the process later, and when this returns nil the port
-// already accepts connections (the kernel queues them before the first
-// Accept), which is when Start sends READY=1 to systemd.
-func (s *Server) configureAndStartHTTP(cfg ServerConfig) error {
-	// Every listener's handler is wrapped by the peer allow-list, outside gin,
-	// so a peer that is not allowed never reaches routing (peer_allowlist.go).
+// R1Listener is HEAD's listener stack, which books hands the kernel through
+// app.Options.R1Listen in release R1 (R1-15): the main listener (HTTPS with
+// HTTP/2 when the TLS pair is readable, HTTP/1.1 otherwise, HEAD's timeouts),
+// HTTP/3 on its UDP port with Alt-Svc, and the port-80 HTTP->HTTPS redirect,
+// every handler behind the peer allow-list. The kernel opens it at 06 §6.5.2
+// start step 7 and drains it first on stop. Core's own listener replaces it
+// when R1-17 builds the perimeter; HTTP/3 and the port-80 redirect have no
+// owner after that row (seams.d/R1-15.md).
+type R1Listener struct {
+	s         *Server
+	ln        net.Listener
+	tls       bool
+	cfg       ServerConfig
+	served    atomic.Bool
+	afterDone chan struct{} // closed when afterListen has run (Serve starts it)
+}
+
+// R1Listen returns books' app.Options.R1Listen for cfg (HEAD's --http3-port,
+// timeouts and external URL): o carries R1Values' address and TLS files, and h
+// is the kernel's root handler, which the listener serves behind the
+// perimeter shim and the peer allow-list.
+func (s *Server) R1Listen(cfg ServerConfig) func(o httpapi.ListenOptions, h http.Handler, log *slog.Logger) (*R1Listener, error) {
+	return func(o httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (*R1Listener, error) {
+		return s.listenR1(cfg, o, h)
+	}
+}
+
+// listenR1 binds the main listener for o (and loads its TLS key pair) and
+// prepares HTTP/3 and the redirect for cfg, serving inner behind the
+// perimeter shim (perimeter_shim.go) and the peer allow-list. A port in use, an unreadable key pair or a refused peer
+// allow-list is returned, before anything serves. When the cert or key file is
+// missing it falls back to HTTP-only, as HEAD did.
+func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.Handler) (*R1Listener, error) {
+	// Every listener's handler is wrapped by the peer allow-list, outside the
+	// router, so a peer that is not allowed never reaches routing
+	// (peer_allowlist.go).
 	if err := startupPeerAllowList(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := startupLoginSaturated(); err != nil {
-		return err
+		return nil, err
 	}
-	gate := s.peerGatedHandler()
+	host, port, err := net.SplitHostPort(o.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen address %q: %w", o.Addr, err)
+	}
+	cfg.Host, cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile = host, port, o.TLSCertFile, o.TLSKeyFile
 	s.httpServer = &http.Server{
-		Addr:              fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
-		Handler:           gate,
+		Addr:              o.Addr,
 		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
 		WriteTimeout:      cfg.WriteTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}
+	l := &R1Listener{s: s, cfg: cfg, afterDone: make(chan struct{})}
 
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
 		if _, err := os.Stat(cfg.TLSCertFile); err != nil {
 			slog.Warn("TLS certificate not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSCertFile, "err", err)
-			cfg.TLSCertFile = ""
-			cfg.TLSKeyFile = ""
-			cfg.HTTP3Port = ""
+			cfg.TLSCertFile, cfg.TLSKeyFile, cfg.HTTP3Port = "", "", ""
 		} else if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
 			slog.Warn("TLS key not available () . Falling back to HTTP-only mode.", "cfg", cfg.TLSKeyFile, "err", err)
-			cfg.TLSCertFile = ""
-			cfg.TLSKeyFile = ""
-			cfg.HTTP3Port = ""
+			cfg.TLSCertFile, cfg.TLSKeyFile, cfg.HTTP3Port = "", "", ""
 		}
 	}
-
-	// Enable HTTP/2 if TLS is configured
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-		// Configure TLS with HTTP/2 (and optionally HTTP/3)
-		nextProtos := []string{"h2", "http/1.1"}
-		if cfg.HTTP3Port != "" {
-			// Add h3 to advertised protocols
-			nextProtos = append([]string{"h3"}, nextProtos...)
-		}
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			NextProtos: nextProtos,
-		}
-		s.httpServer.TLSConfig = tlsConfig
-
-		// Explicitly enable HTTP/1.1 and HTTP/2 over TLS on the stdlib server
-		// (replaces the deprecated x/net http2.ConfigureServer).
-		protocols := new(http.Protocols)
-		protocols.SetHTTP1(true)
-		protocols.SetHTTP2(true)
-		s.httpServer.Protocols = protocols
-
-		// Add Alt-Svc header to advertise HTTP/3 if enabled
-		if cfg.HTTP3Port != "" {
-			s.router.Use(func(c *gin.Context) {
-				c.Header("Alt-Svc", fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port))
-				c.Next()
-			})
-		}
-
-		// Load the key pair now rather than inside ServeTLS: a key pair
-		// that cannot be read must fail Start, before READY=1, instead of
-		// exiting the process just after systemd was told it started.
-		// ServeTLS(ln, "", "") then serves tlsConfig.Certificates.
-		cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-		if err != nil {
-			return fmt.Errorf("load TLS key pair: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-
+	// The Alt-Svc value, when HTTP/3 is served: the engine's late middleware
+	// below and the shim's unrouted answers carry the same one.
+	altSvc := ""
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" && cfg.HTTP3Port != "" {
+		altSvc = fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port)
+	}
+	gate := newPeerAllowListHandler(s.perimeterShim(inner, altSvc))
+	s.httpServer.Handler = gate
+	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 		ln, err := s.bindMainListener()
 		if err != nil {
-			return err
-		}
-		serving := "HTTPS/HTTP2"
-		if cfg.HTTP3Port != "" {
-			serving = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
-		}
-		lifecycleLog.Info("Serving %s on %s", serving, ln.Addr())
-		go func() {
-			if err := s.httpServer.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				// The bind succeeded, so this is the listener failing while
-				// serving. A process whose main listener is gone is useless
-				// but looks alive (on 2026-08-11 an e2e run got a 200 from a
-				// SIBLING that owned the port and gated a change against the
-				// wrong build). Exit so supervisors and scripts see it (H113).
-				lifecycleLog.Error("HTTPS server stopped serving; exiting: %v", err)
-				os.Exit(1)
-			}
-		}()
-
-		// Start HTTP/3 server if configured. Optional and non-fatal, as
-		// before. quic-go binds the UDP socket inside ListenAndServeTLS, so
-		// "started without error" is the most this function knows about it;
-		// READY=1 does not wait on HTTP/3. (Binding the UDP socket here and
-		// handing it to http3.Server.Serve would need the shutdown path to
-		// close it too: quic-go's Close leaves a caller-supplied conn open.)
-		if cfg.HTTP3Port != "" {
-			s.http3Server = &http3.Server{
-				Addr:      fmt.Sprintf("%s:%s", cfg.Host, cfg.HTTP3Port),
-				Handler:   gate,
-				TLSConfig: tlsConfig,
-				// quic-go defaults http3 to 0-RTT, which is accepted before the
-				// peer's address is validated (peer_allowlist.go).
-				QUICConfig: http3ServerQUICConfig(),
-			}
-			lifecycleLog.Info("Starting HTTP/3 (QUIC) server on UDP %s:%s", cfg.Host, cfg.HTTP3Port)
-			go func() {
-				if err := s.http3Server.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					lifecycleLog.Error("HTTP/3 server failed: %v", err)
-				}
-			}()
-		}
-
-		// HTTP to HTTPS redirect server on port 80. Bound synchronously like
-		// the main listener, but a failure stays non-fatal: port 80 may need
-		// privileges this process does not have.
-		redirectAddr := fmt.Sprintf("%s:80", cfg.Host)
-		httpsPort := cfg.Port
-		if httpsPort == "80" {
-			httpsPort = "443" // Don't redirect 80->80
-		}
-		redirectLn, err := net.Listen("tcp", redirectAddr)
-		if err != nil {
-			lifecycleLog.Warn("HTTP->HTTPS redirect server not started (port 80 may require privileges): %v", err)
-		} else {
-			lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
-			redirectServer := &http.Server{
-				Addr:    redirectAddr,
-				Handler: redirectServerHandler(cfg.Host, httpsPort),
-			}
-			s.httpRedirectServer = redirectServer
-			go func() {
-				if err := redirectServer.Serve(redirectLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					lifecycleLog.Warn("HTTP->HTTPS redirect server stopped: %v", err)
-				}
-			}()
-		}
-	} else {
-		// HTTP/1.1 server without TLS
-		ln, err := s.bindMainListener()
-		if err != nil {
-			return err
+			return nil, err
 		}
 		lifecycleLog.Info("Serving HTTP/1.1 on %s (use --tls-cert and --tls-key for HTTP/2, add --http3-port for HTTP/3)", ln.Addr())
+		l.ln, l.cfg = ln, cfg
+		return l, nil
+	}
+
+	// Configure TLS with HTTP/2 (and optionally HTTP/3)
+	nextProtos := []string{"h2", "http/1.1"}
+	if cfg.HTTP3Port != "" {
+		nextProtos = append([]string{"h3"}, nextProtos...)
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: nextProtos}
+	s.httpServer.TLSConfig = tlsConfig
+	// Explicitly enable HTTP/1.1 and HTTP/2 over TLS on the stdlib server.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
+	s.httpServer.Protocols = protocols
+
+	// Advertise HTTP/3. Added to the engine at listen time, as HEAD did, so
+	// it reaches the engine's NoRoute chain (gin applies a late Use there,
+	// not to routes already registered).
+	if altSvc != "" {
+		s.router.Use(func(c *gin.Context) {
+			c.Header("Alt-Svc", altSvc)
+			c.Next()
+		})
+	}
+
+	// Load the key pair now rather than inside ServeTLS: a key pair that
+	// cannot be read fails the start, before readiness.
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS key pair: %w", err)
+	}
+	tlsConfig.Certificates = []tls.Certificate{cert}
+	ln, err := s.bindMainListener()
+	if err != nil {
+		return nil, err
+	}
+	serving := "HTTPS/HTTP2"
+	if cfg.HTTP3Port != "" {
+		serving = "HTTPS/HTTP2 (HTTP/3 on UDP port " + cfg.HTTP3Port + ")"
+		s.http3Server = &http3.Server{
+			Addr:      net.JoinHostPort(cfg.Host, cfg.HTTP3Port),
+			Handler:   gate,
+			TLSConfig: tlsConfig,
+			// quic-go defaults http3 to 0-RTT, which is accepted before the
+			// peer's address is validated (peer_allowlist.go).
+			QUICConfig: http3ServerQUICConfig(),
+		}
+	}
+	lifecycleLog.Info("Serving %s on %s", serving, ln.Addr())
+
+	// HTTP to HTTPS redirect server on port 80. Bound synchronously like the
+	// main listener, but a failure stays non-fatal: port 80 may need
+	// privileges this process does not have.
+	redirectAddr := net.JoinHostPort(cfg.Host, "80")
+	httpsPort := cfg.Port
+	if httpsPort == "80" {
+		httpsPort = "443" // Don't redirect 80->80
+	}
+	if redirectLn, err := net.Listen("tcp", redirectAddr); err != nil {
+		lifecycleLog.Warn("HTTP->HTTPS redirect server not started (port 80 may require privileges): %v", err)
+	} else {
+		lifecycleLog.Info("Serving HTTP->HTTPS redirect on %s (to port %s)", redirectLn.Addr(), httpsPort)
+		redirectServer := &http.Server{Addr: redirectAddr, Handler: redirectServerHandler(cfg.Host, httpsPort)}
+		s.httpRedirectServer = redirectServer
 		go func() {
-			if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				// See the TLS twin above (H113).
-				lifecycleLog.Error("HTTP server stopped serving; exiting: %v", err)
-				os.Exit(1)
+			if err := redirectServer.Serve(redirectLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				lifecycleLog.Warn("HTTP->HTTPS redirect server stopped: %v", err)
 			}
 		}()
 	}
+	l.ln, l.tls, l.cfg = ln, true, cfg
+	return l, nil
+}
+
+// Addr is the main listener's bound address.
+func (l *R1Listener) Addr() net.Addr { return l.ln.Addr() }
+
+// Serve serves the main listener until Shutdown (nil) or a failure (the
+// error: the kernel stops the app, where HEAD exited the process, H113). It
+// starts HTTP/3, when configured, and runs the post-listen start
+// (afterListen) concurrently, as HEAD did once its listener was bound.
+func (l *R1Listener) Serve() error {
+	l.served.Store(true)
+	go func() {
+		defer close(l.afterDone)
+		l.s.afterListen()
+	}()
+	return l.serveListeners()
+}
+
+// serveListeners is Serve without the post-listen start: HTTP/3, when
+// configured, and the main listener until Shutdown or a failure.
+func (l *R1Listener) serveListeners() error {
+	s := l.s
+	if s.http3Server != nil {
+		// Optional and non-fatal, as before. quic-go binds the UDP socket
+		// inside ListenAndServeTLS, so readiness does not wait on HTTP/3.
+		h3 := s.http3Server
+		lifecycleLog.Info("Starting HTTP/3 (QUIC) server on UDP %s", h3.Addr)
+		go func() {
+			if err := h3.ListenAndServeTLS(l.cfg.TLSCertFile, l.cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				lifecycleLog.Error("HTTP/3 server failed: %v", err)
+			}
+		}()
+	}
+	var err error
+	if l.tls {
+		err = s.httpServer.ServeTLS(l.ln, "", "")
+	} else {
+		err = s.httpServer.Serve(l.ln)
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("the main listener stopped serving: %w", err)
+	}
 	return nil
+}
+
+// Shutdown is the listener's drain within ctx (the kernel's
+// min(core.shutdown.http_drain, remaining)): first the stop's pre-drain steps
+// (beforeDrain: systemd, the background loops, the client broadcast, the
+// event streams), once the post-listen start has finished, then HTTP/3, the
+// main server and the redirect.
+func (l *R1Listener) Shutdown(ctx context.Context) error {
+	s := l.s
+	if l.served.Load() {
+		select {
+		case <-l.afterDone:
+		case <-ctx.Done():
+		}
+	}
+	s.beforeDrain()
+	slog.Info("Stopping HTTP servers...")
+	if s.http3Server != nil {
+		if err := s.http3Server.Close(); err != nil {
+			slog.Warn("HTTP/3 server close error", "err", err)
+		}
+	}
+	err := s.httpServer.Shutdown(ctx)
+	if s.httpRedirectServer != nil {
+		if rerr := s.httpRedirectServer.Shutdown(ctx); rerr != nil {
+			lifecycleLog.Warn("HTTP->HTTPS redirect server forced shutdown: %v", rerr)
+		}
+	}
+	return err
+}
+
+// hnswSnapshotInterval is how often the background snapshotter writes the
+// HNSW graph when it changed since its last write.
+const hnswSnapshotInterval = 10 * time.Minute
+
+// hnswStopExportMargin is the budget a stop-time HNSW export must leave for
+// the steps after it (the embedding queue and Ollama, the store closes, the
+// kernel's own close), on top of the last export's measured duration.
+const hnswStopExportMargin = 3 * time.Second
+
+// hnswUnmeasuredExport is the duration assumed for a stop-time export when
+// this process has not exported yet (buffered: about 1-3 s at prod's size).
+const hnswUnmeasuredExport = 5 * time.Second
+
+// hnswSnapshotStore returns the HNSW vector store and its truth-count source
+// when the snapshot is persisted (a database path is set and the vector
+// backend is HNSW).
+func (s *Server) hnswSnapshotStore() (*database.HNSWEmbeddingStore, func(string) (int, error), bool) {
+	if s.hnswPersistDir == "" || s.container == nil {
+		return nil, nil, false
+	}
+	raw, ok := serviceregistry.TryGet[database.VectorANNStore](s.container, "chromemstore")
+	if !ok || raw == nil {
+		return nil, nil, false
+	}
+	hnswStore, ok := raw.(*database.HNSWEmbeddingStore)
+	if !ok {
+		return nil, nil, false
+	}
+	// Record the Pebble truth count alongside the graph. Without it the next
+	// boot cannot tell a fresh snapshot from a stale one and must discard it.
+	var truthCount func(string) (int, error)
+	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](s.container, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
+		truthCount = embStore.CountByType
+	}
+	return hnswStore, truthCount, true
+}
+
+// startHNSWSnapshotter writes the HNSW snapshot every hnswSnapshotInterval
+// when the graph changed (ExportIfDirty), on bgWG, so a stop with no budget
+// left for the export still finds a recent snapshot (R1-15). StopHook's
+// bgCancel ends it and the bgWG wait waits for an export in progress.
+func (s *Server) startHNSWSnapshotter() {
+	if _, _, ok := s.hnswSnapshotStore(); !ok {
+		return
+	}
+	s.bgWG.Go("hnsw-snapshotter", func() {
+		t := time.NewTicker(hnswSnapshotInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.bgCtx.Done():
+				return
+			case <-t.C:
+				s.exportHNSWSnapshot("periodic")
+			}
+		}
+	})
+}
+
+// exportHNSWSnapshot writes the snapshot when the graph changed since the last
+// write and is a complete projection of the store, and logs the outcome.
+func (s *Server) exportHNSWSnapshot(why string) {
+	hnswStore, truthCount, ok := s.hnswSnapshotStore()
+	if !ok {
+		return
+	}
+	res, err := hnswStore.ExportIfDirty(s.hnswPersistDir, truthCount)
+	switch {
+	case errors.Is(err, database.ErrHNSWIncomplete):
+		slog.Info("hnsw: snapshot not written: the graph is still being built", "why", why)
+	case err != nil:
+		slog.Error("hnsw: export failed", "why", why, "err", err)
+	case res.Exported:
+		slog.Info("hnsw: snapshot saved", "why", why, "dir", s.hnswPersistDir, "took", res.Duration.String())
+	}
+}
+
+// stopHNSWSnapshot is the stop-time export: written only when the budget left
+// in ctx covers the last measured export plus hnswStopExportMargin (or
+// hnswUnmeasuredExport when none ran yet); otherwise skipped with an INFO line
+// naming the age of the snapshot on disk, which the background snapshotter
+// keeps recent. The 25 s budget is never raised for it.
+func (s *Server) stopHNSWSnapshot(ctx context.Context) {
+	hnswStore, _, ok := s.hnswSnapshotStore()
+	if !ok {
+		return
+	}
+	at, took := hnswStore.LastExport()
+	need := took
+	if need == 0 {
+		need = hnswUnmeasuredExport
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		if left := time.Until(dl); left < need+hnswStopExportMargin {
+			age := "no snapshot written by this process"
+			if !at.IsZero() {
+				age = time.Since(at).Round(time.Second).String()
+			}
+			slog.Info("hnsw: stop-time snapshot skipped: not enough shutdown budget left",
+				"budget_left", left.Round(time.Millisecond).String(), "needed", (need + hnswStopExportMargin).String(),
+				"snapshot_age", age)
+			return
+		}
+	}
+	s.exportHNSWSnapshot("stop")
 }
 
 // http3ServerQUICConfig is the QUIC configuration of the HTTP/3 server: 0-RTT
@@ -1867,8 +2126,10 @@ func (s *Server) setupRoutes() {
 	if config.AppConfig.EnableAuth {
 		eventsAuth = servermiddleware.RequireAuth(s.storeForWiring())
 	}
-	s.router.GET("/api/events", buildTopLevelAuthChain(cfMW, eventsAuth,
-		func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)
+	// endStreamsOnShutdown first: the stream ends when the stop closes the
+	// event streams, before the listener drains (R1-15).
+	s.router.GET("/api/events", append([]gin.HandlerFunc{s.endStreamsOnShutdown()},
+		buildTopLevelAuthChain(cfMW, eventsAuth, func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)...)
 
 	// Public temp-login consumer at the root so URLs are short and
 	// browser-friendly. Validates the token, deletes it (single-use),
