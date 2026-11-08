@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_reconcile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7ffad9f5-a4f3-49fd-b4ee-3f8b2d043e26
 // last-edited: 2026-11-08
 
@@ -122,9 +122,11 @@ func TestReconcile_MissingKeysReplayed(t *testing.T) {
 		assert.Equal(t, primaryMeta(), m)
 	}
 
-	// Complete again: the reconciled graph is exported, and that snapshot is fresh.
+	// Complete again: the reconciled graph is exported, and after a clean stop
+	// that snapshot is fresh.
 	dir := t.TempDir()
 	require.NoError(t, s.ExportWithTruth(dir, func(string) (int, error) { return 101, nil }))
+	requireCleanStop(t, s, dir)
 	next := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, next.ImportWithStalenessCheck(dir, func(string) (int, error) { return 101, nil }))
 	assert.False(t, next.NeedsReconcile())
@@ -159,9 +161,10 @@ func TestReconcile_DeletedKeysTombstonedAndFiltered(t *testing.T) {
 	assertGone(t, s)
 	assert.Contains(t, foundIDs(t, s, f.vecs["bruce-wayne"], nil), "bruce-wayne")
 
-	// The tombstone survives an export and a fresh import.
+	// The tombstone survives an export, a clean stop and a fresh import.
 	dir := t.TempDir()
 	require.NoError(t, s.ExportWithTruth(dir, func(string) (int, error) { return 11, nil }))
+	requireCleanStop(t, s, dir)
 	next := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, next.ImportWithStalenessCheck(dir, func(string) (int, error) { return 11, nil }))
 	require.False(t, next.NeedsReconcile())
