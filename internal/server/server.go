@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.12
+// version: 2.114.13
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -989,31 +989,7 @@ func NewServer(store database.Store) *Server {
 	if config.AppConfig.DatabasePath != "" {
 		hnswDir := filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
 		server.hnswPersistDir = hnswDir
-		if raw, ok := serviceregistry.TryGet[database.VectorANNStore](regContainer, "chromemstore"); ok && raw != nil {
-			if hnswStore, ok := raw.(*database.HNSWEmbeddingStore); ok {
-				// ARCH-1: guard the snapshot fast-path with a cheap staleness
-				// check against the Pebble source of truth. Without this, an
-				// unclean shutdown silently and permanently strands dedup
-				// Layer 2 on a graph missing every vector upserted since the
-				// last clean-shutdown Export (HNSW-CRASH-2026-06-18 note above
-				// still governs the Import-before-PostInit ordering; this
-				// check does not change that).
-				var truthCount func(string) (int, error)
-				if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](regContainer, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
-					truthCount = embStore.CountByType
-				}
-				if err := hnswStore.ImportWithStalenessCheck(hnswDir, truthCount); err != nil {
-					if !errors.Is(err, database.ErrNoHNSWSnapshot) {
-						slog.Warn("hnsw: import failed, will hydrate from PebbleDB", "err", err)
-					}
-				} else {
-					// reconcile_pending: the snapshot was stale and the dedup
-					// engine's PostInit brings it up to date in the background.
-					slog.Info("hnsw: loaded from on-disk snapshot", "dir", hnswDir,
-						"reconcile_pending", hnswStore.NeedsReconcile())
-				}
-			}
-		}
+		importHNSWSnapshot(regContainer, hnswDir)
 	}
 
 	if err := regContainer.PostInit(regCtx); err != nil {

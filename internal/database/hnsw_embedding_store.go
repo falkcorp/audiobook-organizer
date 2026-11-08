@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.5
+// version: 1.8.6
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -131,6 +131,12 @@ type HNSWEmbeddingStore struct {
 	// happened. ExportIfDirty is clean while gen == exportedGen. Guarded by mu.
 	exportedGen   uint64
 	exportedValid bool
+	// exportedDir is the directory that snapshot is in, so MarkCleanStop
+	// vouches only for the directory the store wrote or loaded. Guarded by mu.
+	exportedDir string
+	// cleanStop is the clean-stop marker MarkCleanStop wrote in this process,
+	// "" if none. The next mutation removes it (bumpGenLocked). Guarded by mu.
+	cleanStop string
 
 	// exportMu serializes exports (they share the .tmp paths). Lock order:
 	// exportMu before mu.
@@ -205,14 +211,14 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 		// as a change, and mark the store incomplete so the damaged graph is
 		// never exported (the next boot rebuilds from the last good snapshot or
 		// from Pebble).
-		s.gen++
+		s.bumpGenLocked()
 		s.markDamaged(entityType, entityID, err)
 		return err
 	}
 	// Store a defensive copy so the caller can't mutate our sidecar. An
 	// upsert of a tombstoned key replaces the marker, so the key is live again.
 	s.setMetaLocked(entityType, entityID, metaOrEmpty(meta))
-	s.gen++
+	s.bumpGenLocked()
 	return nil
 }
 
@@ -343,7 +349,7 @@ func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string)
 func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.gen++ // always: a delete removes meta even when the graph has no such key
+	s.bumpGenLocked() // always: a delete removes meta even when the graph has no such key
 	s.touchLocked(entityType, entityID)
 	if g, ok := s.graphs[entityType]; ok {
 		if _, err := s.safeDelete(g, entityID); err != nil {
@@ -692,16 +698,8 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) ([]*pendingExport, er
 // the files are already in place, and a failure leaves at worst the previous
 // snapshot after a crash.
 func syncDir(dir string) {
-	d, err := os.Open(dir)
-	if err != nil {
-		hnswLog.Warn("hnsw export: open %s for fsync: %v", dir, err)
-		return
-	}
-	if err := d.Sync(); err != nil {
-		hnswLog.Warn("hnsw export: fsync %s: %v", dir, err)
-	}
-	if err := d.Close(); err != nil {
-		hnswLog.Warn("hnsw export: close %s after fsync: %v", dir, err)
+	if err := fsyncDir(dir); err != nil {
+		hnswLog.Warn("hnsw export: %v", err)
 	}
 }
 
@@ -795,14 +793,20 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	}
 
 	// Every temp file is on disk and synced: commit by renaming into place.
-	// os.Rename is atomic on POSIX filesystems.
+	// os.Rename is atomic on POSIX filesystems. From here on a failure has
+	// changed the snapshot on disk (its sidecars are gone, some graphs may be
+	// renamed in), so it no longer describes any gen this store recorded: the
+	// baseline is dropped, the next ExportIfDirty writes a whole snapshot, and
+	// MarkCleanStop will not vouch for this one.
 	for _, p := range pending {
 		if err := os.Rename(p.binTmp, p.binPath); err != nil {
 			abortPending(pending)
+			s.dropExportBaseline()
 			return 0, fmt.Errorf("hnsw export: rename graph %s: %w", p.entityType, err)
 		}
 		if err := os.Rename(p.metaTmp, p.metaPath); err != nil {
 			abortPending(pending)
+			s.dropExportBaseline()
 			return 0, fmt.Errorf("hnsw export: rename meta %s: %w", p.entityType, err)
 		}
 	}
@@ -844,12 +848,20 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	syncDir(dir)
 	took := time.Since(start)
 	s.mu.Lock()
-	s.exportedGen, s.exportedValid = gen, true
+	s.exportedGen, s.exportedValid, s.exportedDir = gen, true, dir
 	s.mu.Unlock()
 	s.lastExportDur.Store(int64(took))
 	s.lastExportAt.Store(time.Now().UnixNano())
 	hnswLog.Info("hnsw: snapshot exported to %s: %d entity type(s) in %s", dir, len(pending), took)
 	return took, nil
+}
+
+// dropExportBaseline records that the snapshot on disk describes no gen of
+// this store, after an export failed part way through changing it.
+func (s *HNSWEmbeddingStore) dropExportBaseline() {
+	s.mu.Lock()
+	s.exportedValid, s.exportedDir = false, ""
+	s.mu.Unlock()
 }
 
 // loadSnapshot decodes every snapshot in dir into local maps without touching
@@ -926,8 +938,9 @@ func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[st
 // that gen is the export baseline and the first ExportIfDirty after boot does
 // not rewrite the same snapshot. Replacing the graphs clears damaged, and the
 // touched set starts empty, so a pending install records every live write from
-// here on.
-func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete, pending bool) {
+// here on. from is the directory a complete install was loaded from (the
+// snapshot MarkCleanStop may vouch for), "" for a discard.
+func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete, pending bool, from string) {
 	tombs := make(map[string]int, len(meta))
 	for entityType, byID := range meta {
 		for _, m := range byID {
@@ -940,12 +953,12 @@ func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[strin
 	s.graphs = graphs
 	s.meta = meta
 	s.tombstones = tombs
-	s.gen++
+	s.bumpGenLocked()
 	s.complete = complete
 	s.damaged = false
 	s.pendingReconcile = pending
 	s.touched = nil
-	s.exportedGen, s.exportedValid = s.gen, complete
+	s.exportedGen, s.exportedValid, s.exportedDir = s.gen, complete, from
 	s.mu.Unlock()
 }
 
@@ -963,21 +976,25 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 	if err != nil {
 		return err
 	}
-	s.installSnapshot(graphs, meta, true, false)
+	s.installSnapshot(graphs, meta, true, false, dir)
 	hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 	return nil
 }
 
-// ImportWithStalenessCheck is Import with a staleness guard (ARCH-1): after
-// decoding the on-disk snapshot, it compares each entity type's recorded Pebble
-// row count (the truth sidecar) against a caller-supplied current truth count
-// (e.g. EmbeddingStore.CountByType, the emb: keyspace's source-of-truth
-// count). If every count matches, the snapshot is installed as complete and
-// hydration is skipped.
+// ImportWithStalenessCheck is Import with a staleness guard (ARCH-1). It first
+// takes the clean-stop marker (TakeHNSWCleanStop, hnsw_clean_stop.go): without
+// it the previous process did not end with a clean stop whose snapshot
+// describes its graph, so the snapshot is stale whatever the row counts say,
+// because a crash can change rows and leave every count as it was. With the
+// marker it compares each entity type's recorded Pebble row count (the truth
+// sidecar) against a caller-supplied current truth count (e.g.
+// EmbeddingStore.CountByType, the emb: keyspace's source-of-truth count). If
+// every count matches, the snapshot is installed as complete and hydration is
+// skipped.
 //
-// If any count differs (there is no tolerance), or a type has no usable truth
-// sidecar, the snapshot is stale: after an unclean shutdown it lacks every
-// write since its export. It is still installed, so the graph serves queries
+// If the marker is absent, any count differs (there is no tolerance), or a
+// type has no usable truth sidecar, the snapshot is stale: after an unclean
+// shutdown it lacks every write since its export. It is still installed, so the graph serves queries
 // at once, but incomplete and pending a reconcile (NeedsReconcile). The dedup
 // engine's PostInit then runs Reconcile, which adds the keys the graph is
 // missing, tombstones the keys Pebble no longer indexes, and asks for a full
@@ -994,23 +1011,43 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 //
 // truth may be nil, in which case the staleness check is skipped entirely
 // (e.g. callers/tests without a Pebble store handy) and Import's result is
-// returned unchanged.
+// returned unchanged; the marker is still taken.
 func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(entityType string) (int, error)) error {
+	// The clean-stop marker is taken before anything else, even when the load
+	// below fails, so no run can leave it in place to vouch for a snapshot it
+	// lets fall behind (TakeHNSWCleanStop).
+	cleanStop, cerr := TakeHNSWCleanStop(dir)
+	if cerr != nil {
+		hnswLog.Error("hnsw import: %v; the snapshot is treated as stale", cerr)
+	}
 	graphs, meta, n, err := s.loadSnapshot(dir)
 	if err != nil {
 		return err
 	}
 	if truth == nil {
-		s.installSnapshot(graphs, meta, true, false)
+		s.installSnapshot(graphs, meta, true, false, dir)
 		hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 		return nil
 	}
 
-	// The staleness check runs on the decoded local graphs, so the Pebble truth
-	// reads happen with no store lock held and the swap below is one atomic step
-	// (the store is never briefly "complete" with a stale graph installed).
-	stale := false
+	// Without the marker the previous process did not stop cleanly, or its
+	// stop did not end with the snapshot describing its graph. Whatever changed
+	// in the crash window may have left every row count as it was (an add and
+	// a delete, a re-embed, a merge or primary change that flips a row's hydrate
+	// verdict), so the snapshot is reconciled whatever the counts say.
+	stale := !cleanStop
+	if stale {
+		hnswLog.Info("hnsw import: no clean-stop marker in %s: the previous process did not stop cleanly or its stop-time snapshot did not finish; the snapshot will be reconciled against Pebble", dir)
+	}
+
+	// With the marker, the row counts are a second check. They run on the
+	// decoded local graphs, so the Pebble truth reads happen with no store lock
+	// held and the swap below is one atomic step (the store is never briefly
+	// "complete" with a stale graph installed).
 	for entityType, g := range graphs {
+		if stale {
+			break
+		}
 		currentTruth, err := truth(entityType)
 		if err != nil {
 			// Can't verify against the truth source; don't treat this entity
@@ -1042,16 +1079,16 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		}
 	}
 	if !stale {
-		s.installSnapshot(graphs, meta, true, false)
+		s.installSnapshot(graphs, meta, true, false, dir)
 		hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 		return nil
 	}
 	if err := snapshotKeysConsistent(graphs, meta); err != nil {
 		hnswLog.Warn("hnsw import: stale snapshot in %s cannot be reconciled, discarding it (the index rebuilds from Pebble): %v", dir, err)
-		s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false, false)
+		s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false, false, "")
 		return nil
 	}
-	s.installSnapshot(graphs, meta, false, true)
+	s.installSnapshot(graphs, meta, false, true, dir)
 	hnswLog.Info("hnsw: stale snapshot imported from %s: %d entity type(s); it serves queries now and is reconciled against Pebble in the background", dir, n)
 	return nil
 }

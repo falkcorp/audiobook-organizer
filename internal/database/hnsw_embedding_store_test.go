@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-11-08
 
@@ -528,6 +528,8 @@ func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing
 	if err := s1.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
 		t.Fatalf("export: %v", err)
 	}
+	// A clean stop, so only the moved count can make the snapshot stale.
+	markCleanStop(t, s1, dir)
 
 	s2 := NewHNSWEmbeddingStore(dim)
 	// Pebble now holds 5 — four upserts landed after the export.
@@ -564,7 +566,8 @@ func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing
 // snapshot exists to avoid.
 //
 // A graph far smaller than the truth count is therefore NORMAL and must be kept,
-// so long as the truth count has not moved since the export.
+// so long as the process stopped cleanly and the truth count has not moved
+// since the export.
 func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
@@ -581,6 +584,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T
 	if err := s1.ExportWithTruth(dir, truth); err != nil {
 		t.Fatalf("export: %v", err)
 	}
+	markCleanStop(t, s1, dir) // the process stopped cleanly after that export
 
 	s2 := NewHNSWEmbeddingStore(dim)
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
@@ -655,6 +659,8 @@ func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing
 	if err := s1.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
 		t.Fatalf("export: %v", err)
 	}
+	// A clean stop, so only the moved "book" count can make the snapshot stale.
+	markCleanStop(t, s1, dir)
 
 	s2 := NewHNSWEmbeddingStore(dim)
 	// "book" is stale (truth moved 1 -> 5); "author" is fresh (1 == 1).
@@ -683,8 +689,8 @@ func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing
 }
 
 // TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot is the counterpart to
-// the discard test: a graph count that meets or exceeds the truth count must
-// be kept (no unnecessary rehydration on every boot).
+// the discard test: after a clean stop, a snapshot whose truth count did not
+// move must be kept (no unnecessary rehydration on every boot).
 func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
@@ -699,6 +705,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	if err := s1.ExportWithTruth(dir, truth); err != nil {
 		t.Fatalf("export: %v", err)
 	}
+	markCleanStop(t, s1, dir)
 
 	s2 := NewHNSWEmbeddingStore(dim)
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
