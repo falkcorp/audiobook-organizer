@@ -80,7 +80,10 @@ const (
 // link(2) is the exclusion between writers, across processes, with no mutex
 // (05-storage §5S.3.15 "Stage"): two creates race on one name and exactly one
 // wins. The in-flight probe runs before it, as the spec's refusal "while a
-// swap of any kind is in flight".
+// swap of any kind is in flight". The probe and the link are two steps, so a
+// swap that renames pending.json to inflight.json between them is not seen:
+// stage only after P0a (which resolves any swap in flight) or with the
+// service stopped.
 func CreateIntent(stateDir string, in Intent) error {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return fmt.Errorf("restorejournal: state directory %q is not an absolute path", stateDir)
