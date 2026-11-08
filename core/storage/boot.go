@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"path/filepath"
@@ -252,8 +251,7 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	st := &bootState{opts: opts}
 	db.boot = st
 	if err := db.readBoot(ctx, refs); err != nil {
-		_ = eng.Close(opts.CloseTimeout)
-		return nil, err
+		return nil, errors.Join(err, eng.Close(opts.CloseTimeout))
 	}
 	return &Opened{db: db}, nil
 }
@@ -345,7 +343,11 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 		return err
 	}
 	if !st.marker {
-		st.installID = db.chooseInstallID()
+		id, err := db.chooseInstallID()
+		if err != nil {
+			return err
+		}
+		st.installID = id
 	}
 	if err := db.planDAG(ctx); err != nil {
 		return err
@@ -714,23 +716,32 @@ func (db *DB) readEpoch(ctx context.Context) error {
 // chooseInstallID is step 5's choice for a marker-less store: the restore
 // boot's hand-over, else an open checkpoint record's of this generation, else
 // a new one.
-func (db *DB) chooseInstallID() string {
+func (db *DB) chooseInstallID() (string, error) {
 	st := db.boot
 	if st.opts.InstallID != "" {
-		return st.opts.InstallID
+		return st.opts.InstallID, nil
 	}
-	recs, _ := db.checkpointRecords()
+	// Unreadable records fail the boot before any write: guessing a new ID
+	// would orphan the open record and take a new full checkpoint each boot.
+	recs, err := db.checkpointRecords()
+	if err != nil {
+		return "", err
+	}
 	for _, r := range recs {
 		if r.rec.Epoch == st.epoch.Epoch && r.rec.open() {
-			return r.rec.InstallID
+			return r.rec.InstallID, nil
 		}
 	}
-	return newInstallID()
+	return newInstallID(), nil
 }
 
 func newInstallID() string {
 	var b [16]byte
-	_, _ = io.ReadFull(rand.Reader, b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		// Unreachable: crypto/rand.Read never returns an error (it crashes
+		// the program instead, Go 1.24 and later).
+		panic(err)
+	}
 	return hex.EncodeToString(b[:])
 }
 
@@ -792,12 +803,12 @@ func (db *DB) writeMarker(ctx context.Context) error {
 // records below each owner's lowest Seed step, `done` for every step a
 // declared floor's Requires names, and the claim ledger; then the sidecars.
 // A crash before the batch leaves an empty store.
-func (db *DB) freshInstall(ctx context.Context) error {
+func (db *DB) freshInstall(ctx context.Context) (err error) {
 	st := db.boot
 	now := st.opts.Clock().UTC()
 	ks := db.storageKS()
 	b := ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := setEnc(b, installKey(), codec.JSON[installRecord](1), db.markerRecord()); err != nil {
 		return err
 	}

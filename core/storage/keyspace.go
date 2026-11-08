@@ -188,7 +188,7 @@ func (s handleOf) get(ctx context.Context, key []byte) ([]byte, error) {
 
 // single runs one write as a one-entry batch committed with Sync; on a
 // migration's legacy range it stages into the step's batch instead.
-func (s handleOf) single(ctx context.Context, op opKind, key, value []byte, dr *rangeEnd) error {
+func (s handleOf) single(ctx context.Context, op opKind, key, value []byte, dr *rangeEnd) (err error) {
 	if err := s.check(); err != nil {
 		return err
 	}
@@ -200,7 +200,6 @@ func (s handleOf) single(ctx context.Context, op opKind, key, value []byte, dr *
 		if !s.legacy {
 			return errTxKeyspaceWrite
 		}
-		var err error
 		if dr != nil {
 			err = s.tx.b.stageRange(h, key, dr.end)
 		} else {
@@ -212,8 +211,7 @@ func (s handleOf) single(ctx context.Context, op opKind, key, value []byte, dr *
 		return s.tx.checkSize()
 	}
 	b := newBatch(h, false)
-	defer func() { _ = b.Close() }()
-	var err error
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if dr != nil {
 		err = b.stageRange(h, key, dr.end)
 	} else {
@@ -241,29 +239,6 @@ func (s handleOf) scan(ctx context.Context, opts ScanOptions) iter.Seq2[KV, erro
 			yield(KV{}, err)
 			return
 		}
-		defer func() { _ = it.Close() }()
-		n := 0
-		var ok bool
-		if opts.Reverse {
-			ok = it.Last()
-		} else {
-			ok = it.First()
-		}
-		for ; ok; n++ {
-			if opts.Limit > 0 && n >= opts.Limit {
-				return
-			}
-			if !yield(KV{Key: it.Key(), Value: it.Value()}, nil) {
-				return
-			}
-			if opts.Reverse {
-				ok = it.Prev()
-			} else {
-				ok = it.Next()
-			}
-		}
-		if err := it.Err(); err != nil {
-			yield(KV{}, err)
-		}
+		yieldScan(it, opts, s.db.log, yield)
 	}
 }

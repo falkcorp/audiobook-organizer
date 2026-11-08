@@ -155,7 +155,9 @@ func batchMatcher(af *ast.File) func(ast.Expr) bool {
 // named storage: it is the one that declares type Batch.
 func fileIsStoragePackage(af *ast.File) bool {
 	for _, imp := range af.Imports {
-		if p, _ := strconv.Unquote(imp.Path.Value); p == storagePath {
+		// The parser only accepts a well-formed quoted import path, so an
+		// Unquote error cannot happen; such a path could not be storage's.
+		if p, err := strconv.Unquote(imp.Path.Value); err == nil && p == storagePath {
 			return false
 		}
 	}

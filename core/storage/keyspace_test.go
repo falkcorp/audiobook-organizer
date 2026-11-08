@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"slices"
 	"strings"
 	"testing"
@@ -332,6 +333,76 @@ func TestLegacyDeleteRangeStaysInClaims(t *testing.T) {
 			}
 			if _, err := g.Get(ctx, []byte("bane:1")); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("owned interval not deleted: %v", err)
+			}
+		})
+	}
+}
+
+// TestScanLimitErrorAndStop covers yieldScan, the one loop under keyspace
+// and snapshot scans: Limit in both directions; an iteration error (the ctx
+// cancelled mid-scan) yielded once, as the last pair; and a consumer that
+// stops early is never yielded to again (range-over-func panics if it is).
+func TestScanLimitErrorAndStop(t *testing.T) {
+	ctx := t.Context()
+	e := newEnv(t, OwnerSpec{Owner: "robin", Spec: Spec{Keyspace: true}, Enabled: true})
+	db := e.open()
+	ks, _ := db.Keyspace("robin")
+	for _, k := range []string{"a", "b", "c", "d"} {
+		if err := ks.Set(ctx, []byte(k), []byte("nightwing")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := ks.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := snap.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	scans := map[string]func(context.Context, ScanOptions) iter.Seq2[KV, error]{"keyspace": ks.Scan, "snapshot": snap.Scan}
+	for name, scan := range scans {
+		t.Run(name, func(t *testing.T) {
+			collect := func(ctx context.Context, o ScanOptions, after func()) (keys []string, errs []error) {
+				for kv, err := range scan(ctx, o) {
+					if err != nil {
+						errs = append(errs, err)
+						continue
+					}
+					keys = append(keys, string(kv.Key))
+					after()
+				}
+				return keys, errs
+			}
+			for _, tc := range []struct {
+				opts ScanOptions
+				want []string
+			}{
+				{ScanOptions{Limit: 2}, []string{"a", "b"}},
+				{ScanOptions{Limit: 2, Reverse: true}, []string{"d", "c"}},
+				{ScanOptions{Limit: 9}, []string{"a", "b", "c", "d"}},
+			} {
+				if got, errs := collect(ctx, tc.opts, func() {}); !slices.Equal(got, tc.want) || len(errs) != 0 {
+					t.Errorf("scan %+v = %v, %v; want %v and no error", tc.opts, got, errs, tc.want)
+				}
+			}
+			cctx, cancel := context.WithCancel(ctx)
+			got, errs := collect(cctx, ScanOptions{}, cancel)
+			cancel()
+			if !slices.Equal(got, []string{"a"}) || len(errs) != 1 || !errors.Is(errs[0], context.Canceled) {
+				t.Errorf("scan cancelled after the first key = %v, %v; want [a] then one context.Canceled", got, errs)
+			}
+			n := 0
+			for _, err := range scan(ctx, ScanOptions{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				n++
+				break
+			}
+			if n != 1 {
+				t.Errorf("a consumer that broke after one pair saw %d", n)
 			}
 		})
 	}

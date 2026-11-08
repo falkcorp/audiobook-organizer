@@ -53,14 +53,21 @@ func WriteFileAtomic(fs vfs.FS, path string, data []byte) error {
 	serr := f.Sync()
 	cerr := f.Close()
 	if err := errors.Join(werr, serr, cerr); err != nil {
-		_ = fs.Remove(tmp)
-		return fmt.Errorf("pebble: write %s: %w", tmp, err)
+		return errors.Join(fmt.Errorf("pebble: write %s: %w", tmp, err), removeTemp(fs, tmp))
 	}
 	if err := fs.Rename(tmp, path); err != nil {
-		_ = fs.Remove(tmp)
-		return fmt.Errorf("pebble: rename %s: %w", path, err)
+		return errors.Join(fmt.Errorf("pebble: rename %s: %w", path, err), removeTemp(fs, tmp))
 	}
 	return SyncDir(fs, dir)
+}
+
+// removeTemp removes a failed write's temp file. A leftover one is harmless
+// to the store, and the error names it so an operator can delete it.
+func removeTemp(fs vfs.FS, tmp string) error {
+	if err := fs.Remove(tmp); err != nil {
+		return fmt.Errorf("pebble: remove temp file %s: %w", tmp, err)
+	}
+	return nil
 }
 
 // SyncDir fsyncs a directory so a create, rename or remove in it is durable.
