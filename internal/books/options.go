@@ -1,12 +1,11 @@
 // file: internal/books/options.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
 package books
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,14 +13,12 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/httpapi"
-	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -46,6 +43,13 @@ type ServeInputs struct {
 	// apply, so the OTLP endpoints, interval and environment come from where
 	// they always did.
 	Telemetry config.Config
+	// StateDir is the state directory serve resolved (EnsureSecureStateDir):
+	// ABO's log file lives under it (core.log.file.path, 05-logging section
+	// 11 item 1). "" keeps the log on the stream only, with no file.
+	StateDir string
+	// LogOut is the stream the log pipeline prints to, beside the file when
+	// there is one; nil is os.Stdout, where HEAD's lines went.
+	LogOut io.Writer
 }
 
 // Options is ABO's app.Options for release R1 (06 §6.4.10, 05-config
@@ -62,7 +66,10 @@ type ServeInputs struct {
 //   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
 //     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
-//   - LogOutput: the activity feed's tee (see logTee);
+//   - LogOutput, R1Log and StateDir: the log pipeline's stream, its level
+//     (log_level, --log-level) and its file under the state directory
+//     (logSettings); the activity feed is a tap on the pipeline, registered
+//     by Attach;
 //   - ProcessDefaults: serve calls app.InstallProcessDefaults, so New
 //     installs the OTel SDK's value-dropping logger and error handler before
 //     it builds the Provider and the OTLP exporters, which read OTEL_* from
@@ -75,6 +82,10 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	}
 	cfg := in.Server
 	m.cfg.Store(&cfg)
+	logCfg, warn := logSettings(config.Snapshot().LogLevel, in.StateDir)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "Warning: "+warn)
+	}
 	return app.Options{
 		AppID:                 appID,
 		MetricNamespace:       metricNamespace,
@@ -86,7 +97,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot()) },
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),
-		LogOutput:             &m.logOut,
+		LogOutput:             logStream(in.LogOut),
+		R1Log:                 &logCfg,
+		StateDir:              in.StateDir,
 		ProcessDefaults:       true,
 	}, nil
 }
@@ -164,8 +177,8 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 // Attach binds what needs the App once New has returned, before Run: the
 // legacy client_golang families register on the App's Provider registry,
 // which the gin /metrics route then serves (05-metrics §6, §13 item 2), and
-// the process default logger's lines switch to the activity feed's writer
-// (see logTee). A disabled books (no server built) has nothing to attach.
+// the activity feed becomes a tap on the App's log pipeline. A disabled
+// books (no server built) has nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
 	if err != nil {
@@ -179,82 +192,6 @@ func Attach(mod module.Module, a *app.App) error {
 	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
-	if w := srv.ActivityLogWriter(); w != nil {
-		m.logOut.setActivity(w)
-	}
+	tapActivity(a, srv.ActivityLogWriter())
 	return nil
-}
-
-// logTee is the App's log output (app.Options.LogOutput). R1-18's activity
-// tap replaces it.
-//
-// Until Attach, every line goes to stdout. Attach points activity at the
-// activity feed's writer, which tees each line to stdout
-// itself and parses it into the Activity Log. In HEAD, NewServer made a text
-// handler over that writer slog's default, so the feed saw exactly what
-// logged through slog's default. With the App's logger installed as the
-// default instead (app.InstallProcessDefaults), the tee keeps that: a line
-// from the process default logger goes to the feed, and a line from a scoped
-// logger (core's own kernel, metrics, http and otel lines, module=core, or a
-// module's own logger) goes to stdout, so it is printed but makes no
-// Activity row (R1-15 review M2). The process default writes no module attribute
-// (core/log Root), so the two are told apart by scopedLine.
-type logTee struct {
-	// stdout takes every line that does not go to the activity feed; nil =
-	// os.Stdout. Production leaves it nil. A test sets it before the App is
-	// built and never after, so it needs no synchronisation, unlike activity,
-	// which Attach sets while the App's goroutines may be logging.
-	stdout   io.Writer
-	activity atomic.Pointer[io.Writer]
-}
-
-// setActivity points the process default logger's lines at the activity
-// feed's writer.
-func (t *logTee) setActivity(w io.Writer) { t.activity.Store(&w) }
-
-func (t *logTee) Write(p []byte) (int, error) {
-	if a := t.activity.Load(); a != nil && !scopedLine(p) {
-		return (*a).Write(p)
-	}
-	if t.stdout != nil {
-		return t.stdout.Write(p)
-	}
-	return os.Stdout.Write(p)
-}
-
-// scopedLine reports whether p, one record of the App's text output, came
-// from a scoped logger. core/log writes a scoped logger's module attribute
-// first, right after the message, and the process default logger writes
-// none, so the line is scoped when " module=" follows the msg value. The slog
-// text handler writes each record in one Write, quoting a message that has
-// spaces, quotes or control characters. A line that does not parse (JSON
-// output, which ABO does not configure) counts as unscoped and goes to the
-// feed, as every line did before.
-func scopedLine(p []byte) bool {
-	const msgKey = " msg="
-	i := bytes.Index(p, []byte(msgKey))
-	if i < 0 {
-		return false
-	}
-	rest := p[i+len(msgKey):]
-	if len(rest) > 0 && rest[0] == '"' {
-		j := 1
-		for j < len(rest) && rest[j] != '"' {
-			if rest[j] == '\\' {
-				j++
-			}
-			j++
-		}
-		if j >= len(rest) {
-			return false
-		}
-		rest = rest[j+1:]
-	} else {
-		j := bytes.IndexAny(rest, " \n")
-		if j < 0 {
-			return false
-		}
-		rest = rest[j:]
-	}
-	return bytes.HasPrefix(rest, []byte(" "+corelog.KeyModule+"="))
 }
