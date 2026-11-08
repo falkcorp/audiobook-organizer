@@ -36,9 +36,78 @@ var ErrCheckpointFreeSpace = errors.New("storage: not enough free space for the 
 // the DB, so its hard links cannot be made (§5S.3.12 "Where").
 var ErrCheckpointDevice = errors.New("storage: the checkpoint directory is not on the DB's filesystem; set core.storage.checkpoint_dir")
 
+// ErrCheckpointDirOverlap: core.storage.checkpoint_dir puts the checkpoint
+// directory at, inside or around the store's own directory, where the
+// garbage sweep could delete the live store. Open refuses it before any
+// write.
+var ErrCheckpointDirOverlap = errors.New("storage: the checkpoint directory overlaps the store")
+
 // scratchDir is the scratch area under the checkpoint directory; the
 // record-less-directory rule does not apply to it (§5S.3.12 "Scratch copies").
 const scratchDir = "scratch"
+
+// checkpointLeaf is the checkpoint directory's name under
+// core.storage.checkpoint_dir (§5S.3.12 "Where").
+const checkpointLeaf = ".mediacore-checkpoints"
+
+// checkpointStamp is the layout of a checkpoint name's UTC time.
+const checkpointStamp = "20060102T150405Z"
+
+// isCheckpointName reports a name in the checkpoint grammar,
+// <YYYYMMDD>T<HHMMSS>Z-<8 lowercase hex>, the only names takeCheckpoint
+// writes and so the only ones the sweep and the reuse rule may touch.
+func isCheckpointName(s string) bool {
+	if len(s) != len(checkpointStamp)+1+8 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case i == 8:
+			if c != 'T' {
+				return false
+			}
+		case i == 15:
+			if c != 'Z' {
+				return false
+			}
+		case i == 16:
+			if c != '-' {
+				return false
+			}
+		case i < 16:
+			if c < '0' || c > '9' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// checkCheckpointDir refuses a relative core.storage.checkpoint_dir and a
+// checkpoint directory that equals the store's directory, holds it or lies
+// inside it.
+func (o *OpenOptions) checkCheckpointDir() error {
+	if o.CheckpointDir != "" && !filepath.IsAbs(o.CheckpointDir) {
+		return fmt.Errorf("storage: core.storage.checkpoint_dir %q is not absolute", o.CheckpointDir)
+	}
+	leaf, store := filepath.Clean(o.cpDir), filepath.Clean(o.Path)
+	if leaf == store || within(leaf, store) || within(store, leaf) {
+		return fmt.Errorf("%w: core.storage.checkpoint_dir %q puts the checkpoints at %s, and the store is at %s",
+			ErrCheckpointDirOverlap, o.CheckpointDir, leaf, store)
+	}
+	return nil
+}
+
+// within reports whether path lies strictly inside dir (both clean and
+// absolute).
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 // vector is a checkpoint's from-vector: every owner's applied version, every
 // level and the Pebble format (§5S.3.12 "Upgrade attempt and reuse").
@@ -106,7 +175,7 @@ type namedRecord struct {
 func (db *DB) checkpointRecords() ([]namedRecord, error) {
 	st := db.boot
 	fs := st.opts.fs
-	names, err := fs.List(st.opts.CheckpointDir)
+	names, err := fs.List(st.opts.cpDir)
 	if err != nil {
 		if oserrorNotExist(err) {
 			return nil, nil
@@ -117,10 +186,10 @@ func (db *DB) checkpointRecords() ([]namedRecord, error) {
 	var out []namedRecord
 	for _, n := range names {
 		base, ok := strings.CutSuffix(n, ".json")
-		if !ok {
+		if !ok || !isCheckpointName(base) {
 			continue
 		}
-		data, ok, err := ipebble.ReadFile(fs, filepath.Join(st.opts.CheckpointDir, n))
+		data, ok, err := ipebble.ReadFile(fs, filepath.Join(st.opts.cpDir, n))
 		if err != nil || !ok {
 			continue
 		}
@@ -151,11 +220,13 @@ func (db *DB) currentVector() vector {
 
 // sweepGarbage removes checkpoint directories without a record and
 // <name>.tmp directories (a crash before the record), and drops records
-// whose directory is gone (§5S.3.12 "How"; the scratch area excepted).
+// whose directory is gone (§5S.3.12 "How"). It touches only names in the
+// checkpoint grammar (isCheckpointName), so the scratch area and anything
+// else in the directory stay.
 func (db *DB) sweepGarbage() error {
 	st := db.boot
 	fs := st.opts.fs
-	dir := st.opts.CheckpointDir
+	dir := st.opts.cpDir
 	names, err := fs.List(dir)
 	if err != nil {
 		if oserrorNotExist(err) {
@@ -169,16 +240,22 @@ func (db *DB) sweepGarbage() error {
 	}
 	for _, n := range names {
 		p := filepath.Join(dir, n)
+		base, isRecord := strings.CutSuffix(n, ".json")
+		base, isTmp := strings.CutSuffix(base, ".tmp")
+		if !isCheckpointName(base) || (isRecord && isTmp) {
+			// The scratch area, or a name takeCheckpoint never writes: not
+			// the sweep's to delete, whatever the directory holds.
+			continue
+		}
 		switch {
-		case n == scratchDir:
-		case strings.HasSuffix(n, ".json"):
-			if !has[strings.TrimSuffix(n, ".json")] {
+		case isRecord:
+			if !has[base] {
 				db.log.Warn("storage: checkpoint record without its directory dropped", "name", n)
 				if err := fs.Remove(p); err != nil {
 					return fmt.Errorf("storage: drop record %s: %w", n, err)
 				}
 			}
-		case strings.HasSuffix(n, ".tmp") || !has[n+".json"]:
+		case isTmp || !has[base+".json"]:
 			if fi, err := fs.Stat(p); err != nil || !fi.IsDir() {
 				continue
 			}
@@ -218,7 +295,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		return err
 	}
 	fs := st.opts.fs
-	dir := st.opts.CheckpointDir
+	dir := st.opts.cpDir
 	// Headroom: the live store + the state files + the margin.
 	release, err := db.lease()
 	if err != nil {
@@ -257,7 +334,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		return fmt.Errorf("%w (%s)", ErrCheckpointDevice, dir)
 	}
 	now := st.opts.Clock().UTC()
-	name := now.Format("20060102T150405Z") + "-" + newInstallID()[:8]
+	name := now.Format(checkpointStamp) + "-" + newInstallID()[:8]
 	tmp := filepath.Join(dir, name+".tmp")
 	if err := db.mkdirPrivate(dir); err != nil {
 		return err
@@ -385,7 +462,7 @@ func (db *DB) writeRecord(name string, rec checkpointRecord) error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(st.opts.CheckpointDir, name+".json")
+	p := filepath.Join(st.opts.cpDir, name+".json")
 	if err := ipebble.WriteFileAtomic(st.opts.fs, p, append(data, '\n')); err != nil {
 		return fmt.Errorf("storage: checkpoint record: %w", err)
 	}

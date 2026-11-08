@@ -42,7 +42,7 @@ func (a *Admin) CheckpointBytes() (open, completed uint64, err error) {
 		return 0, 0, err
 	}
 	for _, r := range recs {
-		n, err := dirBytes(db.boot.opts.fs, filepath.Join(db.boot.opts.CheckpointDir, r.name))
+		n, err := dirBytes(db.boot.opts.fs, filepath.Join(db.boot.opts.cpDir, r.name))
 		if err != nil {
 			return 0, 0, fmt.Errorf("storage: size of checkpoint %s: %w", r.name, err)
 		}
