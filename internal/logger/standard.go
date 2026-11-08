@@ -1,5 +1,5 @@
 // file: internal/logger/standard.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 3f2504e0-4f89-11d3-9a0c-0305e82c3301
 // last-edited: 2026-11-08
 
@@ -99,6 +99,8 @@ func slogLevel(level Level) slog.Level {
 	case LevelError:
 		return slog.LevelError
 	default:
+		// LevelInfo itself, and any Level this package does not define: an
+		// unknown value is logged at info rather than dropped or promoted.
 		return slog.LevelInfo
 	}
 }
