@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
 // last-edited: 2026-11-08
 
@@ -167,6 +167,35 @@ func (s *Swapper) appendRec(ctx context.Context, id string, r restorejournal.Rec
 		return syncDir(s.fs, filepath.Dir(path))
 	}
 	return nil
+}
+
+// durableJournal is id's journal for a boot about to act on it, made
+// durable first (R1-21 review M6, found by the crash matrix's nested
+// faults): a record an earlier boot appended and failed to fsync is visible
+// here and not durable, and an action it allows (the slot rename after
+// rejected, the in-flight file's removal after a terminal step) would
+// outlive it in a crash. The journal is rewritten (rewriteJournal), not
+// just fsynced again: a kernel that marks the pages clean after a failed
+// writeback reports the second fsync done without writing them. A journal
+// file with no record has its directory synced, so the file found is
+// durable before the next append writes into it in place. Labelled
+// swap.journal.resync.
+func (s *Swapper) durableJournal(ctx context.Context, id string) ([]restorejournal.Record, error) {
+	path := journalPath(s.o.StateDir, id)
+	recs, acked, _, err := readJournal(s.fs, path)
+	if err != nil {
+		return nil, err
+	}
+	found, err := exists(s.fs, path)
+	if err != nil || !found {
+		return recs, err
+	}
+	return recs, bootseam.Labelled(bootseam.From(ctx), "swap.journal.resync", func() error {
+		if len(recs) == 0 {
+			return syncDir(s.fs, filepath.Dir(path))
+		}
+		return s.rewriteJournal(path, acked, nil, "resync")
+	})
 }
 
 // rewriteJournal replaces a journal whose torn tail readJournal dropped

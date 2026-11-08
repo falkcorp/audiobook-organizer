@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-08
 
@@ -25,7 +25,7 @@ type Row struct {
 func Rows() []Row {
 	return []Row{
 		{Phase: "P0a", Writer: "restoreswap: the swap and the set-aside (05-backup §5B.3.4; 05-storage §5S.3.15)", Labels: []string{
-			"swap.journal.staged", "swap.journal.rechecked", "swap.slot.inflight", "swap.location.copy",
+			"swap.journal.staged", "swap.journal.resync", "swap.journal.rechecked", "swap.slot.inflight", "swap.location.copy",
 			"swap.setaside.mkdir", "swap.setaside.mv", "swap.journal.previous_moved", "swap.place.mv",
 			"swap.journal.staged_moved", "swap.sidecars", "swap.journal.sidecars", "swap.journal.swapped",
 			"swap.journal.set_aside_started", "swap.journal.moved", "swap.journal.set_aside",

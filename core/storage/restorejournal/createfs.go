@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
 // last-edited: 2026-11-08
 
@@ -66,7 +66,7 @@ func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 		return fmt.Errorf("restorejournal: intent id %q is not one path segment", in.ID)
 	}
 	dir := Dir(stateDir)
-	if err := MkdirAllSynced(fs, dir); err != nil {
+	if err := MkdirAllSynced(fs, stateDir, dir); err != nil {
 		return err
 	}
 	if ids, err := InFlightIDs(fs, stateDir); err != nil {
@@ -134,13 +134,23 @@ func takeBack(fs vfs.FS, dir, pending string, cause error) error {
 }
 
 // MkdirAllSynced creates dir and its missing parents (0700) through fs and
-// fsyncs the parent of every directory it created, so the chain survives a
-// crash before anything is linked or renamed into it: restore/ before an
-// intent (R1-21 review m2), and every directory the swap creates
-// (restoreswap).
-func MkdirAllSynced(fs vfs.FS, dir string) error {
+// fsyncs the parent of every directory it created and of every directory
+// from dir up to root, created or found, so the chain survives a crash
+// before anything is linked or renamed into it: restore/ before an intent
+// (R1-21 review m2), and every directory the swap creates (restoreswap). A
+// directory found existing is not known durable: an earlier attempt may
+// have created it and failed its parent's fsync, and a step that renames
+// into it on the strength of a Stat loses what it renamed in a crash (review
+// M6, found by the crash matrix's nested faults). root is a directory known
+// durable that holds dir; root == dir syncs the parents of created
+// directories only. A dir outside root is an error.
+func MkdirAllSynced(fs vfs.FS, root, dir string) error {
+	root, dir = filepath.Clean(root), filepath.Clean(dir)
+	if dir != root && !InTree(dir, root) {
+		return fmt.Errorf("restorejournal: %s is not inside %s", dir, root)
+	}
 	var created []string
-	for d := filepath.Clean(dir); filepath.Dir(d) != d; d = filepath.Dir(d) {
+	for d := dir; filepath.Dir(d) != d; d = filepath.Dir(d) {
 		if _, err := fs.Stat(d); err == nil {
 			break
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -148,14 +158,27 @@ func MkdirAllSynced(fs vfs.FS, dir string) error {
 		}
 		created = append(created, d)
 	}
-	if len(created) == 0 {
-		return nil
+	if len(created) > 0 {
+		if err := fs.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("restorejournal: create %s: %w", dir, err)
+		}
 	}
-	if err := fs.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("restorejournal: create %s: %w", dir, err)
+	synced := map[string]bool{}
+	syncParent := func(d string) error {
+		p := filepath.Dir(d)
+		if synced[p] {
+			return nil
+		}
+		synced[p] = true
+		return syncDirFS(fs, p)
 	}
 	for _, d := range created {
-		if err := syncDirFS(fs, filepath.Dir(d)); err != nil {
+		if err := syncParent(d); err != nil {
+			return err
+		}
+	}
+	for d := dir; d != root; d = filepath.Dir(d) {
+		if err := syncParent(d); err != nil {
 			return err
 		}
 	}

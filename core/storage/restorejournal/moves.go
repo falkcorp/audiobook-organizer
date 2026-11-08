@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/moves.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a4401f6b-1776-403b-8b7b-8b40bb883e63
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restorejournal
 
@@ -32,6 +32,11 @@ const (
 	leafFail  = "failed"
 	leafStage = "staging"
 )
+
+// AsideDirName is the private directory's name: a path with an element of
+// this name lies in some swap's private namespace, which held nothing
+// before the swap made it.
+const AsideDirName = asideDir
 
 // SetAsideDest is the one set-aside rule of 05-storage §5S.3.15 "Stage"
 // (06 P0a cites it, COR9-12): a target under the state directory goes to
