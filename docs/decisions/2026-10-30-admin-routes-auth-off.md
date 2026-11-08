@@ -1,7 +1,7 @@
 <!-- file: docs/decisions/2026-10-30-admin-routes-auth-off.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 7d1e5b94-3a60-4c28-9f7b-e24a8c06d153 -->
-<!-- last-edited: 2026-10-30 -->
+<!-- last-edited: 2026-11-07 -->
 
 # Admin-role routes with authentication off
 
@@ -76,6 +76,7 @@ Every call site of `RequireAdmin()` found under `internal/`, before this change.
 | `GET /admin/guest-service-tokens` | credential surface | 401 | 401 |
 | `GET /admin/guest-service-tokens/plan` | credential surface | 401 | 401 |
 | `POST /admin/guest-service-tokens/:userId/revoke` | destructive credential change | 401 | 401 |
+| `POST /admin/guest-service-tokens/:userId/reissue` | destructive credential change | 401 | 401 |
 
 Master-list routes (`POST/GET /master-lists`, `GET /master-lists/elsewhere`,
 `DELETE /master-lists/:id`) already used `adminRole()` and are unchanged.
