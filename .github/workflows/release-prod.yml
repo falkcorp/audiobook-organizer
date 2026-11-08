@@ -1,7 +1,7 @@
 # file: .github/workflows/release-prod.yml
-# version: 4.12.4
+# version: 4.13.0
 # guid: f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 name: Production Release
 
@@ -74,3 +74,37 @@ jobs:
       go-run-linters: false
       previous-version: ${{ github.event.inputs.previous-version }}
     secrets: inherit
+
+  # Records the core checkpoint of this release (12 §12.4.1; script and its tests:
+  # .github/workflows/scripts/core_checkpoint.py). Non-blocking by construction:
+  # nothing `needs` this job and continue-on-error keeps a failure here from
+  # turning the run red, so a production release, a hotfix or a roll-forward never
+  # fails because of it. It waits for `release` only so a release that failed
+  # records no checkpoint; core/ at github.sha is what shipped (the changelog
+  # commit the release adds touches no file under core/). It also runs when
+  # prerelease.yml auto-promotes an RC, because that step dispatches this workflow
+  # (the R1 freeze stops that dispatch until the owner clears RELEASE_FREEZE).
+  core-checkpoint:
+    name: Record core checkpoint
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    permissions:
+      # contents: write pushes refs/core-checkpoints/v0.Y.Z; issues: write opens
+      # or updates the core-version-bump-needed issue.
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          # Persisted on purpose: the script pushes the ref with it.
+
+      - name: Record the checkpoint (or ask for a version bump)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/workflows/scripts/core_checkpoint.py --commit "$GITHUB_SHA" --open-issue
