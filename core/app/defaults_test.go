@@ -1,7 +1,7 @@
 // file: core/app/defaults_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7c4e2a-91d3-4f58-a6e0-3c8d5f2b7a19
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	stdlog "log"
 	"log/slog"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/stdr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
@@ -245,4 +247,113 @@ func (m testModule) Register(r *module.Registrar) error {
 		return nil
 	}
 	return m.register(r)
+}
+
+// recordingHandler is an otel.ErrorHandler that keeps every error's text.
+type recordingHandler struct {
+	mu   sync.Mutex
+	errs []string
+}
+
+func (h *recordingHandler) Handle(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.errs = append(h.errs, err.Error())
+}
+
+func (h *recordingHandler) String() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return strings.Join(h.errs, "\n")
+}
+
+// TestNew_ProcessDefaults_SDKSinkBeforeProvider: with Options.ProcessDefaults,
+// New installs the value-dropping SDK logger and the rate-limited error
+// handler before it builds the Provider. Building the trace exporter makes
+// the SDK read OTEL_EXPORTER_OTLP_* and report the bad values raw (as
+// ("parse headers", "input", <value>)); none of that reaches the logger and
+// handler that were installed before New (stand-ins for the SDK's defaults,
+// which write to stderr), and the App's pipeline gets the message and the
+// key names only. InstallProcessDefaults then adopts the pair, a second
+// install errors, a second App's New fails without touching them, and
+// restore puts back what was there before New.
+func TestNew_ProcessDefaults_SDKSinkBeforeProvider(t *testing.T) {
+	const sentinel = "Joker-OTLP-credential-sentinel"
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", sentinel)                    // no '=': "parse headers"
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://["+sentinel) // "parse url"
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", sentinel)                    // "parse duration"
+
+	var before syncBuffer
+	beforeHandler := &recordingHandler{}
+	prevHandler := otel.GetErrorHandler()
+	otel.SetLogger(stdr.New(stdlog.New(&before, "", 0)))
+	otel.SetErrorHandler(beforeHandler)
+	t.Cleanup(func() {
+		otel.SetErrorHandler(prevHandler)
+		otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+	})
+
+	var out syncBuffer
+	opts := Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out, Env: []string{}, ProcessDefaults: true,
+		R1Telemetry: &R1Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}}
+	a, err := New(t.Context(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = a.Metrics().Shutdown(ctx)
+	})
+
+	got := out.String()
+	for name, s := range map[string]string{"the logger before New": before.String(),
+		"the error handler before New": beforeHandler.String(), "the App's pipeline": got} {
+		if strings.Contains(s, sentinel) {
+			t.Errorf("the hostile OTLP env value reached %s:\n%s", name, s)
+		}
+	}
+	if !strings.Contains(got, "values dropped") || !strings.Contains(got, "parse headers") {
+		t.Fatalf("the SDK's report of the bad env did not reach the App's sink (the test is blind):\n%s", got)
+	}
+
+	if _, err := New(t.Context(), Options{AppID: "arkham", MetricNamespace: "arkham", LogOutput: &syncBuffer{},
+		Env: []string{}, ProcessDefaults: true}); !errors.Is(err, ErrProcessDefaultsTaken) {
+		t.Fatalf("a second App's New with ProcessDefaults: %v, want ErrProcessDefaultsTaken", err)
+	}
+	if otel.GetErrorHandler() != otel.ErrorHandler(a.otel.handler) {
+		t.Fatal("the refused New replaced the first App's error handler")
+	}
+
+	restore, err := InstallProcessDefaults(a)
+	if err != nil {
+		t.Fatalf("InstallProcessDefaults after a ProcessDefaults New: %v", err)
+	}
+	if _, err := InstallProcessDefaults(a); !errors.Is(err, ErrProcessDefaultsTaken) {
+		t.Fatalf("second install: %v, want ErrProcessDefaultsTaken", err)
+	}
+	restore()
+	if otel.GetErrorHandler() != otel.ErrorHandler(beforeHandler) {
+		t.Fatalf("restore left %T, want the handler installed before New", otel.GetErrorHandler())
+	}
+}
+
+// TestNew_ProcessDefaults_RestoredWhenBootFails: a New that installed the SDK
+// pair and then fails puts back the handler that was there before.
+func TestNew_ProcessDefaults_RestoredWhenBootFails(t *testing.T) {
+	prevHandler := otel.GetErrorHandler()
+	beforeHandler := &recordingHandler{}
+	otel.SetErrorHandler(beforeHandler)
+	t.Cleanup(func() {
+		otel.SetErrorHandler(prevHandler)
+		otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
+	})
+	m := testModule{id: "wayne", register: func(*module.Registrar) error { return errors.New("Bane broke the module") }}
+	if _, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
+		Env: []string{}, ProcessDefaults: true}, m); err == nil {
+		t.Fatal("New with a failing Register succeeded")
+	}
+	if otel.GetErrorHandler() != otel.ErrorHandler(beforeHandler) {
+		t.Fatalf("a failed New left %T installed", otel.GetErrorHandler())
+	}
 }
