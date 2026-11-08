@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -159,11 +159,7 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		}
 	}
 	if f := k.cfg.ProcessLogging; f != nil && !describe {
-		stdlib := k.RootLogger().Handler()
-		if k.logging != nil {
-			stdlib = k.logging.Handler()
-		}
-		if err := f(k.RootLogger(), stdlib); err != nil {
+		if err := f(k.RootLogger(), k.StdlibLogHandler()); err != nil {
 			return fmt.Errorf("kernel: process logging: %w", err)
 		}
 	}
