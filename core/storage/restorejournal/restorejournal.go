@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/restorejournal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c954a92-88a0-4242-b599-92db9a12cae7
 // last-edited: 2026-11-07
 
@@ -15,14 +15,13 @@
 package restorejournal
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // ErrSwapPending: the one intent slot is taken or a swap is in flight;
@@ -83,42 +82,9 @@ const (
 // swap of any kind is in flight". The probe and the link are two steps, so a
 // swap that renames pending.json to inflight.json between them is not seen:
 // stage only after P0a (which resolves any swap in flight) or with the
-// service stopped.
+// service stopped. It is CreateIntentFS over the real filesystem.
 func CreateIntent(stateDir string, in Intent) error {
-	if stateDir == "" || !filepath.IsAbs(stateDir) {
-		return fmt.Errorf("restorejournal: state directory %q is not an absolute path", stateDir)
-	}
-	dir := filepath.Join(stateDir, restoreDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("restorejournal: create %s: %w", dir, err)
-	}
-	if busy, err := inflight(dir); err != nil {
-		return err
-	} else if busy {
-		return ErrSwapPending
-	}
-	b, err := json.Marshal(in)
-	if err != nil {
-		return fmt.Errorf("restorejournal: encode intent: %w", err)
-	}
-	tmp, err := writeTemp(dir, b)
-	if err != nil {
-		return err
-	}
-	pending := filepath.Join(dir, pendingName)
-	linkErr := os.Link(tmp, pending)
-	rmErr := os.Remove(tmp)
-	switch {
-	case errors.Is(linkErr, os.ErrExist):
-		return errors.Join(ErrSwapPending, tempLeft(tmp, rmErr))
-	case linkErr != nil:
-		return errors.Join(fmt.Errorf("restorejournal: link %s: %w", pending, linkErr), tempLeft(tmp, rmErr))
-	}
-	// The intent is linked and durable once the directory is synced. A temp
-	// name that would not go away is a stray dot-file beside it, not a failed
-	// create, so it does not turn a created intent into an error the caller
-	// would retry.
-	return syncDir(dir)
+	return CreateIntentFS(vfs.Default, stateDir, in)
 }
 
 // tempLeft reports a temp intent file the create could not remove, nil when
@@ -128,50 +94,6 @@ func tempLeft(tmp string, rmErr error) error {
 		return nil
 	}
 	return fmt.Errorf("restorejournal: remove temp intent %s: %w", filepath.Base(tmp), rmErr)
-}
-
-// inflight reports whether any restore/<id>/inflight.json exists.
-func inflight(dir string) (bool, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*", inflightName))
-	if err != nil {
-		return false, fmt.Errorf("restorejournal: probe %s: %w", dir, err)
-	}
-	return len(matches) > 0, nil
-}
-
-// writeTemp writes b to a new temp file in dir, fsynced and closed, mode 0600.
-func writeTemp(dir string, b []byte) (string, error) {
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		return "", fmt.Errorf("restorejournal: temp name: %w", err)
-	}
-	name := filepath.Join(dir, "."+pendingName+".tmp-"+hex.EncodeToString(suffix[:]))
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", fmt.Errorf("restorejournal: create temp intent: %w", err)
-	}
-	_, werr := f.Write(b)
-	serr := f.Sync()
-	cerr := f.Close()
-	if err := errors.Join(werr, serr, cerr); err != nil {
-		_ = os.Remove(name)
-		return "", fmt.Errorf("restorejournal: write temp intent: %w", err)
-	}
-	return name, nil
-}
-
-// syncDir fsyncs dir so a create, link or remove in it is durable.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("restorejournal: open %s: %w", dir, err)
-	}
-	serr := d.Sync()
-	cerr := d.Close()
-	if err := errors.Join(serr, cerr); err != nil {
-		return fmt.Errorf("restorejournal: fsync %s: %w", dir, err)
-	}
-	return nil
 }
 
 // Kind is the swap's kind, the intent's "kind" field and the "staged"
