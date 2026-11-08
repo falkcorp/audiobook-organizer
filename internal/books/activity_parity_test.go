@@ -1,5 +1,5 @@
 // file: internal/books/activity_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f2fd308d-5301-467c-9794-69b349635f32
 // last-edited: 2026-11-08
 
@@ -38,8 +38,7 @@ func nonEmptyLines(s string) []string {
 // through core's otel scope) are printed but make no Activity entry.
 func TestActivityFeed_SameEntriesAsHEAD_NoCoreRows(t *testing.T) {
 	c := bootComposed(t, false, nil, nil)
-	feed, out := &syncBuffer{}, &syncBuffer{}
-	c.mod.logOut.set(out)
+	feed := &syncBuffer{}
 	c.mod.logOut.setActivity(feed)
 
 	emit := func() {
@@ -71,8 +70,14 @@ func TestActivityFeed_SameEntriesAsHEAD_NoCoreRows(t *testing.T) {
 	}
 
 	assert.NotContains(t, feed.String(), "gotham exporter", "core's own line became an Activity entry")
-	assert.Contains(t, out.String(), "gotham exporter", "core's own line must still be printed")
-	assert.Contains(t, out.String(), "module=core")
+	var coreLine string
+	for _, l := range nonEmptyLines(c.newLog.String()) {
+		if strings.Contains(l, "gotham exporter") {
+			coreLine = l
+		}
+	}
+	require.NotEmpty(t, coreLine, "core's own line must still be printed:\n%s", c.newLog.String())
+	assert.Contains(t, coreLine, " module=core ", "core's own line keeps its module")
 }
 
 func TestScopedLine(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -77,8 +77,9 @@ type composed struct {
 	mod   *booksModule
 	srv   *server.Server
 	store *database.PebbleStore
-	// newLog is what the App logged while New ran, before Attach pointed
-	// its output at the activity feed.
+	// newLog is the App's output that is not for the activity feed: every
+	// line until Attach, and the scoped loggers' lines (core's own, module=)
+	// after it.
 	newLog *syncBuffer
 }
 
@@ -124,7 +125,7 @@ func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*d
 
 	mod := Module(store).(*booksModule)
 	newLog := &syncBuffer{}
-	mod.logOut.set(newLog)
+	mod.logOut.stdout = newLog
 	cfg := server.GetDefaultServerConfig()
 	cfg.Host, cfg.Port = "127.0.0.1", "0"
 	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot()})
