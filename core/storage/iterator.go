@@ -275,6 +275,9 @@ func newSnapshot(s handleOf) (*Snapshot, error) {
 	if err := s.check(); err != nil {
 		return nil, err
 	}
+	if s.tx != nil {
+		return nil, errTxSnapshot
+	}
 	release, err := s.db.lease()
 	if err != nil {
 		return nil, err

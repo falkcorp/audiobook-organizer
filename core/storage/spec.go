@@ -182,11 +182,15 @@ type MigrationTx struct {
 }
 
 // Keyspace is the step's keyspace; reads go through the tx. Writes go through
-// tx.Set and tx.Delete: a write on this handle is refused, so a step cannot
-// commit outside its one batch.
+// tx.Set and tx.Delete. A write on this handle or a Sub of it, and a batch or
+// a sequence taken from either, are refused (errTxKeyspaceWrite), and so is a
+// batch of the step's LegacyRange, so a step cannot commit outside its one
+// batch. A snapshot is refused too (errTxSnapshot): it would not see the
+// step's own writes.
 func (tx *MigrationTx) Keyspace() Keyspace { return tx.ks }
 
-// Legacy is the owner's LegacyRange; reads and writes go through the tx.
+// Legacy is the owner's LegacyRange; reads and writes go through the tx. Its
+// NewBatch, NewIndexedBatch and Snapshot are refused as the Keyspace's are.
 func (tx *MigrationTx) Legacy() LegacyRange { return tx.legacy }
 
 // Set stages a write of the step's keyspace.

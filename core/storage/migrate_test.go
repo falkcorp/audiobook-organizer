@@ -500,3 +500,61 @@ func TestBreakingStepRequiresRaisesLevel(t *testing.T) {
 		}
 	}
 }
+
+// TestStepCannotCommitOutsideItsBatch (05-storage §5S.3.5 "Atomicity";
+// review MAJOR-1, probe D): a step's handles read and write through its one
+// batch. A batch of their own, a Sub's batch, a sequence or a legacy batch
+// would commit outside it, and a snapshot would not see the step's writes,
+// so each is refused; a failing step then leaves no row behind.
+func TestStepCannotCommitOutsideItsBatch(t *testing.T) {
+	gotham := func(migs ...Migration) OwnerSpec {
+		return OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Keyspace: true, Claims: gothamClaims(), Migrations: migs}}
+	}
+	e := newEnv(t, gotham(step(1, "cave", "cave", "1")))
+	tried := map[string]error{}
+	commit := func(b *Batch, key string) error {
+		defer func() { _ = b.Close() }()
+		if err := b.Set([]byte(key), []byte("escaped")); err != nil {
+			return err
+		}
+		return b.Commit(context.Background(), Sync)
+	}
+	escape := Migration{Version: 2, Name: "escape", Compat: Additive, Up: func(ctx context.Context, tx *MigrationTx) error {
+		ks, lr := tx.Keyspace(), tx.Legacy()
+		tried["NewBatch"] = commit(ks.NewBatch(), "joker")
+		tried["NewIndexedBatch"] = commit(ks.NewIndexedBatch(), "harley")
+		tried["Sub.NewBatch"] = commit(ks.Sub("cowl").NewBatch(), "penguin")
+		_, tried["Sequence"] = ks.Sequence("ids").Next(ctx)
+		tried["Legacy.NewBatch"] = commit(lr.NewBatch(), "joker:escaped")
+		if s, err := ks.Snapshot(); err == nil {
+			_ = s.Close()
+		} else {
+			tried["Snapshot"] = err
+		}
+		if s, err := lr.Snapshot(); err == nil {
+			_ = s.Close()
+		} else {
+			tried["Legacy.Snapshot"] = err
+		}
+		return errors.New("the step fails after trying")
+	}}
+	upgrade(t, e, gotham(step(1, "cave", "cave", "1"), escape))
+	if _, err := e.tryOpen(); err == nil {
+		t.Fatal("the failing step's boot succeeded")
+	}
+	for _, name := range []string{"NewBatch", "NewIndexedBatch", "Sub.NewBatch", "Sequence", "Legacy.NewBatch"} {
+		if !errors.Is(tried[name], errTxKeyspaceWrite) {
+			t.Errorf("%s inside a step = %v, want errTxKeyspaceWrite", name, tried[name])
+		}
+	}
+	for _, name := range []string{"Snapshot", "Legacy.Snapshot"} {
+		if !errors.Is(tried[name], errTxSnapshot) {
+			t.Errorf("%s inside a step = %v, want errTxSnapshot", name, tried[name])
+		}
+	}
+	for _, prefix := range []string{"m/gotham/joker", "m/gotham/harley", "m/gotham/cowl/", "m/gotham/_seq", "joker:escaped"} {
+		if got := rawKeys(t, e.fs, e.path, prefix); len(got) != 0 {
+			t.Errorf("the failed step left %v behind", got)
+		}
+	}
+}
