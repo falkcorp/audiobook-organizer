@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/twin_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: add1ec36-b167-459f-a907-736b11d3481b
 // last-edited: 2026-11-08
 
@@ -73,13 +73,19 @@ func TestRealFSStrayIsNeverATwin(t *testing.T) {
 }
 
 // TestMvTwinProofByIdentity (R1-21 review M3): on the real filesystem mv's
-// caller proof is ignored; two names of one file (a hard link) are twins
+// caller proof is ignored; two links of one file in two directories (a
+// hard link, as a swap rename moves an item to another directory) are twins
 // and the rename is redone, two different items never are, whatever the
 // caller claims. On an in-memory filesystem the caller's proof decides.
 func TestMvTwinProofByIdentity(t *testing.T) {
 	yes := func() (bool, error) { return true, nil }
 	dir := t.TempDir()
-	src, dst := filepath.Join(dir, "robin"), filepath.Join(dir, "nightwing")
+	for _, d := range []string{"cave", "manor"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src, dst := filepath.Join(dir, "cave", "robin"), filepath.Join(dir, "manor", "nightwing")
 	if err := os.WriteFile(src, []byte("dick"), 0o600); err != nil {
 		t.Fatal(err)
 	}
