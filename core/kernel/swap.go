@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -102,17 +102,41 @@ func bootClock(ctx context.Context) func() time.Time {
 
 // bootProbe is the swap's device probe for a boot over fs: the seam's
 // (bootseam.Seams.Probe, a test's model of a second filesystem), else the
-// operating system's on the real filesystem, else none, since an in-memory
-// filesystem has no devices.
+// operating system's on the real filesystem, else none on an in-memory one
+// (*vfs.MemFS), which has no devices. Any other filesystem gets refuseProbe,
+// so the device checks P0a runs reject the staged swap there instead of
+// being skipped (R1-21 verification review).
 func bootProbe(ctx context.Context, fs vfs.FS) restorejournal.Probe {
 	if s := bootseam.From(ctx); s != nil && s.Probe != nil {
 		return s.Probe
 	}
-	if vfs.Root(fs) == vfs.Default {
+	root := vfs.Root(fs)
+	if root == vfs.Default {
 		return restorejournal.OSProbe()
 	}
-	return nil
+	if _, mem := root.(*vfs.MemFS); mem {
+		return nil
+	}
+	return refuseProbe{root: root}
 }
+
+// refuseProbe is the device probe of a filesystem that is neither the real
+// one nor in memory: it cannot tell a device, an absence or a writable
+// directory, so every query fails, and its errors never match
+// os.ErrNotExist. Step b's rename pre-check (restorejournal.Validate) then
+// refuses every move, and step a's delete rule (ValidateDelete) every
+// entry, so the staged swap is rejected. Today the swap's journal already
+// halts P0a on such a filesystem (restorejournal.ChmodFS cannot make it
+// 0600); this keeps the device checks closed on their own.
+type refuseProbe struct{ root vfs.FS }
+
+func (p refuseProbe) refuse(path string) error {
+	return fmt.Errorf("kernel: no device probe for %s: filesystem %T is neither the real one nor in memory", path, p.root)
+}
+
+func (p refuseProbe) ItemDev(path string) (uint64, error) { return 0, p.refuse(path) }
+func (p refuseProbe) DirDev(path string) (uint64, error)  { return 0, p.refuse(path) }
+func (p refuseProbe) Writable(dir string) error           { return p.refuse(dir) }
 
 // runP0a is boot phase P0a (06 §6.5.1; 05-backup §5B.3.4; 05-storage
 // §5S.3.15): the swapper resumes the swap whose in-flight file exists, else
