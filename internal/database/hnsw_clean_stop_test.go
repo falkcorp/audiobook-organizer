@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -550,8 +550,7 @@ func TestPebbleStoreOpen_TakesTheCleanStopMarker(t *testing.T) {
 	})
 
 	t.Run("claims turned off", func(t *testing.T) {
-		hnswCleanStopClaimOff.Store(true)
-		t.Cleanup(func() { hnswCleanStopClaimOff.Store(false) })
+		t.Cleanup(DisableHNSWCleanStopClaim())
 		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
 		dir := HNSWSnapshotDir(dbPath)
 		writeMarker(t, dir)
@@ -613,5 +612,38 @@ func TestPopCleanStop_WarnsOnADirectoryMismatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDisableHNSWCleanStopClaim_RestoreTurnsClaimsBackOn (R1-15 round-2
+// review, N5): the switch lasts until its restore runs, so a caller that
+// defers it cannot leave claims off for the rest of the process, and nested
+// calls unwind to the setting from before each one.
+func TestDisableHNSWCleanStopClaim_RestoreTurnsClaimsBackOn(t *testing.T) {
+	if hnswCleanStopClaimOff.Load() {
+		t.Fatal("claims are off before the test: an earlier test leaked the switch")
+	}
+	outer := DisableHNSWCleanStopClaim()
+	inner := DisableHNSWCleanStopClaim()
+	inner()
+	if !hnswCleanStopClaimOff.Load() {
+		t.Error("the inner restore turned claims on while the outer call still holds them off")
+	}
+	outer()
+	if hnswCleanStopClaimOff.Load() {
+		t.Fatal("the outer restore left claims off")
+	}
+
+	// An open after the restore takes the marker again.
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	dir := HNSWSnapshotDir(dbPath)
+	writeMarker(t, dir)
+	ps, err := NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ps.Close() })
+	if markerExists(t, dir) {
+		t.Error("an open after the restore left the marker on disk")
 	}
 }
