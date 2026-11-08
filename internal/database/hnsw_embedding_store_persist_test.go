@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_persist_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-11-08
 
@@ -214,6 +214,7 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 
 		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
+		assert.False(t, fresh.NeedsReconcile(), "the snapshot is accepted as fresh")
 		n, err := fresh.CountByType(ctx, "book")
 		require.NoError(t, err)
 		assert.Equal(t, pebbleRows, n, "a snapshot accepted as fresh must contain every counted row")
@@ -255,11 +256,14 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		assert.Equal(t, 4, tc)
 		assert.Equal(t, 4, gc)
 
+		// A stale snapshot is installed too (pending a reconcile), so the
+		// count alone cannot tell fresh from stale: NeedsReconcile does.
 		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
+		assert.False(t, fresh.NeedsReconcile(), "the repaired snapshot is accepted as fresh")
 		n, err := fresh.CountByType(ctx, "book")
 		require.NoError(t, err)
-		assert.Equal(t, 4, n, "the repaired snapshot is accepted as fresh")
+		assert.Equal(t, 4, n)
 
 		res, err = s.ExportIfDirty(dir, truth)
 		require.NoError(t, err)
@@ -267,7 +271,7 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 	})
 }
 
-func TestImport_SetsCompleteAndStaleDiscardClears(t *testing.T) {
+func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 	ctx := context.Background()
 	src := newExportTestStore(t, 4)
 	src.SetComplete(true)
@@ -288,23 +292,35 @@ func TestImport_SetsCompleteAndStaleDiscardClears(t *testing.T) {
 	// Fresh by the staleness check: stays complete.
 	fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return 4, nil }))
+	assert.False(t, fresh.NeedsReconcile())
 	n, err := fresh.CountByType(ctx, "book")
 	require.NoError(t, err)
 	assert.Equal(t, 4, n)
 	assert.NoError(t, fresh.Export(t.TempDir()))
 
-	// Stale: discarded, empty, incomplete again.
+	// Stale: installed for queries, but incomplete and pending a reconcile.
 	stale := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, stale.ImportWithStalenessCheck(dir, func(string) (int, error) { return 5, nil }))
+	assert.True(t, stale.NeedsReconcile())
 	n, err = stale.CountByType(ctx, "book")
 	require.NoError(t, err)
-	assert.Zero(t, n)
+	assert.Equal(t, 4, n)
 	assert.ErrorIs(t, stale.Export(t.TempDir()), database.ErrHNSWIncomplete)
 	_, err = stale.ExportIfDirty(t.TempDir(), nil)
-	assert.ErrorIs(t, err, database.ErrHNSWIncomplete, "a discard bumps the generation, so it is not mistaken for an empty store")
+	assert.ErrorIs(t, err, database.ErrHNSWIncomplete, "a stale install is not mistaken for a clean one")
 
-	// Hydration then completes it.
-	stale.SetComplete(true)
+	// The reconcile then completes it: the four snapshot rows (same vectors and
+	// metadata as newExportTestStore built) plus the fifth Pebble row.
+	rng := rand.New(rand.NewSource(42))
+	rows := make([]database.ReconcileRow, 0, 5)
+	for _, id := range batmanIDs[:4] {
+		rows = append(rows, database.ReconcileRow{ID: id, Vector: exportTestVec(rng), Verdict: database.ReconcileIndex, Meta: map[string]string{"k": id}})
+	}
+	rows = append(rows, database.ReconcileRow{ID: batmanIDs[4], Vector: exportTestVec(rng), Verdict: database.ReconcileIndex, Meta: map[string]string{"k": batmanIDs[4]}})
+	report, err := stale.Reconcile(ctx, map[string][]database.ReconcileRow{"book": rows})
+	require.NoError(t, err)
+	require.True(t, report.Complete)
+	assert.Equal(t, database.ReconcileCounts{Rows: 5, Kept: 4, Added: 1}, report.ByType["book"])
 	assert.NoError(t, stale.Export(t.TempDir()))
 }
 

@@ -1,12 +1,13 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -508,11 +509,12 @@ func TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall(t *testing.T) 
 	}
 }
 
-// TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport locks
-// ARCH-1: if Pebble holds a different number of rows than it did when the
-// snapshot was exported, the snapshot predates writes it cannot know about and
-// must be discarded so hydrate-from-Pebble runs instead.
-func TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport(t *testing.T) {
+// TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport locks
+// ARCH-1 as review B2 changed it: if Pebble holds a different number of rows
+// than it did when the snapshot was exported, the snapshot predates writes it
+// cannot know about. It is installed, so queries work at once, but incomplete
+// and pending a reconcile against Pebble; it is never taken as fresh.
+func TestHNSW_ImportWithStalenessCheck_PendsWhenPebbleGrewSinceExport(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
 	s1 := NewHNSWEmbeddingStore(dim)
@@ -539,12 +541,14 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport(t *test
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}
 
-	n, err := s2.CountByType(ctx, "book")
-	if err != nil {
-		t.Fatalf("CountByType: %v", err)
+	if !s2.NeedsReconcile() {
+		t.Error("a stale snapshot must be installed pending a reconcile")
 	}
-	if n != 0 {
-		t.Errorf("stale snapshot was not discarded: CountByType(book) = %d, want 0", n)
+	if n, _ := s2.CountByType(ctx, "book"); n != 1 {
+		t.Errorf("stale snapshot not installed for reconcile: CountByType(book) = %d, want 1", n)
+	}
+	if err := s2.Export(t.TempDir()); !errors.Is(err, ErrHNSWIncomplete) {
+		t.Errorf("a pending snapshot must not be exported: Export = %v, want ErrHNSWIncomplete", err)
 	}
 }
 
@@ -591,14 +595,17 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T
 		t.Errorf("a filtered graph (1 of 5 rows) was discarded even though Pebble "+
 			"had not changed since export: CountByType(book) = %d, want 1", n)
 	}
+	if s2.NeedsReconcile() {
+		t.Error("a filtered graph whose truth count did not move must be taken as fresh, not reconciled")
+	}
 }
 
-// TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar covers
-// the migration case: a snapshot written by the old Export (or by a run whose
-// truth source was unavailable) carries no sidecar, cannot be verified, and so
-// must be discarded rather than trusted. It is self-healing — the next clean
-// shutdown writes one.
-func TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar(t *testing.T) {
+// TestHNSW_ImportWithStalenessCheck_ReconcilesSnapshotWithoutTruthSidecar
+// covers the migration case: a snapshot written by the old Export (or by a run
+// whose truth source was unavailable) carries no sidecar and cannot be
+// verified, so it is never trusted as fresh. Since review B2 it is reconciled
+// against Pebble rather than discarded; the next export writes a sidecar.
+func TestHNSW_ImportWithStalenessCheck_ReconcilesSnapshotWithoutTruthSidecar(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
 	s1 := NewHNSWEmbeddingStore(dim)
@@ -617,25 +624,22 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar(t *te
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}
 
-	n, err := s2.CountByType(ctx, "book")
-	if err != nil {
-		t.Fatalf("CountByType: %v", err)
+	if !s2.NeedsReconcile() {
+		t.Error("an unverifiable snapshot must be reconciled, not trusted")
 	}
-	if n != 0 {
-		t.Errorf("unverifiable snapshot was kept: CountByType(book) = %d, want 0", n)
+	if err := s2.Export(t.TempDir()); !errors.Is(err, ErrHNSWIncomplete) {
+		t.Errorf("an unverifiable snapshot must not be exported before its reconcile: Export = %v", err)
 	}
 }
 
-// TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale locks the
-// all-or-nothing discard semantics: dedup/lifecycle.go's PostInit gates
-// hydration on the "book" count alone, and HydrateChromem re-populates BOTH
-// "book" and "author" together when it runs. If only the stale "book" graph
-// were discarded while a fresh "author" graph were kept, HydrateChromem would
-// re-Add authors on top of the already-populated author graph — the same
-// Delete+Add per-layer-invariant class of bug (HNSW-CRASH-2026-06-18) that
-// safeAdd/safeDelete guard against. So a stale "book" count must discard the
-// entire snapshot, including an otherwise-fresh "author" graph.
-func TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale(t *testing.T) {
+// TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot: one stale
+// entity type makes the whole snapshot pending, an otherwise-fresh "author"
+// graph included. Reconcile then takes every type at once (it refuses rows that
+// miss a type the store holds), and its rebuild fallback discards every type,
+// so HydrateChromem, which refills "book" and "author" together, always starts
+// from empty: a re-Add of a key a kept graph holds is the Delete+Add
+// per-layer-invariant crash (HNSW-CRASH-2026-06-18).
+func TestHNSW_ImportWithStalenessCheck_StaleTypePendsTheWholeSnapshot(t *testing.T) {
 	const dim = 4
 	ctx := context.Background()
 	s1 := NewHNSWEmbeddingStore(dim)
@@ -648,13 +652,12 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale(t *testing
 
 	dir := t.TempDir()
 	s1.SetComplete(true) // models a fully built graph
-	if err := s1.Export(dir); err != nil {
+	if err := s1.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
 	s2 := NewHNSWEmbeddingStore(dim)
-	// "book" is stale (truth=5 > graph's 1); "author" is fresh (truth=1 ==
-	// graph's 1). The stale "book" must still cause "author" to be discarded.
+	// "book" is stale (truth moved 1 -> 5); "author" is fresh (1 == 1).
 	truth := func(entityType string) (int, error) {
 		if entityType == "book" {
 			return 5, nil
@@ -664,20 +667,18 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale(t *testing
 	if err := s2.ImportWithStalenessCheck(dir, truth); err != nil {
 		t.Fatalf("ImportWithStalenessCheck: %v", err)
 	}
+	if !s2.NeedsReconcile() {
+		t.Fatal("a stale book graph must make the snapshot pending")
+	}
+	if err := s2.Export(t.TempDir()); !errors.Is(err, ErrHNSWIncomplete) {
+		t.Errorf("the fresh author graph must not make a pending snapshot exportable: Export = %v", err)
+	}
 
-	bookCount, err := s2.CountByType(ctx, "book")
-	if err != nil {
-		t.Fatalf("CountByType book: %v", err)
-	}
-	if bookCount != 0 {
-		t.Errorf("stale book snapshot not discarded: CountByType(book) = %d, want 0", bookCount)
-	}
-	authorCount, err := s2.CountByType(ctx, "author")
-	if err != nil {
-		t.Fatalf("CountByType author: %v", err)
-	}
-	if authorCount != 0 {
-		t.Errorf("fresh author graph was not discarded alongside stale book (all-or-nothing violated): CountByType(author) = %d, want 0", authorCount)
+	s2.DiscardForRebuild()
+	for _, entityType := range []string{"book", "author"} {
+		if n, _ := s2.CountByType(ctx, entityType); n != 0 {
+			t.Errorf("DiscardForRebuild must drop every entity type: CountByType(%s) = %d", entityType, n)
+		}
 	}
 }
 
@@ -710,6 +711,9 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("fresh snapshot was discarded unnecessarily: CountByType(book) = %d, want 1", n)
+	}
+	if s2.NeedsReconcile() {
+		t.Error("a fresh snapshot must not wait for a reconcile")
 	}
 }
 
@@ -749,5 +753,26 @@ func TestHNSW_SafeDelete_AbsentAndDoubleDeleteDoNotPanic(t *testing.T) {
 	// safeAdd/TestHNSWUpsert_ReinsertDoesNotCrash) — a process crash is not.
 	if err := s.Upsert(ctx, "book", "B2", []float32{0, 1, 0}, nil); err != nil {
 		t.Logf("post-delete insert returned (recovered) error, tolerated: %v", err)
+	}
+}
+
+// TestSameVector_ComparesAtStoragePrecision (review B2): Pebble keeps float16,
+// the live mirror puts the embedding API's float32 into the graph. An unchanged
+// embedding must not look changed to the stale-snapshot reconcile, or every
+// stale boot would fall back to a full rebuild.
+func TestSameVector_ComparesAtStoragePrecision(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+	orig := unitVec(rng, 64)
+	stored := decodeVector(encodeVector(orig)) // what EmbeddingStore returns
+	if !sameVector(orig, stored) {
+		t.Fatal("a float32 vector and its float16 Pebble row compare as different")
+	}
+	changed := append([]float32(nil), orig...)
+	changed[7] += 0.01
+	if sameVector(changed, stored) {
+		t.Fatal("a re-embedded vector compares as unchanged")
+	}
+	if sameVector(orig, orig[:63]) {
+		t.Fatal("vectors of different lengths compare as unchanged")
 	}
 }
