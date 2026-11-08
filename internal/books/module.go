@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -146,6 +146,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return errors.New("books: Module was given no store")
 	}
 	srv := server.NewServer(m.store)
+	// Stored before any check can fail, so Release tears it down when New
+	// then refuses.
+	m.srv.Store(srv)
 	// The drift check: the reviewed manifest must describe this engine
 	// exactly, and its routes must lie inside the prefixes Manifest declared
 	// (the router refuses a route outside them at P7).
@@ -153,7 +156,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}
-	m.srv.Store(srv)
+	// Each s.perm(atom) route records the atom table's requirement.
+	if routes, err = resolveRoutes(routes); err != nil {
+		return fmt.Errorf("books: legacy manifest: %w", err)
+	}
 
 	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
 	r.MountLegacy(httpapi.LegacyMount{
