@@ -1,7 +1,7 @@
 // file: cmd/commands_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package cmd
 
@@ -16,14 +16,13 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
-	"github.com/falkcorp/audiobook-organizer/internal/startup"
-	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
 func stubCommandDeps(t *testing.T) {
@@ -40,8 +39,7 @@ func stubCommandDeps(t *testing.T) {
 	origSyncEnv := syncConfigFromEnv
 	origNewServer := newServer
 	origDefaultCfg := getDefaultServerConfig
-	origStart := startServer
-	origInitOTEL := initOTEL
+	origRunApp := runApp
 
 	initializeStore = func(dbType, path string) (database.Store, error) {
 		// Command tests only need GlobalStore to be non-nil for the
@@ -83,7 +81,7 @@ func stubCommandDeps(t *testing.T) {
 	getDefaultServerConfig = func() server.ServerConfig {
 		return server.ServerConfig{Host: "localhost", Port: "8484"}
 	}
-	startServer = func(srv *server.Server, cfg server.ServerConfig) error { return nil }
+	runApp = func(context.Context, database.Store, books.ServeInputs) error { return nil }
 
 	t.Cleanup(func() {
 		initializeStore = origInit
@@ -97,8 +95,7 @@ func stubCommandDeps(t *testing.T) {
 		syncConfigFromEnv = origSyncEnv
 		newServer = origNewServer
 		getDefaultServerConfig = origDefaultCfg
-		startServer = origStart
-		initOTEL = origInitOTEL
+		runApp = origRunApp
 		database.SetGlobalStore(nil)
 	})
 }
@@ -196,7 +193,7 @@ func TestServeCommandErrorPaths(t *testing.T) {
 	}
 
 	initEncryption = func(dir string, legacy ...string) error { return nil }
-	startServer = func(srv *server.Server, cfg server.ServerConfig) error {
+	runApp = func(context.Context, database.Store, books.ServeInputs) error {
 		return fmt.Errorf("start failed")
 	}
 	if err := serveCmd.RunE(serveCmd, nil); err == nil {
@@ -310,8 +307,9 @@ func sandboxStateDir(t *testing.T) {
 }
 
 // serveWithStubs runs serveCmd against stubbed deps and reports whether
-// startServer (where the listeners are bound) was reached, and with what config.
-func serveWithStubs(t *testing.T) (started bool, cfg server.ServerConfig, err error) {
+// runApp (the composition root, where the listeners are bound) was reached,
+// and with what inputs.
+func serveWithStubs(t *testing.T) (started bool, in books.ServeInputs, err error) {
 	t.Helper()
 	tempDir := t.TempDir()
 	origConfig := config.AppConfig
@@ -320,41 +318,48 @@ func serveWithStubs(t *testing.T) (started bool, cfg server.ServerConfig, err er
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.pebble")
 	config.AppConfig.RootDir = tempDir
 	sandboxStateDir(t)
-	startServer = func(_ *server.Server, c server.ServerConfig) error {
-		started, cfg = true, c
+	runApp = func(_ context.Context, _ database.Store, got books.ServeInputs) error {
+		started, in = true, got
 		return nil
 	}
 	err = serveCmd.RunE(serveCmd, nil)
-	return started, cfg, err
+	return started, in, err
 }
 
-// A metrics-init failure is Degraded (startup.Table "InitOTEL"): serve still
-// reaches startServer, and the runner it hands the server carries the
-// metrics_disabled token that /health renders. A nil shutdown alongside the
-// error must not be deferred.
-func TestServe_MetricsInitErrorDegradesAndStillServes(t *testing.T) {
+// serve hands the composition root its startup runner, its listener flags
+// and the telemetry settings as HEAD's InitOTEL read them: before the stored
+// settings apply. A collector endpoint that only the stored settings carry
+// does not reach the App's Provider, as it did not reach HEAD's (R1-15).
+func TestServe_TelemetryReadBeforeStoredSettings(t *testing.T) {
 	stubCommandDeps(t)
-	initOTEL = func(context.Context, *telemetry.Config) (func(context.Context) error, error) {
-		return nil, fmt.Errorf("meter provider failed")
+	loadConfigFromDB = func(database.SettingsStore) error {
+		config.AppConfig.OTelExporterOTLPEndpoint = "http://192.0.2.9:4317"
+		return nil
 	}
 
-	started, cfg, err := serveWithStubs(t)
+	started, in, err := serveWithStubs(t)
 	if err != nil {
-		t.Fatalf("serve failed on a degraded step: %v", err)
+		t.Fatalf("serve failed: %v", err)
 	}
 	if !started {
-		t.Fatal("serve never reached startServer: a metrics failure must not stop the server")
+		t.Fatal("serve never reached the composition root")
 	}
-	if cfg.StartupSteps == nil {
-		t.Fatal("serve did not hand its startup runner to the server")
+	if in.Server.StartupSteps == nil {
+		t.Fatal("serve did not hand its startup runner to the composition root")
 	}
-	if got := cfg.StartupSteps.Tokens(); len(got) != 1 || got[0] != startup.TokenMetricsDisabled {
-		t.Fatalf("degraded tokens = %v, want [%s]", got, startup.TokenMetricsDisabled)
+	if in.Server.Port == "" {
+		t.Fatal("serve did not hand its listener flags to the composition root")
+	}
+	if got := in.Telemetry.OTelExporterOTLPEndpoint; got != "" {
+		t.Fatalf("telemetry endpoint = %q, want the value from before the stored settings (empty)", got)
+	}
+	if got := config.AppConfig.OTelExporterOTLPEndpoint; got != "http://192.0.2.9:4317" {
+		t.Fatalf("the stored settings did not apply to AppConfig: %q", got)
 	}
 }
 
 // A store-init failure is Fatal: serve returns the error and never reaches
-// startServer, so no listener is bound.
+// the composition root, so no listener is bound.
 func TestServe_StoreInitErrorAbortsBeforeAnyListener(t *testing.T) {
 	stubCommandDeps(t)
 	initializeStore = func(string, string) (database.Store, error) {
@@ -366,7 +371,7 @@ func TestServe_StoreInitErrorAbortsBeforeAnyListener(t *testing.T) {
 		t.Fatal("serve returned nil after a store-init failure")
 	}
 	if started {
-		t.Fatal("serve reached startServer after a store-init failure")
+		t.Fatal("serve reached the composition root after a store-init failure")
 	}
 }
 
@@ -384,7 +389,7 @@ func TestServe_ConfigLoadErrorIsFatal(t *testing.T) {
 		t.Fatal("serve returned nil after a config-load failure")
 	}
 	if started {
-		t.Fatal("serve reached startServer after a config-load failure")
+		t.Fatal("serve reached the composition root after a config-load failure")
 	}
 }
 
@@ -392,7 +397,7 @@ func TestServe_ConfigLoadErrorIsFatal(t *testing.T) {
 // Pebble store whose config_blob row is not a valid setting record. It used to
 // be skipped, so LoadConfigFromDatabase saw "no blob", ran on defaults, and the
 // first settings save overwrote the stored config. Now the real loader fails,
-// and serve never reaches startServer.
+// and serve never reaches the composition root.
 func TestServe_CorruptConfigBlobRowIsFatal(t *testing.T) {
 	stubCommandDeps(t)
 	dbPath := filepath.Join(t.TempDir(), "corrupt.pebble")
@@ -421,7 +426,7 @@ func TestServe_CorruptConfigBlobRowIsFatal(t *testing.T) {
 		t.Fatal("serve returned nil with a corrupt config_blob row")
 	}
 	if started {
-		t.Fatal("serve reached startServer with a corrupt config_blob row")
+		t.Fatal("serve reached the composition root with a corrupt config_blob row")
 	}
 	if !strings.Contains(err.Error(), "config_blob") {
 		t.Fatalf("error does not name the corrupt row: %v", err)

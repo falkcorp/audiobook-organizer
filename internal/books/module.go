@@ -1,0 +1,251 @@
+// file: internal/books/module.go
+// version: 1.0.0
+// guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
+// last-edited: 2026-11-08
+
+// Package books is ABO's audiobook module and its composition-root glue (04
+// §2.4, 06 §6.11.1 step 2): Module(store) is the module.Module ABO's main
+// hands to app.New, Options is the app.Options of release R1, and Attach
+// binds the App's served registry once New has returned. It is computed
+// layer 6 and imported only by the main package and cmd (03 §3.5.1 item 1);
+// every package below it receives what it needs as values this package
+// wires, never mediacore/module or mediacore/app.
+//
+// In release R1 books wraps HEAD's server: Register builds today's
+// *server.Server and mounts its gin engine with Registrar.MountLegacy
+// (LegacyAuthGin, ServesSPA); its one hook runs HEAD's start up to the
+// listener and HEAD's post-drain stop; the listener stack itself is HEAD's,
+// handed to the kernel through app.Options.R1Listen until R1-17 builds core's
+// perimeter.
+package books
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"sync/atomic"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/module"
+)
+
+// ID is books' module ID.
+const ID module.ID = "books"
+
+// minCoreVersion is the lowest core version books needs (MOD-12): the core
+// this release was built against.
+const minCoreVersion = "0.1.0"
+
+// moduleVersion is books' Manifest.Version (reported by the modules API).
+// The module ships inside ABO's binary, whose build version is not semver
+// ("dev" on a local build), so the module carries its own.
+const moduleVersion = "1.0.0"
+
+// absAuthMethod is the compat auth method books registers for its ABS
+// routes (05-authn §3.3); the legacy manifest's OwnAuth rows name it
+// (internal/server legacy_manifest.go), and the kernel's admission refuses a
+// boot where they differ.
+const absAuthMethod auth.Method = "books.abs"
+
+// errNotBooks is what Options and Attach return for a module.Module that
+// Module did not build.
+var errNotBooks = errors.New("books: not the module books.Module returned")
+
+// topSegments are the mount's top-level server paths (03 §3.6): HEAD's
+// nonSPASegments (internal/server spa_fallback.go), the first segments whose
+// unmatched paths 404 instead of serving the SPA shell. Each is also a
+// declared legacy prefix, so an unmatched path under it gets the legacy 404
+// HEAD's NoRoute answered, whether or not the ABS surface registers routes
+// there (06 §6.5.1 P7 requires every TopSegments entry to be declared).
+func topSegments() []string {
+	return []string{"ping", "status", "logout", "public", "socket.io", "auth", "health", "metrics"}
+}
+
+// spaShared are the top-level segments the mount shares with shell pages:
+// "login" (POST /login is ABS's, GET /login the page; 05-http-api §3.5).
+func spaShared() []string { return []string{"login"} }
+
+// Module returns books for the composition root. store is the store serve's
+// pre-server steps opened (MOD3-1); R1-23 moves the open into the kernel and
+// drops the argument. Module does no work: it reads whether the ABS surface
+// is on, which the effective config fixed before this call and which decides
+// the legacy prefixes the manifest declares.
+func Module(store *database.PebbleStore) module.Module {
+	return &booksModule{store: store, abs: config.AppConfig.ABSAPIEnabled}
+}
+
+// booksModule is books' module.Module.
+type booksModule struct {
+	store *database.PebbleStore
+	abs   bool
+
+	// cfg is serve's listener flags, set by Options before app.New; the hook
+	// and R1Listen read it.
+	cfg atomic.Pointer[server.ServerConfig]
+	// srv is the server Register built.
+	srv atomic.Pointer[server.Server]
+	// registered counts Register calls (TestBooksDisabledInert).
+	registered atomic.Int32
+	// logOut is the App's log output (Options' LogOutput).
+	logOut logTee
+}
+
+// Manifest is books' static declaration. It is pure: the legacy prefixes
+// follow from the ABS flag Module captured.
+func (m *booksModule) Manifest() module.Manifest {
+	return module.Manifest{
+		ID:             ID,
+		Version:        moduleVersion,
+		DisplayName:    "Audiobooks",
+		MinCoreVersion: minCoreVersion,
+		DefaultEnabled: true,
+		LegacyPrefixes: legacyPrefixes(m.abs),
+		// No native route yet, so no public one (the gin mount's public
+		// routes are the legacy manifest's Public rows).
+	}
+}
+
+// legacyPrefixes are the claims of books' gin mount (05-http-api §4.9): the
+// subtree of every legacy route's first segment ("/ping/", which also covers
+// "/ping") or, under /api, of its second ("/api/v1/"); every top segment and
+// SPA-shared segment; and "/socket.io/", where HEAD answered the Engine.IO
+// probe with its legacy 404 and no route is registered (seams.d/R1-15.md).
+func legacyPrefixes(abs bool) []string {
+	set := map[string]bool{}
+	for _, lr := range server.LegacyRoutes(abs) {
+		segs := strings.Split(strings.TrimPrefix(lr.GinPath, "/"), "/")
+		if segs[0] == "api" && len(segs) > 1 {
+			set["/api/"+segs[1]+"/"] = true
+			continue
+		}
+		set["/"+segs[0]+"/"] = true
+	}
+	for _, seg := range slices.Concat(topSegments(), spaShared()) {
+		set["/"+seg+"/"] = true
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// reservedAPINamespaces are the second segments under /api of ABO's
+// unversioned surfaces (the ABS protocol's /api/me, /api/items, ...), which
+// the kernel adds to the reserved module IDs (03 §3.6): every one the ABS
+// surface can register, whether or not it is on, so no module takes a name
+// enabling ABS would need. The versioned v<N> segments are reserved already.
+func reservedAPINamespaces() []string {
+	set := map[string]bool{}
+	for _, lr := range server.LegacyRoutes(true) {
+		segs := strings.Split(strings.TrimPrefix(lr.GinPath, "/"), "/")
+		if segs[0] != "api" || len(segs) < 2 || versionSegment(segs[1]) {
+			continue
+		}
+		set[segs[1]] = true
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// versionSegment reports a "v<digits>" segment.
+func versionSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// Register builds HEAD's server over the store and records books' mount,
+// auth method and hook (06 §6.11.1 step 2). Building the server here is
+// R1's documented exception to Register's no-I/O rule (06 §6.4.1): NewServer
+// constructs HEAD's whole service container, and books has no other place
+// to build the engine MountLegacy needs before P7. R1-23 and the rows that
+// split the server retire it (seams.d/R1-15.md).
+func (m *booksModule) Register(r *module.Registrar) error {
+	m.registered.Add(1)
+	if m.store == nil {
+		return errors.New("books: Module was given no store")
+	}
+	srv := server.NewServer(m.store)
+	// The drift check: the reviewed manifest must describe this engine
+	// exactly, and its routes must lie inside the prefixes Manifest declared
+	// (the router refuses a route outside them at P7).
+	routes, err := srv.LegacyManifest()
+	if err != nil {
+		return fmt.Errorf("books: %w", err)
+	}
+	m.srv.Store(srv)
+
+	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
+	r.MountLegacy(httpapi.LegacyMount{
+		Handler:     srv.LegacyHandler(),
+		Auth:        httpapi.LegacyAuthGin,
+		ServesSPA:   true,
+		Routes:      slices.Values(routes),
+		Redirects:   srv.LegacyRedirects(),
+		TopSegments: topSegments(),
+		SPAShared:   spaShared(),
+	})
+	cfg := m.serveConfig()
+	r.Hook(module.Hook{
+		Name: string(ID) + ".server",
+		// HEAD's start up to the listener (the op gates, the service
+		// container, the search index, the warmers); the kernel opens the
+		// listener after it (start step 7).
+		Start: func(ctx context.Context) error { return srv.StartHook(ctx, cfg) },
+		// HEAD's stop after the listener drained, within the budget left.
+		Stop: srv.StopHook,
+	})
+	return nil
+}
+
+// serveConfig is the ServerConfig Options recorded, or HEAD's defaults.
+func (m *booksModule) serveConfig() server.ServerConfig {
+	if c := m.cfg.Load(); c != nil {
+		return *c
+	}
+	return server.GetDefaultServerConfig()
+}
+
+// asBooks returns the books module behind mod.
+func asBooks(mod module.Module) (*booksModule, error) {
+	m, ok := mod.(*booksModule)
+	if !ok || m == nil {
+		return nil, errNotBooks
+	}
+	return m, nil
+}
+
+// Stopped is closed once books' server has stopped: its stop hook returned,
+// or its start hook failed (the kernel then calls no stop). It is closed at
+// once when the server was never built (Register never ran: boot failed
+// earlier, or books is disabled). The kernel abandons a stop hook at the
+// budget, so serve waits on it before closing the store.
+func Stopped(mod module.Module) <-chan struct{} {
+	if m, err := asBooks(mod); err == nil {
+		if srv := m.srv.Load(); srv != nil {
+			return srv.Stopped()
+		}
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}
