@@ -1,11 +1,11 @@
 // file: internal/search/query_parser_prop_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d169409-96cb-44ea-b915-ccd285d45168
 //
 // Property-based tests for the DSL query parser (plan 4.5 task 3).
 // Uses pgregory.net/rapid to generate random and well-formed inputs
 // and verify invariants that must always hold.
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package search
 
@@ -142,6 +142,14 @@ func genSimpleClause(t *rapid.T) string {
 			// Avoid uppercase keyword clashes — genIdent is lowercase
 			// so this is already safe, but be explicit.
 			if f == "and" || f == "or" || f == "not" {
+				continue
+			}
+			// tag: is an exact filter that SplitTagTerms lifts out before
+			// translation; TranslateAt (what the property calls) refuses it by
+			// design (errTagUnsplit). genIdent draws "tag" now and then, which made
+			// this property fail intermittently on Translate("tag:0"). Tag shapes
+			// are covered by tag_terms_test.go.
+			if f == TagField {
 				continue
 			}
 			return f
