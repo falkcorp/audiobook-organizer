@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/accesslog.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0a02b49d-7162-47dd-a1e6-c0a0254b3766
 // last-edited: 2026-11-08
 
@@ -29,49 +29,65 @@ func skipAccessLog(path string) bool {
 // accessLog is stage 4 (05-http-api §4.2): one slog record per request,
 // with the URL under the kernel's Redactor, as stage 2's span. A refusal of
 // stage 7 (and from F4 stage 13) carries security_event, the access log
-// standing in for audit until the identity flip (SEC2-20).
+// standing in for audit until the identity flip (SEC2-20). A handler panic
+// unwinds past this stage; stage 3 then writes the record (emitAccess), so
+// a panicking request still gets its 500 line, as it did under HEAD's gin
+// logger, which ran outside recovery.
 func (c *Chain) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
 		hw := newHookWriter(w, r, nil)
 		next.ServeHTTP(hw, r)
-		st := From(r.Context())
-		event := ""
-		if st != nil {
-			if p := st.event.Load(); p != nil {
-				event = *p
-			}
-		}
-		if event == "" && skipAccessLog(r.URL.Path) {
-			return
-		}
-		attrs := []slog.Attr{
-			slog.String("method", r.Method),
-			slog.String("path", loggedTarget(c.deps.Redactor, r.URL)),
-			slog.Int("status", hw.Status()),
-			slog.Duration("duration", time.Since(start)),
-			slog.Int64("bytes", hw.n),
-			slog.String("proto", r.Proto),
-		}
-		if st != nil {
-			if st.client.IsValid() {
-				attrs = append(attrs, slog.String("client", st.client.String()))
-			}
-			attrs = append(attrs, slog.String("request_id", st.requestID))
-			if st.clientRequestID != "" {
-				attrs = append(attrs, slog.String("client_request_id", st.clientRequestID))
-			}
-			if route := st.Route(); route != "" {
-				attrs = append(attrs, slog.String("route", route))
-			}
-		}
-		level := slog.LevelInfo
-		if event != "" {
-			attrs = append(attrs, slog.String("security_event", event))
-			level = slog.LevelWarn
-		}
-		c.deps.Log.LogAttrs(r.Context(), level, AccessMessage, attrs...)
+		c.emitAccess(r, hw.Status(), hw.n)
 	})
+}
+
+// emitAccess writes the request's access record with status and bytes as
+// answered. It writes one record per request: a second call (stage 3 after
+// stage 4 already logged) writes nothing.
+func (c *Chain) emitAccess(r *http.Request, status int, bytes int64) {
+	st := From(r.Context())
+	if st != nil && !st.accessLogged.CompareAndSwap(false, true) {
+		return
+	}
+	event := ""
+	var took time.Duration
+	if st != nil {
+		if p := st.event.Load(); p != nil {
+			event = *p
+		}
+		if !st.start.IsZero() {
+			took = time.Since(st.start)
+		}
+	}
+	if event == "" && skipAccessLog(r.URL.Path) {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("method", r.Method),
+		slog.String("path", loggedTarget(c.deps.Redactor, r.URL)),
+		slog.Int("status", status),
+		slog.Duration("duration", took),
+		slog.Int64("bytes", bytes),
+		slog.String("proto", r.Proto),
+	}
+	if st != nil {
+		if st.client.IsValid() {
+			attrs = append(attrs, slog.String("client", st.client.String()))
+		}
+		attrs = append(attrs, slog.String("request_id", st.requestID))
+		if st.clientRequestID != "" {
+			attrs = append(attrs, slog.String("client_request_id", st.clientRequestID))
+		}
+		if route := st.Route(); route != "" {
+			attrs = append(attrs, slog.String("route", route))
+		}
+	}
+	level := slog.LevelInfo
+	if event != "" {
+		attrs = append(attrs, slog.String("security_event", event))
+		level = slog.LevelWarn
+	}
+	c.deps.Log.LogAttrs(r.Context(), level, AccessMessage, attrs...)
 }
 
 // securityEvent marks the request for the access log's security_event.
