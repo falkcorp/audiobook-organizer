@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-12
+// last-edited: 2026-11-07
 
 package database
 
@@ -370,6 +370,7 @@ func TestHNSW_SnapshotSkipsHydration(t *testing.T) {
 
 	// Export then Import — simulates the on-disk snapshot path.
 	dir := t.TempDir()
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.Export(dir); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -421,6 +422,7 @@ func TestHNSW_ExportAtomic_BadWriteLeavesGoodSnapshotIntact(t *testing.T) {
 	}
 
 	dir := t.TempDir()
+	s.SetComplete(true) // models a fully built graph
 	if err := s.Export(dir); err != nil {
 		t.Fatalf("first export: %v", err)
 	}
@@ -443,6 +445,7 @@ func TestHNSW_ExportAtomic_BadWriteLeavesGoodSnapshotIntact(t *testing.T) {
 	}
 	defer os.Remove(tmpBinPath)
 
+	s2.SetComplete(true) // models a fully built graph
 	if err := s2.Export(dir); err == nil {
 		t.Fatal("expected Export to fail when the .bin temp path cannot be created")
 	}
@@ -470,6 +473,7 @@ func TestHNSW_ImportAtomic_CorruptMetaAbortsWithoutPartialInstall(t *testing.T) 
 	}
 
 	dir := t.TempDir()
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.Export(dir); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -518,6 +522,7 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsWhenPebbleGrewSinceExport(t *test
 
 	dir := t.TempDir()
 	// Exported when Pebble held 1 book row.
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.ExportWithTruth(dir, func(string) (int, error) { return 1, nil }); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -568,6 +573,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFilteredGraphBelowTruth(t *testing.T
 	truth := func(string) (int, error) { return 5, nil }
 
 	dir := t.TempDir()
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.ExportWithTruth(dir, truth); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -601,6 +607,7 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsSnapshotWithoutTruthSidecar(t *te
 	}
 
 	dir := t.TempDir()
+	s1.SetComplete(true)                   // models a fully built graph
 	if err := s1.Export(dir); err != nil { // no truth recorded
 		t.Fatalf("export: %v", err)
 	}
@@ -640,6 +647,7 @@ func TestHNSW_ImportWithStalenessCheck_DiscardsAllTypesWhenAnyIsStale(t *testing
 	}
 
 	dir := t.TempDir()
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.Export(dir); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -686,6 +694,7 @@ func TestHNSW_ImportWithStalenessCheck_KeepsFreshSnapshot(t *testing.T) {
 
 	dir := t.TempDir()
 	truth := func(entityType string) (int, error) { return 1, nil }
+	s1.SetComplete(true) // models a fully built graph
 	if err := s1.ExportWithTruth(dir, truth); err != nil {
 		t.Fatalf("export: %v", err)
 	}

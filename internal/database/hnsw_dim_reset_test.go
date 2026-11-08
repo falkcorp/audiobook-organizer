@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_dim_reset_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7b8c19-4d3e-4a60-9b1c-5e8f0a2d6b74
-// last-edited: 2026-07-02
+// last-edited: 2026-11-07
 
 package database
 
@@ -24,6 +24,7 @@ func TestHNSWImport_DiscardsStaleDimSnapshot(t *testing.T) {
 	if err := old.Upsert(ctx, "book", "B1", []float32{1, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert into old store: %v", err)
 	}
+	old.SetComplete(true) // models a fully built graph
 	if err := old.Export(dir); err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -62,6 +63,7 @@ func TestHNSWImport_KeepsMatchingDimSnapshot(t *testing.T) {
 	if err := old.Upsert(ctx, "book", "B1", []float32{1, 0, 0}, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
+	old.SetComplete(true) // models a fully built graph
 	if err := old.Export(dir); err != nil {
 		t.Fatalf("export: %v", err)
 	}
