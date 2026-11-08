@@ -1,5 +1,5 @@
 // file: core/storage/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 56109ea6-e975-416a-9681-1f2102068005
 // last-edited: 2026-11-07
 
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -166,12 +165,6 @@ func stamp(t *testing.T, db *DB, o Owner) (int, bool) {
 		t.Fatal(err)
 	}
 	return rec.Level, true
-}
-
-// fixedClock is a clock that starts at a fixed instant and never moves.
-func fixedClock() func() time.Time {
-	at := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
-	return func() time.Time { return at }
 }
 
 // step is a versioned Additive step that sets one key of the keyspace.
