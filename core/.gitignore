@@ -1,10 +1,13 @@
 # file: core/.gitignore
-# version: 1.0.0
+# version: 1.1.0
 # guid: 729ee186-2908-41ad-8e25-a31fc358285f
-# last-edited: 2026-11-05
+# last-edited: 2026-11-08
 
 # make -C core readiness writes its report here (12 §12.3.11).
 /.ci/readiness/
+# make -C core test-short writes the profile coverage-floor reads (an export
+# of core/ alone has no root .gitignore to ignore it).
+/coverage.out
 /bin/
 **/playwright-report/
 **/blob-report/
