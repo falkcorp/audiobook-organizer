@@ -1,5 +1,5 @@
 // file: core/app/noglobals_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 68d64f45-c7be-4bf0-8c21-6be99047ed03
 // last-edited: 2026-11-07
 
@@ -23,7 +23,9 @@ import (
 // processDefaultsExempt is what app.InstallProcessDefaults (R1-15) may call
 // and nothing else in core: the seven process installs 05-logging §10 lists
 // (05-metrics §12 names the three otel provider and propagator setters among
-// them).
+// them), plus what its restore needs to put them back: the three otel getters
+// it reads the previous values with, and log.SetFlags, because slog.SetDefault
+// zeroes log's flags.
 func processDefaultsExempt() map[string]bool {
 	return map[string]bool{
 		"log/slog.SetDefault":                           true,
@@ -33,6 +35,11 @@ func processDefaultsExempt() map[string]bool {
 		"go.opentelemetry.io/otel.SetMeterProvider":     true,
 		"go.opentelemetry.io/otel.SetTracerProvider":    true,
 		"go.opentelemetry.io/otel.SetTextMapPropagator": true,
+		// restore's reads and its one extra write
+		"go.opentelemetry.io/otel.GetMeterProvider":     true,
+		"go.opentelemetry.io/otel.GetTracerProvider":    true,
+		"go.opentelemetry.io/otel.GetTextMapPropagator": true,
+		"log.SetFlags":                                  true,
 	}
 }
 

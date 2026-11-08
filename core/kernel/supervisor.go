@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-07
 
@@ -164,7 +164,14 @@ func (k *Kernel) Run(ctx context.Context) error {
 		budget = defaultShutdownBudget
 	}
 	var srv Server
+	// A second owner of a family refused since New (an instrument created
+	// through the process-global MeterProvider once the app installed it, or
+	// in a hook's Start) still fails boot: nothing is served yet (05-metrics
+	// §8, TestFamilyTaken_ThroughGlobalProvider).
+	familyErr := k.familyTaken("before the listener opened")
 	switch {
+	case familyErr != nil:
+		err = familyErr
 	case err != nil:
 		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
 	case budget < 0:

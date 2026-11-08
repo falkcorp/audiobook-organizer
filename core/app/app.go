@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-07
 
@@ -29,6 +29,7 @@ import (
 
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
 
@@ -69,6 +70,14 @@ func (a *App) Handler() http.Handler { return a.k.Handler() }
 // what coretest.AssertRoutesHavePermissions walks (03 R6, 06 §6.4.8); valid
 // after New. Not in 06 §6.4.5's App: R1-37's seam, recorded in its seams file.
 func (a *App) Routes() iter.Seq[httpapi.RouteInfo] { return a.k.Routes() }
+
+// Metrics is the App's metrics Provider, valid after New. In release R1 it
+// is the composition root's handle on the served registry: ABO registers its
+// legacy client_golang families through Registerer() and its legacy gin
+// /metrics route serves Handler() until F8 mounts /metrics in the kernel
+// (05-metrics §6, §13 item 2); coretest.MetricsProvider returns it to series
+// contract tests. Modules never see it: they get a Scope.
+func (a *App) Metrics() *metrics.Provider { return a.k.Provider() }
 
 // Modules reports each module's resolved state (enabled, disabled, reason),
 // in ID order.
@@ -231,6 +240,25 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 	}
 	if f := opts.R1Values; f != nil {
 		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
+	}
+	if opts.Logger == nil {
+		c.LogOutput = opts.LogOutput
+	}
+	if f := opts.R1Listen; f != nil {
+		c.Listen = func(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (kernel.Server, error) {
+			srv, err := f(o, h, l)
+			if err != nil || srv == nil {
+				if err == nil {
+					err = errors.New("app: Options.R1Listen returned no server")
+				}
+				return nil, err
+			}
+			return srv, nil
+		}
+	}
+	if t := opts.R1Telemetry; t != nil {
+		kt := kernel.Telemetry(*t)
+		c.Telemetry = &kt
 	}
 	return c, nil
 }

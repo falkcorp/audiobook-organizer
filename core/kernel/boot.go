@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-07
 
@@ -85,6 +85,13 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	if err := k.phase(phaseP8, k.handlerPhase); err != nil {
 		return nil, err
 	}
+	// A family refused through a Scope or the raw MeterProvider during
+	// Register fails boot (05-metrics §8); Run checks again before the
+	// listener for what the process-global install and the hooks' Starts
+	// created.
+	if err := k.familyTaken("during New"); err != nil {
+		return nil, err
+	}
 	return k, nil
 }
 
@@ -131,7 +138,7 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	if serviceName == "" {
 		serviceName = k.cfg.AppID
 	}
-	p, err := metrics.New(ctx, metrics.Options{
+	mo := metrics.Options{
 		AppID:           k.cfg.AppID,
 		ServiceName:     serviceName,
 		MetricNamespace: k.cfg.MetricNamespace,
@@ -140,7 +147,15 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		Prometheus:      true,
 		Redactor:        k.redactor,
 		Logger:          k.coreLog("metrics"),
-	})
+	}
+	// The app's OTLP push, span exporter and resource attributes (R1:
+	// app.Options.R1Telemetry; F3: core.metrics and core.tracing). Describe
+	// builds no exporter: it does no I/O (COR2-13).
+	if t := k.cfg.Telemetry; t != nil && !describe {
+		mo.OTLP, mo.Tracing = t.OTLP, t.Tracing
+		mo.Environment, mo.InstanceID = t.Environment, t.InstanceID
+	}
+	p, err := metrics.New(ctx, mo)
 	if err != nil {
 		return fmt.Errorf("kernel: metrics provider: %w", err)
 	}
