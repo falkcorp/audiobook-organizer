@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.8
+// version: 4.66.9
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1145,13 +1145,6 @@ func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.
 		return nil, fmt.Errorf("listen address %q: %w", o.Addr, err)
 	}
 	cfg.Host, cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile = host, port, o.TLSCertFile, o.TLSKeyFile
-	s.httpServer = &http.Server{
-		Addr:              o.Addr,
-		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    1 << 20, // 1MB
-	}
 	l := &R1Listener{s: s, cfg: cfg, afterDone: make(chan struct{})}
 
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
@@ -1170,7 +1163,17 @@ func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.
 		altSvc = fmt.Sprintf(`h3=":%s"; ma=2592000`, cfg.HTTP3Port)
 	}
 	gate := newPeerAllowListHandler(s.perimeterShim(inner, altSvc))
-	s.httpServer.Handler = gate
+	// The Handler is set in the literal: a Server with none serves
+	// http.DefaultServeMux, where net/http/pprof registers its handlers
+	// (pprof_guard_test.go).
+	s.httpServer = &http.Server{
+		Addr:              o.Addr,
+		Handler:           gate,
+		ReadHeaderTimeout: cfg.ReadTimeout, // Only limit header read, not body (allows large uploads)
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    1 << 20, // 1MB
+	}
 	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 		ln, err := s.bindMainListener()
 		if err != nil {
