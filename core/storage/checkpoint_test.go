@@ -571,3 +571,50 @@ func TestStrandedAttemptCompletedNextBoot(t *testing.T) {
 		})
 	}
 }
+
+// openFails is a vfs whose Open of one path fails, as an EIO or a
+// permission error would.
+type openFails struct {
+	vfs.FS
+	path string
+}
+
+var errScarecrow = errors.New("scarecrow's toxin: input/output error")
+
+func (f openFails) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
+	if name == f.path {
+		return nil, errScarecrow
+	}
+	return f.FS.Open(name, opts...)
+}
+
+// TestUnreadableCheckpointRecordFailsBoot (review MINOR-1): a record that
+// exists but cannot be read fails the boot before any write. Skipping it
+// would take a second full checkpoint beside the open one (and, on a
+// marker-less store, orphan the record under a new install ID).
+func TestUnreadableCheckpointRecordFailsBoot(t *testing.T) {
+	mem := vfs.NewMem()
+	e := headStore(t, mem, failingOwners()...)
+	if _, err := e.tryOpen(); err == nil {
+		t.Fatal("the failing upgrade succeeded")
+	}
+	name := readPointer(t, e).Name
+	before, err := mem.List(cpDir(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.opts.fs = openFails{FS: mem, path: filepath.Join(cpDir(e), name+".json")}
+	e.opts.Owners = fixedOwners()
+	if _, err := e.tryOpen(); !errors.Is(err, errScarecrow) {
+		t.Fatalf("boot with an unreadable record = %v, want the read error", err)
+	}
+	after, err := mem.List(cpDir(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(before)
+	slices.Sort(after)
+	if !slices.Equal(before, after) {
+		t.Fatalf("checkpoint directory %v became %v: the refused boot wrote", before, after)
+	}
+}

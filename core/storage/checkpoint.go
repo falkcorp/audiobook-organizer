@@ -176,7 +176,9 @@ type namedRecord struct {
 	rec  checkpointRecord
 }
 
-// checkpointRecords reads every <name>.json in the checkpoint directory.
+// checkpointRecords reads every <name>.json in the checkpoint directory. A
+// record that cannot be read fails the call; one removed since the listing
+// is skipped, and one that reads but does not parse is logged and skipped.
 func (db *DB) checkpointRecords() ([]namedRecord, error) {
 	st := db.boot
 	fs := st.opts.fs
@@ -195,12 +197,20 @@ func (db *DB) checkpointRecords() ([]namedRecord, error) {
 			continue
 		}
 		data, ok, err := ipebble.ReadFile(fs, filepath.Join(st.opts.cpDir, n))
-		if err != nil || !ok {
-			continue
+		if err != nil {
+			// An EIO or a permission error: skipping the record would take
+			// a second full checkpoint beside it, or orphan it under a new
+			// install ID, so the caller refuses (review MINOR-1).
+			return nil, fmt.Errorf("storage: checkpoint record %s: %w", n, err)
+		}
+		if !ok {
+			continue // removed since the listing
 		}
 		var rec checkpointRecord
 		if json.Unmarshal(data, &rec) != nil {
-			db.log.Error("storage: checkpoint record unreadable; never reused", "name", base)
+			// Records are written atomically, so this is a hand edit or
+			// corruption; it is never reused or completed.
+			db.log.Error("storage: checkpoint record does not parse; never reused", "name", base)
 			continue
 		}
 		out = append(out, namedRecord{name: base, rec: rec})
