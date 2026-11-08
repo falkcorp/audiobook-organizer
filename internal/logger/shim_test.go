@@ -1,5 +1,5 @@
 // file: internal/logger/shim_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8a14c3d7-52e9-4b60-a7f1-0c3d9e5b2a46
 // last-edited: 2026-11-08
 
@@ -38,7 +38,7 @@ func shimPipeline(t *testing.T, buf *bytes.Buffer, levels map[string]slog.Level)
 // level applies to it. Nested With names are dotted.
 func TestShim_SubsystemIsAttribute(t *testing.T) {
 	var buf bytes.Buffer
-	lg := shimPipeline(t, &buf, map[string]slog.Level{"core.quiet": slog.LevelError})
+	lg := shimPipeline(t, &buf, map[string]slog.Level{"process.quiet": slog.LevelError})
 	l := FromSlog(lg.Root())
 
 	l.With("loud").Info("x %d", 1)
@@ -109,7 +109,7 @@ func TestShim_SanitisesTheMessage(t *testing.T) {
 // trace call is a pipeline record at core's trace level.
 func TestShim_TraceReachesATraceGate(t *testing.T) {
 	var buf bytes.Buffer
-	lg := shimPipeline(t, &buf, map[string]slog.Level{"core.deep": corelog.LevelTrace})
+	lg := shimPipeline(t, &buf, map[string]slog.Level{"process.deep": corelog.LevelTrace})
 	l := &StandardLogger{minStdout: LevelTrace, base: lg.Root()}
 	l.With("deep").Trace("down %d", 3)
 	l.With("shallow").Trace("up")
