@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/resetapply.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: dca1f7d5-4bfe-4d11-a0dc-0941c34a8ebd
 // last-edited: 2026-11-08
 
@@ -69,10 +69,14 @@ func (s *Swapper) resumeReset(ctx context.Context, in restorejournal.Intent, rec
 // file's copy and set_aside_started (a failure there moved nothing, so the
 // reset is rejected at once, DATA10-4), then each target's idempotent
 // rename journaled as moved, then set_aside. A rename failure from
-// set_aside_started on moves every target back first (R9-6). moved holds
-// the targets an earlier boot journaled, which are not journaled again, and
-// a target that never existed (nothing at either name after its rename) is
-// not journaled at all (R1-21 review n1): one moved record per item moved.
+// set_aside_started on moves every target back first (R9-6). Every target's
+// rename runs on every resume: a moved record says the item was set aside
+// once, not where it is now, since a move-back killed before its rejected
+// record puts items back under their moved records (R1-21 review M6).
+// moved holds the targets an earlier boot journaled, whose record is not
+// written again, and a target that never existed (nothing at either name
+// after its rename) is not journaled at all (review n1): one moved record
+// per item set aside.
 func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last string, moved map[string]bool) (Outcome, error) {
 	seams := bootseam.From(ctx)
 	if last == StepStaged {
@@ -87,15 +91,15 @@ func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last 
 		}
 	}
 	for _, t := range in.Targets {
-		if moved[filepath.Clean(t.From)] {
-			continue
-		}
 		// Nothing but this set-aside writes a target's destination in the
 		// swap's private namespace, so in the crash model a second name
 		// there is a twin (memGhost); on the real filesystem mv proves it
 		// by identity.
 		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, t.From, t.To, memGhost) }); err != nil {
 			return s.moveBack(ctx, in, err)
+		}
+		if moved[filepath.Clean(t.From)] {
+			continue
 		}
 		if ok, err := exists(s.fs, t.To); err != nil {
 			return s.moveBack(ctx, in, err)
