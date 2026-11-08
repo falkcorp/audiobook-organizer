@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
 // last-edited: 2026-11-08
 
@@ -62,7 +62,7 @@ func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return fmt.Errorf("restorejournal: state directory %q is not an absolute path", stateDir)
 	}
-	if in.ID == "" || filepath.Base(in.ID) != in.ID || in.ID == "." || in.ID == ".." {
+	if !ValidID(in.ID) {
 		return fmt.Errorf("restorejournal: intent id %q is not one path segment", in.ID)
 	}
 	dir := Dir(stateDir)
@@ -160,11 +160,20 @@ func mkdirSyncedFS(fs vfs.FS, dir string) error {
 	return nil
 }
 
+// ValidID reports an intent id that names a directory of its own under
+// restore/: one path segment, not empty, "." or "..". Every reader and
+// writer of an intent checks it, since restore/.. is the state directory.
+func ValidID(id string) bool {
+	return id != "" && id != "." && id != ".." && filepath.Base(id) == id
+}
+
 // InFlightIDs lists the ids of every restore/<id>/inflight.json under
 // stateDir, sorted: the one in-flight probe (05-storage §5S.3.7 "reader
 // check", the sudoers find of the rollback guard). At most one exists under
 // the one-slot rule; a caller that finds more halts. A missing restore
-// directory is no swap.
+// directory is no swap, and a file in it (restore/rejected-<time>.json, a
+// temp) holds none: only a directory is probed, so the probe does not lean
+// on each filesystem's error for a path through a file.
 func InFlightIDs(fs vfs.FS, stateDir string) ([]string, error) {
 	dir := Dir(stateDir)
 	names, err := fs.List(dir)
@@ -178,6 +187,11 @@ func InFlightIDs(fs vfs.FS, stateDir string) ([]string, error) {
 	for _, n := range names {
 		if n == pendingName || n[0] == '.' {
 			continue
+		}
+		if di, err := fs.Stat(filepath.Join(dir, n)); errors.Is(err, os.ErrNotExist) || (err == nil && !di.IsDir()) {
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("restorejournal: probe %s: %w", filepath.Join(dir, n), err)
 		}
 		fi, err := fs.Stat(filepath.Join(dir, n, inflightName))
 		switch {
