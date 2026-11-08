@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_deferred_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 50ced779-c827-4b62-93cb-f6b631d3a60b
-// last-edited: 2026-10-06
+// last-edited: 2026-11-08
 
 package handlers
 
@@ -25,7 +25,6 @@ import (
 func TestLoadCacheRows_DeferredOnlyWithoutAUsableCandidate(t *testing.T) {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 	svc := metafetch.NewService(store)
 

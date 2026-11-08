@@ -1,5 +1,5 @@
 // file: main.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
 // last-edited: 2026-11-08
 
@@ -124,10 +124,13 @@ func run() int {
 	// The deploy and rollback recipes ask a binary what it supports before
 	// restarting it (scripts/deploy-match-unit-type.sh): `--print-capabilities`
 	// prints one token per line, and `sd_notify` means the binary sends
-	// READY=1, so it may run under the Type=notify unit. The flag is core's:
-	// app.FastExit answers it. Handled before cobra for the same stdout reason
-	// as --print-storage-format.
-	if handled, err := app.FastExit(os.Args, os.Stdout); handled {
+	// READY=1, so it may run under the Type=notify unit;
+	// `--print-storage-levels` prints the storage level vector this build
+	// serves, as JSON, from the manifests of the modules serve hands app.New
+	// (05-storage §5S.3.7). The flags are core's: app.FastExit answers them.
+	// Handled before cobra for the same stdout reason as
+	// --print-storage-format.
+	if handled, err := app.FastExit(os.Args, os.Stdout, books.Module()); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

@@ -1,5 +1,5 @@
 // file: internal/startup/steps_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 225d8029-438d-4ff7-9896-03d376746519
 // last-edited: 2026-11-08
 
@@ -25,7 +25,7 @@ import (
 func TestRun_FatalReturnsErrorAndRecordsNoToken(t *testing.T) {
 	st := New().SetErrorLog(t.Logf)
 	boom := errors.New("boom")
-	if err := st.Run("initializeStore", func() error { return boom }); !errors.Is(err, boom) {
+	if err := st.Run("EnsureSecureStateDir", func() error { return boom }); !errors.Is(err, boom) {
 		t.Fatalf("fatal step: got %v, want %v", err, boom)
 	}
 	if got := st.Tokens(); len(got) != 0 {
@@ -53,7 +53,7 @@ func TestRun_DegradedFailureIsLogged(t *testing.T) {
 		!strings.Contains(got[0], TokenSearchIndex) || !strings.Contains(got[0], "bleve closed") {
 		t.Fatalf("error log = %q", got)
 	}
-	_ = st.Run("initializeStore", func() error { return errors.New("fatal") })
+	_ = st.Run("EnsureSecureStateDir", func() error { return errors.New("fatal") })
 	if len(got) != 1 {
 		t.Fatalf("a fatal step logged through the degraded path: %q", got)
 	}

@@ -1,7 +1,7 @@
 // file: internal/scanner/save_book_to_database_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 0f1e2d3c-4b5a-6978-8899-aabbccddeeff
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -25,11 +25,6 @@ func setupPebbleStore(t *testing.T) (*database.PebbleStore, func()) {
 	store, err := database.NewPebbleStore(dbPath)
 	if err != nil {
 		t.Fatalf("create pebble store: %v", err)
-	}
-
-	// Run migrations to ensure schema is up-to-date
-	if err := database.RunMigrations(store); err != nil {
-		t.Fatalf("run migrations: %v", err)
 	}
 
 	return store, func() {

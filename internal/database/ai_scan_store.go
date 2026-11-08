@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.20.1
-// last-edited: 2026-10-19
+// version: 2.21.0
+// last-edited: 2026-11-08
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -8,6 +8,7 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -163,10 +164,6 @@ func NewAIScanStore(path string) (*AIScanStore, error) {
 
 	gated, closeDB := NewOwnedGatedDB(db)
 	store := &AIScanStore{db: gated, prefix: "", owned: true, closeDB: closeDB}
-	if err := store.initCounters(); err != nil {
-		db.Close()
-		return nil, err
-	}
 
 	slog.Info("AI Scan DB opened at", "path", path)
 	return store, nil
@@ -174,30 +171,11 @@ func NewAIScanStore(path string) (*AIScanStore, error) {
 
 // NewAIScanStoreFromDB creates an AIScanStore that shares an existing *GatedDB.
 // All keys are namespaced under "aiscan:" to avoid collisions. Close and Optimize
-// are no-ops — the caller owns the DB lifecycle.
+// are no-ops — the caller owns the DB lifecycle. It writes nothing: an absent
+// counter hands out 1 (nextID), so books' constructor, which builds this
+// store over the main store, commits no write (05-storage §5S.4 step 12).
 func NewAIScanStoreFromDB(db *GatedDB) (*AIScanStore, error) {
-	store := &AIScanStore{db: db, prefix: "aiscan:", owned: false}
-	if err := store.initCounters(); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-// initCounters ensures counter keys exist (value "1") if not already present.
-func (s *AIScanStore) initCounters() error {
-	for _, name := range []string{"scan", "scan_result"} {
-		k := s.k("counter:%s", name)
-		if _, closer, err := s.db.Get(k); err == pebble.ErrNotFound {
-			if err := s.db.Set(k, []byte("1"), pebble.Sync); err != nil {
-				return fmt.Errorf("failed to initialize counter %s: %w", name, err)
-			}
-		} else if err == nil {
-			closer.Close()
-		} else {
-			return fmt.Errorf("failed to check counter %s: %w", name, err)
-		}
-	}
-	return nil
+	return &AIScanStore{db: db, prefix: "aiscan:", owned: false}, nil
 }
 
 // k builds a prefixed key. Use like fmt.Sprintf but the prefix is prepended.
@@ -241,19 +219,22 @@ func (s *AIScanStore) CompactionStats() (stats CompactionStats, ok bool) {
 
 // nextID atomically reads and increments the counter for the given entity type.
 // idMu makes the read and the write one step for every caller of this store.
+// An absent counter hands out 1 (no store seeds its counters).
 func (s *AIScanStore) nextID(counter string) (int, error) {
 	s.idMu.Lock()
 	defer s.idMu.Unlock()
 	key := s.k("counter:%s", counter)
 
+	id := 1
 	value, closer, err := s.db.Get(key)
-	if err != nil {
-		return 0, err
-	}
-	defer closer.Close()
-
-	id, err := strconv.Atoi(string(value))
-	if err != nil {
+	switch {
+	case err == nil:
+		id, err = strconv.Atoi(string(value))
+		_ = closer.Close()
+		if err != nil {
+			return 0, err
+		}
+	case !errors.Is(err, pebble.ErrNotFound):
 		return 0, err
 	}
 

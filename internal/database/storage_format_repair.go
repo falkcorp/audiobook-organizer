@@ -1,7 +1,7 @@
 // file: internal/database/storage_format_repair.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c23ebb3-ad3d-4ea8-ae2e-8b1876ac7ef8
-// last-edited: 2026-10-04
+// last-edited: 2026-11-08
 
 package database
 
@@ -58,16 +58,19 @@ type ReservedPreferenceChange struct {
 	SidecarTouched       bool
 }
 
-// LatestMigrationVersion is the highest version in the migration registry.
-// `diagnostics reserved-prefs --set db_version=N` refuses anything above it:
-// a db_version past the last migration makes RunMigrations skip every
-// migration up to it, silently.
+// LatestMigrationVersion is the highest books migration version this build
+// registers: the legacy migrations (1..LegacyCap) and books' Migrations after
+// them, which core storage records in db_version too. `diagnostics
+// reserved-prefs --set db_version=N` refuses anything above it: core storage
+// refuses to open a store whose db_version is past the last migration with
+// no applied record for the versions in between.
 func LatestMigrationVersion() int {
 	latest := 0
 	for _, m := range migrations {
-		if m.Version > latest {
-			latest = m.Version
-		}
+		latest = max(latest, m.Version)
+	}
+	for _, m := range booksMigrations() {
+		latest = max(latest, m.Version)
 	}
 	return latest
 }

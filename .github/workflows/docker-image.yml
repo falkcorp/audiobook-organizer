@@ -1,7 +1,7 @@
 # file: .github/workflows/docker-image.yml
-# version: 1.0.2
+# version: 1.0.3
 # guid: b2699763-511a-4b87-bf7f-c52dc086fdcc
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # The `docker-image` required check (09 §9.2.1; R1-04): every PR builds the
 # production image and Dockerfile.build-cgo, starts the image and probes it. A
@@ -167,7 +167,7 @@ jobs:
       - name: Run 1, seeded volume, probe
         env:
           READY_TIMEOUT: '300'
-          PROBE_STORAGE_LEVELS: '0'
+          PROBE_STORAGE_LEVELS: '1'
           PROBE_BUILD_ID: '1'
         run: |
           set -eu
@@ -193,7 +193,7 @@ jobs:
       - name: Run 2, encryption key beside the database and kept across recreate
         env:
           READY_TIMEOUT: '300'
-          PROBE_STORAGE_LEVELS: '0'
+          PROBE_STORAGE_LEVELS: '1'
           PROBE_BUILD_ID: '1'
         run: |
           set -eu

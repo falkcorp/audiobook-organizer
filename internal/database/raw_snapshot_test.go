@@ -1,7 +1,7 @@
 // file: internal/database/raw_snapshot_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3f6d20-7a15-4c9e-b4e8-1d0a52c7f693
-// last-edited: 2026-10-21
+// last-edited: 2026-11-08
 
 package database
 
@@ -17,9 +17,9 @@ import (
 func TestRawSnapshot_IsPointInTime(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	require.NoError(t, p.ApplyRawBatch([]RawWrite{
-		{Key: "snap:a", Value: []byte("1")},
-		{Key: "snap:b", Value: []byte("2")},
-		{Key: "snap:c", Value: []byte("3")},
+		{Key: "quick_query_cache:snap:a", Value: []byte("1")},
+		{Key: "quick_query_cache:snap:b", Value: []byte("2")},
+		{Key: "quick_query_cache:snap:c", Value: []byte("3")},
 	}))
 
 	snap, err := p.NewRawSnapshot()
@@ -27,18 +27,18 @@ func TestRawSnapshot_IsPointInTime(t *testing.T) {
 	defer func() { require.NoError(t, snap.Close()) }()
 
 	require.NoError(t, p.ApplyRawBatch([]RawWrite{
-		{Key: "snap:a", Value: []byte("changed")},
-		{Key: "snap:b", Delete: true},
-		{Key: "snap:d", Value: []byte("4")},
+		{Key: "quick_query_cache:snap:a", Value: []byte("changed")},
+		{Key: "quick_query_cache:snap:b", Delete: true},
+		{Key: "quick_query_cache:snap:d", Value: []byte("4")},
 	}))
 
-	got, err := snap.GetRaw("snap:a")
+	got, err := snap.GetRaw("quick_query_cache:snap:a")
 	require.NoError(t, err)
 	require.Equal(t, []byte("1"), got)
-	got, err = snap.GetRaw("snap:b")
+	got, err = snap.GetRaw("quick_query_cache:snap:b")
 	require.NoError(t, err)
 	require.Equal(t, []byte("2"), got)
-	got, err = snap.GetRaw("snap:d")
+	got, err = snap.GetRaw("quick_query_cache:snap:d")
 	require.NoError(t, err)
 	require.Nil(t, got, "a key written after the snapshot opened must not exist in it")
 
@@ -46,7 +46,7 @@ func TestRawSnapshot_IsPointInTime(t *testing.T) {
 	var keys []string
 	after := ""
 	for {
-		pairs, next, err := snap.ScanPrefixPage("snap:", after, 2)
+		pairs, next, err := snap.ScanPrefixPage("quick_query_cache:snap:", after, 2)
 		require.NoError(t, err)
 		for _, kv := range pairs {
 			keys = append(keys, kv.Key)
@@ -56,9 +56,9 @@ func TestRawSnapshot_IsPointInTime(t *testing.T) {
 		}
 		after = next
 	}
-	require.Equal(t, []string{"snap:a", "snap:b", "snap:c"}, keys)
+	require.Equal(t, []string{"quick_query_cache:snap:a", "quick_query_cache:snap:b", "quick_query_cache:snap:c"}, keys)
 
-	live, err := p.GetRaw("snap:a")
+	live, err := p.GetRaw("quick_query_cache:snap:a")
 	require.NoError(t, err)
 	require.Equal(t, []byte("changed"), live)
 }

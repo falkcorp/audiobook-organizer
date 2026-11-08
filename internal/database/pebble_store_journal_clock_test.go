@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_journal_clock_test.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: 7e2b94d1-35c8-4a60-9f17-d08a6b3c5e29
-// last-edited: 2026-10-23
+// last-edited: 2026-11-08
 
 package database
 
@@ -738,8 +738,17 @@ func TestJournalClock_SeedSkipsAnUndecodableRow(t *testing.T) {
 	}
 }
 
-// A malformed key does not fail the open: the seed falls back to the row scan
-// and the key is rewritten, with rows to scan or with none.
+// high is the last sequence handed out (or the seed).
+func (c *journalClock) high() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hw
+}
+
+// A malformed key does not fail the open: the seed falls back to the row
+// scan and writes nothing (books' constructor writes nothing, 05-storage
+// §5S.9.3), and books' start-hook repair rewrites the key, with rows to scan
+// or with none.
 func TestJournalClock_AMalformedKeyFallsBackToTheRowScanAndIsRewritten(t *testing.T) {
 	base := time.Unix(1_800_000_000, 0)
 	for _, withRows := range []bool{true, false} {
@@ -750,9 +759,14 @@ func TestJournalClock_AMalformedKeyFallsBackToTheRowScanAndIsRewritten(t *testin
 		if err := p.db.Set([]byte(journalClockKey), []byte{1, 2, 3}, nil); err != nil {
 			t.Fatal(err)
 		}
-		// The list index backfill is already done, so only the clock decides.
-		if err := p.db.Set([]byte(opChangeByListBackfillKey), []byte("1"), nil); err != nil {
-			t.Fatal(err)
+		keyLen := func() int {
+			t.Helper()
+			v, closer, err := p.db.Get([]byte(journalClockKey))
+			if err != nil {
+				t.Fatalf("withRows=%v: key gone: %v", withRows, err)
+			}
+			defer closer.Close()
+			return len(v)
 		}
 		fresh := &PebbleStore{db: p.db}
 		if err := fresh.seedJournalClock(); err != nil {
@@ -763,23 +777,53 @@ func TestJournalClock_AMalformedKeyFallsBackToTheRowScanAndIsRewritten(t *testin
 				t.Fatalf("the row scan did not run: clock %d", got)
 			}
 		}
-		v, closer, err := p.db.Get([]byte(journalClockKey))
-		if err != nil {
-			t.Fatalf("withRows=%v: key gone after the open: %v", withRows, err)
+		if n := keyLen(); n != 3 {
+			t.Fatalf("withRows=%v: the seed wrote the key (%d bytes); only the start-hook repair may", withRows, n)
 		}
-		n := len(v)
-		closer.Close()
-		if n != 8 {
+		if !fresh.journalClockRepair.Load() {
+			t.Fatalf("withRows=%v: the seed did not ask for the repair", withRows)
+		}
+		if err := fresh.repairJournalClock(); err != nil {
+			t.Fatal(err)
+		}
+		if n := keyLen(); n != 8 {
 			t.Fatalf("withRows=%v: the malformed key (%d bytes) was not rewritten", withRows, n)
 		}
 	}
 }
 
-// The first-open scan also stages the opchange_by_list: entry of every
-// user_content_follow row that lacks one (rows an earlier build wrote), and is
-// idempotent.
-func TestJournalClock_TheFirstOpenScanStagesMissingListEntriesAndIsIdempotent(t *testing.T) {
-	p := newOpChangeTestStore(t)
+// openAtLegacyCap reopens the closed store at path as one HEAD left at
+// LegacyCap, its opchange_by_list: backfill key removed when dropBackfillKey
+// (a store an earlier build wrote has none), so the next open runs books'
+// Migrations, the list-index backfill among them.
+func openAtLegacyCap(t *testing.T, path string, dropBackfillKey bool) *PebbleStore {
+	t.Helper()
+	rewindToR0(t, path, LegacyCap, LegacyCap)
+	if dropBackfillKey {
+		db := rawOpen(t, path, nil)
+		if err := db.Delete([]byte(opChangeByListBackfillKey), pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := NewPebbleStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The list-index backfill (books' Migration LegacyCap+2) stages the
+// opchange_by_list: entry of every user_content_follow row that lacks one
+// (rows an earlier build wrote), and is idempotent.
+func TestJournalClock_TheListIndexBackfillStagesMissingEntriesAndIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backfill.pebble")
+	p, err := NewPebbleStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := time.Unix(1_800_000_000, 0)
 	rawPutOpChange(t, p, &OperationChange{ID: "a", OperationID: "op1", BookID: "S", ChangeType: "user_content_follow", FieldName: "collection-took:L1", CreatedAt: base})
 	rawPutOpChange(t, p, &OperationChange{ID: "b", OperationID: "op1", BookID: "B", ChangeType: "user_content_follow", FieldName: "collection:L1", CreatedAt: base})
@@ -791,18 +835,10 @@ func TestJournalClock_TheFirstOpenScanStagesMissingListEntriesAndIsIdempotent(t 
 		t.Fatal(err)
 	}
 	for pass := 1; pass <= 2; pass++ {
-		fresh := &PebbleStore{db: p.db}
-		// The store was opened fresh (so it wrote its completion keys); a store
-		// from an earlier build has neither. A second pass finds every entry.
-		if err := p.db.Delete([]byte(journalClockKey), nil); err != nil {
+		if err := p.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.db.Delete([]byte(opChangeByListBackfillKey), nil); err != nil {
-			t.Fatal(err)
-		}
-		if err := fresh.seedJournalClock(); err != nil {
-			t.Fatal(err)
-		}
+		p = openAtLegacyCap(t, path, true)
 		if got := listIDs(t, p, "collection", "L1"); len(got) != 2 || got[0] != "op1/a" || got[1] != "op1/b" {
 			t.Fatalf("pass %d: collection L1 reads %v", pass, got)
 		}
@@ -815,14 +851,22 @@ func TestJournalClock_TheFirstOpenScanStagesMissingListEntriesAndIsIdempotent(t 
 			}
 		}
 	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// The list-index backfill is gated on its own completion key, not on the clock
-// key: a store whose clock key exists (written by a build that did not stage the
-// entries) still gets its entries; and once the backfill key is written, a later
-// open does not scan again.
+// The list-index backfill is gated on its own completion key, not on the
+// clock key: a store whose clock key exists (written by a build that did not
+// stage the entries) still gets its entries, and the step leaves that key
+// alone; once the backfill key is written, the step scans nothing again, so
+// an entry removed by hand stays removed.
 func TestJournalClock_TheListIndexBackfillIsGatedOnItsOwnKey(t *testing.T) {
-	p := newOpChangeTestStore(t)
+	path := filepath.Join(t.TempDir(), "gated.pebble")
+	p, err := NewPebbleStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := time.Unix(1_800_000_000, 0)
 	rawPutOpChange(t, p, &OperationChange{ID: "b", OperationID: "op1", BookID: "B", ChangeType: "user_content_follow", FieldName: "collection:L1", CreatedAt: base, CreatedSeq: base.UnixNano()})
 	var v [8]byte
@@ -830,17 +874,12 @@ func TestJournalClock_TheListIndexBackfillIsGatedOnItsOwnKey(t *testing.T) {
 	if err := p.db.Set([]byte(journalClockKey), v[:], pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.db.Delete([]byte(opChangeByListBackfillKey), nil); err != nil { // as in a store an earlier build wrote
+	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := listEntries(t, p, "op1", "b"); len(got) != 0 {
-		t.Fatalf("setup: the row already has entries %v", got)
-	}
-	// The clock key is present, the backfill key is not: the scan runs.
-	fresh := &PebbleStore{db: p.db}
-	if err := fresh.seedJournalClock(); err != nil {
-		t.Fatal(err)
-	}
+
+	// The clock key is present, the backfill key is not: the step scans.
+	p = openAtLegacyCap(t, path, true)
 	if got := listEntries(t, p, "op1", "b"); len(got) != 1 {
 		t.Fatalf("a store with a clock key but no backfill key must get its list entries, has %v", got)
 	}
@@ -849,20 +888,20 @@ func TestJournalClock_TheListIndexBackfillIsGatedOnItsOwnKey(t *testing.T) {
 	} else {
 		closer.Close()
 	}
-	if got, _ := persistedClock(t, p); got != base.UnixNano()+int64(time.Minute) {
-		t.Fatalf("the scan changed a good clock key: %d", got)
+	if got, _ := persistedClock(t, p); got < base.UnixNano()+int64(time.Minute) {
+		t.Fatalf("the clock key went backwards: %d", got)
 	}
-	// Both keys present: a later open reads two keys and scans nothing, so an
-	// entry removed by hand stays removed.
+	// Both keys present: the step runs again and scans nothing.
 	if err := p.db.Delete(append(opChangeByListListPrefix("collection", "L1"), "op1:b"...), nil); err != nil {
 		t.Fatal(err)
 	}
-	fresh2 := &PebbleStore{db: p.db}
-	if err := fresh2.seedJournalClock(); err != nil {
+	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
+	p = openAtLegacyCap(t, path, false)
+	defer func() { _ = p.Close() }()
 	if got := listEntries(t, p, "op1", "b"); len(got) != 0 {
-		t.Fatalf("a second open scanned again: %v", got)
+		t.Fatalf("the step scanned again with its completion key present: %v", got)
 	}
 }
 

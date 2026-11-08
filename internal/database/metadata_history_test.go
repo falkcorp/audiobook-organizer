@@ -1,7 +1,7 @@
 // file: internal/database/metadata_history_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-14
+// last-edited: 2026-11-08
 
 package database
 
@@ -18,10 +18,6 @@ import (
 func setupTestDBWithMigrations(t *testing.T) (Store, func()) {
 	t.Helper()
 	store, cleanup := setupTestDB(t)
-	if err := RunMigrations(store); err != nil {
-		cleanup()
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 	return store, cleanup
 }
 

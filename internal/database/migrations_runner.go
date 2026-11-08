@@ -1,21 +1,20 @@
 // file: internal/database/migrations_runner.go
-// version: 1.0.2
+// version: 2.0.0
 // guid: 6c1acba7-c650-40dc-abf4-87f9cc8d5b35
 // last-edited: 2026-11-08
 
 package database
 
-import (
-	"fmt"
-	"strconv"
-	"time"
+import "time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
-)
-
-// migrationRunnerLog logs through internal/logger, which sanitizes values, rather than
-// calling log/slog directly (TestGuard_NoDirectSlogCalls).
-var migrationRunnerLog = logger.New("database.migrations")
+// Books' migrations run on core storage from release R1 (05-storage §5S.3.5):
+// versions 1..LegacyCap are books' LegacyMigrations (booksLegacySteps,
+// booksspec.go), each Up run by core over books' LegacyRange and then
+// recorded in a batch of its own, as HEAD did (not atomic, §5S.3.5
+// "Atomicity"), and later versions are books' Migrations (booksMigrations),
+// each one batch with its bookkeeping. HEAD's runner (RunMigrations) is gone: core reads the
+// applied version through books' VersionSource, which keeps HEAD's
+// db_version and migration_<n> rows, so R0 still reads them.
 
 // MigrationFunc represents a migration operation.
 //
@@ -23,10 +22,10 @@ var migrationRunnerLog = logger.New("database.migrations")
 //
 // An Up function MUST be idempotent: running it a second time against a store it
 // has already been applied to must succeed and must leave the database
-// byte-identical. RunMigrations will not knowingly replay an Up — a durable
-// applied-migration record short-circuits it — but the record write itself can
-// be lost to a crash on a store that cannot batch, so a replay is possible and
-// must be harmless.
+// byte-identical. Core will not knowingly replay an Up — books' VersionSource
+// counts a durable applied-migration record as applied (DB-02) — but a store
+// restored to an older point, or a record lost with its step, can replay one,
+// so a replay must be harmless.
 //
 // In practice this means: read the current state and skip rows that already have
 // the new shape, rather than rewriting unconditionally. An unconditional rewrite
@@ -40,7 +39,7 @@ type Migration struct {
 	Version     int
 	Description string
 	Up          MigrationFunc
-	Down        MigrationFunc // Optional rollback
+	Down        MigrationFunc // Optional rollback; never run by core storage
 }
 
 // MigrationRecord tracks applied migrations
@@ -54,71 +53,4 @@ type MigrationRecord struct {
 type DatabaseVersion struct {
 	Version   int       `json:"version"`
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// RunMigrations applies all pending migrations
-func RunMigrations(store migrationStore) error {
-	currentVersion, err := getCurrentVersion(store)
-	if err != nil {
-		return fmt.Errorf("failed to get current version: %w", err)
-	}
-
-	migrationRunnerLog.Info("current database version: %d", currentVersion)
-
-	// Find migrations to apply
-	pendingMigrations := []Migration{}
-	for _, m := range migrations {
-		if m.Version > currentVersion {
-			pendingMigrations = append(pendingMigrations, m)
-		}
-	}
-
-	if len(pendingMigrations) == 0 {
-		migrationRunnerLog.Info("database is up to date: version %d", currentVersion)
-		return nil
-	}
-
-	migrationRunnerLog.Info("applying %d migrations", len(pendingMigrations))
-
-	// Apply each migration
-	for _, m := range pendingMigrations {
-		// Replay safety (DB-02). An applied-migration record for a version the
-		// schema counter has not reached means a previous boot ran this Up to
-		// completion and then died before the version write landed. Re-running
-		// Up in that state is exactly the replay this guard exists to prevent:
-		// treat the migration as applied and only advance the version.
-		recorded, err := migrationAlreadyRecorded(store, m.Version)
-		if err != nil {
-			return fmt.Errorf("failed to check migration record %d: %w", m.Version, err)
-		}
-		if recorded {
-			migrationRunnerLog.Info("migration %d already recorded; advancing version without re-running: %s",
-				m.Version, logger.SanitizeLogValue(m.Description))
-			if err := setVersion(store, m.Version); err != nil {
-				return fmt.Errorf("failed to update version to %d: %w", m.Version, err)
-			}
-			continue
-		}
-
-		migrationRunnerLog.Info("applying migration %d: %s", m.Version, logger.SanitizeLogValue(m.Description))
-
-		// Each applied migration is real progress: give it its own start-time
-		// budget so a long run of migrations is not killed by TimeoutStartSec.
-		extendStartTimeout("migration " + strconv.Itoa(m.Version))
-		if err := m.Up(store); err != nil {
-			return fmt.Errorf("migration %d failed: %w", m.Version, err)
-		}
-
-		// Record the migration and advance the version as ONE durable write
-		// wherever the store can batch, so no crash window separates them.
-		if err := commitMigrationBookkeeping(store, m); err != nil {
-			return err
-		}
-
-		migrationRunnerLog.Info("migration %d completed", m.Version)
-	}
-
-	migrationRunnerLog.Info("all migrations completed: version %d", pendingMigrations[len(pendingMigrations)-1].Version)
-
-	return nil
 }
