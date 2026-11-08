@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_embed_context.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 65991395-4743-4674-ac13-5ce6e1a54129
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 """Tests for the embed-context check, core's half of it, the image probe and the
 docker-image workflow (R1-04; 03 §3.2 item 4; 09 §9.2.1 docker-image row).
 
@@ -705,10 +705,12 @@ class DockerImageWorkflowTests(unittest.TestCase):
         self.assertIn("/config/.encryption_key", w)
         self.assertIn("--db /config/x.pebble", w)
         self.assertIn("docker logs", w)
-        # the two optional probes are wired and off
+        # the build-ID probe is on in both runs (R1-19); the level probe is
+        # wired and still off until R1-23
         self.assertIn("PROBE_STORAGE_LEVELS", w)
-        self.assertIn("PROBE_BUILD_ID", w)
-        self.assertIsNone(re.search(r"PROBE_(STORAGE_LEVELS|BUILD_ID):\s*['\"]?1\b", w))
+        self.assertIsNone(re.search(r"PROBE_STORAGE_LEVELS:\s*['\"]?1\b", w))
+        self.assertEqual(len(re.findall(r"PROBE_BUILD_ID:\s*'1'", w)), 2)
+        self.assertIsNone(re.search(r"PROBE_BUILD_ID:\s*['\"]?0\b", w))
 
     def test_no_machine_specific_values(self):
         w = _workflow()
