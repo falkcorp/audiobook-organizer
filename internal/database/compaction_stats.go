@@ -1,7 +1,7 @@
 // file: internal/database/compaction_stats.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: e3014758-0b25-4fcb-8a87-c8b158b6be42
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package database
 
@@ -94,6 +94,9 @@ func (s CompactionStats) WrittenBytes() uint64 {
 func CollectCompactionStats(d *GatedDB) CompactionStats {
 	if d == nil {
 		return CompactionStats{Absent: true}
+	}
+	if d.onCore() {
+		return CompactionStats(d.coreCompactionStats())
 	}
 	m, err := d.Metrics()
 	if err != nil {

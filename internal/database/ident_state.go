@@ -1,7 +1,7 @@
 // file: internal/database/ident_state.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package database
 
@@ -1357,7 +1357,7 @@ func (p *PebbleStore) identReconcileBooks(parent context.Context, dryRun bool) (
 	}
 	// The writer committed NoSync; one synced write makes them durable
 	// before the marker can claim the index is built.
-	if err := p.db.LogData(nil, pebble.Sync); err != nil {
+	if err := p.db.Barrier(); err != nil {
 		return books, fixed, undecodable, fmt.Errorf("sync identification rebuild: %w", err)
 	}
 	return books, fixed, undecodable, nil
@@ -1478,7 +1478,7 @@ func (p *PebbleStore) identReconcileOrphans(ctx context.Context, dryRun bool) (r
 		}
 	}
 	if rows > 0 || keys > 0 {
-		if err := p.db.LogData(nil, pebble.Sync); err != nil {
+		if err := p.db.Barrier(); err != nil {
 			return rows, keys, err
 		}
 	}
