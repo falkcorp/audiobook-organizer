@@ -1,7 +1,7 @@
 # file: core/Makefile
-# version: 1.2.0
+# version: 1.3.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 
 # core's own Makefile (12 §12.3.11). It must run from an export of core/ alone
 # (12 SC4) and, after the split, the core repo has nothing else, so every
@@ -30,7 +30,7 @@ print-toolchain:
 ## root: per-module gates (build vet test-short fmt-check tidy-check, and the two
 ## ratchets over core's own baselines) run in both modules, `fix-check` runs
 ## here only, the rest of the root's `make ci` is root only. Gates whose subject
-## core does not have yet (web-test, mocks-check, coverage-floor) print one
+## core does not have yet (web-test, mocks-check) print one
 ## "not applicable" line and exit 0; each one fails loudly the moment its
 ## subject appears without the real check being wired, so "not applicable" can
 ## not outlive its reason.
@@ -48,8 +48,10 @@ build:
 vet:
 	go vet ./...
 
+## test-short: the -short suite under -race, writing coverage.out for
+## coverage-floor (one pass: -race and -coverprofile together).
 test-short:
-	go test ./... -short -race -count=1 -timeout 25m
+	go test ./... -short -race -count=1 -timeout 25m -coverprofile=coverage.out
 
 ## test-nightly: everything -short skips (property tests and the rest), for
 ## nightly.yml's core job. Not part of ci.
@@ -124,13 +126,23 @@ web-test:
 	fi
 	@echo "web-test: not applicable (no core/web yet)"
 
-## coverage-floor: core's coverage ratchet floor, from the storage move (R1-23).
-## No floor yet; refuses if a floor file appears before it is enforced.
+## coverage-floor: core's coverage ratchet floor, from the storage move (R1-23;
+## 12 §12.3 SC5, 09 §9.4 R1). The total of the coverage.out test-short wrote
+## must not fall below .ci/coverage-floor.txt, so ci runs the suite once. The
+## floor only rises: a PR that raises coverage raises it (ratchet-lower.yml's
+## core entry, todo.d). SC5's 70 % / 60 % targets are the readiness report's,
+## not this gate's. A missing profile, floor file or unreadable number fails.
 coverage-floor:
-	@if [ -e .ci/coverage-floor.txt ]; then \
-		echo "coverage-floor: .ci/coverage-floor.txt exists but this target does not enforce it; wire it"; exit 1; \
-	fi
-	@echo "coverage-floor: no floor yet"
+	@if [ ! -f coverage.out ]; then echo "coverage-floor: coverage.out not found; run make test-short first"; exit 1; fi
+	@if [ ! -f .ci/coverage-floor.txt ]; then echo "coverage-floor: .ci/coverage-floor.txt is missing"; exit 1; fi
+	@total=$$(go tool cover -func=coverage.out | awk '$$1 == "total:" { sub(/%/, "", $$3); print $$3 }'); \
+	floor=$$(tr -d '[:space:]' < .ci/coverage-floor.txt); \
+	case "$$total" in ''|*[!0-9.]*) echo "coverage-floor: could not read the total coverage (got '$$total')"; exit 1;; esac; \
+	case "$$floor" in ''|*[!0-9.]*) echo "coverage-floor: .ci/coverage-floor.txt is not a number (got '$$floor')"; exit 1;; esac; \
+	if awk -v t="$$total" -v f="$$floor" 'BEGIN { exit !(t + 0 < f + 0) }'; then \
+		echo "coverage-floor: core coverage $$total% is below the floor $$floor%"; exit 1; \
+	fi; \
+	echo "coverage-floor: core coverage $$total% meets the floor $$floor%"
 
 ## embed-check: every embed pattern of core resolves to a file, except a pattern
 ## naming a build output listed in scripts/ci/embed_build_outputs.txt (empty until
