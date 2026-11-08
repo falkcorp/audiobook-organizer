@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -60,9 +60,25 @@ type Config struct {
 	R1Values func() R1Values
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
-	// LogOutput is where the kernel's log.Logging writes; nil = os.Stderr.
-	// Ignored when Logger is set.
+	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
+	// core.log.output (os.Stderr by default). With Log.Output "file" it is
+	// instead the stream that also receives each line while
+	// Log.File.TeeStderr is true (nil = os.Stderr). Ignored when Logger is
+	// set.
 	LogOutput io.Writer
+	// Log is the core.log section until config lands (F3), which supplies it
+	// from the layers: nil = log.DefaultSettings(); a non-nil value is the
+	// whole section (build it from log.DefaultSettings()), and an invalid
+	// level, format or output fails boot (05-logging §6). An empty File.Path
+	// defaults to logs/<AppID>.log. Ignored when Logger is set. Release R1
+	// only: F3 deletes it.
+	Log *log.Settings
+	// LogDir is the directory the file output of Log (output "file") lives
+	// under, opened as an *os.Root: core.paths.state_dir, resolved by the app
+	// (05-logging §4 step 1). Required when Log.Output is "file"; unused
+	// otherwise. It is not Config.StateDir, whose presence turns on P0a (the
+	// pre-boot swap), which needs a store the log file does not.
+	LogDir string
 	// Notifier receives the readiness signals; nil = systemd's notify
 	// protocol over NOTIFY_SOCKET (a no-op while that is unset).
 	Notifier ReadinessNotifier
@@ -175,6 +191,7 @@ type Kernel struct {
 	redactor  *log.Redactor
 	provider  *metrics.Provider
 	scope     *metrics.Scope // "<namespace>.kernel"
+	logScope  *metrics.Scope // "<namespace>.log" (logmetrics.go); nil without a pipeline
 	bootPhase metric.Float64Gauge
 	router    *httpapi.Router
 	handler   http.Handler
@@ -182,6 +199,8 @@ type Kernel struct {
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
 	swap  *kernelSwap  // P0a on; nil when P0a did not run (swap.go)
 	build string       // the binary ID, once computed (swap.go)
+	// logClosers close the file output and its os.Root, after logging.
+	logClosers []io.Closer
 
 	hooks     []moduleHook
 	workers   []moduleWorker
@@ -262,6 +281,11 @@ func (k *Kernel) RootLogger() *slog.Logger {
 	}
 	return slog.New(slog.DiscardHandler)
 }
+
+// Logging is the App's log pipeline, for the taps and the process defaults
+// of the composition root. nil when the kernel adopted Config.Logger (tests);
+// the caller must not Close it, closeCore does.
+func (k *Kernel) Logging() *log.Logging { return k.logging }
 
 // CoreLogger is core's logger for one subsystem (module=core).
 func (k *Kernel) CoreLogger(subsystem string) *slog.Logger { return k.coreLog(subsystem) }
