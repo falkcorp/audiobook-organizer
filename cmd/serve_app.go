@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-08
 
@@ -46,10 +46,21 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 		return err
 	}
 	// A failure before Run leaves the server Register built with nothing to
-	// stop it: release it before the store closes. After the start hook has
-	// begun, Release does nothing.
-	defer books.Release(mod)
-	a, err := app.New(ctx, opts, mod)
+	// stop it, and the App's metrics Provider and logging open, so the OTLP
+	// export and the span batcher (the failing boot's last spans) would be
+	// dropped at exit. Release the server, then close the App, before the
+	// store closes: the order Run's own stop ends with (hooks, then core).
+	// Release after the start hook has begun, and Close after Run has begun,
+	// do nothing, because Run's stop order owns both, so this runs on every
+	// return.
+	var a *app.App
+	defer func() {
+		books.Release(mod)
+		if a != nil {
+			closeUnrunApp(a)
+		}
+	}()
+	a, err = app.New(ctx, opts, mod)
 	if err != nil {
 		return err
 	}
@@ -74,6 +85,18 @@ func runComposedApp(ctx context.Context, store database.Store, in books.ServeInp
 		serveLog.Error("books' stop hook was still running at the end of the shutdown budget; closing the store under it")
 	}
 	return runErr
+}
+
+// closeUnrunApp closes an App whose Run never began, releasing what New
+// built (06 §6.4.5), the metrics Provider among it, so its last OTLP export
+// and span batch are flushed rather than dropped at exit. After Run has
+// begun, App.Close does nothing and returns nil. No timeout is set here:
+// Close bounds itself with core.shutdown.budget (R1Values) and ignores ctx's
+// deadline, so a context bound would only read as one it does not have.
+func closeUnrunApp(a *app.App) {
+	if err := a.Close(context.Background()); err != nil {
+		serveLog.Warn("closing the app after a failed boot: %v", err)
+	}
 }
 
 // booksStopped reports whether books' server has finished its stop, without
