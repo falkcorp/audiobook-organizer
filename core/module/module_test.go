@@ -1,5 +1,5 @@
 // file: core/module/module_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2e0a9bf1-27de-4d08-af46-624ebc5146e5
 // last-edited: 2026-11-07
 
@@ -18,11 +18,12 @@ import (
 	"github.com/falkcorp/mediacore/log"
 )
 
-// TestReservedIDs_EqualsArchitectureRow: the union is 03 §3.6's row, and a
+// TestReservedIDs_EqualsArchitectureRow: the union of the four owner lists
+// (httpapi, ui, rbac, log) is 03 §3.6's row, and a
 // fresh slice per call.
 func TestReservedIDs_EqualsArchitectureRow(t *testing.T) {
 	want := []string{"activity", "api", "assets", "auth", "core", "custom", "events", "health", "invite",
-		"livez", "login", "metrics", "readyz", "settings", "setup", "static", "system", "ui", "users", "v<digits>"}
+		"livez", "login", "metrics", "process", "readyz", "settings", "setup", "static", "system", "ui", "users", "v<digits>"}
 	got := ReservedIDs()
 	if !slices.Equal(got, want) {
 		t.Fatalf("ReservedIDs() = %v\nwant %v", got, want)
@@ -37,7 +38,7 @@ func TestIDValid(t *testing.T) {
 	cases := map[ID]bool{
 		"batcave": true, "hello": true, "b2": true, "abcdefghijklmnop": true,
 		"": false, "b": false, "Batcave": false, "bat-cave": false, "2bat": false, "abcdefghijklmnopq": false,
-		"core": false, "api": false, "login": false, "v1": false, "v2026": false, "vigilante": true,
+		"core": false, "api": false, "login": false, "process": false, "v1": false, "v2026": false, "vigilante": true,
 	}
 	for id, want := range cases {
 		if got := id.Valid(); got != want {
