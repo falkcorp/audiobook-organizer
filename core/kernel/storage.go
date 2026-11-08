@@ -1,5 +1,5 @@
 // file: core/kernel/storage.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
 // last-edited: 2026-11-08
 
@@ -84,13 +84,18 @@ func (k *Kernel) openStorage(ctx context.Context) error {
 		return fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
 	}
 	opts := storage.OpenOptions{
-		Path:        k.cfg.StoragePath,
-		FS:          k.cfg.StorageFS,
-		Owners:      k.storageOwners(),
-		Build:       build,
-		Logger:      k.coreLog("storage"),
-		ExtendStart: k.extendStart(coreOwner),
-		Clock:       bootClock(ctx),
+		Path:         k.cfg.StoragePath,
+		FS:           k.cfg.StorageFS,
+		Owners:       k.storageOwners(),
+		Build:        build,
+		Logger:       k.coreLog("storage"),
+		ExtendStart:  k.extendStart(coreOwner),
+		Clock:        bootClock(ctx),
+		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
+		ClaimsShadow: k.cfg.StorageClaimsShadow,
+	}
+	if opts.ClaimsShadow {
+		k.log.Warn("kernel: core.storage.claims.mode=shadow: out-of-claim storage accesses are logged and allowed, not refused (the emergency dial; strict is the default)")
 	}
 	if err := k.swapBeforeOpen(ctx, &opts); err != nil {
 		return err
@@ -160,6 +165,15 @@ func (k *Kernel) storageHandles(id module.ID) module.StorageHandles {
 	return h
 }
 
+// StorageAdmin is the open store's admin surface, nil when no store is open.
+// Release R1 only (app.App.StorageAdmin says why).
+func (k *Kernel) StorageAdmin() *storage.Admin {
+	if k.store == nil || k.store.db == nil {
+		return nil
+	}
+	return k.store.db.Admin()
+}
+
 // storageMetrics records <namespace>_storage_level{owner,kind} and
 // <namespace>_storage_checkpoint_bytes{state} (05-storage §5S.8, 05-metrics
 // §12) once P5 has built the Provider: kernel code records them during the
@@ -170,7 +184,7 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	if k.store == nil || k.store.db == nil {
 		return nil
 	}
-	scope, err := k.provider.Core("storage", "owner", "kind", "state")
+	scope, err := k.provider.Core("storage", "owner", "kind", "state", "op", "mode")
 	if err != nil {
 		return fmt.Errorf("kernel: storage metrics scope: %w", err)
 	}
@@ -184,6 +198,21 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 		metric.WithDescription("Bytes held by pre-migration checkpoints, by state (05-storage §5S.3.12)."))
 	if err != nil {
 		return fmt.Errorf("kernel: storage checkpoint gauge: %w", err)
+	}
+	// <namespace>_storage_claim_violations_total{owner,op,mode} (§5S.8): the
+	// out-of-claim accesses storage refused, or the shadow dial allowed
+	// (§5S.9.4 step 2). A series appears from its first access.
+	db := k.store.db
+	if _, err := scope.Meter().Int64ObservableCounter(scope.Prefix()+".claim_violations",
+		metric.WithDescription("Out-of-claim storage accesses by owner and op class: refused under strict claims, allowed by the shadow dial core.storage.claims.mode=shadow (05-storage §5S.8, §5S.9.4 step 2)."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			for v, n := range db.ClaimViolations() {
+				o.Observe(int64(n), metric.WithAttributes(attribute.String("owner", string(v.Owner)),
+					attribute.String("op", v.Op), attribute.String("mode", v.Mode)))
+			}
+			return nil
+		})); err != nil {
+		return fmt.Errorf("kernel: storage claim violations counter: %w", err)
 	}
 	stored, supported := k.store.db.Levels()
 	for _, o := range slices.Sorted(maps.Keys(supported)) {
