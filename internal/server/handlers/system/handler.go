@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.5
+// version: 1.28.6
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -901,26 +901,18 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
 	}
 
-	// RestoreBackupIn (not RestoreBackup) so req.BackupFilename is only ever
-	// used as a directory-listing lookup key, never joined directly into a
-	// filesystem path -- see backup.RestoreBackupIn's doc comment (CodeQL
-	// go/path-injection: sanitizing the filename is not a credited barrier in
-	// this repo, only resolving it against os.ReadDir's own results is).
-	//
-	// distrustANNSnapshot is deferred, so it runs whether the restore
-	// finished, failed partway through the extraction, or panicked in it. It
-	// is skipped only when RestoreBackupIn refused before writing anything.
-	refused := false
-	defer func() {
-		if !refused {
-			h.distrustANNSnapshot(targetPath)
-		}
-	}()
-	if err := backup.RestoreBackupIn(backupConfig.BackupDir, safeFilename, targetPath, req.Verify); err != nil {
-		refused = backup.RefusedBeforeWriting(err)
-		// backup.RestoreBackupIn distinguishes two verify=true failure shapes,
-		// both fail-closed (no extraction performed) rather than silently
-		// restoring unverified:
+	// PrepareRestoreIn (not a path-taking variant) so req.BackupFilename is
+	// only ever used as a directory-listing lookup key, never joined directly
+	// into a filesystem path -- see backup.PrepareRestoreIn's doc comment
+	// (CodeQL go/path-injection: sanitizing the filename is not a credited
+	// barrier in this repo, only resolving it against os.ReadDir's own
+	// results is).
+	prepared, err := backup.PrepareRestoreIn(backupConfig.BackupDir, safeFilename, req.Verify)
+	if err != nil {
+		// PrepareRestoreIn writes nothing, so a refused restore leaves the HNSW
+		// snapshot's trust alone. It distinguishes two verify=true failure
+		// shapes, both fail-closed (no extraction performed) rather than
+		// silently restoring unverified:
 		//
 		//   - ErrChecksumMismatch: the archive's current bytes disagree with
 		//     the checksum recorded when it was created -- i.e. the request
@@ -933,8 +925,8 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		//     to compare against. 400: the caller's request cannot be
 		//     satisfied as specified.
 		//
-		// Any other error (missing file, corrupted archive structure, path
-		// escape, etc.) is still a 500 via httputil.InternalError, unchanged.
+		// Any other error (missing file, unreadable backup directory) is a
+		// 500 via httputil.InternalError.
 		switch {
 		case errors.Is(err, backup.ErrChecksumMismatch):
 			httputil.RespondWithConflict(c, err.Error())
@@ -946,9 +938,26 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		return
 	}
 
+	// The extraction below writes database files behind the write gate. The
+	// live HNSW store is marked diverged before its first write, not after
+	// it: the kernel's drain does not wait for handler goroutines, so a stop
+	// can run MarkCleanStop while this extraction is mid-write and the
+	// process can exit before this handler returns (R1-15 round-3 review,
+	// B1-r3). After the mark, such a stop refuses the marker, and a marker an
+	// earlier stop wrote is removed by the mark itself.
+	h.markANNSnapshotDiverged()
+	// The on-disk markers are removed after the extraction, deferred so that
+	// runs whether it finished, failed partway or panicked; run after it, the
+	// removal also catches a marker the archive itself carried.
+	defer h.removeANNCleanStopMarkers(targetPath)
+	if err := prepared.Extract(targetPath); err != nil {
+		httputil.InternalError(c, "failed to restore backup", err)
+		return
+	}
+
 	// Reaching here means either verify=false (verification not requested) or
-	// verify=true and the checksum matched -- backup.RestoreBackupIn returns an
-	// error in every other case, so "verified" always equals what was asked
+	// verify=true and the checksum matched -- backup.PrepareRestoreIn returns
+	// an error in every other case, so "verified" always equals what was asked
 	// for. The fields are included explicitly (rather than omitted) so a
 	// caller parsing the response, not just the server log, can tell whether
 	// verification actually happened.
@@ -963,26 +972,26 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 // annRestoreReason is the divergence reason a restore gives the HNSW store.
 const annRestoreReason = "a backup restore wrote database files the write gate did not see"
 
-// distrustANNSnapshot stops the HNSW snapshot from being trusted after a
-// restore into targetPath (R1-15 round-2 review, B1). Extraction writes
-// Pebble files with plain file writes, so the GatedDB verdict watch never
-// counts them, and the restored rows can differ from the graph in every way.
-//
-//   - It marks the live store diverged, so this run's stop writes no
-//     clean-stop marker. It does so for every target: a custom target can
-//     still be the live database directory under another spelling (a
-//     symlink, a bind mount), and the cost of a needless mark is one boot
-//     that reconciles the snapshot instead of trusting it.
-//   - It removes a marker in the snapshot directory of the live database
-//     and in that of the database the restore wrote. Run after the
-//     extraction, it also removes a marker the archive itself carried.
-//
-// Called on a failed restore too, since an extraction can fail after writing
-// some files, unless backup.RefusedBeforeWriting says nothing was written.
-func (h *Handler) distrustANNSnapshot(targetPath string) {
+// markANNSnapshotDiverged stops this run's stop from vouching for the HNSW
+// snapshot once a restore is about to write (R1-15 round-2 review B1, and
+// round-3 B1-r3 for when). Extraction writes Pebble files with plain file
+// writes, so the GatedDB verdict watch never counts them, and the restored
+// rows can differ from the graph in every way. It marks the live store for
+// every target: a custom target can still be the live database directory
+// under another spelling (a symlink, a bind mount), and the cost of a
+// needless mark is one boot that reconciles the snapshot instead of trusting
+// it.
+func (h *Handler) markANNSnapshotDiverged() {
 	if h.annDiverged != nil {
 		h.annDiverged(annRestoreReason)
 	}
+}
+
+// removeANNCleanStopMarkers removes a clean-stop marker in the snapshot
+// directory of the live database and in that of the database a restore into
+// targetPath wrote. RestoreBackup defers it past the extraction, so it also
+// removes a marker the archive carried.
+func (h *Handler) removeANNCleanStopMarkers(targetPath string) {
 	dbPath := config.AppConfig.DatabasePath
 	if dbPath == "" {
 		return
