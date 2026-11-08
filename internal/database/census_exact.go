@@ -1,7 +1,7 @@
 // file: internal/database/census_exact.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5d2b8e71-0c4a-4f3e-9b6d-2a7c1e8f4b90
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 package database
 
@@ -645,7 +645,7 @@ func (r *exactCensusRun) countRange(fam string, lo, hi []byte, c *exactFamilyCou
 		if err := r.ctx.Err(); err != nil {
 			return err
 		}
-		it, err := r.p.db.NewIter(&pebble.IterOptions{LowerBound: lo, UpperBound: hi})
+		it, err := r.p.db.newCensusIter(&pebble.IterOptions{LowerBound: lo, UpperBound: hi})
 		if err != nil {
 			return fmt.Errorf("exact census iterator: %w", err)
 		}

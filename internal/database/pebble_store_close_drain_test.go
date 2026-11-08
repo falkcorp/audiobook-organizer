@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_close_drain_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c2e9b14-5d3a-4f8e-9a61-2b0c4d8e7f35
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -166,25 +166,6 @@ func TestPebbleStoreClose_WaitsForInFlightReaders(t *testing.T) {
 		runCloseDrainCase(t, func(p *PebbleStore) (io.Closer, error) {
 			_, closer, err := p.db.Get([]byte("closedrain:001"))
 			return closer, err
-		})
-	})
-	t.Run("indexed batch iterator", func(t *testing.T) {
-		runCloseDrainCase(t, func(p *PebbleStore) (io.Closer, error) {
-			b := p.db.NewIndexedBatch()
-			it, err := b.NewIter(&pebble.IterOptions{})
-			if err != nil {
-				_ = b.Close()
-				return nil, err
-			}
-			it.First()
-			return closerFunc(func() error {
-				ierr := it.Close()
-				berr := b.Close()
-				if ierr != nil {
-					return ierr
-				}
-				return berr
-			}), nil
 		})
 	})
 }
@@ -525,7 +506,7 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 		"Set":         func() error { return p.db.Set([]byte("lease:a"), []byte("v"), pebble.NoSync) },
 		"Delete":      func() error { return p.db.Delete([]byte("lease:a"), pebble.NoSync) },
 		"DeleteRange": func() error { return p.db.DeleteRange([]byte("lease:a"), []byte("lease:b"), pebble.NoSync) },
-		"LogData":     func() error { return p.db.LogData([]byte("x"), pebble.NoSync) },
+		"Barrier":     p.db.Barrier,
 		"SyncWAL":     p.db.SyncWAL,
 		"Flush":       p.db.Flush,
 		"Metrics":     func() error { _, err := p.db.Metrics(); return err },
@@ -550,27 +531,6 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 				return err
 			}
 			return c.Close()
-		},
-		"IndexedBatch.NewIter": func() error {
-			b := p.db.NewIndexedBatch()
-			defer func() { _ = b.Close() }()
-			it, err := b.NewIter(&pebble.IterOptions{})
-			if err != nil {
-				return err
-			}
-			return it.Close()
-		},
-		"Iter.Clone": func() error {
-			it, err := p.db.NewIter(&pebble.IterOptions{})
-			if err != nil {
-				return err
-			}
-			c, err := it.Clone(pebble.CloneOptions{})
-			if err != nil {
-				_ = it.Close()
-				return err
-			}
-			return errors.Join(c.Close(), it.Close())
 		},
 	}
 	for name, call := range calls {

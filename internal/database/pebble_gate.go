@@ -1,7 +1,7 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // THE INVARIANT THIS FILE ENFORCES: pebble's DB.Close must never run while
@@ -324,11 +325,17 @@ type gatedReader interface {
 	NewIter(o *pebble.IterOptions) (*GatedIter, error)
 }
 
-// GatedDB is the only handle to a store's pebble engine. It exposes the
-// subset of *pebble.DB the codebase uses, with every call leased against the
-// gate so Close can wait for it. See the file comment for the invariant.
+// GatedDB is the only handle to a store's engine. It exposes the subset of
+// *pebble.DB the codebase uses, with every call leased against the gate so
+// Close can wait for it. See the file comment for the invariant.
+//
+// It has two backends. The raw backend (db) is an engine its store opened
+// itself: the AI scan store and the OpenLibrary cache. The core backend (lr)
+// is books' claims on the main store, which core storage opens from release
+// R1 (legacyrange.go). Exactly one is set.
 type GatedDB struct {
 	db   *pebble.DB
+	lr   *legacyBackend
 	gate *dbGate
 }
 
@@ -345,6 +352,13 @@ func NewGatedDB(db *pebble.DB) *GatedDB {
 // function that closes it: drain (bounded by timeout), sync, then close. The
 // close function is separate from the handle on purpose: borrowers get the
 // *GatedDB, and only the owner can close what they borrowed.
+func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error) {
+	d := NewGatedDB(db)
+	return d, d.ownedClose()
+}
+
+// ownedClose is the close function of a store that owns d's engine (raw) or
+// the core DB behind d (a standalone core open).
 //
 // A close that times out (an access outlived the drain, or a WAL sync is
 // stuck) syncs what it can, leaves the engine OPEN and returns an error. That
@@ -360,13 +374,12 @@ func NewGatedDB(db *pebble.DB) *GatedDB {
 // is not used; the attempt in flight is the one that answers it. A call made
 // after an attempt has finished is a new attempt, so a failed close is still
 // retried by the next call.
-func NewOwnedGatedDB(db *pebble.DB) (*GatedDB, func(timeout time.Duration) error) {
-	d := NewGatedDB(db)
+func (d *GatedDB) ownedClose() func(timeout time.Duration) error {
 	var mu sync.Mutex // guards the three fields below
 	var closed bool
 	var result error
 	var inflight *closeAttempt
-	return d, func(timeout time.Duration) error {
+	return func(timeout time.Duration) error {
 		mu.Lock()
 		if closed {
 			defer mu.Unlock()
@@ -419,10 +432,20 @@ type closeAttempt struct {
 	err  error
 }
 
-// Get reads key. The returned closer holds a lease until it is closed.
+// Get reads key. On the raw backend the returned closer holds a lease until
+// it is closed; on the core backend the value is a copy and the closer is a
+// no-op.
 func (d *GatedDB) Get(key []byte) ([]byte, io.Closer, error) {
 	if err := d.gate.acquire(); err != nil {
 		return nil, nil, err
+	}
+	if d.lr != nil {
+		defer d.gate.release()
+		v, err := d.lr.r.Get(context.Background(), key)
+		if err != nil {
+			return nil, nil, legacyErr(err)
+		}
+		return v, nopCloser{}, nil
 	}
 	v, c, err := d.db.Get(key)
 	if err != nil {
@@ -438,6 +461,9 @@ func (d *GatedDB) Set(key, value []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		return d.lr.write(opts, func(b *storage.Batch) error { return b.Set(key, value) })
+	}
 	return d.db.Set(key, value, opts)
 }
 
@@ -447,48 +473,55 @@ func (d *GatedDB) Delete(key []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		return d.lr.write(opts, func(b *storage.Batch) error { return b.Delete(key) })
+	}
 	return d.db.Delete(key, opts)
 }
 
-// DeleteRange removes [start, end).
+// DeleteRange removes [start, end). On the core backend the whole range must
+// resolve to books' claims.
 func (d *GatedDB) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
 	if err := d.gate.acquire(); err != nil {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		return d.lr.write(opts, func(b *storage.Batch) error { return b.DeleteRange(start, end) })
+	}
 	return d.db.DeleteRange(start, end, opts)
 }
 
-// Merge merges value into key.
-func (d *GatedDB) Merge(key, value []byte, opts *pebble.WriteOptions) error {
-	if err := d.gate.acquire(); err != nil {
-		return err
-	}
-	defer d.gate.release()
-	return d.db.Merge(key, value, opts)
-}
-
-// LogData writes data to the WAL only. For a sync-only record use SyncWAL,
-// which is admitted while Close drains.
-func (d *GatedDB) LogData(data []byte, opts *pebble.WriteOptions) error {
-	if err := d.gate.acquire(); err != nil {
-		return err
-	}
-	defer d.gate.release()
-	return d.db.LogData(data, opts)
-}
-
 // SyncWAL makes every record committed so far durable (an fsync'd empty WAL
-// record; the sequential WAL cannot persist it before the NoSync records
-// ahead of it). It is admitted while Close drains, so a writer whose commit
-// landed before Close began still gets its sync; it is refused only once the
-// gate is sealed, right before the engine closes (which flushes the WAL
-// itself).
+// record, or core's WAL barrier; the sequential WAL cannot persist it before
+// the NoSync records ahead of it). It is admitted while Close drains, so a
+// writer whose commit landed before Close began still gets its sync; it is
+// refused only once the gate is sealed, right before the engine closes
+// (which flushes the WAL itself).
 func (d *GatedDB) SyncWAL() error {
 	if err := d.gate.acquireSync(); err != nil {
 		return err
 	}
 	defer d.gate.release()
+	return d.syncWALLeased()
+}
+
+// Barrier makes every record committed so far durable, like SyncWAL, under an
+// ordinary lease: refused once Close begins (HEAD's LogData(nil, Sync), which
+// writers that committed NoSync use before a marker claims their rows exist).
+func (d *GatedDB) Barrier() error {
+	if err := d.gate.acquire(); err != nil {
+		return err
+	}
+	defer d.gate.release()
+	return d.syncWALLeased()
+}
+
+// syncWALLeased is the WAL sync itself, for a caller holding a lease.
+func (d *GatedDB) syncWALLeased() error {
+	if d.lr != nil {
+		return legacyErr(d.lr.r.Barrier(context.Background()))
+	}
 	return d.db.LogData(nil, pebble.Sync)
 }
 
@@ -498,29 +531,61 @@ func (d *GatedDB) Flush() error {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		a, err := d.lr.adminOf()
+		if err != nil {
+			return err
+		}
+		return legacyErr(a.Flush(context.Background()))
+	}
 	return d.db.Flush()
 }
 
-// Compact compacts [start, end).
+// Compact compacts [start, end). The core backend always allows parallel
+// compactions (storage.Admin.Compact).
 func (d *GatedDB) Compact(ctx context.Context, start, end []byte, parallelize bool) error {
 	if err := d.gate.acquire(); err != nil {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		a, err := d.lr.adminOf()
+		if err != nil {
+			return err
+		}
+		return legacyErr(a.Compact(ctx, start, end))
+	}
 	return d.db.Compact(ctx, start, end, parallelize)
 }
 
-// Checkpoint writes a consistent copy of the engine to destDir.
+// Checkpoint writes a consistent copy of the engine to destDir. The core
+// backend takes core's checkpoint (storage.Admin.Checkpoint), which takes no
+// pebble options.
 func (d *GatedDB) Checkpoint(destDir string, opts ...pebble.CheckpointOption) error {
 	if err := d.gate.acquire(); err != nil {
 		return err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		if len(opts) > 0 {
+			return errors.New("pebble store: checkpoint options are not supported on core storage")
+		}
+		a, err := d.lr.adminOf()
+		if err != nil {
+			return err
+		}
+		return legacyErr(a.Checkpoint(context.Background(), destDir))
+	}
 	return d.db.Checkpoint(destDir, opts...)
 }
 
-// Metrics returns the engine's metrics, or errStoreClosing once Close began.
+// Metrics returns the raw engine's metrics, or errStoreClosing once Close
+// began. The core backend has no pebble.Metrics; its figures come through
+// engineSample and compactionStats instead.
 func (d *GatedDB) Metrics() (*pebble.Metrics, error) {
+	if d.lr != nil {
+		return nil, errors.New("pebble store: engine metrics of the store core storage opened come from storage.Admin")
+	}
 	if err := d.gate.acquire(); err != nil {
 		return nil, err
 	}
@@ -528,8 +593,49 @@ func (d *GatedDB) Metrics() (*pebble.Metrics, error) {
 	return d.db.Metrics(), nil
 }
 
-// SSTables lists the engine's sstables.
+// coreEngineSample is the core backend's engine counters (storage.Admin),
+// for the Pebble collector and the census's flush check. The raw backend
+// reads Metrics instead.
+func (d *GatedDB) coreEngineSample() (storage.EngineSample, error) {
+	if d.lr == nil {
+		return storage.EngineSample{}, errors.New("pebble store: coreEngineSample on the raw backend")
+	}
+	if err := d.gate.acquire(); err != nil {
+		return storage.EngineSample{}, err
+	}
+	defer d.gate.release()
+	a, err := d.lr.adminOf()
+	if err != nil {
+		return storage.EngineSample{}, err
+	}
+	s, err := a.EngineSample()
+	return s, legacyErr(err)
+}
+
+// coreCompactionStats is the core backend's compaction counters
+// (storage.Admin); Absent when the store is closing or the admin surface is
+// not attached.
+func (d *GatedDB) coreCompactionStats() storage.CompactionStats {
+	if d.lr == nil {
+		return storage.CompactionStats{Absent: true}
+	}
+	if err := d.gate.acquire(); err != nil {
+		return storage.CompactionStats{Absent: true}
+	}
+	defer d.gate.release()
+	a, err := d.lr.adminOf()
+	if err != nil {
+		return storage.CompactionStats{Absent: true}
+	}
+	return a.CompactionStats()
+}
+
+// SSTables lists the engine's sstables (raw backend only: errNoSSTables on
+// the core backend).
 func (d *GatedDB) SSTables(opts ...pebble.SSTablesOption) ([][]pebble.SSTableInfo, error) {
+	if d.lr != nil {
+		return nil, errNoSSTables
+	}
 	if err := d.gate.acquire(); err != nil {
 		return nil, err
 	}
@@ -543,21 +649,57 @@ func (d *GatedDB) EstimateDiskUsage(start, end []byte) (uint64, error) {
 		return 0, err
 	}
 	defer d.gate.release()
+	if d.lr != nil {
+		a, err := d.lr.adminOf()
+		if err != nil {
+			return 0, err
+		}
+		n, err := a.EstimateDiskUsage(start, end)
+		return n, legacyErr(err)
+	}
 	return d.db.EstimateDiskUsage(start, end)
 }
 
 // FormatMajorVersion reports the engine's format version. It reads a field
-// set at open, so it takes no lease.
+// set at open, so it takes no lease. Core pins the same format as ABO
+// (PebbleFormatMajorVersion) and ratchets the store to it before anything
+// reads it, so the core backend reports that.
 func (d *GatedDB) FormatMajorVersion() pebble.FormatMajorVersion {
+	if d.lr != nil {
+		return PebbleFormatMajorVersion
+	}
 	return d.db.FormatMajorVersion()
 }
 
 // NewIter opens an iterator that holds a lease until it is closed.
 func (d *GatedDB) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
+	return d.newIter(o, false)
+}
+
+// newCensusIter is NewIter for the exact census: on the core backend its
+// Stats also count the value bytes of every entry it lands on (the raw
+// engine counts them itself), at the cost of reading each value.
+func (d *GatedDB) newCensusIter(o *pebble.IterOptions) (*GatedIter, error) {
+	return d.newIter(o, true)
+}
+
+func (d *GatedDB) newIter(o *pebble.IterOptions, countValues bool) (*GatedIter, error) {
 	if err := d.gate.acquire(); err != nil {
 		return nil, err
 	}
-	it, err := d.db.NewIter(o)
+	var (
+		it  iterBackend
+		err error
+	)
+	if d.lr != nil {
+		it, err = legacyIterOver(o, countValues, func(so storage.ScanOptions) (*storage.Iterator, error) {
+			return d.lr.r.NewIterator(context.Background(), so)
+		})
+	} else {
+		var pit *pebble.Iterator
+		pit, err = d.db.NewIter(o)
+		it = pit
+	}
 	if err != nil {
 		d.gate.release()
 		return nil, err
@@ -565,13 +707,32 @@ func (d *GatedDB) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 	return &GatedIter{it: it, gate: d.gate}, nil
 }
 
+// legacyIterOver opens a core iterator with o's bounds through open.
+func legacyIterOver(o *pebble.IterOptions, countValues bool, open func(storage.ScanOptions) (*storage.Iterator, error)) (*legacyIter, error) {
+	so, err := scanOptions(o)
+	if err != nil {
+		return nil, err
+	}
+	return newLegacyIter(func(start, end []byte) (*storage.Iterator, error) {
+		return open(storage.ScanOptions{Start: start, End: end})
+	}, so.Start, so.End, countValues)
+}
+
 // NewSnapshot opens a snapshot that holds a lease until it is closed. Once
-// Close has begun it returns a snapshot whose reads all fail with
-// errStoreClosing and whose Close is a no-op, so the signature stays
-// error-free like pebble's.
+// Close has begun (or the core snapshot cannot be taken) it returns a
+// snapshot whose reads all fail with that error and whose Close is a no-op,
+// so the signature stays error-free like pebble's.
 func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 	if err := d.gate.acquire(); err != nil {
 		return &GatedSnapshot{gate: d.gate, err: err}
+	}
+	if d.lr != nil {
+		ls, err := d.lr.r.Snapshot()
+		if err != nil {
+			d.gate.release()
+			return &GatedSnapshot{gate: d.gate, err: legacyErr(err)}
+		}
+		return &GatedSnapshot{lsnap: ls, gate: d.gate}
 	}
 	return &GatedSnapshot{snap: d.db.NewSnapshot(), gate: d.gate}
 }
@@ -579,13 +740,26 @@ func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 // NewBatch returns a write-only batch. Building it holds no lease; Commit
 // does.
 func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
+	if d.lr != nil {
+		return &GatedBatch{lb: d.lr.r.NewBatch(), gate: d.gate}
+	}
 	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate}
 }
 
 // NewIndexedBatch returns a batch that can also be read. Building it holds no
-// lease; Commit, Get and each iterator do.
+// lease; Commit and Get do.
 func (d *GatedDB) NewIndexedBatch() *GatedBatch {
-	return &GatedBatch{b: d.db.NewIndexedBatch(), gate: d.gate}
+	if d.lr != nil {
+		return &GatedBatch{lb: d.lr.r.NewIndexedBatch(), indexed: true, gate: d.gate}
+	}
+	return &GatedBatch{b: d.db.NewIndexedBatch(), indexed: true, gate: d.gate}
+}
+
+// newRecordingBatch returns a batch that only records its writes, for
+// staging that is replayed into other batches with Apply. It touches no
+// engine, so it needs no lease and works the same on both backends.
+func (d *GatedDB) newRecordingBatch() *GatedBatch {
+	return &GatedBatch{rec: &[]batchOp{}, gate: d.gate}
 }
 
 // syncWALForShutdown fsyncs the WAL, waiting no longer than deadline. Only
@@ -604,7 +778,7 @@ func (d *GatedDB) syncWALForShutdown(stage string, deadline time.Time) error {
 	res := make(chan error, 1)
 	go func() {
 		defer d.gate.release()
-		res <- d.db.LogData(nil, pebble.Sync)
+		res <- d.syncWALLeased()
 	}()
 	t := time.NewTimer(max(time.Until(deadline), 0))
 	defer t.Stop()
@@ -682,8 +856,19 @@ func (d *GatedDB) runShutdownHook(stage shutdownStage) {
 	}
 }
 
-// closeEngine closes the engine. Only after drainAndSeal, and never twice.
-func (d *GatedDB) closeEngine() error { return d.db.Close() }
+// closeEngine closes the engine. Only after drainAndSeal, and never twice. On
+// the core backend it closes the core DB a standalone opener opened, and does
+// nothing when the kernel owns the store (the kernel closes it after every
+// module has stopped).
+func (d *GatedDB) closeEngine() error {
+	if d.lr != nil {
+		if d.lr.closeStore == nil {
+			return nil
+		}
+		return d.lr.closeStore()
+	}
+	return d.db.Close()
+}
 
 // gatedCloser releases a Get's lease after the engine closer runs.
 type gatedCloser struct {
@@ -701,16 +886,16 @@ func (g *gatedCloser) Close() error {
 	return err
 }
 
-// GatedIter is a pebble iterator holding a gate lease. Its positioning and
-// read methods forward to pebble unchanged; Close releases the lease after
-// the engine iterator is closed, at most once however many times Close runs.
+// GatedIter is an iterator holding a gate lease. Its positioning and read
+// methods forward to the backend unchanged; Close releases the lease after
+// the backend iterator is closed, at most once however many times Close runs.
 type GatedIter struct {
-	it   *pebble.Iterator
+	it   iterBackend
 	gate *dbGate
 	done atomic.Bool
 }
 
-// Close closes the engine iterator, then releases the lease.
+// Close closes the backend iterator, then releases the lease.
 func (it *GatedIter) Close() error {
 	if !it.done.CompareAndSwap(false, true) {
 		return nil
@@ -720,22 +905,8 @@ func (it *GatedIter) Close() error {
 	return err
 }
 
-// Clone clones the iterator under a lease of its own (a clone pins its own
-// readState).
-func (it *GatedIter) Clone(opts pebble.CloneOptions) (*GatedIter, error) {
-	if err := it.gate.acquire(); err != nil {
-		return nil, err
-	}
-	c, err := it.it.Clone(opts)
-	if err != nil {
-		it.gate.release()
-		return nil, err
-	}
-	return &GatedIter{it: c, gate: it.gate}, nil
-}
-
-// First, Last, Next, Prev, SeekGE, SeekLT, SeekPrefixGE, Valid, Key, Value,
-// ValueAndErr, Error, SetBounds, Stats and ResetStats forward to pebble.
+// First, Last, Next, Prev, SeekGE, SeekLT, Valid, Key, Value, ValueAndErr,
+// Error, SetBounds, Stats and ResetStats forward to the backend.
 
 func (it *GatedIter) First() bool                   { return it.it.First() }
 func (it *GatedIter) Last() bool                    { return it.it.Last() }
@@ -743,7 +914,6 @@ func (it *GatedIter) Next() bool                    { return it.it.Next() }
 func (it *GatedIter) Prev() bool                    { return it.it.Prev() }
 func (it *GatedIter) SeekGE(key []byte) bool        { return it.it.SeekGE(key) }
 func (it *GatedIter) SeekLT(key []byte) bool        { return it.it.SeekLT(key) }
-func (it *GatedIter) SeekPrefixGE(key []byte) bool  { return it.it.SeekPrefixGE(key) }
 func (it *GatedIter) Valid() bool                   { return it.it.Valid() }
 func (it *GatedIter) Key() []byte                   { return it.it.Key() }
 func (it *GatedIter) Value() []byte                 { return it.it.Value() }
@@ -753,13 +923,14 @@ func (it *GatedIter) SetBounds(lower, upper []byte) { it.it.SetBounds(lower, upp
 func (it *GatedIter) Stats() pebble.IteratorStats   { return it.it.Stats() }
 func (it *GatedIter) ResetStats()                   { it.it.ResetStats() }
 
-// GatedSnapshot is a pebble snapshot holding a gate lease until Close. Its
+// GatedSnapshot is a snapshot holding a gate lease until Close. Its
 // iterators and Gets take leases of their own.
 type GatedSnapshot struct {
-	snap *pebble.Snapshot
-	gate *dbGate
-	err  error // non-nil: opened after Close began; every read fails with it
-	done atomic.Bool
+	snap  *pebble.Snapshot  // raw backend
+	lsnap *storage.Snapshot // core backend
+	gate  *dbGate
+	err   error // non-nil: opened after Close began; every read fails with it
+	done  atomic.Bool
 }
 
 // Get reads key as of the snapshot.
@@ -769,6 +940,14 @@ func (s *GatedSnapshot) Get(key []byte) ([]byte, io.Closer, error) {
 	}
 	if err := s.gate.acquire(); err != nil {
 		return nil, nil, err
+	}
+	if s.lsnap != nil {
+		defer s.gate.release()
+		v, err := s.lsnap.Get(context.Background(), key)
+		if err != nil {
+			return nil, nil, legacyErr(err)
+		}
+		return v, nopCloser{}, nil
 	}
 	v, c, err := s.snap.Get(key)
 	if err != nil {
@@ -786,7 +965,19 @@ func (s *GatedSnapshot) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 	if err := s.gate.acquire(); err != nil {
 		return nil, err
 	}
-	it, err := s.snap.NewIter(o)
+	var (
+		it  iterBackend
+		err error
+	)
+	if s.lsnap != nil {
+		it, err = legacyIterOver(o, false, func(so storage.ScanOptions) (*storage.Iterator, error) {
+			return s.lsnap.NewIterator(context.Background(), so)
+		})
+	} else {
+		var pit *pebble.Iterator
+		pit, err = s.snap.NewIter(o)
+		it = pit
+	}
 	if err != nil {
 		s.gate.release()
 		return nil, err
@@ -799,33 +990,64 @@ func (s *GatedSnapshot) Close() error {
 	if s.err != nil || !s.done.CompareAndSwap(false, true) {
 		return nil
 	}
-	err := s.snap.Close()
+	var err error
+	if s.lsnap != nil {
+		err = legacyErr(s.lsnap.Close())
+	} else {
+		err = s.snap.Close()
+	}
 	s.gate.release()
 	return err
 }
 
-// GatedBatch is a pebble batch. Its engine-touching methods (Commit, and Get
-// / NewIter on an indexed batch) hold a gate lease for their duration; its
-// build methods are process memory and forward to pebble without one.
+// GatedBatch is a batch. Its engine-touching methods (Commit, and Get on an
+// indexed batch) hold a gate lease for their duration; its build methods are
+// process memory and forward without one. It has three backends: a pebble
+// batch (raw), a core batch over books' claims (core), or a recording of its
+// writes (newRecordingBatch), which can only be replayed into another batch
+// with Apply.
 type GatedBatch struct {
-	b    *pebble.Batch
-	gate *dbGate
+	b       *pebble.Batch
+	lb      *storage.Batch
+	rec     *[]batchOp
+	indexed bool
+	gate    *dbGate
 }
+
+// errRecordingBatch is returned by an engine call on a recording batch.
+var errRecordingBatch = errors.New("pebble store: a recording batch only replays into another batch")
 
 // Commit applies the batch to the engine.
 func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
+	if b.rec != nil {
+		return errRecordingBatch
+	}
 	if err := b.gate.acquire(); err != nil {
 		return err
 	}
 	defer b.gate.release()
+	if b.lb != nil {
+		return legacyErr(b.lb.Commit(context.Background(), durability(o)))
+	}
 	return b.b.Commit(o)
 }
 
 // Get reads key through an indexed batch: the batch's own writes over the
 // engine.
 func (b *GatedBatch) Get(key []byte) ([]byte, io.Closer, error) {
+	if b.rec != nil {
+		return nil, nil, errRecordingBatch
+	}
 	if err := b.gate.acquire(); err != nil {
 		return nil, nil, err
+	}
+	if b.lb != nil {
+		defer b.gate.release()
+		v, err := b.lb.Get(context.Background(), key)
+		if err != nil {
+			return nil, nil, legacyErr(err)
+		}
+		return v, nopCloser{}, nil
 	}
 	v, c, err := b.b.Get(key)
 	if err != nil {
@@ -835,42 +1057,109 @@ func (b *GatedBatch) Get(key []byte) ([]byte, io.Closer, error) {
 	return v, &gatedCloser{c: c, gate: b.gate}, nil
 }
 
-// NewIter opens an iterator over an indexed batch merged with the engine.
-func (b *GatedBatch) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
-	if err := b.gate.acquire(); err != nil {
-		return nil, err
+// Apply appends a recording batch's writes to b (process memory only, no
+// lease). Only a batch from newRecordingBatch can be applied: a core batch
+// cannot be copied into another.
+func (b *GatedBatch) Apply(other *GatedBatch, _ *pebble.WriteOptions) error {
+	if other.rec == nil {
+		return errors.New("pebble store: Apply takes a recording batch (GatedDB.newRecordingBatch)")
 	}
-	it, err := b.b.NewIter(o)
-	if err != nil {
-		b.gate.release()
-		return nil, err
+	for _, op := range *other.rec {
+		var err error
+		switch op.kind {
+		case batchOpSet:
+			err = b.Set(op.key, op.value, nil)
+		case batchOpDelete:
+			err = b.Delete(op.key, nil)
+		case batchOpDeleteRange:
+			err = b.DeleteRange(op.key, op.value, nil)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	return &GatedIter{it: it, gate: b.gate}, nil
+	return nil
 }
 
-// Apply appends other's operations to b (process memory only, no lease).
-func (b *GatedBatch) Apply(other *GatedBatch, opts *pebble.WriteOptions) error {
-	return b.b.Apply(other.b, opts)
+// record appends one write to a recording batch, copying its bytes (pebble
+// batches copy too, so callers may reuse their buffers).
+func (b *GatedBatch) record(kind uint8, key, value []byte) {
+	*b.rec = append(*b.rec, batchOp{kind: kind, key: append([]byte(nil), key...), value: append([]byte(nil), value...)})
 }
 
-// Set, Delete, DeleteRange, Merge, Close, Reset, Len, Count, Empty and
-// Indexed are process memory and forward to pebble.
+// Set, Delete, DeleteRange, Close, Len, Count, Empty and Indexed are process
+// memory. On the core backend Set, Delete and DeleteRange are checked against
+// books' claims as they are staged.
 
 func (b *GatedBatch) Set(key, value []byte, opts *pebble.WriteOptions) error {
+	switch {
+	case b.rec != nil:
+		b.record(batchOpSet, key, value)
+		return nil
+	case b.lb != nil:
+		return legacyErr(b.lb.Set(key, value))
+	}
 	return b.b.Set(key, value, opts)
 }
+
 func (b *GatedBatch) Delete(key []byte, opts *pebble.WriteOptions) error {
+	switch {
+	case b.rec != nil:
+		b.record(batchOpDelete, key, nil)
+		return nil
+	case b.lb != nil:
+		return legacyErr(b.lb.Delete(key))
+	}
 	return b.b.Delete(key, opts)
 }
+
 func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
+	switch {
+	case b.rec != nil:
+		b.record(batchOpDeleteRange, start, end)
+		return nil
+	case b.lb != nil:
+		return legacyErr(b.lb.DeleteRange(start, end))
+	}
 	return b.b.DeleteRange(start, end, opts)
 }
-func (b *GatedBatch) Merge(key, value []byte, opts *pebble.WriteOptions) error {
-	return b.b.Merge(key, value, opts)
+
+func (b *GatedBatch) Close() error {
+	switch {
+	case b.rec != nil:
+		*b.rec = nil
+		return nil
+	case b.lb != nil:
+		return legacyErr(b.lb.Close())
+	}
+	return b.b.Close()
 }
-func (b *GatedBatch) Close() error  { return b.b.Close() }
-func (b *GatedBatch) Reset()        { b.b.Reset() }
-func (b *GatedBatch) Len() int      { return b.b.Len() }
-func (b *GatedBatch) Count() uint32 { return b.b.Count() }
-func (b *GatedBatch) Empty() bool   { return b.b.Empty() }
-func (b *GatedBatch) Indexed() bool { return b.b.Indexed() }
+
+// Len is the batch's size in bytes (a recording batch: the bytes it holds).
+func (b *GatedBatch) Len() int {
+	switch {
+	case b.rec != nil:
+		n := 0
+		for _, op := range *b.rec {
+			n += len(op.key) + len(op.value)
+		}
+		return n
+	case b.lb != nil:
+		return b.lb.Len()
+	}
+	return b.b.Len()
+}
+
+// Count is the number of writes staged.
+func (b *GatedBatch) Count() uint32 {
+	switch {
+	case b.rec != nil:
+		return uint32(len(*b.rec))
+	case b.lb != nil:
+		return uint32(b.lb.Count())
+	}
+	return b.b.Count()
+}
+
+func (b *GatedBatch) Empty() bool   { return b.Count() == 0 }
+func (b *GatedBatch) Indexed() bool { return b.indexed }
