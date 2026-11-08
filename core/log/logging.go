@@ -1,7 +1,7 @@
 // file: core/log/logging.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package log
 
@@ -151,6 +151,13 @@ type Record struct {
 	Attrs     []slog.Attr // resolved (LogValuer applied), groups preserved
 	TraceID   string
 	SpanID    string
+	// Process is true when the record came from Root or Handler, the logger
+	// that is the process default (slog.Default, the stdlib log), or from a
+	// logger derived from it with With or WithGroup, and false when it came
+	// from a logger an owner asked for with Module or Scope. A tap that must
+	// see only what the process's own code logs, not core's own kernel,
+	// metrics or http lines nor a module's, filters on it.
+	Process bool
 }
 
 // Counters is a snapshot of the pipeline's counters (05-logging §3), read by
@@ -293,7 +300,7 @@ func levelName(lv slog.Level) string {
 }
 
 // Root returns the core logger (module="core").
-func (l *Logging) Root() *slog.Logger { return slog.New(&handler{l: l, sc: l.root}) }
+func (l *Logging) Root() *slog.Logger { return slog.New(&handler{l: l, sc: l.root, process: true}) }
 
 // Module returns module id's logger (module=id). It never panics: an invalid
 // id is refused at kernel validation, not here.
@@ -310,7 +317,7 @@ func (l *Logging) Scope(module, subsystem string) *slog.Logger {
 
 // Handler returns the core scope's handler, for adapters (the gin bridge, the
 // logr sink).
-func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.root} }
+func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.root, process: true} }
 
 // Redactor returns the pipeline's redactor, for span redaction (05-metrics).
 func (l *Logging) Redactor() *Redactor { return l.redactor }
