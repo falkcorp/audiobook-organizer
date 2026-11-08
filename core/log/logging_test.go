@@ -1,7 +1,7 @@
 // file: core/log/logging_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b1061a80-9d8b-4729-b19f-80870f03b30f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package log
 
@@ -929,5 +929,55 @@ func TestTap_PrimaryNameRefused(t *testing.T) {
 	closeDrained(t, l)
 	if called || !strings.Contains(stderr.String(), "primary") {
 		t.Errorf("tap named primary was accepted (called=%v, stderr=%q)", called, stderr.String())
+	}
+}
+
+// TestRoot_ProcessDefaultCarriesNoModule (R1-15 review M2): Root, the logger
+// app.InstallProcessDefaults makes slog's default, adds no module attribute,
+// is gated at the root level only, and is counted under "". Core's own
+// components keep module=core through Scope("core", subsystem).
+func TestRoot_ProcessDefaultCarriesNoModule(t *testing.T) {
+	var buf syncBuffer
+	l := newTestLogging(t, &buf, FormatText, LevelInfo, map[string]slog.Level{"core": LevelError})
+	rec := &tapRecorder{}
+	stop := l.Tap("m2", LevelInfo, 8, rec.fn)
+	defer stop()
+
+	l.Root().Info("bruce wayne checked the cave", "op_id", "01BATCAVE")
+	slog.New(l.Handler()).Info("alfred restocked the cave")
+	l.Scope("core", "kernel").Error("kernel line")
+	closeDrained(t, l)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 lines, got %d:\n%s", len(lines), buf.String())
+	}
+	for _, line := range lines[:2] {
+		if strings.Contains(line, KeyModule+"=") {
+			t.Errorf("the process default logger wrote a module attribute: %q", line)
+		}
+	}
+	if !strings.Contains(lines[0], `msg="bruce wayne checked the cave" op_id=01BATCAVE`) {
+		t.Errorf("process line is not the plain text-handler shape: %q", lines[0])
+	}
+	if !strings.Contains(lines[2], `msg="kernel line" module=core subsystem=kernel`) {
+		t.Errorf("core's own line lost module=core: %q", lines[2])
+	}
+
+	// Levels["core"]=error gates core's scopes, not the process default.
+	if !l.Root().Enabled(context.Background(), LevelInfo) {
+		t.Error(`Levels["core"] gated the process default logger`)
+	}
+	if l.Scope("core", "metrics").Enabled(context.Background(), LevelInfo) {
+		t.Error(`Levels["core"] did not gate a core scope`)
+	}
+
+	c := l.Counters().Records
+	if c[""][LevelInfo] != 2 || c["core"][LevelError] != 1 {
+		t.Errorf("records by module = %v; want 2 under \"\" and 1 under core", c)
+	}
+	recs := rec.records()
+	if len(recs) != 3 || recs[0].Module != "" || recs[1].Module != "" || recs[2].Module != "core" {
+		t.Errorf("tap modules = %v; want \"\", \"\", core", recs)
 	}
 }

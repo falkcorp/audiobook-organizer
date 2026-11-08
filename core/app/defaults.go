@@ -1,5 +1,5 @@
 // file: core/app/defaults.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d0f6c4e-8b1a-4e57-9f3c-6a2b7d9e1c40
 // last-edited: 2026-11-08
 
@@ -32,8 +32,11 @@ var ErrProcessDefaultsTaken = errors.New("app: the process defaults are already 
 // InstallProcessDefaults points the process-wide defaults at this App's
 // pipeline and telemetry (05-logging §3, MOD4-3):
 //
-//   - slog.SetDefault(the App's root logger), which also redirects the
-//     standard library's log package;
+//   - slog.SetDefault(the App's process default logger, Logging.Root():
+//     the whole pipeline, with no module attribute, because what logs
+//     through slog's default is the application's own code and third-party
+//     libraries; core's own components keep module=core through their own
+//     loggers), which also redirects the standard library's log package;
 //   - otel.SetLogger(a sink that keeps the message and the key names and
 //     drops every value), because the SDK logs raw env input there;
 //   - otel.SetErrorHandler(a class-keyed rate limiter logging through the

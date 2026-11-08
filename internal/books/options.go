@@ -1,11 +1,12 @@
 // file: internal/books/options.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
 package books
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/httpapi"
+	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -177,25 +179,80 @@ func Attach(mod module.Module, a *app.App) error {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
 	if w := srv.ActivityLogWriter(); w != nil {
-		m.logOut.set(w)
+		m.logOut.setActivity(w)
 	}
 	return nil
 }
 
-// logTee is the App's log output (app.Options.LogOutput): stdout until
-// Attach points it at the activity feed's writer, which tees every line to
-// stdout itself and parses it into the Activity Log. In HEAD NewServer made a
-// text handler over that writer the default logger; with the App's logger
-// installed as the default instead (app.InstallProcessDefaults), routing the
-// App's text output through the same writer keeps the Activity Log's
-// scheduler and operation lines. R1-18's activity tap replaces it.
-type logTee struct{ w atomic.Pointer[io.Writer] }
+// logTee is the App's log output (app.Options.LogOutput). R1-18's activity
+// tap replaces it.
+//
+// Until Attach, every line goes to out (stdout when unset). Attach points
+// activity at the activity feed's writer, which tees each line to stdout
+// itself and parses it into the Activity Log. In HEAD, NewServer made a text
+// handler over that writer slog's default, so the feed saw exactly what
+// logged through slog's default. With the App's logger installed as the
+// default instead (app.InstallProcessDefaults), the tee keeps that: a line
+// from the process default logger goes to the feed, and a line from a scoped
+// logger (core's own kernel, metrics, http and otel lines, module=core, or a
+// module's own logger) goes to out, so it is printed but makes no Activity
+// row (R1-15 review M2). The process default writes no module attribute
+// (core/log Root), so the two are told apart by scopedLine.
+type logTee struct {
+	out      atomic.Pointer[io.Writer]
+	activity atomic.Pointer[io.Writer]
+}
 
-func (t *logTee) set(w io.Writer) { t.w.Store(&w) }
+// set points every line that does not go to the activity feed at w.
+func (t *logTee) set(w io.Writer) { t.out.Store(&w) }
+
+// setActivity points the process default logger's lines at the activity
+// feed's writer.
+func (t *logTee) setActivity(w io.Writer) { t.activity.Store(&w) }
 
 func (t *logTee) Write(p []byte) (int, error) {
-	if w := t.w.Load(); w != nil {
+	if a := t.activity.Load(); a != nil && !scopedLine(p) {
+		return (*a).Write(p)
+	}
+	if w := t.out.Load(); w != nil {
 		return (*w).Write(p)
 	}
 	return os.Stdout.Write(p)
+}
+
+// scopedLine reports whether p, one record of the App's text output, came
+// from a scoped logger. core/log writes a scoped logger's module attribute
+// first, right after the message, and the process default logger writes
+// none, so the line is scoped when " module=" follows the msg value. The slog
+// text handler writes each record in one Write, quoting a message that has
+// spaces, quotes or control characters. A line that does not parse (JSON
+// output, which ABO does not configure) counts as unscoped and goes to the
+// feed, as every line did before.
+func scopedLine(p []byte) bool {
+	const msgKey = " msg="
+	i := bytes.Index(p, []byte(msgKey))
+	if i < 0 {
+		return false
+	}
+	rest := p[i+len(msgKey):]
+	if len(rest) > 0 && rest[0] == '"' {
+		j := 1
+		for j < len(rest) && rest[j] != '"' {
+			if rest[j] == '\\' {
+				j++
+			}
+			j++
+		}
+		if j >= len(rest) {
+			return false
+		}
+		rest = rest[j+1:]
+	} else {
+		j := bytes.IndexAny(rest, " \n")
+		if j < 0 {
+			return false
+		}
+		rest = rest[j:]
+	}
+	return bytes.HasPrefix(rest, []byte(" "+corelog.KeyModule+"="))
 }
