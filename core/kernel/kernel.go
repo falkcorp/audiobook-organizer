@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -81,10 +81,11 @@ type Config struct {
 	// the SDK reads OTEL_* from the environment. An error fails boot.
 	// Describe never calls it.
 	BeforeTelemetry func(log *slog.Logger) error
-	// Telemetry is app.Options.R1Telemetry, converted: the part of the
-	// Provider's metrics.Options that F3's core.metrics and core.tracing
-	// sections will carry. nil = the Prometheus scrape only. Describe ignores
-	// it (an offline generator builds no exporter).
+	// Telemetry is app.Options.Telemetry, converted: the part of the
+	// Provider's metrics.Options that the core.metrics and core.tracing
+	// sections describe; from F3 core config fills it. nil = the Prometheus
+	// scrape only. Describe ignores it (an offline generator builds no
+	// exporter).
 	Telemetry *Telemetry
 	// Modules are the modules compiled into the app, enabled or not.
 	Modules []module.Module
@@ -113,10 +114,11 @@ type R1Values struct {
 	ShutdownBudget               time.Duration
 }
 
-// Telemetry mirrors app.R1Telemetry field for field: the OTLP metric push,
-// the OTLP span exporter and the resource attributes the kernel's Provider
-// takes from the app until config lands (F3 deletes both). The propagator
-// needs no option: the Provider's is always W3C trace context plus baggage.
+// Telemetry mirrors app.Telemetry field for field, so app converts one into
+// the other without copying fields by hand (the kernel cannot import app):
+// the OTLP metric push, the OTLP span exporter and the resource attributes
+// of the kernel's Provider. The propagator needs no option: the Provider's
+// is always W3C trace context plus baggage.
 type Telemetry struct {
 	OTLP        *metrics.OTLPMetrics
 	Tracing     *metrics.OTLPTracing

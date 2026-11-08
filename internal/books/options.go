@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -58,7 +58,7 @@ type ServeInputs struct {
 //     reads ABO_CORE_SHUTDOWN_BUDGET into it);
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
-//   - R1Telemetry: HEAD's OTLP tracing and metric push and its environment;
+//   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
 //   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
 //     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
@@ -85,7 +85,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		LegacyAuthGinUntil:    ID,
 		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot()) },
 		R1Listen:              m.r1Listen,
-		R1Telemetry:           r1Telemetry(in.Telemetry),
+		Telemetry:             telemetryFromConfig(in.Telemetry),
 		LogOutput:             &m.logOut,
 		ProcessDefaults:       true,
 	}, nil
@@ -120,13 +120,14 @@ func splitList(s string) []string {
 	return out
 }
 
-// r1Telemetry is HEAD's InitOTEL configuration as R1Telemetry: tracing when a
-// trace collector is set (OTEL_EXPORTER_OTLP_ENDPOINT), the metric push when
-// its own collector is set (never derived from the trace one), and the
-// deployment environment. The instance ID is left to core, which draws one
+// telemetryFromConfig is HEAD's InitOTEL configuration as app.Telemetry:
+// tracing when a trace collector is set (OTEL_EXPORTER_OTLP_ENDPOINT), the
+// metric push when its own collector is set (never derived from the trace
+// one), and the deployment environment. Core config fills app.Telemetry from
+// F3, and this mapping goes with ABO's telemetry.Config (05-metrics §6). The instance ID is left to core, which draws one
 // per Provider: ABO has one Provider, so metrics and traces share it.
-func r1Telemetry(c config.Config) *app.R1Telemetry {
-	t := &app.R1Telemetry{Environment: c.TelemetryEnvironment}
+func telemetryFromConfig(c config.Config) *app.Telemetry {
+	t := &app.Telemetry{Environment: c.TelemetryEnvironment}
 	if c.OTelExporterOTLPEndpoint != "" {
 		t.Tracing = &metrics.OTLPTracing{Endpoint: c.OTelExporterOTLPEndpoint}
 	}

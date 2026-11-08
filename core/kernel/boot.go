@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -169,7 +169,7 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		Logger:          k.coreLog("metrics"),
 	}
 	// The app's OTLP push, span exporter and resource attributes (R1:
-	// app.Options.R1Telemetry; F3: core.metrics and core.tracing). Describe
+	// app.Options.Telemetry; F3: core.metrics and core.tracing). Describe
 	// builds no exporter: it does no I/O (COR2-13).
 	if t := k.cfg.Telemetry; t != nil && !describe {
 		mo.OTLP, mo.Tracing = t.OTLP, t.Tracing
