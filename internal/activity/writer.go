@@ -1,5 +1,5 @@
 // file: internal/activity/writer.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-11-08
 
@@ -146,10 +146,14 @@ func (w *Writer) Start(ctx context.Context) error {
 
 // Write implements io.Writer. Always writes to stdout first, then parses
 // complete lines and sends ActivityEntry values to the background drain.
+//
+// A stdout failure never stops the activity feed: p is fed whether or not
+// stdout took it. The failure is still the caller's to see, so Write returns
+// stdout's count and error after Feed, as io.Writer requires of a short write.
 func (w *Writer) Write(p []byte) (n int, err error) {
-	n, _ = w.stdout.Write(p) // a stdout failure never stops the activity feed
+	n, err = w.stdout.Write(p)
 	w.Feed(p)
-	return n, nil
+	return n, err
 }
 
 // Feed parses complete lines of p into activity entries exactly as Write does
