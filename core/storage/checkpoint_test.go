@@ -397,6 +397,80 @@ func TestFreshStoreBesideOpenRecordGetsNewInstallID(t *testing.T) {
 	}
 }
 
+// TestSwappedStoreDoesNotInheritOpenRecord (coordinator, after the review):
+// a marker-less store whose upgrade failed leaves an open record. A different
+// marker-less store swapped in at the same path (a restore from backup, a
+// copy) lands on the same epoch number, since neither store has an epoch row
+// yet. It must not adopt the record's install ID or reuse its checkpoint:
+// restoring that checkpoint would bring back the other store. The record
+// carries the DB directory's identity, and only the store in that directory
+// (same epoch, same identity) matches it. The "same directory" case is the
+// control: the store whose attempt failed still reuses its checkpoint.
+func TestSwappedStoreDoesNotInheritOpenRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		swap bool
+	}{
+		{"same directory", false},
+		{"swapped store", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := vfs.NewMem()
+			e := headStore(t, fs, failingOwners()...)
+			ino := uint64(1)
+			e.opts.dirIdentity = func(string) (uint64, uint64, error) { return 7, ino, nil }
+			if _, err := e.tryOpen(); err == nil {
+				t.Fatal("the failing upgrade succeeded")
+			}
+			old := readPointer(t, e).Name
+			oldRec := readRecord(t, e, old)
+			if !oldRec.open() || oldRec.DirDev != 7 || oldRec.DirIno != 1 {
+				t.Fatalf("the failed attempt's record = %+v, want open with dir identity 7/1", oldRec)
+			}
+			if tc.swap {
+				dir, base := filepath.Dir(e.path), filepath.Base(e.path)
+				names, err := fs.List(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, n := range names {
+					if strings.HasPrefix(n, base) {
+						if err := fs.RemoveAll(filepath.Join(dir, n)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				e.seedRaw("riddler:1", "?", "riddler:2", "??")
+				ino = 2
+			}
+			e.opts.Owners = fixedOwners()
+			db := e.open()
+			got := db.CheckpointName()
+			if !tc.swap {
+				if got != old || db.boot.installID != oldRec.InstallID {
+					t.Fatalf("the same store used checkpoint %q as %q, want %q as %q", got, db.boot.installID, old, oldRec.InstallID)
+				}
+				return
+			}
+			if db.boot.installID == "" || db.boot.installID == oldRec.InstallID {
+				t.Fatalf("the swapped store's install ID = %q, want a new one (the open record has %q)", db.boot.installID, oldRec.InstallID)
+			}
+			if got == "" || got == old {
+				t.Fatalf("the swapped store used checkpoint %q, want its own (not %q)", got, old)
+			}
+			if rec := readRecord(t, e, got); rec.InstallID != db.boot.installID || rec.DirIno != 2 {
+				t.Fatalf("the swapped store's record = %+v, want install %q and dir identity 7/2", rec, db.boot.installID)
+			}
+			if keys := rawKeys(t, fs, filepath.Join(cpDir(e), got, "db"), "riddler:"); len(keys) != 2 {
+				t.Fatalf("the swapped store's checkpoint holds riddler keys %v, want both", keys)
+			}
+			if rec := readRecord(t, e, old); rec.InstallID != oldRec.InstallID || !rec.open() {
+				t.Fatalf("the old store's record changed: %+v", rec)
+			}
+		})
+	}
+}
+
 // TestSecondUpgradeTakesFreshCheckpoint (05-storage §5S.3.12, DATA3-1;
 // review BLOCKER-1): only a crash loop reuses a checkpoint. A completed
 // attempt's is never reused, and neither is a failed attempt's once a boot
