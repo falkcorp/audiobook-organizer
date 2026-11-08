@@ -8,9 +8,11 @@ package restorejournal
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -241,5 +243,47 @@ func TestCreateIntentConcurrentOneWins(t *testing.T) {
 func TestCreateIntentRefusesRelativeStateDir(t *testing.T) {
 	if err := CreateIntent("alfred-state", Intent{ID: "x", Kind: KindArchive}); err == nil {
 		t.Fatal("CreateIntent with a relative state directory succeeded")
+	}
+}
+
+// jsonKeys is the sorted key set of v's JSON object encoding.
+func jsonKeys(t *testing.T, v any) []string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	return slices.Sorted(maps.Keys(m))
+}
+
+// TestRestoreJournalJSONKeys (05-storage §5S.3.15; review MINOR-6): a
+// journal Record and an intent's Target encode with the snake_case keys the
+// spec names (targets[{from, to}], step_id), not Go's field names. The
+// round-trip test cannot see this: encoding/json decodes keys
+// case-insensitively.
+func TestRestoreJournalJSONKeys(t *testing.T) {
+	at := time.Date(1940, 4, 25, 9, 0, 0, 0, time.UTC)
+	full := Record{At: at, Step: "moved", Seq: 7, Actor: "core/storage", Note: "reset", From: "/gotham/main.pebble",
+		To: "/gotham/.mediacore-restore/r1/previous/main.pebble", Failed: []string{"/gotham/cache"},
+		InstallID: "wayne-1", HooksOwed: true, StepID: "storage/8"}
+	want := []string{"actor", "at", "failed", "from", "hooks_owed", "install_id", "note", "seq", "step", "step_id", "to"}
+	if got := jsonKeys(t, full); !slices.Equal(got, want) {
+		t.Fatalf("Record keys = %v, want %v", got, want)
+	}
+	// A step's record carries only what that step sets.
+	if got := jsonKeys(t, Record{At: at, Step: "applied", Actor: "core/storage"}); !slices.Equal(got, []string{"actor", "at", "step"}) {
+		t.Fatalf("a bare Record's keys = %v, want [actor at step]", got)
+	}
+	if got := jsonKeys(t, Target{From: "/gotham/a", To: "/gotham/b"}); !slices.Equal(got, []string{"from", "to"}) {
+		t.Fatalf("Target keys = %v, want [from to]", got)
+	}
+	var back Record
+	b, _ := json.Marshal(full)
+	if err := json.Unmarshal(b, &back); err != nil || !reflect.DeepEqual(back, full) {
+		t.Fatalf("Record round trip = %+v (%v), want %+v", back, err, full)
 	}
 }

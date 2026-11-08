@@ -1913,7 +1913,10 @@ type Intent struct {
 	HookPaths          []string `json:"hook_paths,omitempty"` // ResetPlan.Paths (R10-6)
 }
 
-type Target struct{ From, To string }
+type Target struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
 
 // CreateIntent writes in into <stateDir>/restore/pending.json atomically:
 // temp file + fsync, link(2) (EEXIST → ErrSwapPending, the temp removed),
@@ -1954,30 +1957,31 @@ const (
 // created by renaming pending.json before the first live item is renamed
 // (R9-7).
 type Record struct {
-	At    time.Time
-	Step  string
-	Seq   uint64 // restore "staged": the outgoing store's journal head seq (DATA2-25)
-	Actor string
-	Note  string
+	At    time.Time `json:"at"`
+	Step  string    `json:"step"`
+	Seq   uint64    `json:"seq,omitempty"` // restore "staged": the outgoing store's journal head seq (DATA2-25)
+	Actor string    `json:"actor"`
+	Note  string    `json:"note,omitempty"`
 	// From and To (KindReset "moved" only): the target and its set-aside
 	// destination, so resume, move-back and manual undo know where it went.
-	From, To string
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 	// Failed ("hook_done" only): the entries the reset hook could not remove
 	// (COR8-4).
-	Failed []string
+	Failed []string `json:"failed,omitempty"`
 	// InstallID ("set_aside_started" only): the old install's ID, for manual
 	// undo, also after a crash mid-set-aside (DATA9-15).
-	InstallID string
+	InstallID string `json:"install_id,omitempty"`
 	// HooksOwed (restore "marker_written" and "applied_offline"): a build
 	// without P4d steps 2-3 (R1) applied this restore with no hooks, or an
 	// offline restore of a checkpoint whose record has hooks_owed (the
 	// escape from a failed journal included, DATA-7); the next journaling
 	// boot runs them with the source's boundary (05-backup §5B.3.6).
-	HooksOwed bool
+	HooksOwed bool `json:"hooks_owed,omitempty"`
 	// StepID (KindRewrite "staged" only): the staging M8's step ID, copied
 	// from the intent, so M8 finds its own journals after inflight.json is
 	// gone (§5S.3.13 "M8").
-	StepID string
+	StepID string `json:"step_id,omitempty"`
 }
 ```
 
@@ -2786,6 +2790,7 @@ credentials.
 | `TestReadinessMarksCheckpointServed` (kernel) | the previous build booting after a failed upgrade has written `ready_at` by the time it sends READY=1; a record it cannot write stops the app before READY=1 |
 | `TestSwapBackCheckpointNeverReused` | after a failed restore swaps back, no checkpoint the restored store took is reused or named (DATA3-1) |
 | `TestDeferredStepTakesFreshCheckpoint` | a boot whose only pending step belongs to a disabled owner takes no checkpoint; the boot that finally runs it takes a fresh one (OPS3-14) |
+| `TestRestoreJournalJSONKeys` | a journal `Record` and an intent's `Target` encode with the snake_case keys this file names (`targets[{from, to}]`, `step_id`, `hooks_owed`, ...), each step-specific key omitted when unset; the keys are asserted directly, since `encoding/json` decodes case-insensitively |
 | `TestClaimPrefixShape` | a claim prefix that does not end in a separator byte, or is only 0xff bytes, fails boot with every problem listed; an exact `Key` needs no separator |
 | `TestStepCannotCommitOutsideItsBatch` | inside a step, a batch (plain, indexed, of a `Sub`, of the `LegacyRange`), a `Sequence` and a `Snapshot` of the step's handles are refused, and the failed step leaves no row behind |
 | `TestStrandedAttemptCompletedNextBoot` | a kill between step 9's batch and the checkpoint's completion (`hooks.beforeComplete`): the next boot runs nothing, completes the record and the pointer and clears `c/storage/attempt`; a later upgrade takes its own checkpoint; a key whose record is already completed, or gone, is only cleared |

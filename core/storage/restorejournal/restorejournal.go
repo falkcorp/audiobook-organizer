@@ -58,8 +58,11 @@ type Intent struct {
 	HookPaths          []string `json:"hook_paths,omitempty"` // ResetPlan.Paths (R10-6)
 }
 
-// Target is one absolute from/to pair of an intent.
-type Target struct{ From, To string }
+// Target is one absolute from/to pair of an intent: targets[{from, to}].
+type Target struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
 
 // The slot's file names under <stateDir>/restore/.
 const (
@@ -200,28 +203,29 @@ const (
 // created by renaming pending.json before the first live item is renamed
 // (R9-7).
 type Record struct {
-	At    time.Time
-	Step  string
-	Seq   uint64 // restore "staged": the outgoing store's journal head seq (DATA2-25)
-	Actor string
-	Note  string
+	At    time.Time `json:"at"`
+	Step  string    `json:"step"`
+	Seq   uint64    `json:"seq,omitempty"` // restore "staged": the outgoing store's journal head seq (DATA2-25)
+	Actor string    `json:"actor"`
+	Note  string    `json:"note,omitempty"`
 	// From and To (KindReset "moved" only): the target and its set-aside
 	// destination, so resume, move-back and manual undo know where it went.
-	From, To string
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 	// Failed ("hook_done" only): the entries the reset hook could not remove
 	// (COR8-4).
-	Failed []string
+	Failed []string `json:"failed,omitempty"`
 	// InstallID ("set_aside_started" only): the old install's ID, for manual
 	// undo, also after a crash mid-set-aside (DATA9-15).
-	InstallID string
+	InstallID string `json:"install_id,omitempty"`
 	// HooksOwed (restore "marker_written" and "applied_offline"): a build
 	// without P4d steps 2-3 (R1) applied this restore with no hooks, or an
 	// offline restore of a checkpoint whose record has hooks_owed (the
 	// escape from a failed journal included, DATA-7); the next journaling
 	// boot runs them with the source's boundary (05-backup §5B.3.6).
-	HooksOwed bool
+	HooksOwed bool `json:"hooks_owed,omitempty"`
 	// StepID (KindRewrite "staged" only): the staging M8's step ID, copied
 	// from the intent, so M8 finds its own journals after inflight.json is
 	// gone (§5S.3.13 "M8").
-	StepID string
+	StepID string `json:"step_id,omitempty"`
 }
