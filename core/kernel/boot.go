@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -257,12 +257,19 @@ func (k *Kernel) moduleLog(id module.ID) *slog.Logger {
 // that far from now, never closer). It extends the start window of id's hook
 // Start if one is running, so the kernel's own core.lifecycle.start_timeout
 // does not abandon a step that is making progress, and it asks the service
-// manager for the same time over NOTIFY_SOCKET. Config.ExtendStart replaces
-// the second in tests. A failed request is logged and never fails startup:
+// manager for the same time over NOTIFY_SOCKET, but only while that is a
+// start-up request: when the window was extended, or when the call comes
+// before Run (during Register). After that, with no Start of id running (after
+// READY, during stop, between hooks), EXTEND_TIMEOUT_USEC is not sent: in the
+// deactivating state systemd would push TimeoutStopSec out, and after READY
+// there is no start timeout left to extend. Config.ExtendStart replaces the
+// systemd send in tests. A failed request is logged and never fails startup:
 // under Type=simple there is no socket at all.
 func (k *Kernel) extendStart(id module.ID) func(string) {
 	return func(step string) {
-		k.startWin.extend(id, sdnotify.StartupStepBudget)
+		if !k.startWin.extend(id, sdnotify.StartupStepBudget) && k.ran.Load() {
+			return
+		}
 		send := k.cfg.ExtendStart
 		if send == nil {
 			send = func(string) {
