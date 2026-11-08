@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_stages_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b1e7c3a-2d84-4f69-a0b7-8c6e3f1d9a42
 // last-edited: 2026-11-08
 
@@ -230,7 +230,8 @@ func (a *accessLog) String() string {
 
 // TestAccessLog_NoInviteToken: core's access log, which replaced gin's
 // request log, never writes an invite token or a credential query value,
-// for the invite routes, the SPA's invite page and an ABS ?token= request,
+// for the invite routes, the SPA's invite page, an ABS ?token= request and
+// an answer core writes itself (R1-15 review m6's case: core's group 404),
 // while the handler still sees the real values. (The cases of HEAD's
 // RedactingLogFormatter and RedactLogRequestPath tests.)
 func TestAccessLog_NoInviteToken(t *testing.T) {
@@ -272,6 +273,8 @@ func TestAccessLog_NoInviteToken(t *testing.T) {
 		"/api/v1/items%3Fwidth=4&token=" + cred + "?w=1",
 		"/invite/" + tok,
 		"/invite/%3F" + tok,
+		// Core answers this itself (its group's problem 404): gin never runs.
+		"/api/core/v1/riddler?token=" + cred,
 	} {
 		method := http.MethodGet
 		switch {
@@ -282,15 +285,15 @@ func TestAccessLog_NoInviteToken(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		stack.ServeHTTP(w, httptest.NewRequest(method, target, nil))
-		if routed := !strings.Contains(target, "%3F") && !strings.HasPrefix(target, "/invite/"); routed {
+		if routed := !strings.Contains(target, "%3F") && !strings.HasPrefix(target, "/invite/") && !strings.HasPrefix(target, "/api/core/"); routed {
 			// The unrouted targets answer core's or gin's 404; only their
 			// access line matters here.
 			require.Equal(t, http.StatusOK, w.Code, target)
 		}
 	}
 	out := logs.String()
-	if n := strings.Count(out, `msg="http access"`); n != 11 {
-		t.Fatalf("access records = %d, want 11:\n%s", n, out)
+	if n := strings.Count(out, `msg="http access"`); n != 12 {
+		t.Fatalf("access records = %d, want 12:\n%s", n, out)
 	}
 	for _, secret := range []string{tok, "joker%2Dcard", cred} {
 		if strings.Contains(out, secret) {
