@@ -1,7 +1,7 @@
 // file: core/storage/migrate.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -337,8 +337,8 @@ func (db *DB) Plan() (runnable, deferred []StepRef) {
 // each versioned step as one batch with its bookkeeping (and level stamp),
 // then the claim ledgers, the store generation, the sidecars, the books
 // marker and the checkpoint's completion. A failed step halts with
-// ErrMigrationFailed; earlier steps stay committed and the attempt's
-// checkpoint stays open.
+// ErrMigrationFailed, wrapping a *StepError when the step itself failed;
+// earlier steps stay committed and the attempt's checkpoint stays open.
 func (db *DB) Migrate(ctx context.Context) error {
 	st := db.boot
 	if st == nil || !st.prepared {
@@ -373,7 +373,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 func (db *DB) runLegacy(ctx context.Context, n *stepNode) (err error) {
 	lr, _ := db.Legacy(n.owner.owner)
 	if err := n.legacy.Up(ctx, lr); err != nil {
-		return err
+		return stepFailed(ctx, n.ref, err)
 	}
 	b := lr.NewBatch()
 	defer func() { err = errors.Join(err, b.Close()) }()
@@ -405,10 +405,10 @@ func (db *DB) runStep(ctx context.Context, n *stepNode) (err error) {
 		tx.legacy = lr
 	}
 	if err := n.mig.Up(ctx, tx); err != nil {
-		return err
+		return stepFailed(ctx, n.ref, err)
 	}
 	if b.err != nil {
-		return b.err
+		return stepFailed(ctx, n.ref, b.err) // a write the step staged was refused
 	}
 	step := AppliedStep{Version: n.mig.Version, Name: n.mig.Name, Compat: n.mig.Compat, HasCompat: true,
 		RaisesLevel: n.mig.RaisesLevel, AppliedAt: db.clock().UTC(), Build: db.boot.opts.Build}

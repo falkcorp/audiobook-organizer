@@ -1,7 +1,7 @@
 // file: core/storage/spec.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 156e1b2e-7ad2-4241-b21e-71d4f21d472b
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -281,6 +281,36 @@ func (e *ErrMigrationFailed) Error() string {
 }
 
 func (e *ErrMigrationFailed) Unwrap() error { return e.Err }
+
+// StepError marks a migration step's own failure inside ErrMigrationFailed:
+// its Up returned an error, or a write it staged was refused (outside its
+// keyspace, past the batch limits). That is what 05-backup §5B.3.4's error
+// table calls "the migration DAG fails" (DATA7-12): the step cannot run on
+// this store with this binary. Everything else Migrate can fail with — the
+// step's applied record, a level step's sidecar, the commit, the completion
+// after the list, a boot whose context ended — says nothing about the step
+// and is not a StepError. The kernel journals a KindCheckpoint restore failed
+// only on a StepError (errors.As); any other failure halts the boot and the
+// next boot retries it. Its message is the step's error unchanged:
+// ErrMigrationFailed names the step.
+type StepError struct {
+	Step StepRef
+	Err  error
+}
+
+func (e *StepError) Error() string { return e.Err.Error() }
+
+func (e *StepError) Unwrap() error { return e.Err }
+
+// stepFailed marks err, a step's own failure, as a StepError, unless the
+// boot's context has ended: an Up that returns because the boot is stopping
+// failed nothing.
+func stepFailed(ctx context.Context, ref StepRef, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	return &StepError{Step: ref, Err: err}
+}
 
 // Levels is a reader-level vector by level owner ("core" and module IDs).
 type Levels map[Owner]int
