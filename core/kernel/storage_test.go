@@ -235,15 +235,15 @@ func (n readySignal) Ready() error { close(n.ready); return nil }
 // lateStopKernel boots gcpd with two hooks and a shutdown budget of budget.
 // Stops run in reverse registration order: gordon's Stop holds until the
 // budget is spent, so bullock's is reached after it and stopHooks hands it to
-// the background with an expired ctx. bullock's Stop waits for release, then
-// writes its keyspace and sends the result to wrote.
-func lateStopKernel(t *testing.T, path string, budget time.Duration, release <-chan struct{}, wrote chan<- error) (*Kernel, *module.Deps, *logcapture.Capture, chan struct{}) {
+// the background with an expired ctx. bullock's Stop calls hold, then writes
+// its keyspace and sends the result to wrote.
+func lateStopKernel(t *testing.T, path string, budget time.Duration, hold func(), wrote chan<- error) (*Kernel, *module.Deps, *logcapture.Capture, chan struct{}) {
 	t.Helper()
 	deps := new(module.Deps)
 	gcpd := storageMod("gcpd", func(r *module.Registrar) error {
 		*deps = r.Deps()
 		r.Hook(module.Hook{Name: "gcpd.bullock", Stop: func(context.Context) error {
-			<-release
+			hold()
 			err := deps.Storage.Keyspace.Set(context.Background(), []byte("report"), []byte("filed"))
 			wrote <- err
 			return err
@@ -275,14 +275,13 @@ func TestCloseCoreAwaitsLateStops(t *testing.T) {
 
 	t.Run("finishes-within-the-floor", func(t *testing.T) {
 		path := tempStoragePath(t)
-		release, wrote := make(chan struct{}), make(chan error, 1)
-		k, _, _, ready := lateStopKernel(t, path, budget, release, wrote)
+		wrote := make(chan error, 1)
+		// bullock writes a fifth of a floor after it is called: long after
+		// a close that did not wait, well inside one that does.
+		k, _, _, ready := lateStopKernel(t, path, budget, func() { time.Sleep(lateStopFloor / 5) }, wrote)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := run(ctx, k)
 		<-ready
-		// bullock writes a fifth of a floor after it is called: long after
-		// a close that did not wait, well inside one that does.
-		go func() { time.Sleep(lateStopFloor / 5); close(release) }()
 		cancel()
 		<-done
 		if err := <-wrote; err != nil {
@@ -299,7 +298,7 @@ func TestCloseCoreAwaitsLateStops(t *testing.T) {
 
 	t.Run("still-running-at-the-floor", func(t *testing.T) {
 		release, wrote := make(chan struct{}), make(chan error, 1)
-		k, deps, capture, ready := lateStopKernel(t, tempStoragePath(t), budget, release, wrote)
+		k, deps, capture, ready := lateStopKernel(t, tempStoragePath(t), budget, func() { <-release }, wrote)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := run(ctx, k)
 		<-ready
