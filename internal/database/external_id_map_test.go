@@ -1,6 +1,7 @@
 // file: internal/database/external_id_map_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-11-08
 
 package database
 
@@ -11,11 +12,6 @@ import (
 func TestExternalIDMapping_CreateAndGet(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	// Run migration
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	// Create a mapping
 	mapping := &ExternalIDMapping{
@@ -51,10 +47,6 @@ func TestExternalIDMapping_TrackNumber(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
-
 	tn := 3
 	mapping := &ExternalIDMapping{
 		Source:      "itunes",
@@ -81,10 +73,6 @@ func TestExternalIDMapping_TrackNumber(t *testing.T) {
 func TestExternalIDMapping_TombstoneBlocksLookup(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	mapping := &ExternalIDMapping{
 		Source:     "itunes",
@@ -131,10 +119,6 @@ func TestExternalIDMapping_TombstoneBlocksLookup(t *testing.T) {
 func TestExternalIDMapping_ReassignExternalIDs(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	// Create multiple mappings for one book
 	for _, pid := range []string{"PID_A", "PID_B", "PID_C"} {
@@ -186,10 +170,6 @@ func TestExternalIDMapping_BulkCreateWithDuplicates(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
-
 	// Create an existing mapping
 	if err := store.CreateExternalIDMapping(&ExternalIDMapping{
 		Source:     "itunes",
@@ -232,10 +212,6 @@ func TestExternalIDMapping_GetExternalIDsForBook(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
-
 	// Create mappings for the same book from different sources
 	mappings := []ExternalIDMapping{
 		{Source: "itunes", ExternalID: "IPID1", BookID: "MULTI_BOOK"},
@@ -271,10 +247,6 @@ func TestExternalIDMapping_UpsertOverwrites(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
-
 	// Create initial mapping
 	if err := store.CreateExternalIDMapping(&ExternalIDMapping{
 		Source:     "itunes",
@@ -306,10 +278,6 @@ func TestExternalIDMapping_UpsertOverwrites(t *testing.T) {
 func TestExternalIDMapping_IsExternalIDTombstoned_NotFound(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	if err := RunMigrations(store); err != nil {
-		t.Fatalf("RunMigrations failed: %v", err)
-	}
 
 	// Non-existent ID should not be tombstoned
 	tombstoned, err := store.IsExternalIDTombstoned("itunes", "DOES_NOT_EXIST")

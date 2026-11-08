@@ -1,5 +1,5 @@
 // file: core/app/extendstart_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d057159-dd11-4c4f-a871-b20ed3ff5611
 // last-edited: 2026-11-08
 
@@ -9,7 +9,9 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +20,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/lifecycle"
+	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // notifySocket binds a unix datagram socket and points NOTIFY_SOCKET at it
@@ -120,6 +124,7 @@ func TestFastExit(t *testing.T) {
 		{"audiobook-organizer", "--print-capabilities", "extra"},
 		{"audiobook-organizer", "serve", "--print-capabilities"},
 		{"audiobook-organizer", "--print-storage-format"},
+		{"audiobook-organizer", "--print-storage-levels", "extra"},
 	} {
 		out.Reset()
 		handled, err := FastExit(args, &out)
@@ -139,5 +144,55 @@ func TestFastExit_WriteErrorIsReturned(t *testing.T) {
 	handled, err := FastExit([]string{"x", "--print-capabilities"}, failingWriter{})
 	if !handled || err == nil || !strings.Contains(err.Error(), "closed pipe") {
 		t.Fatalf("FastExit = %v, %v, want handled with the write error", handled, err)
+	}
+}
+
+// levelsModule declares storage at a level, for --print-storage-levels.
+type levelsModule struct {
+	id    module.ID
+	level int
+}
+
+func (m levelsModule) Manifest() module.Manifest {
+	return module.Manifest{ID: m.id, Version: "1.0.0", MinCoreVersion: "0.1.0",
+		Storage: storage.Spec{Keyspace: true, Level: m.level}}
+}
+func (levelsModule) Register(*module.Registrar) error { return nil }
+
+// storagelessModule declares no storage, so it is no level owner.
+type storagelessModule struct{}
+
+func (storagelessModule) Manifest() module.Manifest {
+	return module.Manifest{ID: "oracle", Version: "1.0.0", MinCoreVersion: "0.1.0"}
+}
+func (storagelessModule) Register(*module.Registrar) error { return nil }
+
+// TestFastExit_PrintStorageLevels (05-storage §5S.3.7 "Fast-exit flags"):
+// --print-storage-levels prints the build's supported vector as one JSON
+// object computed from the manifests alone: core's own owner at 0 and every
+// storage owner at its declared level; a module without storage is no
+// owner. With no modules it is core's alone.
+func TestFastExit_PrintStorageLevels(t *testing.T) {
+	var out bytes.Buffer
+	handled, err := FastExit([]string{"batcomputer", "--print-storage-levels"}, &out,
+		levelsModule{id: "batcave", level: 2}, levelsModule{id: "gotham"}, storagelessModule{})
+	if err != nil || !handled {
+		t.Fatalf("FastExit = %v, %v, want handled", handled, err)
+	}
+	if !strings.HasSuffix(out.String(), "\n") || strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("stdout = %q, want one line", out.String())
+	}
+	var got map[string]int
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout %q is not a JSON object: %v", out.String(), err)
+	}
+	want := map[string]int{"core": 0, "batcave": 2, "gotham": 0}
+	if !maps.Equal(got, want) {
+		t.Fatalf("levels = %v, want %v", got, want)
+	}
+
+	out.Reset()
+	if handled, err := FastExit([]string{"batcomputer", "--print-storage-levels"}, &out); !handled || err != nil || out.String() != `{"core":0}`+"\n" {
+		t.Fatalf("no modules: FastExit = %v, %v, stdout %q, want core's vector alone", handled, err, out.String())
 	}
 }

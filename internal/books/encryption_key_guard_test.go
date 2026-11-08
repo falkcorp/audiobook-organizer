@@ -1,9 +1,9 @@
-// file: cmd/encryption_key_guard_test.go
-// version: 1.2.1
+// file: internal/books/encryption_key_guard_test.go
+// version: 1.3.0
 // guid: 2f58c3a9-6e41-4b07-90d8-7a13e5b2f846
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
-package cmd
+package books
 
 import (
 	"bytes"
@@ -16,11 +16,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// guardStore is the narrowest thing guardAgainstKeyRegeneration needs. It is a
-// hand-rolled stub rather than MockStore because the only interesting axis is
-// what GetAllSettings returns, including its error.
+// guardStore is what guardAgainstKeyRegeneration reads (settingsCensus). The
+// only interesting axis is what GetAllSettings returns, including its error.
+// The guard moved here from cmd with HEAD's other pre-server steps when the
+// kernel began opening the store (R1-23).
 type guardStore struct {
-	database.Store
 	settings []database.Setting
 	err      error
 }

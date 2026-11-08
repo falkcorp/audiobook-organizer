@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 
 package scanner
 
@@ -431,6 +431,14 @@ type lateRowStore struct {
 	mu         sync.Mutex
 	hashLooked bool
 }
+
+// Unwrap opts the wrapper into database.AsCapability (see
+// racedRowStore.Unwrap). Without it, a save that lands before the memdb
+// warmup publishes fails its ownership lookup with
+// ErrRetiredReaderUnavailable before the hash branch it tests. It intercepts
+// only GetBookByFileHash and GetBookByFilePath, which no capability lookup
+// goes through.
+func (s *lateRowStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
 
 func (s *lateRowStore) GetBookByFileHash(h string) (*database.Book, error) {
 	s.mu.Lock()

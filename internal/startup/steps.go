@@ -1,5 +1,5 @@
 // file: internal/startup/steps.go
-// version: 1.1.1
+// version: 1.3.0
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
 // last-edited: 2026-11-08
 
@@ -8,12 +8,14 @@
 // server up and reports a fixed token in /health's `degraded` list
 // (Degraded).
 //
-// It is a leaf package (stdlib only, layer 0 in internal/arch): most steps
-// (opening the store, telemetry, the secure state directory, the encryption
-// key, loading persisted config) run in cmd before any *server.Server exists,
-// so the table and the token set cannot live in package server. cmd builds
-// one *Steps, runs its steps through Run, and hands the same value to the
-// server through ServerConfig.StartupSteps.
+// It is a leaf package (stdlib only, layer 0 in internal/arch): several steps
+// (the secure state directory, the encryption key, loading persisted config)
+// run in books before any *server.Server exists, so the table and the token
+// set cannot live in package server. books.Options builds one *Steps (unless
+// serve hands one), runs its steps through Run, and hands the same value to
+// the server through ServerConfig.StartupSteps. Since release R1 the kernel
+// opens the store (its P2), so opening it is no row here, and cmd runs no
+// step of its own (06 §6.4.3).
 //
 // Every Run call names its step with a string literal that must be a row of
 // Table, and every row must be named by some Run call. steps_test.go enforces
@@ -69,26 +71,25 @@ type Step struct {
 // Token values reported in /health's `degraded` list. Fixed strings, never
 // error text: /health is unauthenticated.
 const (
-	TokenSearchIndex = "search_index"
+	TokenSearchIndex    = "search_index"
+	TokenSettingsWrites = "settings_writes"
 )
 
 // Table classifies every startup step, in the order startup runs them.
 //
-// Where each step lives (verified 2026-10-10):
-//   - initializeStore:             database.InitializeStore, internal/database/store.go:1501; run in cmd/root.go serveCmd
-//   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133
-//   - guardAgainstKeyRegeneration: cmd/root.go guardAgainstKeyRegeneration
+// Where each step lives (verified 2026-11-08):
+//   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133; run in books.Options
+//   - guardAgainstKeyRegeneration: internal/books/boot.go guardAgainstKeyRegeneration; run in books' Register (bootSettings)
 //   - initEncryption:              database.InitEncryption, internal/database/settings.go:109
 //   - loadConfigFromDB:            config.LoadConfigFromDatabase, internal/config/persistence.go:698
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
+//   - settingsWrites:              internal/books/module.go (*booksModule).startRepairs (deferredSettings.apply)
 //   - opRegistrationGate:          internal/server/server_lifecycle.go (*Server).opRegistrationGate
 //   - container.Start:             internal/server/server_lifecycle.go (*Server).StartHook
 //   - opCatalogGate:               internal/server/server_lifecycle.go (*Server).opCatalogGate (05-PR7)
 //   - searchindex:                 search.(*IndexService).Start, internal/search/register.go:41 (logs and leaves Index() nil)
 //   - http:                        internal/server/server_lifecycle.go (*Server).R1Listen (listenR1)
 var Table = []Step{
-	{Name: "initializeStore", Class: Fatal,
-		Reason: "nothing works without the store"},
 	{Name: "EnsureSecureStateDir", Class: Fatal,
 		Reason: "the secrets location must be sane before a key is read or written"},
 	{Name: "guardAgainstKeyRegeneration", Class: Fatal,
@@ -99,6 +100,8 @@ var Table = []Step{
 		Reason: "SaveConfigToDatabase persists the WHOLE config struct as config_blob, so a server running on defaults overwrites the stored config on its first settings save"},
 	{Name: "config.Validate", Class: Fatal,
 		Reason: "bad config must not serve"},
+	{Name: "settingsWrites", Class: Degraded, Token: TokenSettingsWrites,
+		Reason: "the settings load's upgrade writes (blob migrations, markers, re-encryption) commit in books' repairs hook after the effective config is loaded and validated; a failed commit leaves the stored rows unchanged from the failed write on, the next boot's load stages them again, and the first settings save persists the whole effective config anyway (R1-23 review S2)"},
 	{Name: "opRegistrationGate", Class: Fatal,
 		Reason: "a hole in the operations registry makes ops vanish silently (existing behaviour)"},
 	{Name: "container.Start", Class: Fatal,

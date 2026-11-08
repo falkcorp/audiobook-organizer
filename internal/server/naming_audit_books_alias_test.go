@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-08
 
 package server
 
@@ -33,6 +33,9 @@ func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
+	// The version purge samples the library's live files through memdb and
+	// answers 503 until it serves.
+	store.WaitForWarmup()
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
 	t.Cleanup(func() {

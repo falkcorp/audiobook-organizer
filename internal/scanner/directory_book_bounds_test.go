@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 
 package scanner
 
@@ -295,6 +295,11 @@ type slowLookupStore struct {
 	probes atomic.Int32
 }
 
+// Unwrap opts the wrapper into database.AsCapability (see
+// racedRowStore.Unwrap): it only adds latency to one lookup, so capability
+// reads must reach the Pebble store behind it however early the save lands.
+func (s *slowLookupStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
+
 func (s *slowLookupStore) GetBookByFilePath(path string) (*database.Book, error) {
 	s.probes.Add(1)
 	time.Sleep(s.delay)
@@ -409,6 +414,12 @@ type racedCreateStore struct {
 	lookups int
 	rowID   string
 }
+
+// Unwrap opts the wrapper into database.AsCapability (see
+// racedRowStore.Unwrap). Without it, a save that lands before the memdb
+// warmup publishes fails its ownership lookup with
+// ErrRetiredReaderUnavailable instead of reaching the raced create.
+func (s *racedCreateStore) Unwrap() database.Store { return innerStore(s.scannerStore) }
 
 func (s *racedCreateStore) GetBookByFilePath(path string) (*database.Book, error) {
 	if path == s.target {

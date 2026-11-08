@@ -1,7 +1,7 @@
 // file: internal/server/itunes_writeback_cleanup_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c7579b1-af5d-495e-93cf-b375de7d2837
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package server
 
@@ -35,8 +35,12 @@ func TestPurgeLegacyITunesWriteBackKeys(t *testing.T) {
 		require.NoError(t, store.SetRaw(k, []byte("x")))
 	}
 	require.NoError(t, store.SetUserPreferenceForUser("_system", "outbox:writeback:book-1", "2026-10-01T00:00:00Z"))
-	// Neighbours that must survive.
-	require.NoError(t, store.SetRaw("itunes_writebackX", []byte("keep")))
+	// Neighbours that must survive. The nearest one is in the itunes: family,
+	// which sorts just before itunes_writeback: and is what an over-broad
+	// "itunes" prefix would take. A key such as "itunes_writebackX" cannot be a
+	// neighbour: it is outside books' claims, so strict claims refuse its write
+	// and clip it out of every scan the cleanup makes.
+	require.NoError(t, store.SetRaw("itunes:keep", []byte("keep")))
 	require.NoError(t, store.SetUserPreferenceForUser("_system", "pipeline_checkpoint:b1:tags", "keep"))
 
 	got := purgeLegacyITunesWriteBackKeys(store)
@@ -47,7 +51,7 @@ func TestPurgeLegacyITunesWriteBackKeys(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, n, "prefix %s", prefix)
 	}
-	v, err := store.GetRaw("itunes_writebackX")
+	v, err := store.GetRaw("itunes:keep")
 	require.NoError(t, err)
 	require.Equal(t, []byte("keep"), v)
 	pref, err := store.GetUserPreferenceForUser("_system", "pipeline_checkpoint:b1:tags")

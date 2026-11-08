@@ -1,7 +1,7 @@
 // file: internal/database/pebble_scan_prefix_page_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c0c043a1-4b1d-4cc2-8ddb-61a8be59cea2
-// last-edited: 2026-10-03
+// last-edited: 2026-11-08
 
 package database
 
@@ -25,7 +25,7 @@ func newRawPebble(t *testing.T) *PebbleStore {
 // prefix, so a scan that leaks past its bounds shows up as extra keys.
 func seedRaw(t *testing.T, s *PebbleStore, prefix string, n int) []string {
 	t.Helper()
-	for _, k := range []string{"aaa:before", "zzz:after", prefix[:len(prefix)-1]} {
+	for _, k := range []string{"quick_query_cache:aaa:before", "quick_query_cache:zzz:after", prefix[:len(prefix)-1]} {
 		if err := s.SetRaw(k, []byte("neighbour")); err != nil {
 			t.Fatal(err)
 		}
@@ -75,8 +75,8 @@ func drain(t *testing.T, s *PebbleStore, prefix string, limit int) (keys []strin
 
 func TestScanPrefixPage_AcrossPageBoundaries(t *testing.T) {
 	s := newRawPebble(t)
-	want := seedRaw(t, s, "pg:", 10)
-	got, sizes := drain(t, s, "pg:", 3)
+	want := seedRaw(t, s, "quick_query_cache:pg:", 10)
+	got, sizes := drain(t, s, "quick_query_cache:pg:", 3)
 	if !slices.Equal(got, want) {
 		t.Fatalf("keys = %v, want %v", got, want)
 	}
@@ -87,8 +87,8 @@ func TestScanPrefixPage_AcrossPageBoundaries(t *testing.T) {
 
 func TestScanPrefixPage_ExactMultipleEndsWithoutEmptyPage(t *testing.T) {
 	s := newRawPebble(t)
-	want := seedRaw(t, s, "pg:", 9)
-	got, sizes := drain(t, s, "pg:", 3)
+	want := seedRaw(t, s, "quick_query_cache:pg:", 9)
+	got, sizes := drain(t, s, "quick_query_cache:pg:", 3)
 	if !slices.Equal(got, want) {
 		t.Fatalf("keys = %v, want %v", got, want)
 	}
@@ -99,8 +99,8 @@ func TestScanPrefixPage_ExactMultipleEndsWithoutEmptyPage(t *testing.T) {
 
 func TestScanPrefixPage_Empty(t *testing.T) {
 	s := newRawPebble(t)
-	seedRaw(t, s, "pg:", 0)
-	pairs, next, err := s.ScanPrefixPage("pg:", "", 5)
+	seedRaw(t, s, "quick_query_cache:pg:", 0)
+	pairs, next, err := s.ScanPrefixPage("quick_query_cache:pg:", "", 5)
 	if err != nil || len(pairs) != 0 || next != "" {
 		t.Fatalf("empty prefix: pairs=%d next=%q err=%v", len(pairs), next, err)
 	}
@@ -108,32 +108,32 @@ func TestScanPrefixPage_Empty(t *testing.T) {
 
 func TestScanPrefixPage_AfterIsExclusiveAndNeedNotExist(t *testing.T) {
 	s := newRawPebble(t)
-	seedRaw(t, s, "pg:", 5)
-	pairs, _, err := s.ScanPrefixPage("pg:", "pg:001", 10)
+	seedRaw(t, s, "quick_query_cache:pg:", 5)
+	pairs, _, err := s.ScanPrefixPage("quick_query_cache:pg:", "quick_query_cache:pg:001", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairs) != 3 || pairs[0].Key != "pg:002" {
+	if len(pairs) != 3 || pairs[0].Key != "quick_query_cache:pg:002" {
 		t.Fatalf("after existing key: got %d pairs starting %v", len(pairs), pairs)
 	}
 	// A cursor whose key was deleted in the meantime (Prune deletes behind
 	// its cursor) resumes at the next key rather than restarting.
-	if err := s.DeleteRaw("pg:002"); err != nil {
+	if err := s.DeleteRaw("quick_query_cache:pg:002"); err != nil {
 		t.Fatal(err)
 	}
-	pairs, _, err = s.ScanPrefixPage("pg:", "pg:002", 10)
+	pairs, _, err = s.ScanPrefixPage("quick_query_cache:pg:", "quick_query_cache:pg:002", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairs) != 2 || pairs[0].Key != "pg:003" {
+	if len(pairs) != 2 || pairs[0].Key != "quick_query_cache:pg:003" {
 		t.Fatalf("after deleted key: got %v", pairs)
 	}
 }
 
 func TestScanPrefixPage_TrailingFFPrefix(t *testing.T) {
 	s := newRawPebble(t)
-	prefix := "ff\xff"
-	for _, k := range []string{prefix + "a", prefix + "b", "fg", "ff"} {
+	prefix := "quick_query_cache:ff\xff"
+	for _, k := range []string{prefix + "a", prefix + "b", "quick_query_cache:fg", "quick_query_cache:ff"} {
 		if err := s.SetRaw(k, []byte(k)); err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +147,7 @@ func TestScanPrefixPage_TrailingFFPrefix(t *testing.T) {
 func TestScanPrefixPage_RejectsNonPositiveLimit(t *testing.T) {
 	s := newRawPebble(t)
 	for _, l := range []int{0, -1} {
-		if _, _, err := s.ScanPrefixPage("pg:", "", l); err == nil {
+		if _, _, err := s.ScanPrefixPage("quick_query_cache:pg:", "", l); err == nil {
 			t.Errorf("limit %d accepted", l)
 		}
 	}
@@ -155,15 +155,15 @@ func TestScanPrefixPage_RejectsNonPositiveLimit(t *testing.T) {
 
 func TestDeleteRawBatch(t *testing.T) {
 	s := newRawPebble(t)
-	seedRaw(t, s, "pg:", 4)
-	if err := s.DeleteRawBatch([]string{"pg:000", "pg:002", "pg:missing"}); err != nil {
+	seedRaw(t, s, "quick_query_cache:pg:", 4)
+	if err := s.DeleteRawBatch([]string{"quick_query_cache:pg:000", "quick_query_cache:pg:002", "quick_query_cache:pg:missing"}); err != nil {
 		t.Fatalf("DeleteRawBatch: %v", err)
 	}
 	if err := s.DeleteRawBatch(nil); err != nil {
 		t.Fatalf("empty batch: %v", err)
 	}
-	got, _ := drain(t, s, "pg:", 10)
-	if !slices.Equal(got, []string{"pg:001", "pg:003"}) {
+	got, _ := drain(t, s, "quick_query_cache:pg:", 10)
+	if !slices.Equal(got, []string{"quick_query_cache:pg:001", "quick_query_cache:pg:003"}) {
 		t.Fatalf("remaining = %v", got)
 	}
 }

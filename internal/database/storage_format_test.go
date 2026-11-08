@@ -1,21 +1,23 @@
 // file: internal/database/storage_format_test.go
-// version: 1.0.0
+// version: 2.1.0
 // guid: 8a965f29-0efc-4a0a-9fb9-bdc400520fd4
-// last-edited: 2026-10-04
+// last-edited: 2026-11-08
 
 package database
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,20 +72,46 @@ func rawKeysAt(t *testing.T, path string, fs vfs.FS) []string {
 	return rawKeys(t, db)
 }
 
+// rawStampAt decodes the stamp row of the closed store at path, the way HEAD
+// reads it.
 func rawStampAt(t *testing.T, path string, fs vfs.FS) (int, bool) {
+	t.Helper()
+	row, present := rawStampRowAt(t, path, fs)
+	if !present {
+		return 0, false
+	}
+	return decodeStampRow(t, row), true
+}
+
+// decodeStampRow decodes a stamp row's format number, the way HEAD reads it.
+func decodeStampRow(t *testing.T, row []byte) int {
+	t.Helper()
+	var pref UserPreference
+	require.NoError(t, json.Unmarshal(row, &pref))
+	require.NotNil(t, pref.Value)
+	var v DatabaseVersion
+	require.NoError(t, json.Unmarshal([]byte(*pref.Value), &v))
+	return v.Version
+}
+
+// rawStampRowAt returns the stamp row's bytes as stored.
+func rawStampRowAt(t *testing.T, path string, fs vfs.FS) ([]byte, bool) {
 	t.Helper()
 	db := rawOpen(t, path, fs)
 	defer func() { require.NoError(t, db.Close()) }()
-	stamp, present, err := readStorageFormatStamp(db)
+	v, err := rawGet(db, []byte("preference:"+storageFormatPreferenceKey))
 	require.NoError(t, err)
-	return stamp, present
+	return []byte(v.value), v.present
 }
 
-// writeRawStamp writes the stamp row straight into Pebble, the way only the
-// stamp writer and the recovery command can (the preference API refuses it).
+// writeRawStamp writes the stamp row straight into Pebble, in HEAD's format,
+// the way HEAD's stamp writer and the recovery command do (the preference
+// API refuses it).
 func writeRawStamp(t *testing.T, path string, fs vfs.FS, n int) {
 	t.Helper()
-	rec, err := storageFormatStampRecord(77, n)
+	payload, err := databaseVersionPayload(n)
+	require.NoError(t, err)
+	rec, err := json.Marshal(UserPreference{ID: 77, Key: storageFormatPreferenceKey, Value: &payload, UpdatedAt: time.Now()})
 	require.NoError(t, err)
 	rawSet(t, path, fs, "preference:"+storageFormatPreferenceKey, string(rec))
 }
@@ -102,36 +130,27 @@ func readSidecarFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestStorageFormat_FreshStoreStampedAtSupported(t *testing.T) {
-	fs := vfs.NewMem()
-	s, err := newPebbleStore("/fresh", fs)
-	require.NoError(t, err)
-	require.NoError(t, s.Close())
+// A fresh store is stamped at 1, as HEAD stamped it: stampStorageFormat, the
+// open-time repair HEAD called ensureStorageFormatStamp, writes an absent
+// stamp at the value an absent stamp already reads as (R1-23 D7). The
+// projection is unchanged and the sidecar says 1.
+func TestStorageFormat_FreshStoreStampedAtOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.pebble")
+	openAndClose(t, path)
 
-	stamp, present := rawStampAt(t, "/fresh", fs)
-	require.True(t, present)
+	stamp, present := rawStampAt(t, path, nil)
+	require.True(t, present, "the open-time repair stamps a fresh store, as HEAD did")
 	require.Equal(t, SupportedStorageFormat, stamp)
+	require.Equal(t, fmt.Sprintf("%d\n", SupportedStorageFormat), readSidecarFile(t, path))
 
 	// The in-memory constructor tests use stamps the same way.
 	m, err := NewPebbleStoreInMemory("/mem")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, m.Close()) }()
-	stamp, present, err = readStorageFormatStamp(m.db)
+	row, err := m.GetRaw("preference:" + storageFormatPreferenceKey)
 	require.NoError(t, err)
-	require.True(t, present)
-	require.Equal(t, SupportedStorageFormat, stamp)
-}
-
-func TestStorageFormat_EmptyStoreStampedAtBuild(t *testing.T) {
-	setBuildStorageFormat(t, 2)
-	fs := vfs.NewMem()
-	s, err := newPebbleStore("/empty", fs)
-	require.NoError(t, err)
-	require.NoError(t, s.Close())
-
-	stamp, present := rawStampAt(t, "/empty", fs)
-	require.True(t, present)
-	require.Equal(t, 2, stamp, "an empty store is created at the build's format, not the legacy one")
+	require.NotNil(t, row)
+	require.Equal(t, SupportedStorageFormat, decodeStampRow(t, row))
 }
 
 func TestStorageFormat_DataWithoutStampReadsAsLegacy(t *testing.T) {
@@ -141,89 +160,38 @@ func TestStorageFormat_DataWithoutStampReadsAsLegacy(t *testing.T) {
 	openAndClose(t, path)
 
 	stamp, present := rawStampAt(t, path, nil)
-	require.True(t, present)
-	require.Equal(t, legacyStorageFormat, stamp)
+	require.True(t, present, "the first core boot stamps a store HEAD left unstamped, as HEAD's open did")
+	require.Equal(t, legacyStorageFormat, stamp, "at the value an absent stamp already reads as")
 	require.Equal(t, fmt.Sprintf("%d\n", legacyStorageFormat), readSidecarFile(t, path))
 }
 
-func TestStorageFormat_OlderStoreRefusedBeforeAnyWrite(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "older.pebble")
-	rawSet(t, path, nil, "book:x", "{}")
-	setBuildStorageFormat(t, 2)
-
-	s, err := NewPebbleStore(path)
-	require.Error(t, err)
-	require.Nil(t, s)
-	var migErr *StorageMigrationRequiredError
-	require.True(t, errors.As(err, &migErr), "got %T: %v", err, err)
-	require.Equal(t, legacyStorageFormat, migErr.Stamp)
-	require.Equal(t, 2, migErr.Supported)
-	require.False(t, migErr.MarkerPresent)
-	require.True(t, strings.HasSuffix(err.Error(), "start serve to migrate"), err.Error())
-
-	require.Equal(t, []string{"book:x"}, rawKeysAt(t, path, nil),
-		"the refused open must write nothing: no counter: keys, no stamp")
-	_, statErr := os.Stat(StorageFormatSidecarPath(path))
-	require.True(t, errors.Is(statErr, os.ErrNotExist), "no sidecar after a refused open: %v", statErr)
-}
-
-func TestStorageFormat_MarkerPresentRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "marked.pebble")
-	openAndClose(t, path)
-	rawSet(t, path, nil, "preference:"+storageMigrationPreferenceKey, `{"id":99,"key":"storage_migration"}`)
-	before := rawKeysAt(t, path, nil)
-
-	_, err := NewPebbleStore(path)
-	var migErr *StorageMigrationRequiredError
-	require.True(t, errors.As(err, &migErr), "got %T: %v", err, err)
-	require.True(t, migErr.MarkerPresent)
-	require.Equal(t, SupportedStorageFormat, migErr.Stamp)
-	require.Contains(t, err.Error(), "storage_migration marker")
-	require.Contains(t, err.Error(), "restore the pre-migration checkpoint")
-	require.NotContains(t, err.Error(), "start serve to migrate",
-		"serve itself refuses a marked store, so telling the operator to start serve is circular")
-	require.Equal(t, before, rawKeysAt(t, path, nil), "the refused open wrote something")
-
-	db, st, err := openPebbleChecked(path, nil, openForCutover)
-	require.NoError(t, err)
-	require.True(t, st.markerPresent)
-	require.Equal(t, before, rawKeys(t, db), "the cut-over open wrote something")
-	require.NoError(t, db.Close())
-	require.Equal(t, before, rawKeysAt(t, path, nil))
-}
-
-func TestStorageFormat_CutoverModeStillRefusesNewer(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cutover-newer.pebble")
-	openAndClose(t, path)
-	setBuildStorageFormat(t, 0)
-
-	db, _, err := openPebbleChecked(path, nil, openForCutover)
-	require.Nil(t, db)
-	var tooNew *StorageFormatTooNewError
-	require.True(t, errors.As(err, &tooNew), "got %T: %v", err, err)
-}
-
-func TestStorageFormat_RefusesNewerStamp(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "newer.pebble")
-	openAndClose(t, path)
-	writeRawStamp(t, path, nil, SupportedStorageFormat+1)
-	before := rawKeysAt(t, path, nil)
-
-	_, err := NewPebbleStore(path)
-	var tooNew *StorageFormatTooNewError
-	require.True(t, errors.As(err, &tooNew), "got %T: %v", err, err)
-	require.Equal(t, "stamp", tooNew.Source)
-	require.Equal(t, SupportedStorageFormat+1, tooNew.Stamp)
-	require.Equal(t, SupportedStorageFormat, tooNew.Supported)
-	want := fmt.Sprintf("storage format %d (stamp) in %s is newer than this build supports (%d); refusing to open. "+
-		"Restore the pre-migration checkpoint and the binary that match this store: "+
-		"docs/system/runbooks.md#storage-format-restore", SupportedStorageFormat+1, path, SupportedStorageFormat)
-	require.Equal(t, want, err.Error())
-
-	stamp, present := rawStampAt(t, path, nil)
-	require.True(t, present)
-	require.Equal(t, SupportedStorageFormat+1, stamp, "the refused open changed the stamp")
-	require.Equal(t, before, rawKeysAt(t, path, nil), "the refused open wrote something")
+// The stamp row is not the guard's input on a core build (the sidecar is),
+// and no open rewrites it: whatever HEAD left there, decodable or not, is
+// byte-for-byte what a rollback to HEAD finds.
+func TestStorageFormat_StampRowNeverRewrittenAtOpen(t *testing.T) {
+	for name, row := range map[string]string{
+		"undecodable": "not json",
+		"empty value": `{"id":5,"key":"storage_format"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "stamp.pebble")
+			openAndClose(t, path)
+			rawSet(t, path, nil, "preference:"+storageFormatPreferenceKey, row)
+			openAndClose(t, path)
+			got, present := rawStampRowAt(t, path, nil)
+			require.True(t, present)
+			require.Equal(t, row, string(got))
+		})
+	}
+	t.Run("current", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "stamp.pebble")
+		openAndClose(t, path)
+		writeRawStamp(t, path, nil, SupportedStorageFormat)
+		before, _ := rawStampRowAt(t, path, nil)
+		openAndClose(t, path)
+		got, _ := rawStampRowAt(t, path, nil)
+		require.Equal(t, before, got)
+	})
 }
 
 func TestStorageFormat_RefusesNewerSidecar(t *testing.T) {
@@ -233,49 +201,30 @@ func TestStorageFormat_RefusesNewerSidecar(t *testing.T) {
 	before := rawKeysAt(t, path, nil)
 
 	_, err := NewPebbleStore(path)
-	var tooNew *StorageFormatTooNewError
+	var tooNew *storage.LevelTooNewError
 	require.True(t, errors.As(err, &tooNew), "got %T: %v", err, err)
-	require.Equal(t, "sidecar", tooNew.Source)
-	require.Equal(t, 2, tooNew.Stamp)
-	require.Contains(t, err.Error(), "docs/system/runbooks.md#storage-format-restore")
+	require.Equal(t, BooksOwner, tooNew.Owner)
+	require.Equal(t, "legacy-stamp", tooNew.Source)
+	require.Equal(t, 2, tooNew.Store)
+	require.Equal(t, SupportedStorageFormat, tooNew.Supported)
 	require.Equal(t, before, rawKeysAt(t, path, nil), "the refused open wrote something")
 	require.Equal(t, "2\n", readSidecarFile(t, path), "the refused open rewrote the sidecar")
 }
 
-func TestStorageFormat_CorruptSidecarIsRewritten(t *testing.T) {
+// A sidecar that exists and does not parse refuses the boot: it is the
+// guard's only input for the projection, so a store too new for this build
+// could not be ruled out (05-storage §5S.3.7, review MINOR-3).
+func TestStorageFormat_CorruptSidecarRefusesBoot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sidecar-garbage.pebble")
 	openAndClose(t, path)
 	require.NoError(t, os.WriteFile(StorageFormatSidecarPath(path), []byte("garbage"), 0o644))
-
-	openAndClose(t, path)
-	require.Equal(t, "1\n", readSidecarFile(t, path))
-}
-
-func TestStorageFormat_UndecodableStampFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "undecodable.pebble")
-	openAndClose(t, path)
-	rawSet(t, path, nil, "preference:"+storageFormatPreferenceKey, "not json")
+	before := rawKeysAt(t, path, nil)
 
 	_, err := NewPebbleStore(path)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "decode storage format stamp")
-
-	db := rawOpen(t, path, nil)
-	v, closer, err := db.Get([]byte("preference:" + storageFormatPreferenceKey))
-	require.NoError(t, err)
-	require.Equal(t, "not json", string(v), "the failed open must not restamp")
-	require.NoError(t, closer.Close())
-	require.NoError(t, db.Close())
-}
-
-func TestStorageFormat_EmptyStampValueFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty-value.pebble")
-	openAndClose(t, path)
-	rawSet(t, path, nil, "preference:"+storageFormatPreferenceKey, `{"id":5,"key":"storage_format"}`)
-
-	_, err := NewPebbleStore(path)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty value")
+	require.Contains(t, err.Error(), StorageFormatSidecarPath(path))
+	require.Equal(t, before, rawKeysAt(t, path, nil), "the refused open wrote something")
+	require.Equal(t, "garbage", readSidecarFile(t, path), "the refused open rewrote the sidecar")
 }
 
 func TestStorageFormat_SidecarWrittenAtOpen(t *testing.T) {
@@ -289,30 +238,32 @@ func TestStorageFormat_SidecarWrittenAtOpen(t *testing.T) {
 	require.True(t, errors.Is(err, os.ErrNotExist), "the temp file must be renamed away: %v", err)
 }
 
-func TestStorageFormat_ResetRestamps(t *testing.T) {
+// Reset wipes books' claims, the projection rows with them, and writes no
+// stamp back: the projection stays 1 (HEAD reads a store with data and no
+// stamp as 1), and core's keys, outside books' claims, survive.
+func TestStorageFormat_ResetWritesNoStamp(t *testing.T) {
 	s, err := NewPebbleStoreInMemory("/reset")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, s.Close()) }()
 	s.WaitForWarmup()
+	require.NoError(t, s.SetUserPreference("theme", "gotham-night"))
 
 	require.NoError(t, s.Reset())
-	stamp, present, err := readStorageFormatStamp(s.db)
+	row, err := s.GetRaw("preference:" + storageFormatPreferenceKey)
 	require.NoError(t, err)
-	require.True(t, present)
-	require.Equal(t, SupportedStorageFormat, stamp)
+	require.Nil(t, row)
+	gone, err := s.GetUserPreference("theme")
+	require.NoError(t, err)
+	require.Nil(t, gone)
 
-	// The stamp went in the wipe batch with preference ID 1, and the counter
-	// moved past it, so the next preference does not reuse the ID.
-	pref, err := s.GetUserPreference(storageFormatPreferenceKey)
-	require.NoError(t, err)
-	require.Equal(t, 1, pref.ID)
+	// The preference counter starts over, so the next preference is ID 1.
 	require.NoError(t, s.SetUserPreference("theme", "dark"))
 	theme, err := s.GetUserPreference("theme")
 	require.NoError(t, err)
-	require.Equal(t, 2, theme.ID)
+	require.Equal(t, 1, theme.ID)
 }
 
-func TestStorageFormat_CurrentStampStoreOpensAndServes(t *testing.T) {
+func TestStorageFormat_CurrentStoreOpensAndServes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current.pebble")
 	s, err := NewPebbleStore(path)
 	require.NoError(t, err)
@@ -321,13 +272,10 @@ func TestStorageFormat_CurrentStampStoreOpensAndServes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Close())
 
-	stamp, present := rawStampAt(t, path, nil)
-	require.True(t, present)
-	require.Equal(t, buildStorageFormat, stamp)
 	require.Equal(t, "1\n", readSidecarFile(t, path))
 
 	s2, err := NewPebbleStore(path)
-	require.NoError(t, err, "a current, unmarked store must open")
+	require.NoError(t, err, "a current store must open")
 	defer func() { require.NoError(t, s2.Close()) }()
 	got, err := s2.GetBookByID(created.ID)
 	require.NoError(t, err)
@@ -337,9 +285,12 @@ func TestStorageFormat_CurrentStampStoreOpensAndServes(t *testing.T) {
 
 // The brief names this ListUserPreferences; the function that iterates
 // preference: and silently skips rows that do not decode is
-// GetAllUserPreferences.
+// GetAllUserPreferences. The stamp row HEAD wrote still decodes as one.
 func TestStorageFormat_ListUserPreferencesStillDecodes(t *testing.T) {
-	s, err := NewPebbleStoreInMemory("/prefs")
+	path := filepath.Join(t.TempDir(), "prefs.pebble")
+	openAndClose(t, path)
+	writeRawStamp(t, path, nil, SupportedStorageFormat)
+	s, err := NewPebbleStore(path)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, s.Close()) }()
 
@@ -379,13 +330,13 @@ func TestStorageFormat_PreferenceAPIRefusesGuardedKeys(t *testing.T) {
 		require.ErrorIs(t, s.SetUserPreference(key, "garbage"), ErrReservedPreferenceKey, key)
 		require.ErrorIs(t, s.DeleteUserPreference(key), ErrReservedPreferenceKey, key)
 	}
-	stamp, present, err := readStorageFormatStamp(s.db)
+	row, err := s.GetRaw("preference:" + storageFormatPreferenceKey)
 	require.NoError(t, err)
-	require.True(t, present)
-	require.Equal(t, SupportedStorageFormat, stamp)
+	require.NotNil(t, row, "the refused delete left the open-time stamp in place")
+	require.Equal(t, SupportedStorageFormat, decodeStampRow(t, row), "the refused set wrote nothing")
 
-	// db_version and migration_<n> stay writable at the store: RunMigrations
-	// writes them through SetUserPreference. The HTTP handler rejects them.
+	// db_version and migration_<n> stay writable at the store (books'
+	// VersionSource and the tests write them). The HTTP handler rejects them.
 	require.NoError(t, s.SetUserPreference("migration_9999", "{}"))
 	require.True(t, IsReservedPreferenceKey("migration_9999"))
 	require.True(t, IsReservedPreferenceKey(dbVersionPreferenceKey))
@@ -397,12 +348,13 @@ func TestStorageFormat_RefusedOpenDoesNotRatchetPebbleFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "min-format.pebble")
 	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
 	require.NoError(t, err)
-	require.NoError(t, db.Set([]byte("preference:"+storageMigrationPreferenceKey), []byte(`{"id":1}`), pebble.Sync))
+	require.NoError(t, db.Set([]byte("book:x"), []byte("{}"), pebble.Sync))
 	require.NoError(t, db.Close())
+	require.NoError(t, os.WriteFile(StorageFormatSidecarPath(path), []byte("2\n"), 0o644))
 
 	_, err = NewPebbleStore(path)
-	var migErr *StorageMigrationRequiredError
-	require.True(t, errors.As(err, &migErr), "got %T: %v", err, err)
+	var tooNew *storage.LevelTooNewError
+	require.True(t, errors.As(err, &tooNew), "got %T: %v", err, err)
 
 	db, err = pebble.Open(path, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
 	require.NoError(t, err)
@@ -586,6 +538,7 @@ func TestStorageFormat_RepairDBVersionCappedAtLatestMigration(t *testing.T) {
 func TestStorageFormat_RepairRefusesStampDeleteWhenBuildIsNewer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "repair-delete-newer.pebble")
 	openAndClose(t, path)
+	writeRawStamp(t, path, nil, 1) // as HEAD left it
 	setBuildStorageFormat(t, 2)
 
 	_, err := RepairReservedPreference(path, storageFormatPreferenceKey, 0)
@@ -621,8 +574,6 @@ func TestStorageFormat_RepairDeletesMarker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "repair-marker.pebble")
 	openAndClose(t, path)
 	rawSet(t, path, nil, "preference:"+storageMigrationPreferenceKey, "x")
-	_, err := NewPebbleStore(path)
-	require.Error(t, err)
 
 	change, err := RepairReservedPreference(path, storageMigrationPreferenceKey, 0)
 	require.NoError(t, err)

@@ -1,15 +1,13 @@
 // file: internal/database/provider_throttle_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: b66678de-73cb-4f2b-8d84-94bea576add7
-// last-edited: 2026-10-18
+// last-edited: 2026-11-08
 
 package database
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 func newThrottleTestStore(t *testing.T) *PebbleStore {
@@ -90,12 +88,11 @@ func TestProviderThrottle_EmptyIDRejected(t *testing.T) {
 // "provider_throttle_v2:" is the realistic hazard: '_' (0x5f) sorts above ':'
 // (0x3a), so it lands inside an unbounded scan.
 func TestProviderThrottle_LoadIsScopedToItsPrefix(t *testing.T) {
-	s := newThrottleTestStore(t)
+	// The neighbour is outside books' claims, so it is in the engine before
+	// the store opens, as in a store HEAD wrote.
+	s := openWithUnclaimedKeys(t, map[string]string{"provider_throttle_v2:google-books": "{}"})
 	if err := s.SaveProviderThrottle("google-books", []byte("{}")); err != nil {
 		t.Fatalf("save: %v", err)
-	}
-	if err := s.db.Set([]byte("provider_throttle_v2:google-books"), []byte("{}"), pebble.Sync); err != nil {
-		t.Fatalf("seed neighbour: %v", err)
 	}
 	rows, err := s.LoadProviderThrottles()
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.5.1
+// version: 1.5.3
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // Router-level coverage for the credential guard (2026-10-07): an API key
 // (here an all-scope admin key, the strongest there is) gets 403 from the
@@ -83,7 +83,11 @@ func setupCredGuardServerOpts(t *testing.T, cfg func(*config.Config), startRegis
 	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
-	require.NoError(t, database.RunMigrations(store))
+	// Routes under test read through memdb (the purge and forget paths sample
+	// the library's live files; ops definitions wait for the startup warmup)
+	// and answer 503/409 until it serves. The store open no longer runs
+	// HEAD's migration runner, whose time used to cover the warmup by luck.
+	store.WaitForWarmup()
 	_, _, err = auth.SeedRoles(store)
 	require.NoError(t, err)
 

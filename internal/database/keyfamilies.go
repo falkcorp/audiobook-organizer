@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.18.4
+// version: 1.19.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package database
 
@@ -131,10 +131,14 @@ var keyFamilies = []KeyFamily{
 	{"ext_id:", "external id mappings", "internal/database/pebble_store_externalids.go"},
 	{"import_path:", "import paths", "internal/database/pebble_store_importpaths.go"},
 	{"itunes:", "iTunes library fingerprints", "internal/database/pebble_store_stats.go"},
+	{"itunes_writeback:", "retired: the removed iTunes write-back's durable queue, held removes and status (itunes_writeback:q:, itunes_writeback:held:remove:, itunes_writeback:status); read and deleted only by the legacy cleanup", "internal/server/itunes_writeback_cleanup.go"},
 	{"library:", "legacy library paths, migrated to import_path:", "internal/database/pebble_store.go"},
 	{"merge_user_state_pending:", "pending user-state repairs after a merge", "internal/merge/pending_repair.go"},
 	{"merge:combine-journal:", "book combine journal", "internal/merge/combine_journal.go"},
 	{"merge:combine-retire:", "links a combine's absorbed shell to each retire op that retired it (one key per shell and op), so the combine's undo reverses the retire first", "internal/merge/retire_link.go"},
+	{"merge:combine-undo-applied:", "a combine undo's applied record, written once its writes succeed and before the journal's status write; deleted once the journal reads undone", "internal/merge/combine_journal.go"},
+	{"merge:group-redirect:", "where a group a merge emptied went (merge:group-redirect:<group> -> the group that took its members), for undo and restore", "internal/merge/group_redirect.go"},
+	{"merge:sibling-journal:", "book merge sibling-move journals: the version-group siblings a merge moved, read by the sibling undo", "internal/merge/sibling_journal.go"},
 	{"merge:survivor-reconcile:", "per-user markers that make a touched survivor's put-back safe to re-run", "internal/merge/combine_journal.go"},
 	{"scanner:ai_parse_single_fail:", "single-file AI parse give-up markers by path hash", "internal/scanner/ai_parse_giveup.go"},
 	{"apply_refusal:", "structural refusals the cached-metadata batch apply remembers, one per book, with the fingerprint of the inputs that produced them", "internal/server/batch_apply_refusal.go"},
@@ -153,6 +157,7 @@ var keyFamilies = []KeyFamily{
 	{"rejected_candidate:", "rejected batch metadata candidates", "internal/server/metadata_batch_candidates.go"},
 	{"revert_settle_owed:", "operation reverts owed a settle pass (revert_settle_owed:#corrupt:<time>:<record> holds an undecodable record set aside)", "internal/audiobooks/revert_settle.go"},
 	{"scan_fail:", "scan quarantine records by path hash", "internal/database/pebble_store_quarantine.go"},
+	{"scan_identity_proposal:", "what a rescan read for an existing book's title, author, series and position, kept for the reviewed fixer maintenance.scan-proposed-identity instead of overwriting the row", "internal/database/scan_identity_proposal.go"},
 	{"split_book_candidate:", "split-book dedup candidates", "internal/dedup/split_book_storage.go"},
 	{"tombstone:", "deleted-book tombstones", "internal/database/pebble_store.go"},
 	{"user_tag:", "user tags", "internal/database/pebble_store.go"},
@@ -262,6 +267,7 @@ var keyFamilies = []KeyFamily{
 	{"system:", "system flags and markers", "internal/database/pebble_store_atpath_index.go"},
 	{"system:backfill:", "backfill completion markers and cursors", "internal/database/pebble_store_atpath_index.go"},
 	{"system:census:", "last exact db census and its run progress", "internal/database/census_exact.go"},
+	{"versions:trash_cleanup:merge_stop_streak", "one bare key: the consecutive nights the trash cleanup stopped for the merge lock (a decimal integer)", "internal/versions/lifecycle.go"},
 
 	// ── Operations ──
 	{"op:", "legacy op dedup and completion records", "internal/database/pebble_store_ops_v2.go"},
@@ -276,6 +282,7 @@ var keyFamilies = []KeyFamily{
 	{"operation:", "v1 operation rows", "internal/database/pebble_store_operations.go"},
 	{"operationlog:", "v1 operation logs", "internal/database/pebble_store_operations.go"},
 	{"opstate:", "v1 operation state (checkpoints); the opstate:<opID>:params suffix is LIVE, not legacy: it is the backfill-file-hashes chunk journal (a crash-recovery record, internal/maintenance/jobs/backfill_file_hashes.go), so a cleanup must not sweep it; DeleteOperationState removes it with the op", "internal/database/pebble_store_operations.go"},
+	{"opstest:", "scratch keys of the pkg/ops/opstest harness's in-memory worlds (the DirtySet example drains opstest:dirty:); no production code writes it. Registered rather than given a test-only claim option on the standalone opener so the opener has no test-only surface (R1-23 seams note D20)", "pkg/ops/opstest/world.go"},
 	{"opsummary:", "v1 operation summaries", "internal/database/pebble_store_operations.go"},
 	{"opv2:", "operations v2", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:act:", "operations v2 active set", "internal/database/pebble_store_ops_v2.go"},
