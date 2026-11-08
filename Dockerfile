@@ -1,5 +1,5 @@
 # file: Dockerfile
-# version: 2.7.6
+# version: 2.7.7
 # guid: audiobook-organizer-dockerfile-production
 # last-edited: 2026-11-07
 
@@ -18,10 +18,22 @@ WORKDIR /build/web
 # its repo root two levels above itself, so it sits at /build/scripts/ci/ and this
 # stage's WORKDIR is /build/web. prefer-offline is the old flag, now through npm's
 # own environment so the script needs no flag plumbing.
+#
+# The four steps of 07 §7.3.2 "Docker frontend stage, in order", with the first
+# three run by the entry point in one RUN: core/web (manifests and sources, since
+# web/'s file: dependency points at the dist/ the ordered build writes; .dockerignore
+# keeps the host's node_modules and dist/ out) and web/'s manifests are copied, then
+# `build_web.sh deps` runs npm ci in core/web, builds @mediacore/api-client, and runs
+# npm ci in web/. A change under web/src never reaches this layer.
 COPY scripts/ci/build_web.sh ../scripts/ci/
+COPY core/web/ ../core/web/
 COPY web/package*.json ./
 RUN npm_config_prefer_offline=true sh ../scripts/ci/build_web.sh deps
 
+# Step 4. The optional UI build ID (07 §7.6.3): the context has no .git to derive
+# one from, so a release passes --build-arg BUILD_ID=...; empty or unset falls
+# through to the timestamp rule of web/build-id.ts. Only this stage declares it.
+ARG BUILD_ID=
 COPY web/ ./
 RUN npm run build
 
