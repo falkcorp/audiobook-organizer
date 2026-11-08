@@ -1,5 +1,5 @@
 // file: internal/books/logging.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bed10864-095d-4c93-8263-f11300b314b9
 // last-edited: 2026-11-08
 
@@ -8,13 +8,13 @@ package books
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/mediacore/app"
 	corelog "github.com/falkcorp/mediacore/log"
 )
@@ -45,9 +45,7 @@ const logFilePath = "logs/" + appID + ".log"
 func logSettings(level, stateDir string) (s corelog.Settings, warn string) {
 	s = corelog.DefaultSettings()
 	if lv := strings.TrimSpace(level); lv != "" {
-		if _, err := corelog.ParseLevel(lv); err != nil {
-			warn = fmt.Sprintf("log_level %q is not trace, debug, info, warn or error; using info", level)
-		} else {
+		if _, warn = logger.ParseLevelOrInfo(level); warn == "" {
 			s.Level = strings.ToLower(lv)
 		}
 	}

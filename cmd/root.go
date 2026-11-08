@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -103,7 +103,7 @@ var scanCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
-		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
@@ -189,7 +189,7 @@ var organizeCmd = &cobra.Command{
 		if config.AppConfig.RootDir == "" {
 			return fmt.Errorf("root directory not specified")
 		}
-		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel)()
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
 		// Initialize database
 		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
@@ -238,6 +238,13 @@ var serveCmd = &cobra.Command{
 	Short: "Start the web server",
 	Long:  `Start the web server to provide a web interface for audiobook management.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Lines before app.New installs the log pipeline (config, store open,
+		// migrations, the key guard, encryption init) go to standard output at
+		// log_level, as the rest of serve's output does, not to slog's stock
+		// default on standard error. The App's process install stacks on this
+		// and restores it. nil: Options reports an unknown level once, later.
+		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, nil)()
+
 		// Every startup step runs through one *startup.Steps, which applies
 		// the step's reviewed class from startup.Table: a Fatal step's error
 		// is returned and stops the process before it serves; a Degraded
