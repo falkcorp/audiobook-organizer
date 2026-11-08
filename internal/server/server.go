@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.6
+// version: 2.114.7
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-07
 
@@ -54,6 +54,7 @@ import (
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	diagflight "github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -202,7 +203,7 @@ type Server struct {
 	collectionHV    *handlers.CollectionHandler
 	httpServer      *http.Server
 	// httpBoundAddr is the main listener's real address ("host:port"),
-	// stored by configureAndStartHTTP once the port is bound and before
+	// stored by bindMainListener once the port is bound and before
 	// READY=1 is sent. With --port 0 it is the only record of the port.
 	httpBoundAddr          atomic.Pointer[string]
 	router                 *gin.Engine
@@ -406,6 +407,20 @@ type Server struct {
 	shutdownArmed chan struct{}
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
+
+	// life is the state one lifecycle run shares between StartHook, the
+	// post-listen start, the pre-drain steps and StopHook (server_lifecycle.go).
+	life lifecycleRun
+	// stopped is closed when StopHook returns: the composition root waits on
+	// it before closing the store, because the kernel abandons a stop hook at
+	// the shutdown budget without stopping it (Stopped).
+	stopped  chan struct{}
+	stopOnce sync.Once
+	// streamsClosing is closed by the pre-drain step (closeStreams), before
+	// the listener drains, so the long-lived event streams (/api/events, the
+	// ops v2 events) end instead of holding the drain for its whole budget.
+	streamsClosing   chan struct{}
+	closeStreamsOnce sync.Once
 
 	// served is the App's Provider registry, bound once by AttachMetrics
 	// after app.New and before Run (R1-15: the Provider exists only once New
@@ -653,6 +668,18 @@ func newBaseRouter() *gin.Engine {
 	return router
 }
 
+// LegacyHandler is the gin engine books mounts with Registrar.MountLegacy
+// (R1-15): every legacy route, its global middleware (logger, recovery,
+// security headers, CORS, the Basic gate, compression, tracing) and the SPA
+// NoRoute chain.
+func (s *Server) LegacyHandler() http.Handler { return s.router }
+
+// LegacyRoutes is books' legacy route manifest for an engine built with the
+// ABS surface on or off, without an engine: the table LegacyManifest checks a
+// built engine against. internal/books derives Manifest.LegacyPrefixes from it
+// at P1, before Register builds the engine.
+func LegacyRoutes(absEnabled bool) []httpapi.LegacyRoute { return legacyManifest(absEnabled) }
+
 // servedMetrics is the registry AttachMetrics binds: the App's Provider
 // registry and the handler that serves it.
 type servedMetrics struct {
@@ -768,6 +795,11 @@ func NewServer(store database.Store) *Server {
 		slog.Warn("failed to disable trusted proxies", "err", err)
 	}
 
+	// First: marks the request for the perimeter shim (perimeter_shim.go),
+	// so a response this engine writes is told apart from one core's router
+	// writes itself, which the shim gives HEAD's perimeter (R1-15).
+	router.Use(perimeterSeen())
+
 	// Custom logger that skips noisy polling endpoints
 	// (UOS-14: /operations/active removed; SkipPaths entry removed)
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
@@ -833,6 +865,8 @@ func NewServer(store database.Store) *Server {
 		traceSnap:              flightRec,
 		shutdownArmed:          make(chan struct{}),
 		opsV3Closing:           make(chan struct{}),
+		stopped:                make(chan struct{}),
+		streamsClosing:         make(chan struct{}),
 		router:                 router,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),

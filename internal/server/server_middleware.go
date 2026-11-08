@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.5
+// version: 1.12.6
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 package server
 
@@ -55,35 +55,9 @@ func cachedImportPaths(store importPathLister) ([]database.ImportPath, error) {
 
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		origin := strings.TrimSpace(c.GetHeader("Origin"))
-		allowedOrigin := ""
-		isDevMode := gin.Mode() == gin.DebugMode
-
-		if origin != "" {
-			// Dev-mode CORS: allow Vite dev server only.
-			if isDevMode && (origin == "http://localhost:5173" || origin == "https://localhost:5173") {
-				allowedOrigin = origin
-			}
-
-			// Always allow same-origin requests.
-			host := strings.TrimSpace(c.Request.Host)
-			if host != "" {
-				if origin == "http://"+host || origin == "https://"+host {
-					allowedOrigin = origin
-				}
-			}
-		}
-
-		if allowedOrigin != "" {
-			c.Header("Access-Control-Allow-Origin", allowedOrigin)
-			c.Header("Vary", "Origin")
-			c.Header("Access-Control-Allow-Credentials", "true")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, Cache-Control, X-Requested-With")
-			c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
-		}
-
+		origin, allowed := setCORSHeaders(c.Writer.Header(), c.Request)
 		if c.Request.Method == http.MethodOptions {
-			if origin != "" && allowedOrigin == "" {
+			if origin != "" && !allowed {
 				c.AbortWithStatus(http.StatusForbidden)
 				return
 			}
@@ -95,25 +69,65 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
+// setCORSHeaders writes the CORS response headers for r's Origin when that
+// origin is allowed (the Vite dev server in debug mode, or the request's own
+// host) and returns the trimmed origin and whether it was allowed. Shared by
+// corsMiddleware and the perimeter shim (perimeterShim), so a response core's
+// router writes itself carries the same headers as gin's.
+func setCORSHeaders(h http.Header, r *http.Request) (origin string, allowed bool) {
+	origin = strings.TrimSpace(r.Header.Get("Origin"))
+	allowedOrigin := ""
+	isDevMode := gin.Mode() == gin.DebugMode
+
+	if origin != "" {
+		// Dev-mode CORS: allow Vite dev server only.
+		if isDevMode && (origin == "http://localhost:5173" || origin == "https://localhost:5173") {
+			allowedOrigin = origin
+		}
+
+		// Always allow same-origin requests.
+		host := strings.TrimSpace(r.Host)
+		if host != "" {
+			if origin == "http://"+host || origin == "https://"+host {
+				allowedOrigin = origin
+			}
+		}
+	}
+
+	if allowedOrigin != "" {
+		h.Set("Access-Control-Allow-Origin", allowedOrigin)
+		h.Set("Vary", "Origin")
+		h.Set("Access-Control-Allow-Credentials", "true")
+		h.Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, Cache-Control, X-Requested-With")
+		h.Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+	}
+	return origin, allowedOrigin != ""
+}
+
 // securityHeadersMiddleware sets browser security headers on every response.
 // TLS-only headers (HSTS) are added only when the connection is HTTPS. The CSP
 // and Permissions-Policy are set before the handler runs, so a handler that
 // sets its own Content-Security-Policy keeps it (see csp.go).
 func securityHeadersMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "SAMEORIGIN")
-		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Header("X-XSS-Protection", "0") // tell browsers to use built-in XSS filters, not legacy mode
-		c.Header("Content-Security-Policy", contentSecurityPolicy())
-		c.Header("Reporting-Endpoints", cspReportGroup+"=\""+cspReportPath+"\"") // report-to target for the CSP's report-to directive
-		c.Header("Permissions-Policy", permissionsPolicy)
-
-		if c.Request.TLS != nil || strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https") {
-			c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		}
-
+		setSecurityHeaders(c.Writer.Header(), c.Request)
 		c.Next()
+	}
+}
+
+// setSecurityHeaders writes the browser security headers for r: shared by
+// securityHeadersMiddleware and the perimeter shim (perimeterShim).
+func setSecurityHeaders(h http.Header, r *http.Request) {
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("X-Frame-Options", "SAMEORIGIN")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	h.Set("X-XSS-Protection", "0") // tell browsers to use built-in XSS filters, not legacy mode
+	h.Set("Content-Security-Policy", contentSecurityPolicy())
+	h.Set("Reporting-Endpoints", cspReportGroup+"=\""+cspReportPath+"\"") // report-to target for the CSP's report-to directive
+	h.Set("Permissions-Policy", permissionsPolicy)
+
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 	}
 }
 

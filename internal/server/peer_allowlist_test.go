@@ -1,7 +1,7 @@
 // file: internal/server/peer_allowlist_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 89583aea-53c7-4ab3-9f35-dea7d459f40f
-// last-edited: 2026-10-21
+// last-edited: 2026-11-07
 
 package server
 
@@ -165,10 +165,10 @@ func TestValidatePeerAllowList(t *testing.T) {
 }
 
 // A bad ALLOWED_PEER_CIDRS must stop the service starting, not be skipped.
-func TestConfigureAndStartHTTP_RefusesToStartOnABadAllowList(t *testing.T) {
+func TestListenR1_RefusesToStartOnABadAllowList(t *testing.T) {
 	setAllowedPeerCIDRs(t, "192.0.2.0/24, 10.0.0.0/99")
 	s := listenTestServer()
-	err := s.configureAndStartHTTP(listenTestConfig("0"))
+	err := s.startListenersForTest(listenTestConfig("0"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ALLOWED_PEER_CIDRS")
 	require.Contains(t, err.Error(), "10.0.0.0/99")
@@ -247,7 +247,7 @@ func TestRedirectServerHandler_IsGatedAndRedirects(t *testing.T) {
 // The gate replaces gin's handler on EVERY serving listener. Each is driven
 // with a peer that is not allowed; a listener still serving s.router directly
 // would answer 200.
-func TestConfigureAndStartHTTP_EveryListenerIsGatedByThePeerAllowList(t *testing.T) {
+func TestListenR1_EveryListenerIsGatedByThePeerAllowList(t *testing.T) {
 	setAllowedPeerCIDRs(t, "192.0.2.0/24")
 	certPath, keyPath, _ := writeSelfSignedCert(t)
 	cfg := listenTestConfig("0")
@@ -255,7 +255,7 @@ func TestConfigureAndStartHTTP_EveryListenerIsGatedByThePeerAllowList(t *testing
 	cfg.HTTP3Port = "0"
 
 	s := listenTestServer()
-	require.NoError(t, s.configureAndStartHTTP(cfg))
+	require.NoError(t, s.startListenersForTest(cfg))
 	t.Cleanup(func() {
 		_ = s.httpServer.Close()
 		if s.http3Server != nil {
@@ -288,10 +288,10 @@ func TestConfigureAndStartHTTP_EveryListenerIsGatedByThePeerAllowList(t *testing
 	require.Equal(t, http.StatusOK, probe(s.http3Server.Handler, "127.0.0.1:5000"))
 }
 
-func TestConfigureAndStartHTTP_PlainHTTPListenerIsGated(t *testing.T) {
+func TestListenR1_PlainHTTPListenerIsGated(t *testing.T) {
 	setAllowedPeerCIDRs(t, "192.0.2.0/24")
 	s := listenTestServer()
-	require.NoError(t, s.configureAndStartHTTP(listenTestConfig("0")))
+	require.NoError(t, s.startListenersForTest(listenTestConfig("0")))
 	t.Cleanup(func() { _ = s.httpServer.Close() })
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	req.RemoteAddr = "8.8.8.8:5000"
