@@ -158,6 +158,15 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 			return fmt.Errorf("kernel: before telemetry: %w", err)
 		}
 	}
+	if f := k.cfg.ProcessLogging; f != nil && !describe {
+		stdlib := k.RootLogger().Handler()
+		if k.logging != nil {
+			stdlib = k.logging.Handler()
+		}
+		if err := f(k.RootLogger(), stdlib); err != nil {
+			return fmt.Errorf("kernel: process logging: %w", err)
+		}
+	}
 	ids := make([]string, 0, len(k.entries))
 	for _, e := range k.entries {
 		ids = append(ids, string(e.man.ID))

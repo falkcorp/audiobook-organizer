@@ -1,5 +1,5 @@
 // file: core/app/noglobals_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 68d64f45-c7be-4bf0-8c21-6be99047ed03
 // last-edited: 2026-11-08
 
@@ -20,20 +20,19 @@ import (
 	"github.com/falkcorp/mediacore/archtest"
 )
 
-// processDefaultsExempt maps the two functions of package app that may touch
-// the process defaults (R1-15) to what each may call, and nothing else in core
-// may: the seven process installs 05-logging §10 lists (05-metrics §12 names
-// the three otel provider and propagator setters among them), split between
-// installOTelDiagnostics (the SDK logger and error handler, which New installs
-// before the Provider for Options.ProcessDefaults) and InstallProcessDefaults
-// (the other five), plus what InstallProcessDefaults' restore needs to put
-// them back: the three otel getters it reads the previous values with, and
-// log.SetFlags, because slog.SetDefault zeroes log's flags.
+// processDefaultsExempt maps the three functions of package app that may touch
+// the process defaults (R1-15, R1-18) to what each may call, and nothing else
+// in core may: the seven process installs 05-logging §10 lists (05-metrics §12
+// names the three otel provider and propagator setters among them), split
+// between installOTelDiagnostics (the SDK logger and error handler, which New
+// installs before the Provider for Options.ProcessDefaults), installSlogDefault
+// (the slog default and the standard library log bridge, which New installs
+// before any module's Register) and InstallProcessDefaults (the other three),
+// plus what InstallProcessDefaults' restore needs to put them back: the three
+// otel getters it reads the previous values with.
 func processDefaultsExempt() map[string]map[string]bool {
 	return map[string]map[string]bool{
 		"InstallProcessDefaults": {
-			"log/slog.SetDefault":                           true,
-			"log.SetOutput":                                 true,
 			"go.opentelemetry.io/otel.SetMeterProvider":     true,
 			"go.opentelemetry.io/otel.SetTracerProvider":    true,
 			"go.opentelemetry.io/otel.SetTextMapPropagator": true,
@@ -41,7 +40,14 @@ func processDefaultsExempt() map[string]map[string]bool {
 			"go.opentelemetry.io/otel.GetMeterProvider":     true,
 			"go.opentelemetry.io/otel.GetTracerProvider":    true,
 			"go.opentelemetry.io/otel.GetTextMapPropagator": true,
-			"log.SetFlags": true,
+		},
+		// The slog default and the standard library log bridge, and what its
+		// restore puts back (log.SetFlags, because slog.SetDefault zeroes
+		// log's flags). New calls it before any module's Register.
+		"installSlogDefault": {
+			"log/slog.SetDefault": true,
+			"log.SetOutput":       true,
+			"log.SetFlags":        true,
 		},
 		"installOTelDiagnostics": {
 			"go.opentelemetry.io/otel.SetLogger":       true,
@@ -265,8 +271,11 @@ func manor() {
 	_, _ = signal.NotifyContext(nil)
 }
 
-func InstallProcessDefaults() {
+func installSlogDefault() {
 	slog.SetDefault(nil)
+}
+
+func InstallProcessDefaults() {
 	otel.SetTracerProvider(nil)
 	_ = promhttp.Handler()
 	otel.SetLogger(nil)
