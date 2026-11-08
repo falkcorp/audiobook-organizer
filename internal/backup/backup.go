@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.22.4
+// version: 1.22.5
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package backup
 
@@ -637,6 +637,23 @@ var ErrVerificationUnsupported = errors.New("no stored checksum for this backup"
 // truncated, or tampered with since it was created.
 var ErrChecksumMismatch = errors.New("backup archive does not match its recorded checksum")
 
+// ErrBackupNotFound is returned by RestoreBackupIn when backupDir holds no
+// file of the requested name. The error also matches os.ErrNotExist.
+var ErrBackupNotFound = errors.New("backup not found")
+
+// RefusedBeforeWriting reports whether err is one RestoreBackupIn returns
+// before it writes anything into the target: the backup was not found, or
+// verification was asked for and failed. Every other error, including one
+// RestoreBackupIn returns before the extraction today, may follow writes, so
+// a caller that must react to a restore's writes treats it as a restore.
+// os.ErrNotExist is not on the list: the extraction's own file errors match
+// it too.
+func RefusedBeforeWriting(err error) bool {
+	return errors.Is(err, ErrBackupNotFound) ||
+		errors.Is(err, ErrVerificationUnsupported) ||
+		errors.Is(err, ErrChecksumMismatch)
+}
+
 // checksumSidecarPath returns the path of the sidecar file CreateBackup writes
 // next to backupPath, holding a sha256sum(1)-formatted line.
 func checksumSidecarPath(backupPath string) string {
@@ -748,7 +765,7 @@ func RestoreBackupIn(backupDir, filename, targetPath string, verify bool) error 
 		}
 	}
 	if archiveEntry == nil {
-		return fmt.Errorf("backup %q not found in %s: %w", filename, backupDir, os.ErrNotExist)
+		return fmt.Errorf("%w: %q in %s: %w", ErrBackupNotFound, filename, backupDir, os.ErrNotExist)
 	}
 	archivePath := filepath.Join(backupDir, archiveEntry.Name())
 
