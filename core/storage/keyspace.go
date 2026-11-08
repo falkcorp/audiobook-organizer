@@ -28,9 +28,14 @@ type Keyspace struct {
 
 func (Keyspace) handle() {}
 
-// errTxKeyspaceWrite: a write on a migration's Keyspace, which would commit
-// outside the step's one batch.
-var errTxKeyspaceWrite = errors.New("storage: a migration's Keyspace is read through the step; write with MigrationTx.Set or Delete")
+// errTxKeyspaceWrite: a write through a migration step's handles that would
+// commit outside the step's one batch: a direct write on its Keyspace, or a
+// batch or sequence taken from its Keyspace (or a Sub) or its LegacyRange.
+var errTxKeyspaceWrite = errors.New("storage: a migration step writes only through its one batch: MigrationTx.Set or Delete, or its LegacyRange's own Set, Delete and DeleteRange; a batch or sequence of the step's handles would commit outside it")
+
+// errTxSnapshot: a snapshot of a migration step's handle, which reads the
+// engine and so would not see the step's own writes.
+var errTxSnapshot = errors.New("storage: a snapshot inside a migration step would not see the step's own writes; read through the step's handles")
 
 // Prefix is the keyspace's absolute prefix: "m/tv/" or "c/tasks/".
 func (k Keyspace) Prefix() string { return string(k.prefix) }
@@ -98,13 +103,18 @@ func (k Keyspace) NewIterator(ctx context.Context, opts ScanOptions) (*Iterator,
 	return k.scope().newIterator(ctx, opts, nil)
 }
 
-// NewBatch is a write-only batch with k bound.
+// NewBatch is a write-only batch with k bound. On a migration step's
+// Keyspace (MigrationTx.Keyspace, or a Sub of it) the batch refuses every
+// write and its Commit (errTxKeyspaceWrite).
 func (k Keyspace) NewBatch() *Batch { return newBatch(k, false) }
 
-// NewIndexedBatch is a batch whose reads see its own writes.
+// NewIndexedBatch is a batch whose reads see its own writes; refused on a
+// migration step's Keyspace as NewBatch is.
 func (k Keyspace) NewIndexedBatch() *Batch { return newBatch(k, true) }
 
-// Snapshot is a point-in-time, read-only view scoped to k.
+// Snapshot is a point-in-time, read-only view scoped to k. A migration
+// step's Keyspace refuses it (errTxSnapshot): it would read the engine, not
+// the step's batch.
 func (k Keyspace) Snapshot() (*Snapshot, error) { return newSnapshot(k.scope()) }
 
 // Sequence returns a named monotonic uint64 allocator stored in the keyspace
@@ -117,6 +127,10 @@ func (k Keyspace) Sequence(name string) *Sequence {
 	}
 	if err := keys.ValidName(name); err != nil {
 		return &Sequence{err: fmt.Errorf("storage: sequence name: %w", err)}
+	}
+	if k.tx != nil {
+		// Its lease commits on its own, outside the step's one batch.
+		return &Sequence{err: errTxKeyspaceWrite}
 	}
 	rel := keys.Join(keys.Str("_seq"), keys.Str(name))
 	abs := string(k.prefix) + string(rel)

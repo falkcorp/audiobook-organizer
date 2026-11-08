@@ -72,6 +72,12 @@ func newBatch(origin Handle, indexed bool) *Batch {
 		b.err = ErrInvalidKeyspace
 		return b
 	}
+	if s.tx != nil {
+		// A migration step's handle: this batch would commit outside the
+		// step's one batch, so every stage and the Commit refuse.
+		b.err = errTxKeyspaceWrite
+		return b
+	}
 	b.bound = append(b.bound, s)
 	return b
 }
@@ -109,6 +115,8 @@ func (b *Batch) Bind(h Handle) *Batch {
 		b.poison(fmt.Errorf("storage: Bind of a zero handle: %w", ErrInvalidKeyspace))
 	case s.db != b.db:
 		b.poison(fmt.Errorf("storage: Bind of a handle of another store: %w", ErrOutsideKeyspace))
+	case s.tx != nil:
+		b.poison(fmt.Errorf("storage: Bind of a migration step's handle: %w", errTxKeyspaceWrite))
 	case b.boundScope(h) == nil:
 		b.bound = append(b.bound, s)
 	}

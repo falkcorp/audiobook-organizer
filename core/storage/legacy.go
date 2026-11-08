@@ -45,13 +45,17 @@ func (r LegacyRange) NewIterator(ctx context.Context, opts ScanOptions) (*Iterat
 	return r.scope().newIterator(ctx, opts, nil)
 }
 
-// NewBatch is a write-only batch with r bound.
+// NewBatch is a write-only batch with r bound. On a migration step's range
+// (MigrationTx.Legacy) the batch refuses every write and its Commit
+// (errTxKeyspaceWrite): the step's writes go through r's own methods.
 func (r LegacyRange) NewBatch() *Batch { return newBatch(r, false) }
 
-// NewIndexedBatch is a batch whose reads see its own writes.
+// NewIndexedBatch is a batch whose reads see its own writes; refused on a
+// migration step's range as NewBatch is.
 func (r LegacyRange) NewIndexedBatch() *Batch { return newBatch(r, true) }
 
-// Snapshot is a point-in-time, read-only view scoped to r.
+// Snapshot is a point-in-time, read-only view scoped to r; refused on a
+// migration step's range (errTxSnapshot).
 func (r LegacyRange) Snapshot() (*Snapshot, error) { return newSnapshot(r.scope()) }
 
 // Set is a one-entry batch committed with Sync (inside a migration, a write
