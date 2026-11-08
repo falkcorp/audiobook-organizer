@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-07
 
@@ -549,7 +549,7 @@ func (r *Router) Build() (http.Handler, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	root, _ := r.rootOwner()
+	root := r.rootHandler()
 	d := &dispatcher{
 		mux:          mux,
 		root:         root,
