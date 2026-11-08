@@ -1,5 +1,5 @@
 // file: internal/books/logging_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
 // last-edited: 2026-11-08
 
@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -189,4 +191,102 @@ func TestLogMetricsServedByBooks(t *testing.T) {
 		assert.Contains(t, body, fam+"{", "family %s not served", fam)
 	}
 	assert.NotContains(t, body, "batmobile-secret")
+}
+
+// activityRef feeds line to a fresh activity writer, the parse HEAD's text
+// handler line got, and returns the entry it built.
+func activityRef(t *testing.T, c *composed, line string) database.ActivityEntry {
+	t.Helper()
+	ref := activity.NewWriter(nil, 8)
+	ref.Feed([]byte(line))
+	select {
+	case e := <-ref.Chan():
+		return e
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no entry parsed from %q", line)
+	}
+	return database.ActivityEntry{}
+}
+
+// nextActivity is the next entry on the composed server's activity writer.
+func nextActivity(t *testing.T, c *composed) database.ActivityEntry {
+	t.Helper()
+	select {
+	case e := <-c.srv.ActivityLogWriter().Chan():
+		return e
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Activity entry arrived: the tap is not registered")
+	}
+	return database.ActivityEntry{}
+}
+
+// TestActivityTap_EntriesMatchHEADAndCarryNoModule: for the same log call the
+// Activity entry the tap makes has the summary, details, source, level and
+// operation of the entry HEAD's text handler line made, and neither carries a
+// module attribute. HEAD's line is built with slog.NewTextHandler at info,
+// the subsystem as the message prefix, as HEAD's logger shim wrote it.
+func TestActivityTap_EntriesMatchHEADAndCarryNoModule(t *testing.T) {
+	c := bootComposed(t, false, nil, nil)
+
+	headLine := func(msg string, attrs ...slog.Attr) string {
+		var buf bytes.Buffer
+		h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+		r := slog.NewRecord(time.Now(), slog.LevelWarn, msg, 0)
+		r.AddAttrs(attrs...)
+		require.NoError(t, h.Handle(context.Background(), r))
+		return buf.String()
+	}
+	for _, tc := range []struct {
+		name string
+		log  func()
+		head string
+	}{
+		{"plain slog", func() {
+			slog.Warn("scan finished", "op_id", "op-batcave", "books", 3, "path", "/lib/cave dir")
+		}, headLine("scan finished", slog.String("op_id", "op-batcave"), slog.Int("books", 3), slog.String("path", "/lib/cave dir"))},
+		{"subsystem logger", func() {
+			logger.New("scheduler").Warn("tick %d", 7)
+		}, headLine("scheduler: tick 7")},
+		{"subsystem attribute", func() {
+			slog.Default().With("subsystem", "operations").Warn("run finished", "opID", "op-gotham")
+		}, headLine("operations: run finished", slog.String("opID", "op-gotham"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := activityRef(t, c, tc.head)
+			tc.log()
+			got := nextActivity(t, c)
+			assert.Equal(t, want.Type, got.Type)
+			assert.Equal(t, want.Tier, got.Tier)
+			assert.Equal(t, want.Level, got.Level)
+			assert.Equal(t, want.Source, got.Source)
+			assert.Equal(t, want.OperationID, got.OperationID)
+			assert.Equal(t, want.Summary, got.Summary)
+			assert.Equal(t, want.Details, got.Details)
+			assert.Equal(t, want.Tags, got.Tags)
+			assert.NotContains(t, got.Summary, "module=")
+			for k := range got.Details {
+				assert.NotEqual(t, "module", k, "details carry a module attribute")
+			}
+		})
+	}
+}
+
+// TestActivityTap_CoreOwnRecordsMakeNoEntries: records from core's own
+// loggers (kernel, metrics, http, otel) and from a module's logger are not
+// Activity rows: HEAD's feed only ever saw what went through slog.Default
+// (the root logger here, which is the process default).
+// The marker record, logged last, is the first entry that arrives: the tap's
+// queue is FIFO.
+func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
+	c := bootComposed(t, false, nil, nil)
+	lg := c.app.Logging()
+	lg.Scope("core", "kernel").Info("kernel: listening", "addr", "cave:8080")
+	lg.Scope("core", "metrics").Warn("metrics: family taken")
+	lg.Scope("core", "http").Error("http: serve failed")
+	lg.Scope("core", "otel").Info("otel: exporter built")
+	lg.Module("books").Info("books module line")
+	slog.Info("alfred marker")
+
+	e := nextActivity(t, c)
+	assert.Contains(t, e.Summary, "alfred marker", "a core-owned record became an Activity entry: %+v", e)
 }
