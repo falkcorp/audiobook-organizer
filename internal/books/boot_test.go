@@ -1,11 +1,12 @@
 // file: internal/books/boot_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e1b7c92-3a6d-4f08-8b25-9c0d7e5a1f36
 // last-edited: 2026-11-08
 
 package books
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -140,4 +141,49 @@ func TestOptions_StorageInputs(t *testing.T) {
 	m := mod.(*booksModule)
 	require.NotNil(t, m.steps, "Options made no startup runner")
 	assert.Same(t, m.steps, m.serveConfig().StartupSteps, "the server does not get books' startup runner")
+}
+
+// flatEmbeddingBlob is a config_blob in the shape before the nested
+// embedding object: the settings load rewrites it (migrateEmbeddingBlob)
+// and records its one-shot markers, all writes through the store it is
+// handed.
+const flatEmbeddingBlob = `{"embedding_enabled":true,"embedding_model":"batcomputer"}`
+
+// TestBooksConstructorWritesNothing (05-storage §5S.4 step 12): books' P6
+// constructor commits no write. The real settings load runs in Register over
+// a stored blob it migrates; app.New commits none of the load's writes (the
+// counter on books' handle stands still and the stored rows are the
+// pre-boot ones), and the repairs start hook commits every one, so the next
+// boot's load finds the blob already in its new shape.
+func TestBooksConstructorWritesNothing(t *testing.T) {
+	var before uint64
+	r := runComposedWith(t,
+		func(s *database.PebbleStore) {
+			require.NoError(t, s.SetSetting("config_blob", flatEmbeddingBlob, "json", false))
+			before = s.CommittedWrites()
+		},
+		func(*app.Options) { loadConfigFromDB = config.LoadConfigFromDatabase },
+		func(c *composed) {
+			assert.Equal(t, before, c.store.CommittedWrites(), "books' P6 constructor committed a write")
+			blob, err := c.store.GetSetting("config_blob")
+			require.NoError(t, err)
+			assert.JSONEq(t, flatEmbeddingBlob, blob.Value, "the blob migration committed in Register")
+			_, err = c.store.GetSetting("maintenance_window_migrated")
+			assert.ErrorIs(t, err, database.ErrSettingNotFound, "a load marker committed in Register")
+		})
+
+	// The rows below are the load's writes, committed by the repairs hook:
+	// they were absent when app.New returned.
+	assert.Greater(t, r.store.CommittedWrites(), before, "the repairs hook committed nothing")
+	stored := configBlob(t, r.store)
+	assert.NotContains(t, stored, "embedding_enabled", "the migrated blob was not committed")
+	var emb struct {
+		Model string `json:"model"`
+	}
+	require.Contains(t, stored, "embedding")
+	require.NoError(t, json.Unmarshal(stored["embedding"], &emb))
+	assert.Equal(t, "batcomputer", emb.Model)
+	marker, err := r.store.GetSetting("maintenance_window_migrated")
+	require.NoError(t, err)
+	assert.Equal(t, "true", marker.Value)
 }

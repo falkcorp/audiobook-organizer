@@ -1,5 +1,5 @@
 // file: internal/database/legacyrange.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c7e1a92-6b3d-4f05-9e28-d1a5b7c3f604
 // last-edited: 2026-11-08
 
@@ -91,6 +91,18 @@ type legacyBackend struct {
 	// closeStore closes what the opener opened (the standalone opener owns
 	// its core DB); nil when the kernel owns the store and closes it itself.
 	closeStore func() error
+}
+
+// CommittedWrites is how many non-empty writes this store and every store
+// sharing its engine (activity, embedding, AI scan) have committed through
+// books' claims since it was built. Books' Register reads it to prove its
+// constructor commits none (05-storage §5S.4 step 12,
+// TestBooksConstructorWritesNothing); 0 on a store on the raw engine.
+func (p *PebbleStore) CommittedWrites() uint64 {
+	if p.db == nil || p.db.lr == nil {
+		return 0
+	}
+	return p.db.lr.commits.Load()
 }
 
 // newLegacyGatedDB wraps books' LegacyRange. closeStore is run by the owned

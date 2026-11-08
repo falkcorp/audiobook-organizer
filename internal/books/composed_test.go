@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -225,8 +225,20 @@ type runningApp struct {
 // test's end) cancels it.
 func runComposed(t *testing.T) *runningApp {
 	t.Helper()
+	return runComposedWith(t, nil, nil, nil)
+}
+
+// runComposedWith is runComposed with pre and opt as bootComposedWith takes
+// them, and booted, when set, called with the composition after app.New and
+// before Run. When it returns, Run has opened the listener, so every start
+// hook has returned (06 §6.5.2 start steps (2) and (7)).
+func runComposedWith(t *testing.T, pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+	t.Helper()
 	addrs := make(chan net.Addr, 1)
-	c := bootComposedWith(t, false, nil, nil, func(o *app.Options) {
+	c := bootComposedWith(t, false, nil, pre, func(o *app.Options) {
+		if opt != nil {
+			opt(o)
+		}
 		listen := o.R1Listen
 		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
 			srv, err := listen(lo, h, l)
@@ -236,6 +248,9 @@ func runComposed(t *testing.T) *runningApp {
 			return srv, err
 		}
 	})
+	if booted != nil {
+		booted(c)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &runningApp{composed: c, cancel: cancel, ran: make(chan error, 1)}
 	go func() { r.ran <- c.app.Run(ctx) }()

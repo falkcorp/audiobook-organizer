@@ -200,7 +200,8 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
-	if err := bootSettings(store, steps, m.stateDir); err != nil {
+	settingsWrites, err := bootSettings(store, steps, m.stateDir)
+	if err != nil {
 		return err
 	}
 	if config.AppConfig.ABSAPIEnabled != m.abs {
@@ -241,12 +242,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// closes the core DB.
 	r.Hook(module.Hook{
 		Name: string(ID) + ".repairs",
-		// HEAD's open-time writers and the opv3 reconcile (05-storage
-		// §5S.9.3; 06 §6.5.2 step 2), then the memdb warmup, before the
-		// server's start resumes operations. A failure closes the store
-		// here: the kernel calls no Stop for a hook whose Start failed.
+		// The settings load's held writes, then HEAD's open-time writers
+		// and the opv3 reconcile (05-storage §5S.9.3; 06 §6.5.2 step 2),
+		// then the memdb warmup, before the server's start resumes
+		// operations. A failure closes the store here: the kernel calls no
+		// Stop for a hook whose Start failed.
 		Start: func(ctx context.Context) error {
 			m.repairsBegan.Store(true)
+			if err := settingsWrites.apply(); err != nil {
+				return errors.Join(err, m.closeStore())
+			}
 			if err := store.RunBootRepairs(ctx); err != nil {
 				return errors.Join(fmt.Errorf("books: boot repairs: %w", err), m.closeStore())
 			}

@@ -26,7 +26,9 @@ import (
 // settings load fails in R1"). R2's config flip replaces them with core
 // config and secrets. They run in Register, not in the start hook, because
 // NewServer reads the effective config and Register builds the server the
-// legacy mount needs before P7 (seams.d/R1-23.md).
+// legacy mount needs before P7 (seams.d/R1-23.md). Register commits no
+// write (TestBooksConstructorWritesNothing): the load runs over
+// deferredSettings, and the writes it makes commit in the repairs start hook.
 
 // The settings boot's dependencies, variables so tests can fail each step.
 var (
@@ -43,14 +45,15 @@ type settingsStore interface {
 }
 
 // bootSettings runs HEAD's pre-server steps over store, through steps, in
-// HEAD's order. stateDir is the secure state directory Options resolved; the
-// key's legacy location is the database's own directory.
-func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) error {
+// HEAD's order, and returns the settings load's held writes for the repairs
+// hook to commit. stateDir is the secure state directory Options resolved;
+// the key's legacy location is the database's own directory.
+func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*deferredSettings, error) {
 	legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
 	if err := steps.Run("guardAgainstKeyRegeneration", func() error {
 		return guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir)
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	// The key lives in the secure state directory, a constant, not beside
 	// the database, which may move between pools; the database's directory
@@ -64,20 +67,21 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) er
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	bootLog.Info("settings encryption initialized (state dir: %s)", stateDir)
 
 	// Fatal, not a warning: SaveConfigToDatabase persists the whole config
 	// struct, so a server running on defaults would write those defaults
 	// over the stored config on its first settings save.
+	pending := newDeferredSettings(store)
 	if err := steps.Run("loadConfigFromDB", func() error {
-		if err := loadConfigFromDB(store); err != nil {
+		if err := loadConfigFromDB(pending); err != nil {
 			return fmt.Errorf("failed to load config from database: %w", err)
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	snap := config.Snapshot()
 	// Only whether the key is set: even a suffix is secret material in the
@@ -98,7 +102,7 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) er
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
 	if folders, err := store.GetAllImportPaths(); err == nil {
@@ -107,7 +111,10 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) er
 			bootLog.Info("  import path %s (%s)", folder.Name, folder.Path)
 		}
 	}
-	return nil
+	if n := pending.pending(); n > 0 {
+		bootLog.Info("the settings load staged %d write(s); they commit in books' repairs hook", n)
+	}
+	return pending, nil
 }
 
 // allowKeyRegenEnv lets an operator proceed past guardAgainstKeyRegeneration.
