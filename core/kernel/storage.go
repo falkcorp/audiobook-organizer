@@ -1,5 +1,5 @@
 // file: core/kernel/storage.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
 // last-edited: 2026-11-08
 
@@ -14,7 +14,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/mediacore/buildid"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -78,26 +77,24 @@ func (k *Kernel) storageWanted(describe bool) (bool, error) {
 // upgrade floors, validate every spec and claim, check a marker-less store
 // for foreign keys and plan the migrations. It writes nothing to the store.
 func (k *Kernel) openStorage(ctx context.Context) error {
-	var owners []storage.OwnerSpec
-	for _, e := range k.entries {
-		if DeclaresStorage(e.man) {
-			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})
-		}
-	}
 	// Every build field of the store names the binary ID, never the core
 	// version constant (05-storage §5S.3.7 "Binary ID"); once per process.
-	build, err := buildid.Binary(k.cfg.Version)
+	build, err := k.binaryID(ctx)
 	if err != nil {
 		return fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
 	}
-	o, err := storage.Open(ctx, storage.OpenOptions{
+	opts := storage.OpenOptions{
 		Path:        k.cfg.StoragePath,
 		FS:          k.cfg.StorageFS,
-		Owners:      owners,
+		Owners:      k.storageOwners(),
 		Build:       build,
 		Logger:      k.coreLog("storage"),
 		ExtendStart: k.extendStart(coreOwner),
-	})
+	}
+	if err := k.swapBeforeOpen(ctx, &opts); err != nil {
+		return err
+	}
+	o, err := storage.Open(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("kernel: open storage (P2): %w", err)
 	}

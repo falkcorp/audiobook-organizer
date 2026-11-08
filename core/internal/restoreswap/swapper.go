@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-07
 
@@ -210,6 +210,22 @@ func InFlight(fs vfs.FS, stateDir string) (id string, ok bool, err error) {
 		return ids[0], true, nil
 	}
 	return "", false, nil
+}
+
+// InFlightJournal is the in-flight swap's kind and last journal step: what
+// the reader check's one admitted recipe reads (09 §9.2.1: the previous
+// binary's storage restore-offline --checkpoint passes a KindCheckpoint
+// journal at failed). ok is false when nothing is in flight.
+func InFlightJournal(fs vfs.FS, stateDir string) (id string, kind restorejournal.Kind, last string, ok bool, err error) {
+	if id, ok, err = InFlight(fs, stateDir); err != nil || !ok {
+		return "", "", "", false, err
+	}
+	in, err := readIntent(fs, filepath.Join(restorejournal.JournalDir(stateDir, id), restorejournal.InflightName))
+	if err != nil {
+		return id, "", "", true, err
+	}
+	recs, err := ReadJournal(fs, stateDir, id)
+	return id, in.Kind, lastStep(recs), true, err
 }
 
 // RunP0a is boot phase P0a (06 §6.5.1; 05-backup §5B.3.4): it resumes the

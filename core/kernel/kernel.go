@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -99,6 +99,11 @@ type Config struct {
 	// StorageFS is the filesystem P2 opens the store on; the zero value is
 	// the OS's. Tests only: coretest's harness passes storage.MemFS().
 	StorageFS storage.FS
+	// StateDir is core.paths.state_dir, absolute, resolved once from
+	// pre-boot inputs (06 §6.4.5 StateDir). Set, the kernel runs P0a, the
+	// pre-boot swap, over <StateDir>/restore/ before the store opens. "" =
+	// no swap. Describe never runs P0a.
+	StateDir string
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
@@ -174,6 +179,8 @@ type Kernel struct {
 	handler   http.Handler
 
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
+	swap  *kernelSwap  // P0a on; nil when P0a did not run (swap.go)
+	build string       // the binary ID, once computed (swap.go)
 
 	hooks     []moduleHook
 	workers   []moduleWorker
