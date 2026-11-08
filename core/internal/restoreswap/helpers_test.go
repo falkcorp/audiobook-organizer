@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 423994b8-e639-4aa4-b358-afa195f91d63
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restoreswap
 
@@ -167,6 +167,16 @@ func dbPathOf(layout string) string {
 // store tagged "staged", staged through Stage as kind.
 func restoreFixture(t testing.TB, kind restorejournal.Kind, layout string, withLocation bool) fixture {
 	t.Helper()
+	f := restoreSetup(t, kind, layout, withLocation)
+	if err := newSwapper(t, f.mem, testBuild, testNow).Stage(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// restoreSetup is restoreFixture's stores and intent, not yet staged.
+func restoreSetup(t testing.TB, kind restorejournal.Kind, layout string, withLocation bool) fixture {
+	t.Helper()
 	mem := vfs.NewCrashableMem()
 	db := dbPathOf(layout)
 	id := "r-" + string(kind) + "-" + layout
@@ -185,15 +195,22 @@ func restoreFixture(t testing.TB, kind restorejournal.Kind, layout string, withL
 	f.live, f.staged = treeHash(t, mem, db), treeHash(t, mem, staging)
 	f.in = restorejournal.Intent{ID: id, Kind: kind, DBPath: db, Targets: []restorejournal.Target{{From: staging, To: db}},
 		StagedByBuild: testBuild, ExpiresAt: testNow().Add(time.Hour), RequestedBy: "alfred", RequestedAt: testNow(), InstallID: "wayne-manor"}
-	if err := newSwapper(t, mem, testBuild, testNow).Stage(context.Background(), f.in); err != nil {
-		t.Fatal(err)
-	}
 	return f
 }
 
 // resetFixture is a live store with its sidecars, a boot record in the state
 // directory and (factory) an auxiliary DB to delete, staged as a reset.
 func resetFixture(t testing.TB, kind restorejournal.ResetKind, layout string) fixture {
+	t.Helper()
+	f := resetSetup(t, kind, layout)
+	if err := newSwapper(t, f.mem, testBuild, testNow).Stage(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// resetSetup is resetFixture's store and intent, not yet staged.
+func resetSetup(t testing.TB, kind restorejournal.ResetKind, layout string) fixture {
 	t.Helper()
 	mem := vfs.NewCrashableMem()
 	db := dbPathOf(layout)
@@ -211,9 +228,6 @@ func resetFixture(t testing.TB, kind restorejournal.ResetKind, layout string) fi
 		aux := "/arkham/aux/ol"
 		writeFile(t, mem, filepath.Join(aux, "000001.sst"), "penguin")
 		f.in.Delete = []string{aux}
-	}
-	if err := newSwapper(t, mem, testBuild, testNow).Stage(context.Background(), f.in); err != nil {
-		t.Fatal(err)
 	}
 	return f
 }
