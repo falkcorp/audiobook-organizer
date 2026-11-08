@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/resetapply.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: dca1f7d5-4bfe-4d11-a0dc-0941c34a8ebd
 // last-edited: 2026-11-08
 
@@ -25,7 +25,7 @@ func (s *Swapper) startReset(ctx context.Context, in restorejournal.Intent) (Out
 	}); err != nil {
 		return s.inflightFailed(ctx, in, err)
 	}
-	return s.resetFrom(ctx, in, StepStaged)
+	return s.resetFrom(ctx, in, StepStaged, nil)
 }
 
 // resumeReset continues a KindReset journal whose in-flight file exists.
@@ -35,7 +35,13 @@ func (s *Swapper) resumeReset(ctx context.Context, in restorejournal.Intent, rec
 	last := lastStep(recs)
 	switch last {
 	case StepStaged, StepSetAsideStarted, StepMoved:
-		return s.resetFrom(ctx, in, last)
+		moved := map[string]bool{}
+		for _, r := range recs {
+			if r.Step == StepMoved {
+				moved[filepath.Clean(r.From)] = true
+			}
+		}
+		return s.resetFrom(ctx, in, last, moved)
 	case StepSetAside:
 		return Outcome{Boot: BootReset, ID: in.ID, Intent: in, Last: last}, nil
 	case StepApplied:
@@ -63,8 +69,11 @@ func (s *Swapper) resumeReset(ctx context.Context, in restorejournal.Intent, rec
 // file's copy and set_aside_started (a failure there moved nothing, so the
 // reset is rejected at once, DATA10-4), then each target's idempotent
 // rename journaled as moved, then set_aside. A rename failure from
-// set_aside_started on moves every target back first (R9-6).
-func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last string) (Outcome, error) {
+// set_aside_started on moves every target back first (R9-6). moved holds
+// the targets an earlier boot journaled, which are not journaled again, and
+// a target that never existed (nothing at either name after its rename) is
+// not journaled at all (R1-21 review n1): one moved record per item moved.
+func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last string, moved map[string]bool) (Outcome, error) {
 	seams := bootseam.From(ctx)
 	if last == StepStaged {
 		err := bootseam.Labelled(seams, "swap.location.copy", func() error {
@@ -78,12 +87,20 @@ func (s *Swapper) resetFrom(ctx context.Context, in restorejournal.Intent, last 
 		}
 	}
 	for _, t := range in.Targets {
+		if moved[filepath.Clean(t.From)] {
+			continue
+		}
 		// Nothing but this set-aside writes a target's destination in the
 		// swap's private namespace, so in the crash model a second name
 		// there is a twin (memGhost); on the real filesystem mv proves it
 		// by identity.
 		if err := bootseam.Labelled(seams, "swap.setaside.mv", func() error { return mv(s.fs, t.From, t.To, memGhost) }); err != nil {
 			return s.moveBack(ctx, in, err)
+		}
+		if ok, err := exists(s.fs, t.To); err != nil {
+			return s.moveBack(ctx, in, err)
+		} else if !ok {
+			continue // never existed: nothing was set aside
 		}
 		if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepMoved, From: t.From, To: t.To}); err != nil {
 			return s.moveBack(ctx, in, err)
