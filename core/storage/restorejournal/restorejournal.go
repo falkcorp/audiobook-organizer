@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/restorejournal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c954a92-88a0-4242-b599-92db9a12cae7
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package restorejournal holds the kinds, record types and intent of the one
 // journaled directory swap (05-backup's staged restore, revert and checkpoint
@@ -140,6 +140,9 @@ type Record struct {
 	// Failed ("hook_done" only): the entries the reset hook could not remove
 	// (COR8-4).
 	Failed []string `json:"failed,omitempty"`
+	// Kept ("hook_done" only): the delete entries skipped because removing
+	// them would remove a kept path (rule (4), Kept): a skip, not a failure.
+	Kept []string `json:"kept,omitempty"`
 	// InstallID ("set_aside_started" only): the old install's ID, for manual
 	// undo, also after a crash mid-set-aside (DATA9-15).
 	InstallID string `json:"install_id,omitempty"`

@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/fixture.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 127402ea-7c81-40e4-a90a-159f4d64dcdc
 // last-edited: 2026-11-08
 
@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -59,19 +58,13 @@ func (f Fixture) roots() []string {
 func uniq(paths ...string) []string {
 	var out []string
 	for _, p := range paths {
-		if slices.ContainsFunc(out, func(q string) bool { return within(q, p) }) {
+		if slices.ContainsFunc(out, func(q string) bool { return restorejournal.InTree(p, q) }) {
 			continue
 		}
-		out = slices.DeleteFunc(out, func(q string) bool { return within(p, q) })
+		out = slices.DeleteFunc(out, func(q string) bool { return restorejournal.InTree(q, p) })
 		out = append(out, p)
 	}
 	return out
-}
-
-// within reports whether p is dir or under it.
-func within(dir, p string) bool {
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // diskUsage is what every in-memory filesystem of the kit reports: plenty,
@@ -247,8 +240,20 @@ func save(mem *vfs.MemFS, f Fixture) error {
 // Stage stages in into f's swap slot as the kernel's stager does, under the
 // kit's binary ID: StagedByBuild defaults to BuildID, RequestedAt to Now,
 // ExpiresAt to an hour after it and RequestedBy to "crashmatrix". The
-// staged store and the swap's targets are the caller's.
+// staged store and the swap's targets are the caller's. The rename
+// pre-check and the delete entries' device check probe the real
+// filesystem (restorejournal.OSProbe).
 func Stage(f Fixture, in restorejournal.Intent) error {
+	return StageWith(f, in, restorejournal.OSProbe())
+}
+
+// StageWith is Stage with the pre-check's probe replaced. A test host has one
+// filesystem, so a fixture whose intent needs a second one (a reset's
+// delete entry, which 05-storage §5S.3.15 lists only off the DB's
+// filesystem) passes a probe that reports that entry on another device. The
+// entry must still lie under one of the fixture's directories, or no run's
+// in-memory copy holds it.
+func StageWith(f Fixture, in restorejournal.Intent, probe restorejournal.Probe) error {
 	if in.StagedByBuild == "" {
 		in.StagedByBuild = BuildID
 	}
@@ -264,8 +269,7 @@ func Stage(f Fixture, in restorejournal.Intent) error {
 	if in.DBPath == "" {
 		in.DBPath = f.dbPath()
 	}
-	s, err := restoreswap.New(restoreswap.Options{StateDir: f.StateDir, BuildID: BuildID, Clock: Now,
-		Probe: restorejournal.OSProbe()})
+	s, err := restoreswap.New(restoreswap.Options{StateDir: f.StateDir, BuildID: BuildID, Clock: Now, Probe: probe})
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -453,10 +453,17 @@ func (s *Swapper) ResetApplied(ctx context.Context, id string) error {
 }
 
 // ResetDone is the kernel's completion of a reset with no reset hook (R1,
-// and every ResetStore): each intent Delete entry removed with the hook's
-// per-entry rule (a failure is recorded, never fatal; removing what is gone
-// is success), then hook_done with the failures and the in-flight file
-// deleted (05-storage §5S.3.15 "Completion: hook_done").
+// and every ResetStore), owed only after applied: each intent Delete entry
+// removed with the hook's per-entry rules (05-storage §5S.3.15 "Completion:
+// hook_done", "The app's reset hook"), then hook_done and the in-flight file
+// deleted. An entry whose removal would remove a kept path (rule (4),
+// restorejournal.Kept: the state directory, <db parent>, restore/, a
+// set-aside, the fresh store) is skipped and recorded as kept, never
+// removed; a relative entry is refused and a removal that fails is
+// recorded as failed. Neither fails the boot, and removing what is gone is
+// success. A journal at hook_done (a kill before the in-flight file was
+// deleted) only deletes it; any other step refuses, so nothing is removed
+// before the fresh install is journaled.
 func (s *Swapper) ResetDone(ctx context.Context, id string) error {
 	in, err := readIntent(s.fs, s.inflightPath(id))
 	if err != nil {
@@ -466,9 +473,20 @@ func (s *Swapper) ResetDone(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if last == StepApplied {
-		var failed []string
+	switch last {
+	case StepApplied:
+		var failed, kept []string
 		for _, p := range in.Delete {
+			switch {
+			case !filepath.IsAbs(p):
+				s.o.Logger.Error("restoreswap: reset delete entry is not absolute; not removed", "id", id, "path", p)
+				failed = append(failed, p)
+				continue
+			case restorejournal.Kept(s.o.StateDir, in, s.legacySuffixes(), p):
+				s.o.Logger.Warn("restoreswap: reset delete entry is or holds a kept path; skipped", "id", id, "path", p)
+				kept = append(kept, p)
+				continue
+			}
 			err := bootseam.Labelled(bootseam.From(ctx), "swap.delete.remove", func() error {
 				if ok, err := exists(s.fs, p); err != nil || !ok {
 					return err // removing what is gone is success
@@ -479,13 +497,16 @@ func (s *Swapper) ResetDone(ctx context.Context, id string) error {
 				return syncDir(s.fs, filepath.Dir(p))
 			})
 			if err != nil {
-				s.o.Logger.Error("restoreswap: reset could not remove an entry", "path", p, "err", err)
+				s.o.Logger.Error("restoreswap: reset could not remove an entry", "id", id, "path", p, "err", err)
 				failed = append(failed, p)
 			}
 		}
-		if err := s.appendRec(ctx, id, restorejournal.Record{Step: StepHookDone, Failed: failed}); err != nil {
+		if err := s.appendRec(ctx, id, restorejournal.Record{Step: StepHookDone, Failed: failed, Kept: kept}); err != nil {
 			return err
 		}
+	case StepHookDone:
+	default:
+		return fmt.Errorf("restoreswap: reset %s owes hook_done only after applied; its journal reads %q", id, last)
 	}
 	return s.removeInflight(ctx, id)
 }
