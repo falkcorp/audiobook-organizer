@@ -28,7 +28,7 @@ func osSameDevice(vfs.FS) func(a, b string) (bool, error) {
 
 func osChmod(fs vfs.FS) func(path string, dir bool) error {
 	return func(path string, dir bool) error {
-		if fs != vfs.Default {
+		if vfs.Root(fs) != vfs.Default {
 			return nil
 		}
 		mode := os.FileMode(0o600)
