@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
-# last-edited: 2026-11-06
+# last-edited: 2026-11-08
 """Run the whole short Go test suite as one of N shards, then merge coverage.
 
 `make test-short` runs `go test ./... -short -race` as one process tree, so
@@ -126,6 +126,15 @@ class Unit:
     @property
     def label(self) -> str:
         return self.pkg.key if self.group == 0 else f"{self.pkg.key}#{self.group}"
+
+
+
+# How go test's output is captured. Decoded as text for the report, with
+# undecodable bytes replaced: a test that prints raw bytes (a gzip body starts
+# 0x1f 0x8b) made strict UTF-8 decoding raise UnicodeDecodeError on 2026-11-08
+# (#4455 shard 4/4). That crashed the whole shard and threw away every real
+# test result in it.
+GO_TEST_IO: dict[str, object] = {"capture_output": True, "text": True, "errors": "replace"}
 
 
 def _load_module(directory: str) -> list[Package]:
@@ -439,9 +448,7 @@ def run_shard(units: list[Unit], go_args: list[str], out: str, jobs: int = 0) ->
         prof = os.path.join(tmp, f"{i}.out") if call.module == "." else None
         cover = [f"-coverprofile={prof}"] if prof else []
         start = time.monotonic()
-        res = subprocess.run(
-            [*base, "test", *call.go_args, *cover, *call.args], capture_output=True, text=True
-        )
+        res = subprocess.run([*base, "test", *call.go_args, *cover, *call.args], **GO_TEST_IO)
         return (
             call.label,
             res.returncode,
