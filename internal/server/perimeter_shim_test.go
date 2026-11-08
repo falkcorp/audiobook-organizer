@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -387,6 +388,31 @@ func TestPerimeterShim_GatesEveryCoreAnswer(t *testing.T) {
 			assert.NotEmpty(t, w.Header().Get("WWW-Authenticate"), "core status %d", c.status)
 			assert.Empty(t, w.Body.String(), "core status %d: the refusal carries core's body", c.status)
 		}
+	}
+}
+
+// flushErrWriter is a connection's writer whose flush fails.
+type flushErrWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (w flushErrWriter) FlushError() error { return w.err }
+
+// TestPerimeterShim_FlushErrorCrossesTheShim: a handler's
+// http.ResponseController flush gets the connection's error through the
+// shim's writer, as it does through core's stage writers (review n2).
+func TestPerimeterShim_FlushErrorCrossesTheShim(t *testing.T) {
+	want := errors.New("the Batmobile's uplink dropped")
+	var got error
+	kernel := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Context().Value(perimeterKey{}).(*perimeterState).gin.Store(true) // gin served it
+		got = http.NewResponseController(w).Flush()
+	})
+	(&Server{}).perimeterShim(kernel, "").ServeHTTP(flushErrWriter{httptest.NewRecorder(), want},
+		httptest.NewRequest(http.MethodGet, "/api/v1/events", nil))
+	if !errors.Is(got, want) {
+		t.Fatalf("flush error = %v, want %v", got, want)
 	}
 }
 
