@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -26,9 +26,11 @@ import (
 const phaseP0a = "P0a"
 
 // ErrSwapInFlight: a restore or factory reset is in flight (a
-// restore/<id>/inflight.json exists) and this opener may not open the store:
-// the rollback guard's refusal, health's restore_inflight (05-storage §5S.3.7
-// reader check). Boot the current build once to finish the swap.
+// restore/<id>/inflight.json exists) that this boot's P0a did not take over,
+// so the kernel does not open the store (05-storage §5S.3.7 reader check,
+// for the kernel's own open). Boot the current build once to finish the
+// swap. Openers without P0a (the offline commands, the updater's rollback)
+// get 05-storage's CheckReader with its restore_inflight token (R1-25, F8).
 var ErrSwapInFlight = errors.New("kernel: a restore or factory reset is in flight (restore_inflight); boot the current build once to finish it")
 
 // ErrSwappedBack: a restore boot failed and step x swapped the original store
@@ -245,31 +247,4 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 		return fmt.Errorf("%w (journal %s): %w", ErrCheckpointRestoreFailedHere, out.ID, cause)
 	}
 	return k.swap.s.SwapBack(ctx, out.ID, fmt.Errorf("%s: %w", phase, cause))
-}
-
-// ReaderCheckAllow is the one admitted recipe of 09 §9.2.1.
-type ReaderCheckAllow struct {
-	// FailedCheckpointEscape admits a KindCheckpoint journal whose last step
-	// is failed: the previous binary's storage restore-offline --checkpoint,
-	// the one escape from a checkpoint restore the current build failed
-	// (05-storage §5S.3.12, machine 1).
-	FailedCheckpointEscape bool
-}
-
-// ReaderCheck is 05-storage §5S.3.7's reader check for every opener that
-// runs without P0a (offline commands, the updater's manual rollback): it
-// returns ErrSwapInFlight while a restore/<id>/inflight.json exists under
-// stateDir, except for the recipe allow admits, and passes a pending intent,
-// which an older build rejects at its own P0a (staged_by_build).
-func ReaderCheck(stateDir string, allow ReaderCheckAllow) error {
-	id, kind, last, ok, err := restoreswap.InFlightJournal(vfs.Default, stateDir)
-	switch {
-	case err != nil:
-		return fmt.Errorf("kernel: reader check: %w", err)
-	case !ok:
-		return nil
-	case allow.FailedCheckpointEscape && kind == restorejournal.KindCheckpoint && last == restoreswap.StepFailed:
-		return nil
-	}
-	return fmt.Errorf("%w: restore/%s/inflight.json (%s, at %q)", ErrSwapInFlight, id, kind, last)
 }
