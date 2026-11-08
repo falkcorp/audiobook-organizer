@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-08
 
@@ -367,14 +367,10 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	if err := db.mkdirPrivate(tmp); err != nil {
 		return err
 	}
-	release, err = db.lease()
-	if err != nil {
+	// A copy that fails checkpointInto's read-only check stays behind as
+	// <name>.tmp, which the next boot's sweep removes.
+	if err := db.checkpointInto(filepath.Join(tmp, "db")); err != nil {
 		return err
-	}
-	err = db.eng.DB().Checkpoint(filepath.Join(tmp, "db"), cpebble.WithFlushedWAL())
-	release()
-	if err != nil {
-		return fmt.Errorf("storage: checkpoint: %w", err)
 	}
 	files, err := db.copyStateFiles(filepath.Join(tmp, "state"))
 	if err != nil {
@@ -400,6 +396,54 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	st.cpName = name
 	db.log.Info("storage: pre-migration checkpoint taken", "name", name, "bytes", storeBytes)
 	return db.writePointer(checkpointPointer{Name: name, State: "open"})
+}
+
+// errCopyRefused marks a checkpoint copy checkpointInto made and refused: it
+// did not open read-only, or it would not close after the check. The copy is
+// the caller's to leave for the sweep or to remove.
+var errCopyRefused = errors.New("is refused")
+
+// checkpointInto writes a Pebble checkpoint of the store into dir, which must
+// not exist, and refuses a copy that does not open read-only (F2; §5S.3.12
+// "How"). The boot's pre-migration checkpoint and Admin.Checkpoint (05-backup's
+// archive, the dry run's scratch copy) both take their copy here.
+//
+// Pebble v2.1.7's DB.Checkpoint copies as many bytes of the MANIFEST as this
+// process's MANIFEST writer has written (checkpoint.go), and Pebble makes that
+// writer at the process's first version edit. Open writes one whenever it
+// replays a WAL, even an empty one, but a store with no WAL left to replay (a
+// kill inside Open after the MANIFEST marker moved and before the new WAL's
+// directory entry was durable) opens without one: its copy's MANIFEST would
+// be empty and the copy unopenable. A Flush applies a version edit even with
+// an empty memtable, so the copy taken after it holds a full MANIFEST
+// (TestEmptyFlushRewritesTheManifest pins both halves of that reading of
+// Pebble). The read-only open is the guard that does not depend on it: a copy
+// that fails it, or will not close after it, is an error wrapping
+// errCopyRefused, and the caller leaves it for the sweep or removes it.
+func (db *DB) checkpointInto(dir string) error {
+	release, err := db.lease()
+	if err != nil {
+		return err
+	}
+	if err = db.eng.DB().Flush(); err != nil {
+		err = fmt.Errorf("flush before it: %w", err)
+	} else {
+		err = db.eng.DB().Checkpoint(dir, cpebble.WithFlushedWAL())
+	}
+	release()
+	if err != nil {
+		return fmt.Errorf("storage: checkpoint: %w", err)
+	}
+	eng, err := ipebble.Open(dir, ipebble.Options{FS: db.eng.FS(), ReadOnly: true, ErrorIfNotExists: true, Logger: db.log})
+	if err != nil {
+		return fmt.Errorf("storage: checkpoint copy %s does not open read-only, so it %w. The live store is untouched. "+
+			"Check the filesystem that holds the copy for I/O errors and free space; if every attempt is refused, "+
+			"report it with Pebble's error: %w", dir, errCopyRefused, err)
+	}
+	if err := eng.Close(db.set.closeTimeout); err != nil {
+		return fmt.Errorf("storage: checkpoint copy %s %w: it opened read-only but did not close: %w", dir, errCopyRefused, err)
+	}
+	return nil
 }
 
 // existingAncestor is dir or its nearest existing parent.

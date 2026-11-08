@@ -1,7 +1,7 @@
 // file: core/storage/admin.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e760c156-0276-4ad3-9f53-76551e9860b5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 
-	cpebble "github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	ipebble "github.com/falkcorp/mediacore/internal/pebble"
@@ -92,21 +91,26 @@ func dirBytes(fs vfs.FS, dir string) (uint64, error) {
 func fullRange() (start, end []byte) { return []byte{0}, bytes.Repeat([]byte{0xff}, 8) }
 
 // Checkpoint writes a consistent copy of the store into dir (which must not
-// exist) with a flushed WAL, then sets its directories to 0700 and its files
-// to 0600 (§5S.3.12 "Where"; 05-backup's archive and the dry run's scratch
-// copy use it).
+// exist) with a flushed memtable and WAL, checks that the copy opens
+// read-only, then sets its directories to 0700 and its files to 0600
+// (§5S.3.12 "Where" and "How"; 05-backup's archive and the dry run's scratch
+// copy use it). A copy that does not open, or will not close after the
+// check, is removed and the error returned, as Pebble removes dir when its own
+// Checkpoint fails.
 func (a *Admin) Checkpoint(ctx context.Context, dir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	release, err := a.db.lease()
-	if err != nil {
+	if err := a.db.checkpointInto(dir); err != nil {
+		if errors.Is(err, errCopyRefused) {
+			// Only a copy checkpointInto made and refused: any other failure
+			// left dir as Pebble left it, which may be a directory the caller
+			// already had.
+			if rerr := a.db.eng.FS().RemoveAll(dir); rerr != nil {
+				err = errors.Join(err, fmt.Errorf("storage: remove the refused checkpoint copy %s: %w", dir, rerr))
+			}
+		}
 		return err
-	}
-	err = a.db.eng.DB().Checkpoint(dir, cpebble.WithFlushedWAL())
-	release()
-	if err != nil {
-		return fmt.Errorf("storage: checkpoint: %w", err)
 	}
 	if a.db.boot == nil {
 		return nil
