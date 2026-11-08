@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: core/scripts/ci/core_ci_lib.py
-# version: 1.1.0
+# version: 1.4.0
 # guid: d60ca7b1-bb62-4184-8eec-82dba792b0ec
 # last-edited: 2026-11-08
 """Shared helpers of core's version and readiness scripts (12 §12.3, §12.4).
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -56,16 +57,16 @@ class Semver:
         )
         return (self.major, self.minor, self.patch, pre)
 
-    def __lt__(self, other: "Semver") -> bool:
+    def __lt__(self, other: Semver) -> bool:
         return self._key() < other._key()
 
-    def __le__(self, other: "Semver") -> bool:
+    def __le__(self, other: Semver) -> bool:
         return self._key() <= other._key()
 
-    def __gt__(self, other: "Semver") -> bool:
+    def __gt__(self, other: Semver) -> bool:
         return self._key() > other._key()
 
-    def __ge__(self, other: "Semver") -> bool:
+    def __ge__(self, other: Semver) -> bool:
         return self._key() >= other._key()
 
 
@@ -81,7 +82,9 @@ def version_from_source(source: str, where: str = "version.go") -> str:
     """The text of ``const Version`` in the source of core/version/version.go."""
     found = _VERSION_CONST_RE.findall(source)
     if len(found) != 1:
-        raise ValueError(f"{where}: expected exactly one 'const Version = \"...\"', found {len(found)}")
+        raise ValueError(
+            f"{where}: expected exactly one 'const Version = \"...\"', found {len(found)}"
+        )
     return found[0]
 
 
@@ -93,6 +96,14 @@ def read_version(core: pathlib.Path) -> str:
     return version_from_source(path.read_text(encoding="utf-8"), str(path))
 
 
+def module_path(core: pathlib.Path) -> str:
+    """core's module path, from the module line of core/go.mod."""
+    m = re.search(r"^module\s+(\S+)\s*$", (core / "go.mod").read_text(encoding="utf-8"), re.M)
+    if not m:
+        raise ValueError(f"{core / 'go.mod'}: no module line")
+    return m.group(1)
+
+
 def git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -100,6 +111,17 @@ def git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.Comple
         text=True,
         check=check,
     )
+
+
+def repo_root(core: pathlib.Path) -> tuple[pathlib.Path, str]:
+    """(the git work tree holding core, core's path inside it).
+
+    ("<repo>", "core/") in this monorepo; ("<core>", "") in an export of core/
+    alone (12 SC4(a)), which is a fresh repository holding only core/.
+    """
+    top = git(core, "rev-parse", "--show-toplevel").stdout.strip()
+    prefix = git(core, "rev-parse", "--show-prefix").stdout.strip()
+    return pathlib.Path(top), prefix
 
 
 def is_git_repo(repo: pathlib.Path) -> bool:
@@ -179,6 +201,42 @@ def write_result(out_dir: pathlib.Path, result: Result) -> pathlib.Path:
     path = out_dir / f"{result.id.lower()}.json"
     path.write_text(json.dumps(dataclasses.asdict(result), indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def finish(result: Result, out_dir: pathlib.Path | None, report_only: bool) -> int:
+    """Print the result, store it when asked, and return the exit code.
+
+    PASS and NOT_APPLICABLE exit 0. FAIL exits 1 and ERROR (the measurement could
+    not run) exits 2, unless report_only: `make -C core readiness` is a report,
+    so a criterion that is not met, or a tool that is missing, is recorded in the
+    result and the script still exits 0. A crash is an exception and never exits 0.
+    """
+    print(result.line())
+    for line in result.details:
+        print(f"  {line}")
+    if out_dir is not None:
+        write_result(out_dir, result)
+    if result.status in (PASS, NOT_APPLICABLE) or report_only:
+        return 0
+    return 2 if result.status == ERROR else 1
+
+
+def go_env() -> dict[str, str]:
+    """The environment for go commands: no workspace, no inherited flags, core's toolchain pin."""
+    env = dict(os.environ)
+    env.pop("GOFLAGS", None)
+    env["GOWORK"] = "off"
+    if not env.get("GOTOOLCHAIN"):
+        core = pathlib.Path(__file__).resolve().parents[2]
+        pin = subprocess.run(
+            ["make", "-s", "-C", str(core), "print-toolchain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pin.returncode == 0 and pin.stdout.strip():
+            env["GOTOOLCHAIN"] = pin.stdout.strip()
+    return env
 
 
 def load_results(out_dir: pathlib.Path, ids: Sequence[str]) -> list[Result | None]:

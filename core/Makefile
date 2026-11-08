@@ -1,5 +1,5 @@
 # file: core/Makefile
-# version: 1.4.0
+# version: 1.5.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
 # last-edited: 2026-11-08
 
@@ -19,7 +19,8 @@ PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
 	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
-	generate-api-client coverage-floor embed-check test-nightly version-check script-test
+	generate-api-client coverage-floor embed-check test-nightly version-check script-test \
+	tools readiness apidiff-gate coverage coredoc-check vulncheck
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
 print-toolchain:
@@ -176,3 +177,56 @@ version-check:
 ## .github/workflows/scripts/ only.
 script-test:
 	$(PYTHON) -m unittest discover -s scripts/ci -p 'test_*.py'
+
+## tools: build the pinned tool binaries into core/bin (ignored by core/.gitignore),
+## from the nested modules under tools/ (12 §12.3.11): apidiff and gorelease (SC1),
+## govulncheck (SC9) and staticcheck (pinned like the root's tools/staticcheck;
+## scripts/ci/check_module_skew.py compares the two). Nothing is written outside core/.
+TOOLS_BIN := $(CURDIR)/bin
+
+tools:
+	GOBIN=$(TOOLS_BIN) go -C tools/apidiff install tool
+	GOBIN=$(TOOLS_BIN) go -C tools/govulncheck install tool
+	GOBIN=$(TOOLS_BIN) go -C tools/staticcheck install tool
+
+## readiness: the split-readiness measurements that are reports, never merge gates
+## (12 §12.3.11): SC1 apidiff-gate, SC5 coverage thresholds, SC6 coredoc-check,
+## SC9 vulncheck. It writes only under $(READINESS_OUT): one JSON result per
+## criterion, then readiness.json and readiness.md with the date and the commit.
+## It exits 0 whatever the verdicts (each script runs with --report, so a criterion
+## that is not met is recorded, not failed) and fails only when a script crashes.
+## The root-side nightly job folds the report into
+## docs/plans/platform-core/split-readiness.md through a PR (split-readiness.yml).
+##
+## SC1_FIRST_CHECKPOINT is the first checkpoint that counts (release R2's, 12 SC1,
+## e.g. v0.5.0): earlier checkpoints are reported but start no count. Unset, SC1
+## cannot be met yet.
+READINESS_OUT ?= $(CURDIR)/.ci/readiness
+SC1_FIRST_CHECKPOINT ?=
+
+readiness: apidiff-gate coverage coredoc-check vulncheck
+	$(PYTHON) scripts/ci/readiness_report.py --out $(READINESS_OUT)
+
+## apidiff-gate: SC1 over the newest four refs/core-checkpoints/* (core_api_gate.py).
+apidiff-gate: tools
+	$(PYTHON) scripts/ci/core_api_gate.py --apidiff $(TOOLS_BIN)/apidiff \
+		--first-counting '$(SC1_FIRST_CHECKPOINT)' --out $(READINESS_OUT) --report
+
+## coverage: SC5, go test -short -coverprofile over core, then the thresholds
+## (total 70 %, every SDK package 60 %; core_coverage_by_package.py). The tests run
+## here without -race: this measures coverage, test-short gates the merge.
+coverage:
+	@mkdir -p $(READINESS_OUT)
+	@status=0; \
+	go test -short -count=1 -coverprofile=$(READINESS_OUT)/core.out ./... > $(READINESS_OUT)/core-test.log 2>&1 || status=$$?; \
+	$(PYTHON) scripts/ci/core_coverage_by_package.py $(READINESS_OUT)/core.out --min 60 \
+		--exclude 'kernel/|internal/|examples/' --test-status $$status --out $(READINESS_OUT) --report
+
+## coredoc-check: SC6, the generated reference matches core's registrations
+## (not applicable until the coredoc generator lands; coredoc_check.py).
+coredoc-check:
+	$(PYTHON) scripts/ci/coredoc_check.py --out $(READINESS_OUT) --report
+
+## vulncheck: SC9, govulncheck ./... with the pinned binary (core_vulncheck.py).
+vulncheck: tools
+	$(PYTHON) scripts/ci/core_vulncheck.py --out $(READINESS_OUT) --report
