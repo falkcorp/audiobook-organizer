@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
 // last-edited: 2026-11-08
 
@@ -344,7 +344,7 @@ func (fr *fixtureRun) killNested(at string, ch chain, boot func(i int) string) {
 // in sorted order, with each file's bytes. Two filesystems with one key
 // boot alike.
 func stateKey(fs vfs.FS) ([sha256.Size]byte, error) {
-	h := sha256.New()
+	h := sha256.New() // a hash.Hash's Write never returns an error
 	var walk func(dir string) error
 	walk = func(dir string) error {
 		names, err := fs.List(dir)
@@ -359,7 +359,7 @@ func stateKey(fs vfs.FS) ([sha256.Size]byte, error) {
 				return err
 			}
 			if fi.IsDir() {
-				fmt.Fprintf(h, "d %q\n", p)
+				h.Write(fmt.Appendf(nil, "d %q\n", p))
 				if err := walk(p); err != nil {
 					return err
 				}
@@ -376,7 +376,7 @@ func stateKey(fs vfs.FS) ([sha256.Size]byte, error) {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(h, "f %q %d\n", p, len(b))
+			h.Write(fmt.Appendf(nil, "f %q %d\n", p, len(b)))
 			h.Write(b)
 		}
 		return nil
