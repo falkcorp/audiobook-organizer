@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-08
 
@@ -32,8 +32,8 @@ func Rows() []Row {
 			"swap.journal.staged_moved", "swap.sidecars", "swap.journal.sidecars", "swap.journal.swapped",
 			"swap.journal.set_aside_started", "swap.journal.moved", "swap.journal.set_aside",
 		}},
-		{Phase: "P0a", Writer: "restoreswap: a rejected intent (staged_by_build, expires_at, the in-flight rename refused)", Labels: []string{
-			"swap.journal.rejected", "swap.slot.rejected", "swap.slot.cleanup",
+		{Phase: "P0a", Writer: "restoreswap: a rejected intent (staged_by_build, expires_at, target shapes, the in-flight rename refused; an unusable pending.json moved aside)", Labels: []string{
+			"swap.journal.rejected", "swap.slot.rejected", "swap.slot.invalid", "swap.slot.cleanup",
 		}},
 		{Phase: "P0a, and after P2/P4 on a restore boot", Writer: "restoreswap: step x, the swap-back of a failed restore and the move-back of a reset (05-backup §5B.3.4 step x)", Labels: []string{
 			"swap.back.mark", "swap.back.location", "swap.back.mv", "swap.back.sidecars", "swap.journal.swapped_back",
