@@ -1,7 +1,7 @@
 // file: core/storage/compact_progress_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3f8a1c6e-2d7b-4c90-a5e4-9b1f0d7c2a83
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -278,7 +278,12 @@ func TestRunStep_NoStatsReportsElapsedOnly(t *testing.T) {
 // compactionStatsFromMetrics reads real field names from the pinned Pebble version; this pins
 // that the mapping compiles and produces sane numbers on a real DB.
 func TestCompactionStats_RealPebble(t *testing.T) {
-	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
+	// Automatic compactions are off so the only compaction in this test is
+	// the explicit db.Compact below. With them on, the flushes can schedule a
+	// background compaction that finishes before the `before` snapshot (or
+	// leaves db.Compact nothing to merge), making the written-bytes delta zero
+	// and the test flaky under load.
+	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem(), DisableAutomaticCompactions: true})
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	for i := range 2000 {
@@ -292,8 +297,10 @@ func TestCompactionStats_RealPebble(t *testing.T) {
 	}
 	require.NoError(t, db.Flush())
 	before := compactionStatsFromMetrics(db.Metrics())
+	require.Zero(t, before.Count, "no compaction may run before the snapshot")
 	require.NoError(t, db.Compact(context.Background(), nil, []byte{0xff}, false))
 	after := compactionStatsFromMetrics(db.Metrics())
+	assert.Greater(t, after.Count, before.Count, "the explicit compaction must be counted")
 	assert.Greater(t, after.LiveTableSize, int64(0))
 	assert.Greater(t, after.WrittenBytes(), before.WrittenBytes(), "a compaction must show written bytes")
 	assert.Greater(t, after.BottomLevelSize, int64(0), "a full compaction lands data in the bottom level")
