@@ -1,5 +1,5 @@
 // file: core/log/logging_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: b1061a80-9d8b-4729-b19f-80870f03b30f
 // last-edited: 2026-11-08
 
@@ -983,9 +983,11 @@ func TestRoot_ProcessDefaultCarriesNoModule(t *testing.T) {
 }
 
 // TestWithAttrs_SubsystemMovesTheScope: adding a subsystem attribute to a
-// logger moves it to that module.subsystem scope, so Levels["core.scanner"]
-// gates it as Scope("core", "scanner") would (R1-18's books shim logs with
-// subsystem as an attribute and relies on this for per-subsystem levels). The
+// logger moves it to that module.subsystem scope. The process default logger
+// (Root) has no module, so its subsystems are keyed "process.<subsystem>" and
+// Levels["process.scanner"] gates it (R1-18's books shim logs with subsystem as
+// an attribute and relies on this for per-subsystem levels); Scope("core", ...)
+// loggers keep "core.<subsystem>". The
 // line carries one subsystem=, the record's, and a tap sees it as
 // Record.Subsystem, not among Attrs.
 func TestWithAttrs_SubsystemMovesTheScope(t *testing.T) {
