@@ -1,10 +1,10 @@
-// file: core/coretest/logcapture.go
-// version: 1.0.0
+// file: core/coretest/logcapture/logcapture.go
+// version: 1.1.0
 // guid: 155a2aa9-906e-487e-8f5d-2be349726953
 // last-edited: 2026-11-07
 
 // Package coretest holds test support for core's own tests.
-package coretest
+package logcapture
 
 import (
 	"context"

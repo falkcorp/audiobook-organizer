@@ -1,5 +1,5 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
 // last-edited: 2026-11-07
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
@@ -66,7 +66,7 @@ func (m testModule) with(fn func(*module.Manifest)) testModule {
 // testConfig is a Config for mods whose log goes to a capture.
 func testConfig(t *testing.T, mods ...module.Module) Config {
 	t.Helper()
-	return Config{AppID: "gotham", Logger: coretest.NewLogCapture(t).Logger(), Modules: mods}
+	return Config{AppID: "gotham", Logger: logcapture.NewLogCapture(t).Logger(), Modules: mods}
 }
 
 // mustNew boots c or fails the test.
@@ -370,7 +370,7 @@ func TestSPAOwner(t *testing.T) {
 }
 
 func TestDepsScoping(t *testing.T) {
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	var got []module.Deps
 	reg := func(r *module.Registrar) error {
 		d := r.Deps()
@@ -418,7 +418,7 @@ func TestDepsScoping(t *testing.T) {
 
 func TestRegistrarClosedAfterRegister(t *testing.T) {
 	var kept *module.Registrar
-	capture := coretest.NewLogCapture(t)
+	capture := logcapture.NewLogCapture(t)
 	c := testConfig(t, mod("batcave", func(r *module.Registrar) error { kept = r; return nil }))
 	c.Logger = capture.Logger()
 	k := mustNew(t, c)
@@ -502,7 +502,7 @@ func TestDescribe_EveryModuleEnabled(t *testing.T) {
 }
 
 func TestKernelFamiliesGathered(t *testing.T) {
-	k := mustNew(t, Config{AppID: "gotham", Logger: coretest.NewLogCapture(t).Logger()})
+	k := mustNew(t, Config{AppID: "gotham", Logger: logcapture.NewLogCapture(t).Logger()})
 	srv := httptest.NewServer(k.provider.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL)
