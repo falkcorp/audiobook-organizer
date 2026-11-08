@@ -1,5 +1,5 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
 // last-edited: 2026-11-07
 
@@ -414,6 +414,7 @@ func TestDepsScoping(t *testing.T) {
 	if got[0].Metrics.Prefix() != "gotham" {
 		t.Fatalf("single-module prefix = %q, want gotham", got[0].Metrics.Prefix())
 	}
+	t.Run("storage", depsScopingStorage)
 }
 
 func TestRegistrarClosedAfterRegister(t *testing.T) {
@@ -502,7 +503,9 @@ func TestDescribe_EveryModuleEnabled(t *testing.T) {
 }
 
 func TestKernelFamiliesGathered(t *testing.T) {
-	k := mustNew(t, Config{AppID: "gotham", Logger: logcapture.New(t).Logger()})
+	// Zero modules; the store is core's own (core/storage), so the storage
+	// families are seeded by the boot as 05-metrics §12 requires.
+	k := mustNew(t, Config{AppID: "gotham", Logger: logcapture.New(t).Logger(), StoragePath: tempStoragePath(t)})
 	srv := httptest.NewServer(k.provider.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL)
@@ -510,10 +513,14 @@ func TestKernelFamiliesGathered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	families, err := scrapeFamilies(resp, metricstest.FamilyPrefix(k.scope))
+	all, err := scrapeFamilies(resp, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	prefixes := []string{metricstest.FamilyPrefix(k.scope), metricstest.FamilyPrefix(k.store.scope)}
+	families := slices.DeleteFunc(all, func(f string) bool {
+		return !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(f, p) })
+	})
 	wantNames, err := readFamilies("testdata/kernel_families.golden")
 	if err != nil {
 		t.Fatal(err)
@@ -521,12 +528,12 @@ func TestKernelFamiliesGathered(t *testing.T) {
 	if !slices.Equal(families, wantNames) {
 		t.Fatalf("kernel families served = %v, want %v (testdata/kernel_families.golden)", families, wantNames)
 	}
-	metricstest.AssertSeries(t, k.provider, k.scope, "testdata/series.golden")
+	assertSeries(t, k, "testdata/series.golden", k.scope, k.store.scope)
 	phases, err := bootPhases(k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(phases, []string{"P1", "P5", "P6", "P7", "P8"}) {
-		t.Fatalf("boot phases recorded = %v, want P1 P5 P6 P7 P8", phases)
+	if want := []string{"P1", "P2", "P4a", "P4b", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
+		t.Fatalf("boot phases recorded = %v, want %v", phases, want)
 	}
 }

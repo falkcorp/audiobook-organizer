@@ -1,14 +1,16 @@
 // file: core/module/manifest.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f5448853-c265-4559-bf8c-4cb61f16fa24
 // last-edited: 2026-11-07
 
 package module
 
+import "github.com/falkcorp/mediacore/storage"
+
 // Manifest is everything the kernel validates before any storage is opened,
 // and everything that must stay known while the module is disabled (06
-// §6.4.2). These are the R1 fields; Settings (config), Storage and ResetHook
-// (storage) arrive with their packages (06 §6.4.10).
+// §6.4.2). These are the R1 fields; Settings (config) and ResetHook arrive
+// with their packages (06 §6.4.10).
 type Manifest struct {
 	ID          ID
 	Version     string // semver, e.g. "1.12.0"; reported by GET /api/core/v1/modules
@@ -46,6 +48,16 @@ type Manifest struct {
 	// public set is a reviewed manifest list (COR3-3). hello lists
 	// "getGreeting" until core authentication lands (R2's identity flip).
 	PublicRoutes []string
+
+	// Storage is the module's storage declaration (05-storage §5S.3.4,
+	// §5S.3.5): its keyspace m/<ID>/, its legacy claims and its versioned
+	// migrations, Seed steps included (a Seed step and every later step of
+	// the owner run on a fresh install too, §6.5.1 P4a, COR5-8, COR6-4). It
+	// stays known while the module is disabled, so its claims are validated
+	// and its keyspace stays reserved. No core subsystem reads a module's
+	// rows (03 R1). The zero value declares nothing; a module that declares
+	// anything boots only with core.storage.path set.
+	Storage storage.Spec
 }
 
 // UIDescriptor lists the IDs of client-side contributions (07 §7.4.2).

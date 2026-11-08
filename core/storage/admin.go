@@ -14,6 +14,7 @@ import (
 	"slices"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 
 	ipebble "github.com/falkcorp/mediacore/internal/pebble"
 	"github.com/falkcorp/mediacore/storage/keys"
@@ -28,6 +29,64 @@ type Admin struct{ db *DB }
 
 // Admin returns the store's admin surface, for the kernel.
 func (db *DB) Admin() *Admin { return &Admin{db: db} }
+
+// CheckpointBytes sums the bytes of every recorded pre-migration checkpoint
+// by the two states of <namespace>_storage_checkpoint_bytes (§5S.8):
+// completed, a record whose attempt completed (completed_at set), and open,
+// every other record (an attempt's rollback point, served, or left by a
+// restore). A record whose directory is gone counts nothing.
+func (a *Admin) CheckpointBytes() (open, completed uint64, err error) {
+	db := a.db
+	recs, err := db.checkpointRecords()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, r := range recs {
+		n, err := dirBytes(db.boot.opts.fs, filepath.Join(db.boot.opts.CheckpointDir, r.name))
+		if err != nil {
+			return 0, 0, fmt.Errorf("storage: size of checkpoint %s: %w", r.name, err)
+		}
+		if r.rec.CompletedAt != nil {
+			completed += n
+		} else {
+			open += n
+		}
+	}
+	return open, completed, nil
+}
+
+// dirBytes is the total size of the regular files under dir; 0 when dir is
+// missing.
+func dirBytes(fs vfs.FS, dir string) (uint64, error) {
+	names, err := fs.List(dir)
+	if err != nil {
+		if oserrorNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var total uint64
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		fi, err := fs.Stat(p)
+		if err != nil {
+			if oserrorNotExist(err) {
+				continue
+			}
+			return 0, err
+		}
+		if fi.IsDir() {
+			sub, err := dirBytes(fs, p)
+			if err != nil {
+				return 0, err
+			}
+			total += sub
+			continue
+		}
+		total += uint64(fi.Size())
+	}
+	return total, nil
+}
 
 // fullRange spans every key the store can hold.
 func fullRange() (start, end []byte) { return []byte{0}, bytes.Repeat([]byte{0xff}, 8) }
