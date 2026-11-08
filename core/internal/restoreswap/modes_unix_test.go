@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/modes_unix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9fc3abb8-4b6f-4fba-ac15-81185f297514
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 //go:build unix
 
@@ -66,6 +66,11 @@ func TestSwapFilesArePrivate(t *testing.T) {
 	wantMode(filepath.Join(dir, restorejournal.InflightName), 0o600)
 	wantMode(filepath.Join(dir, restorejournal.JournalName), 0o600)
 	wantMode(filepath.Join(dir, locationFile), 0o640)
+	// The directories the swap creates are 0700 (R1-21 review n5): restore/,
+	// the journal's, and previous/, which holds the original store.
+	wantMode(restorejournal.Dir(h.state), 0o700)
+	wantMode(dir, 0o700)
+	wantMode(filepath.Dir(restorejournal.SetAsideDest(h.state, h.db, id, h.db)), 0o700)
 	if err := s.Opened(ctx, id); err != nil {
 		t.Fatal(err)
 	}
@@ -75,4 +80,5 @@ func TestSwapFilesArePrivate(t *testing.T) {
 	wantMode(filepath.Join(dir, backStarted), 0o600)
 	wantMode(filepath.Join(dir, backMoved), 0o600)
 	wantMode(location, 0o640)
+	wantMode(filepath.Dir(restorejournal.FailedDest(h.state, h.db, id, h.db)), 0o700)
 }

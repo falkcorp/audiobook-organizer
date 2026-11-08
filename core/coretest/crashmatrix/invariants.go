@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/invariants.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bc10682b-4c38-446d-a7dd-4fb4b2cc676b
 // last-edited: 2026-11-08
 
@@ -162,7 +162,11 @@ func readStore(fsys vfs.FS, path string, stamps bool) (ok bool, rows string, lev
 }
 
 // readSlot reads every journal under <state_dir>/restore/ and whether an
-// intent is still pending.
+// intent is still pending. A directory with neither a journal nor an
+// in-flight file holds no swap, as P0a and the in-flight probe read it
+// (Stage's directory before its create, a removed swap's leftovers), and is
+// left out; one with an in-flight file and no journal is kept, at step "",
+// for I2 to report.
 func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 	dir := restorejournal.Dir(stateDir)
 	names, err := fsys.List(dir)
@@ -189,9 +193,6 @@ func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 			continue
 		}
 		recs, err := restoreswap.ReadJournal(fsys, stateDir, n)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue // a directory with no journal: the stager's, or a removed swap's leftovers
-		}
 		if err != nil {
 			return nil, false, fmt.Errorf("journal %s: %w", n, err)
 		}
@@ -200,7 +201,13 @@ func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 			j.last = recs[len(recs)-1].Step
 		}
 		_, serr := fsys.Stat(fsys.PathJoin(p, restorejournal.InflightName))
+		if serr != nil && !errors.Is(serr, fs.ErrNotExist) {
+			return nil, false, fmt.Errorf("journal %s: %w", n, serr)
+		}
 		j.inflight = serr == nil
+		if len(recs) == 0 && !j.inflight {
+			continue
+		}
 		if n == flying {
 			j.kind = kind // only an in-flight journal's kind matters: failed is legal for KindCheckpoint
 		}

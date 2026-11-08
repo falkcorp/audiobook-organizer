@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // cardLabel is the joker module's writer label when a test registers it.
@@ -153,5 +154,50 @@ func TestUncoveredNamesRowsNoLabelReaches(t *testing.T) {
 	}
 	if got := Uncovered(rows, map[string]bool{"cave.mkdir": true, "manor.write": true}); len(got) != 0 {
 		t.Fatalf("Uncovered = %+v, want none", got)
+	}
+}
+
+// TestReadSlotSkipsDirectoriesWithNoSwap (R1-21 review n3): readSlot leaves
+// out a restore/<id>/ with neither a journal nor an in-flight file, which
+// holds no swap, and keeps one with an in-flight file and no journal, at
+// step "", so I2 reports it.
+func TestReadSlotSkipsDirectoriesWithNoSwap(t *testing.T) {
+	mem := vfs.NewMem()
+	state := "/gotham/state"
+	write := func(path, body string) {
+		t.Helper()
+		if err := mem.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		f, err := mem.Create(path, vfs.WriteCategoryUnspecified)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mem.MkdirAll(restorejournal.JournalDir(state, "r-leftover"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(restorejournal.JournalDir(state, "r-done"), restorejournal.JournalName), `{"step":"applied"}`+"\n")
+	journals, pending, err := readSlot(mem, state)
+	if err != nil || pending {
+		t.Fatalf("readSlot = %v, %v, %v", journals, pending, err)
+	}
+	if _, ok := journals["r-leftover"]; ok || journals["r-done"].last != "applied" || len(journals) != 1 {
+		t.Fatalf("journals = %+v, want r-done only", journals)
+	}
+	intent := `{"id":"r-orphan","kind":"archive","db_path":"/batcave/db/main.pebble"}`
+	write(filepath.Join(restorejournal.JournalDir(state, "r-orphan"), restorejournal.InflightName), intent)
+	journals, _, err = readSlot(mem, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, ok := journals["r-orphan"]; !ok || j.last != "" || !j.inflight {
+		t.Fatalf("journals = %+v, want r-orphan in flight at step \"\"", journals)
 	}
 }
