@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2bad0d9-b859-4674-9232-a674448cef1f
 // last-edited: 2026-11-07
 
@@ -19,8 +19,9 @@ import (
 // fakeGin stands in for a gin engine (core never imports gin, N7): it routes
 // on the decoded r.URL.Path with gin's tree rule (a static segment before a
 // parameter at the same depth), runs the post-match check through
-// LegacyMatchAgrees first, as ABO's first gin middleware does, and records
-// which route's handler ran.
+// LegacyMatchAgrees first, as ABO's first gin middleware does (a request it
+// routes nowhere skips the check and gets its NoRoute answer, 418 here), and
+// records which route's handler ran.
 type fakeGin struct {
 	mu     sync.Mutex
 	routes []ginRoute
@@ -79,12 +80,12 @@ func ginBefore(a, b []string) bool {
 
 func (g *fakeGin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	full := g.match(r.Method, r.URL.Path)
-	if agrees, ok := LegacyMatchAgrees(r.Context(), r.Method, full); ok && !agrees {
-		writeLegacyNotFound(r.Context(), w, nil)
-		return
-	}
 	if full == "" {
 		http.Error(w, "noroute", http.StatusTeapot)
+		return
+	}
+	if agrees, ok := LegacyMatchAgrees(r.Context(), r.Method, full); ok && !agrees {
+		writeLegacyNotFound(r.Context(), w, nil)
 		return
 	}
 	g.mu.Lock()
@@ -118,7 +119,8 @@ func manifestOf(routes ...LegacyRoute) func(func(LegacyRoute) bool) {
 }
 
 // gcpdRouter mounts h for owner "gcpd" (claims /api/v1/ and /ping) with the
-// manifest routes, LegacyAuthGin admitted.
+// manifest routes, as a LegacyAuthGin mount (which module may use it is the
+// Registrar's check, not the router's).
 func gcpdRouter(t *testing.T, h http.Handler, routes ...LegacyRoute) *Router {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
@@ -217,10 +219,11 @@ func TestLegacyMount_FoldsConflictingSet(t *testing.T) {
 		}
 	}
 	// A path the generalised pattern matches and no member does never reaches
-	// a handler (rule 5).
+	// a handler (rule 5): gin routes it nowhere and gives its own NoRoute
+	// answer (418 here; HEAD's gin answers an /api/ path with its 404).
 	rec := serve(h, http.MethodGet, "/api/v1/cases/c-1/alibis", "")
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "endpoint not found") {
-		t.Errorf("non-member path = %d %q, want legacy 404", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("non-member path = %d %q, want gin's NoRoute answer", rec.Code, rec.Body.String())
 	}
 	if got := g.took(); len(got) != 0 {
 		t.Errorf("non-member path ran %v", got)
@@ -492,5 +495,76 @@ func TestLegacyRedirect_CoversOnlyUnclaimedPaths(t *testing.T) {
 	if err := NewRouter(Options{}, Deps{}).MountLegacy(LegacyMount{Owner: "gcpd", Handler: g,
 		Redirects: []LegacyRedirect{{Prefix: "/api", Location: loc}}}); !errors.Is(err, ErrLegacyManifest) {
 		t.Fatalf("redirect without a subtree prefix = %v, want ErrLegacyManifest", err)
+	}
+}
+
+const legacyNotFound = `{"error":"endpoint not found","code":"NOT_FOUND","status":404}`
+
+// TestDispatch_LegacyWrongMethodIsLegacyNotFound: HEAD's gin has
+// HandleMethodNotAllowed off, so a wrong method on a manifest path is gin's
+// 404, byte for byte, never core's problem 405 with an Allow header.
+func TestDispatch_LegacyWrongMethodIsLegacyNotFound(t *testing.T) {
+	g := newFakeGin("GET /api/v1/cases/:id", "POST /api/v1/cases")
+	h := mustBuild(t, gcpdRouter(t, g, gothamRoute(http.MethodGet, "/api/v1/cases/:id"),
+		gothamRoute(http.MethodPost, "/api/v1/cases")))
+	for _, c := range [][2]string{{http.MethodDelete, "/api/v1/cases/penguin"}, {http.MethodGet, "/api/v1/cases"}, {http.MethodPut, "/api/v1/cases"}} {
+		rec := serve(h, c[0], c[1], "")
+		if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound || rec.Header().Get("Allow") != "" {
+			t.Errorf("%s %s = %d %q Allow %q, want the legacy 404", c[0], c[1], rec.Code, rec.Body.String(), rec.Header().Get("Allow"))
+		}
+	}
+	if ran := g.took(); len(ran) != 0 {
+		t.Fatalf("gin ran %v", ran)
+	}
+}
+
+// TestDispatch_TrailingSlashPatternNoRedirect: ServeMux answers GET /x with a
+// 307 to /x/ when only "/x/{$}" is registered; the router answers it as the
+// miss it is (a problem 404 for a native path, the legacy 404 under a legacy
+// claim), and the slashed path is still served.
+func TestDispatch_TrailingSlashPatternNoRedirect(t *testing.T) {
+	r, grp := newRouter(t, "listGadgets")
+	Handle(grp, Route{Method: http.MethodGet, Path: "/gadgets/{$}", Name: "listGadgets", Perm: rbac.Public}, noop)
+	h := mustBuild(t, r)
+	rec := serve(h, http.MethodGet, "/api/batcave/v1/gadgets", "")
+	if rec.Code != http.StatusNotFound || rec.Header().Get("Content-Type") != "application/problem+json" || rec.Header().Get("Location") != "" {
+		t.Fatalf("GET without the slash = %d %q Location %q, want problem 404", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("Location"))
+	}
+	if rec := serve(h, http.MethodGet, "/api/batcave/v1/gadgets/", ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET with the slash = %d %q", rec.Code, rec.Body.String())
+	}
+
+	g := newFakeGin("GET /api/v1/cases/:id/")
+	lh := mustBuild(t, gcpdRouter(t, g, gothamRoute(http.MethodGet, "/api/v1/cases/:id/")))
+	rec = serve(lh, http.MethodGet, "/api/v1/cases/penguin", "")
+	if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound {
+		t.Fatalf("legacy GET without the slash = %d %q Location %q, want the legacy 404", rec.Code, rec.Body.String(), rec.Header().Get("Location"))
+	}
+	if rec := serve(lh, http.MethodGet, "/api/v1/cases/penguin/", ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"GET /api/v1/cases/:id/"}) {
+		t.Fatalf("legacy GET with the slash = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDispatch_SPASharedGetServesShell is the request half of 06 §6.10's
+// TestReservedSegmentsDisjointFromNonSPA: "login" is a SPAShared segment under
+// its owner's claim; GET /login, which no route matches, goes to the "/"
+// owner (the same engine, whose NoRoute page is the shell: 418 here), and
+// POST /login reaches the mount's route.
+func TestDispatch_SPASharedGetServesShell(t *testing.T) {
+	g := newFakeGin("POST /login")
+	r := NewRouter(Options{}, Deps{})
+	if err := r.Claim("gcpd", "/login"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthGin, ServesSPA: true, SPAShared: []string{"login"},
+		Routes: manifestOf(LegacyRoute{Method: http.MethodPost, GinPath: "/login", Perm: rbac.Public, Public: true})}); err != nil {
+		t.Fatal(err)
+	}
+	h := mustBuild(t, r)
+	if rec := serve(h, http.MethodPost, "/login", ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"POST /login"}) {
+		t.Fatalf("POST /login = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := serve(h, http.MethodGet, "/login", ""); rec.Code != http.StatusTeapot {
+		t.Fatalf("GET /login = %d %q, want the shell (gin's NoRoute)", rec.Code, rec.Body.String())
 	}
 }

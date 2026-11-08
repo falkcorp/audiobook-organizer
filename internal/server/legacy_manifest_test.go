@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
 // last-edited: 2026-11-07
 
@@ -424,6 +424,50 @@ func TestLegacyMount_MuxAndGinAgreeOnEncodedSlash(t *testing.T) {
 		assert.Equal(t, legacyNotFoundBody, w.Body.String(), "%s %s", lr.Method, p)
 	}
 	assert.Greater(t, pairs, 20, "too few encoded-slash pairs found; the scan is broken")
+}
+
+// TestLegacyMount_UnmatchedMethodMatchesGin: a request gin answers from its
+// NoRoute chain (no route for that method and path) gets the same status,
+// Content-Type and body through the mount. HEAD's gin has
+// HandleMethodNotAllowed off, so a wrong method on a manifest path is gin's
+// 404, never core's problem 405; GET /login, whose only route is POST, is the
+// SPA's page (06 §6.10 TestReservedSegmentsDisjointFromNonSPA, request half).
+// Every manifest path is tried with every method gin has no route for.
+func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
+	for _, abs := range absModes() {
+		t.Run(absName(abs), func(t *testing.T) {
+			f := legacyEngine(t, abs, false)
+			_, h := booksMount(t, f)
+			manifest, err := f.srv.LegacyManifest()
+			require.NoError(t, err)
+			routed := map[string]bool{}
+			var paths []string
+			for _, lr := range manifest {
+				p := legacyConcretePath(lr.GinPath)
+				if !slices.Contains(paths, p) {
+					paths = append(paths, p)
+				}
+				routed[lr.Method+" "+p] = true
+			}
+			methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+			n := 0
+			for _, p := range paths {
+				for _, m := range methods {
+					if routed[m+" "+p] {
+						continue
+					}
+					n++
+					g, mt := probe(f.srv.router, m, p, ""), probe(h, m, p, "")
+					assert.Equal(t, g.Code, mt.Code, "%s %s", m, p)
+					assert.Equal(t, g.Header().Get("Content-Type"), mt.Header().Get("Content-Type"), "%s %s", m, p)
+					assert.Equal(t, g.Body.String(), mt.Body.String(), "%s %s", m, p)
+				}
+			}
+			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
+			// The SPA-shared segment: gin serves GET /login from NoRoute.
+			assert.Equal(t, probe(f.srv.router, http.MethodGet, "/login", "").Code, probe(h, http.MethodGet, "/login", "").Code)
+		})
+	}
 }
 
 // TestNativePrefixesNotRedirected: paths reserved for versioned APIs are not

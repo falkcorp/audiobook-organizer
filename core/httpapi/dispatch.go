@@ -1,5 +1,5 @@
 // file: core/httpapi/dispatch.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a494f53-6f15-4cca-bfe7-f575ea6913a4
 // last-edited: 2026-11-07
 
@@ -15,11 +15,13 @@ import (
 )
 
 // dispatcher wraps the ServeMux with 05-http-api §4.3, §4.8 and §4.10: an
-// unclean path never reaches the mux (no 301), an unmatched path gets problem
-// 404/405 (with the Allow header the mux computed) instead of the mux's
-// plain-text body, an unmatched path under a legacy owner's claim gets 404 in
-// the legacy shape, a legacy mount's Redirects answer the unmatched paths they
-// cover, and the "/" owner receives only what NonSPA lets through.
+// unclean path never reaches the mux (no 301), nor does a path the mux would
+// answer with its trailing-slash redirect (no 307), an unmatched path gets
+// problem 404/405 (with the Allow header the mux computed) instead of the
+// mux's plain-text body, an unmatched path under a legacy owner's claim gets
+// 404 in the legacy shape whatever its method (HEAD's gin has no 405), a
+// legacy mount's Redirects answer the unmatched paths they cover, and the "/"
+// owner receives only what NonSPA lets through.
 type dispatcher struct {
 	mux          *http.ServeMux
 	root         http.Handler // the "/" owner, or nil
@@ -44,13 +46,19 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, pattern := d.mux.Handler(r)
-	if pattern != "" {
+	if pattern != "" && !slashRedirect(pattern, r) {
 		// ServeHTTP, not h: only the mux's own dispatch sets r.PathValue.
 		d.mux.ServeHTTP(w, r)
 		return
 	}
-	status, allow := capture(h, r)
-	if status == http.StatusMethodNotAllowed && (d.root == nil || d.nonSPA(r)) {
+	// From here the request is unmatched: no pattern, or only the canonical
+	// form with a trailing slash matched, which is a miss here as it is in
+	// gin with RedirectTrailingSlash off.
+	status, allow := http.StatusNotFound, ""
+	if pattern == "" {
+		status, allow = capture(h, r)
+	}
+	if status == http.StatusMethodNotAllowed && !d.underLegacyClaim(r.URL.Path) && (d.root == nil || d.nonSPA(r)) {
 		hdr := http.Header{}
 		if allow != "" {
 			hdr.Set("Allow", allow)
@@ -71,15 +79,34 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if d.root != nil && !d.nonSPA(r) {
+		// Before the legacy claims: a SPAShared segment ("/login") is under
+		// its owner's claim, yet a GET or HEAD no route matched is the
+		// shell's page, as in HEAD's gin (06 §6.10, FE2-7).
+		d.root.ServeHTTP(w, r)
+		return
+	}
 	if d.underLegacyClaim(r.URL.Path) {
 		writeLegacyNotFound(ctx, w, d.log)
 		return
 	}
-	if d.root == nil || d.nonSPA(r) {
-		writeProblem(ctx, w, r, Problem{Status: http.StatusNotFound, Code: "not_found"}, nil, d.log)
-		return
+	writeProblem(ctx, w, r, Problem{Status: http.StatusNotFound, Code: "not_found"}, nil, d.log)
+}
+
+// slashRedirect reports the mux's trailing-slash redirect: Handler returns
+// the pattern that matched path+"/" (a subtree "/x/" or an exact "/x/{$}",
+// wildcards allowed) for a path without the slash. A pattern ending in "/"
+// matches a path without one only with more segments below it, so the same
+// segment count without the final empty segment is the redirect.
+func slashRedirect(pattern string, r *http.Request) bool {
+	_, pat := splitPattern(pattern)
+	if i := strings.IndexByte(pat, '/'); i > 0 { // a host-qualified pattern
+		pat = pat[i:]
 	}
-	d.root.ServeHTTP(w, r)
+	pat = strings.TrimSuffix(pat, "{$}")
+	p := r.URL.EscapedPath()
+	return strings.HasSuffix(pat, "/") && !strings.HasSuffix(p, "/") &&
+		strings.Count(p, "/") == strings.Count(pat, "/")-1
 }
 
 func (d *dispatcher) underLegacyClaim(p string) bool {

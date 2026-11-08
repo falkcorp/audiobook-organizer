@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
 // last-edited: 2026-11-07
 
@@ -206,9 +206,17 @@ func (s *Server) LegacyRedirects() []httpapi.LegacyRedirect {
 // not that pattern's manifest entry (for a generalised pattern, one of its
 // members) gets 404 in the legacy error shape before any handler runs. A
 // request gin serves directly, or through the "/" fallback, carries no
-// pattern and passes.
+// pattern and passes. So does one gin routes to no route at all (FullPath
+// ""): its NoRoute chain serves no route's handler, and answering it exactly
+// as gin does (the /api redirect, the SPA, gin's 404) is what keeps a
+// mounted path byte-identical to HEAD, a wrong method or a HEAD request on a
+// GET-only route included.
 func legacyMatchCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.FullPath() == "" {
+			c.Next()
+			return
+		}
 		if agrees, ok := httpapi.LegacyMatchAgrees(c.Request.Context(), c.Request.Method, c.FullPath()); ok && !agrees {
 			httputil.RespondWithNotFound(c, "endpoint", "")
 			c.Abort()
