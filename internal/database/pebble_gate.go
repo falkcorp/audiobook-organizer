@@ -1,7 +1,7 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -330,6 +330,9 @@ type gatedReader interface {
 type GatedDB struct {
 	db   *pebble.DB
 	gate *dbGate
+	// verdict counts the writes to the keys the HNSW reconcile's verdict
+	// reads (hnsw_verdict_watch.go).
+	verdict verdictWatch
 }
 
 // NewGatedDB wraps an engine the caller opened, for a caller that keeps the
@@ -438,6 +441,9 @@ func (d *GatedDB) Set(key, value []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if isVerdictKey(key) {
+		d.verdict.note()
+	}
 	return d.db.Set(key, value, opts)
 }
 
@@ -447,6 +453,9 @@ func (d *GatedDB) Delete(key []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if isVerdictKey(key) {
+		d.verdict.note()
+	}
 	return d.db.Delete(key, opts)
 }
 
@@ -456,6 +465,9 @@ func (d *GatedDB) DeleteRange(start, end []byte, opts *pebble.WriteOptions) erro
 		return err
 	}
 	defer d.gate.release()
+	if rangeTouchesVerdictKeys(start, end) {
+		d.verdict.note()
+	}
 	return d.db.DeleteRange(start, end, opts)
 }
 
@@ -465,6 +477,9 @@ func (d *GatedDB) Merge(key, value []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if isVerdictKey(key) {
+		d.verdict.note()
+	}
 	return d.db.Merge(key, value, opts)
 }
 
@@ -579,13 +594,13 @@ func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 // NewBatch returns a write-only batch. Building it holds no lease; Commit
 // does.
 func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
-	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate}
+	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate, watch: &d.verdict}
 }
 
 // NewIndexedBatch returns a batch that can also be read. Building it holds no
 // lease; Commit, Get and each iterator do.
 func (d *GatedDB) NewIndexedBatch() *GatedBatch {
-	return &GatedBatch{b: d.db.NewIndexedBatch(), gate: d.gate}
+	return &GatedBatch{b: d.db.NewIndexedBatch(), gate: d.gate, watch: &d.verdict}
 }
 
 // syncWALForShutdown fsyncs the WAL, waiting no longer than deadline. Only
@@ -810,14 +825,22 @@ func (s *GatedSnapshot) Close() error {
 type GatedBatch struct {
 	b    *pebble.Batch
 	gate *dbGate
+	// watch is the database's verdict watch, and verdict records that the
+	// batch staged a verdict write; Commit notes it (hnsw_verdict_watch.go).
+	watch   *verdictWatch
+	verdict bool
 }
 
-// Commit applies the batch to the engine.
+// Commit applies the batch to the engine. A batch that staged a verdict write
+// is noted before it commits.
 func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
 	if err := b.gate.acquire(); err != nil {
 		return err
 	}
 	defer b.gate.release()
+	if b.verdict && b.watch != nil {
+		b.watch.note()
+	}
 	return b.b.Commit(o)
 }
 
@@ -848,28 +871,64 @@ func (b *GatedBatch) NewIter(o *pebble.IterOptions) (*GatedIter, error) {
 	return &GatedIter{it: it, gate: b.gate}, nil
 }
 
-// Apply appends other's operations to b (process memory only, no lease).
+// Apply appends other's operations to b (process memory only, no lease), and
+// other's verdict write with them.
 func (b *GatedBatch) Apply(other *GatedBatch, opts *pebble.WriteOptions) error {
-	return b.b.Apply(other.b, opts)
+	if err := b.b.Apply(other.b, opts); err != nil {
+		return err
+	}
+	if other.verdict {
+		b.verdict = true
+	}
+	return nil
 }
 
 // Set, Delete, DeleteRange, Merge, Close, Reset, Len, Count, Empty and
-// Indexed are process memory and forward to pebble.
+// Indexed are process memory and forward to pebble. The four writes record a
+// verdict write (isVerdictKey) for Commit to note.
 
 func (b *GatedBatch) Set(key, value []byte, opts *pebble.WriteOptions) error {
+	if isVerdictKey(key) {
+		b.verdict = true
+	}
 	return b.b.Set(key, value, opts)
 }
+
+// setJudged stages a Set of a verdict key whose caller has decided whether it
+// changes anything the reconcile reads, instead of counting it as one by its
+// key (hnsw_verdict_watch.go). Only a caller that compared what the row held
+// with what it writes may pass false.
+func (b *GatedBatch) setJudged(key, value []byte, changesVerdict bool) error {
+	if changesVerdict {
+		b.verdict = true
+	}
+	return b.b.Set(key, value, nil)
+}
 func (b *GatedBatch) Delete(key []byte, opts *pebble.WriteOptions) error {
+	if isVerdictKey(key) {
+		b.verdict = true
+	}
 	return b.b.Delete(key, opts)
 }
 func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
+	if rangeTouchesVerdictKeys(start, end) {
+		b.verdict = true
+	}
 	return b.b.DeleteRange(start, end, opts)
 }
 func (b *GatedBatch) Merge(key, value []byte, opts *pebble.WriteOptions) error {
+	if isVerdictKey(key) {
+		b.verdict = true
+	}
 	return b.b.Merge(key, value, opts)
 }
-func (b *GatedBatch) Close() error  { return b.b.Close() }
-func (b *GatedBatch) Reset()        { b.b.Reset() }
+func (b *GatedBatch) Close() error { return b.b.Close() }
+
+// Reset empties the batch, and forgets its verdict write with its operations.
+func (b *GatedBatch) Reset() {
+	b.b.Reset()
+	b.verdict = false
+}
 func (b *GatedBatch) Len() int      { return b.b.Len() }
 func (b *GatedBatch) Count() uint32 { return b.b.Count() }
 func (b *GatedBatch) Empty() bool   { return b.b.Empty() }
