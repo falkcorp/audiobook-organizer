@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_persist_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-11-08
 
@@ -378,4 +378,28 @@ func TestExportIfDirty_MutationsDuringExport(t *testing.T) {
 	n, err := loaded.CountByType(ctx, "book")
 	require.NoError(t, err)
 	assert.Equal(t, len(batmanIDs), n)
+}
+
+// TestExportIfDirty_CleanAfterFreshImport: a fresh snapshot import installs a
+// graph the file on disk already describes, so the first periodic export after
+// boot is skipped (review NIT); a mutation after it makes the store dirty.
+func TestExportIfDirty_CleanAfterFreshImport(t *testing.T) {
+	ctx := context.Background()
+	src := newExportTestStore(t, 3)
+	src.SetComplete(true)
+	dir := t.TempDir()
+	truth := func(string) (int, error) { return 3, nil }
+	require.NoError(t, src.ExportWithTruth(dir, truth))
+
+	imp := database.NewHNSWEmbeddingStore(exportTestDim)
+	require.NoError(t, imp.ImportWithStalenessCheck(dir, truth))
+	res, err := imp.ExportIfDirty(dir, truth)
+	require.NoError(t, err)
+	assert.True(t, res.Clean, "the imported snapshot is already on disk")
+	assert.False(t, res.Exported)
+
+	require.NoError(t, imp.Upsert(ctx, "book", "harvey-dent", exportTestVec(rand.New(rand.NewSource(11))), nil))
+	res, err = imp.ExportIfDirty(dir, func(string) (int, error) { return 4, nil })
+	require.NoError(t, err)
+	assert.True(t, res.Exported, "a mutation after the import is exported")
 }
