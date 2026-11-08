@@ -1,5 +1,5 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
 // last-edited: 2026-11-07
 
@@ -32,7 +32,6 @@ import (
 	htmltemplate "html/template"
 	"net/http"
 	"net/mail"
-	"net/url"
 	"strings"
 	"sync"
 	texttemplate "text/template"
@@ -86,22 +85,21 @@ func (d *InviteDelivery) baseURL() string {
 
 // Why an invitation email cannot go out; sendBlocked returns one of these.
 const (
-	mailNotConfiguredReason = "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
-	publicURLMissingReason  = "the server's public address is not set (PUBLIC_BASE_URL or EXTERNAL_URL), so an emailed link would not open; copy the link instead"
+	mailNotConfiguredReason = mailNotConfiguredCore + "; copy the link instead"
+	publicURLMissingReason  = publicURLMissingCore + ", so an emailed link would not open; copy the link instead"
 )
 
 // sendBlocked returns why an invitation email cannot be sent right now, or
-// "" when it can: mail must be configured, and the link base must be an
-// absolute http(s) URL, since a relative link in an email opens nothing.
+// "" when it can: the rule is EmailSendBlocked's, which the phone-app key
+// email shares. The wording adds the invitation's own advice.
 func (d *InviteDelivery) sendBlocked() string {
-	if d.sender() == nil {
+	switch EmailSendBlocked(d.sender(), d.baseURL()) {
+	case "":
+		return ""
+	case mailNotConfiguredCore:
 		return mailNotConfiguredReason
 	}
-	u, err := url.Parse(d.baseURL())
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return publicURLMissingReason
-	}
-	return ""
+	return publicURLMissingReason
 }
 
 func (d *InviteDelivery) policySync() bool {
@@ -160,6 +158,10 @@ type inviteEmailData struct {
 	// PhoneAppToken is true when accepting mints the guest's own phone-app
 	// key, so the email says the invitation page will show it once.
 	PhoneAppToken bool
+	// KeyInEmail selects the phoneAppSteps wording (phone_app_steps.go). It is
+	// always false here: an invitation never carries the key, the invitation
+	// page shows it once.
+	KeyInEmail bool
 }
 
 const inviteEmailSubject = "You're invited to Audiobook Organizer"
@@ -187,24 +189,10 @@ You have been invited to Audiobook Organizer.
 (two values, each with a name). Copy it then: it is shown only once and is not in this email.
 Add the key to the app BEFORE you sign in to it, or the app cannot reach the server.
 
-iPhone or iPad: install AudioBooth from the App Store.
-  1. Open AudioBooth, go to Servers and tap + to add a server.
-  2. Server address: {{.ServerURL}}
-  3. Before signing in, tap Custom Headers, then Add Header. Add each of the two
-     values from the invitation page under the name shown next to it.
-  4. Go back and sign in with your username ({{.Username}}) and password.
-
-Android 9 or newer: install Lissen from Google Play or F-Droid.
-  https://play.google.com/store/apps/details?id=org.grakovne.lissen
-  (The official Audiobookshelf Android app cannot connect to this server.)
-  1. Open Lissen. On the "Connect to server" screen, tap the gear icon.
-  2. Tap Connection, then Custom Headers. Add the two values from the invitation
-     page: Key is the name shown, Value is the value next to it.
-  3. Go back. Server URL: {{.ServerURL}}  Login: {{.Username}}
-     Password: the one you chose. Tap Connect.{{else}}Phone app access will be added to your account soon.{{end}}
+{{template "phoneAppSteps" .}}{{else}}Phone app access will be added to your account soon.{{end}}
 
 If you were not expecting this invitation, you can ignore this email.
-`))
+` + phoneAppStepsTextDef))
 
 var inviteHTMLTmpl = htmltemplate.Must(htmltemplate.New("html").Parse(`<!doctype html>
 <html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5;color:#1d1d1f;max-width:600px">
@@ -220,22 +208,9 @@ If the link does not open, copy this address into your browser:<br>
 {{if .EmailLogin}}<p>If Cloudflare asks you to sign in first, enter this email address: <code>{{.Email}}</code>. Cloudflare emails you a one-time code; type it in. This works once you have chosen your password in step 1.</p>
 {{end}}{{if .PhoneAppToken}}<h3>3. Phone app (optional)</h3>
 <p>When you create your account, the invitation page shows your own phone-app key (two values, each with a name). Copy it then: it is shown only once and is not in this email. Add the key to the app <strong>before</strong> you sign in to it, or the app cannot reach the server.</p>
-<p><strong>iPhone or iPad:</strong> install AudioBooth from the App Store.</p>
-<ol>
-<li>Open AudioBooth, go to <strong>Servers</strong> and tap <strong>+</strong> to add a server.</li>
-<li>Server address: <code>{{.ServerURL}}</code></li>
-<li>Before signing in, tap <strong>Custom Headers</strong>, then <strong>Add Header</strong>. Add each of the two values from the invitation page under the name shown next to it.</li>
-<li>Go back and sign in with your username (<strong>{{.Username}}</strong>) and password.</li>
-</ol>
-<p><strong>Android 9 or newer:</strong> install <a href="https://play.google.com/store/apps/details?id=org.grakovne.lissen">Lissen from Google Play</a> or F-Droid. The official Audiobookshelf Android app cannot connect to this server.</p>
-<ol>
-<li>Open Lissen. On the <strong>Connect to server</strong> screen, tap the gear icon.</li>
-<li>Tap <strong>Connection</strong>, then <strong>Custom Headers</strong>. Add the two values from the invitation page: <strong>Key</strong> is the name shown, <strong>Value</strong> is the value next to it.</li>
-<li>Go back. Server URL: <code>{{.ServerURL}}</code>, Login: <strong>{{.Username}}</strong>, Password: the one you chose. Tap <strong>Connect</strong>.</li>
-</ol>
-{{else}}<p>Phone app access will be added to your account soon.</p>{{end}}
+{{template "phoneAppSteps" .}}{{else}}<p>Phone app access will be added to your account soon.</p>{{end}}
 <p style="color:#666">If you were not expecting this invitation, you can ignore this email.</p>
-</body></html>`))
+</body></html>` + phoneAppStepsHTMLDef))
 
 // renderInviteEmail builds the invitation message. Templates escape every
 // value (html/template contextually; the text part has no markup).
