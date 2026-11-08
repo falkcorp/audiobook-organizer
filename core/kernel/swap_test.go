@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -12,12 +12,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -276,6 +279,78 @@ func TestCheckpointRestoreFailedKeepsInFlight(t *testing.T) {
 	}
 	if err := ReaderCheck(h.state, ReaderCheckAllow{FailedCheckpointEscape: true}); err != nil {
 		t.Fatalf("reader check with the failed-checkpoint escape = %v, want nil", err)
+	}
+}
+
+// TestCheckpointRestoreBookkeepingFailureRetries (DATA7-12 as R1-21's
+// review (f) reads it): only a migration step's own failure (a
+// *storage.StepError) journals a KindCheckpoint restore failed. A P4b
+// bookkeeping failure, here an ENOSPC on the finish sidecars, closes the
+// store and halts the boot with nothing journaled: the journal stays at
+// opened with its in-flight file, and the next boot of the same binary
+// resumes the restore boot to applied.
+func TestCheckpointRestoreBookkeepingFailureRetries(t *testing.T) {
+	mem := vfs.NewCrashableMem()
+	const state = "/gotham/state"
+	db := state + "/storage/main.pebble"
+	boot := func(fail func(bootseamtest.Event) error) error {
+		rec := bootseamtest.New(mem, bootseamtest.Options{Fail: fail})
+		seams := rec.Seams()
+		seams.BuildID = swapBuild
+		c := testConfig(t, storageMod("alfred", nil, seedStep(1, "cave")))
+		c.StoragePath, c.StateDir = db, state
+		k, err := New(bootseam.With(t.Context(), seams), c)
+		if err != nil {
+			return err
+		}
+		return k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget))
+	}
+	if err := boot(nil); err != nil {
+		t.Fatal(err)
+	}
+	const id = "r-checkpoint"
+	staged := filepath.Join(restorejournal.StagingDir(db, id), "main.pebble")
+	if _, err := vfs.Clone(mem, mem, db, staged); err != nil {
+		t.Fatal(err)
+	}
+	s, err := restoreswap.New(restoreswap.Options{FS: mem, StateDir: state, BuildID: swapBuild})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Stage(t.Context(), restorejournal.Intent{ID: id, Kind: restorejournal.KindCheckpoint, DBPath: db,
+		Targets:       []restorejournal.Target{{From: staged, To: db}},
+		StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	hit := false
+	err = boot(func(ev bootseamtest.Event) error {
+		if !hit && ev.Label == "storage.finish.sidecars" && ev.Kind == errorfs.OpCreate {
+			hit = true
+			return syscall.ENOSPC
+		}
+		return nil
+	})
+	if !hit || !errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrCheckpointRestoreFailedHere) || errors.Is(err, ErrSwappedBack) {
+		t.Fatalf("restore boot with a failing finish sidecar = %v (injected %v), want the ENOSPC alone", err, hit)
+	}
+	recs, err := restoreswap.ReadJournal(mem, state, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stepsOf(recs); got[len(got)-1] != "opened" {
+		t.Fatalf("journal %v, want it left at opened", got)
+	}
+	if _, ok, err := restoreswap.InFlight(mem, state); err != nil || !ok {
+		t.Fatalf("in flight = %v, %v; want the in-flight file kept", ok, err)
+	}
+	if err := boot(nil); err != nil {
+		t.Fatalf("the same binary's next boot = %v, want it to finish the restore", err)
+	}
+	if recs, err = restoreswap.ReadJournal(mem, state, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := stepsOf(recs); got[len(got)-1] != "applied" {
+		t.Fatalf("journal %v, want applied", got)
 	}
 }
 
