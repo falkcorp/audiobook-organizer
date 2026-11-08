@@ -1,0 +1,12 @@
+# file: core/kernel/testdata/log/series.golden
+# version: 1.0.0
+# guid: 8d41c6e2-7b3a-4f0e-a5c9-2e6f1b0d9a34
+# last-edited: 2026-11-08
+#
+# The mediacore.log scope's series (05-logging §9, 05-metrics §6 item 5):
+# family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestLogMetrics_SeriesGolden. The two journal families of §9 are not here:
+# Counters has no field for them until F5-15.
+mediacore_log_dropped_total	counter	sink
+mediacore_log_records_total	counter	level,module
+mediacore_log_redactions_total	counter	kind
