@@ -1,5 +1,5 @@
 # file: .github/workflows/docker-image.yml
-# version: 1.0.1
+# version: 1.0.2
 # guid: b2699763-511a-4b87-bf7f-c52dc086fdcc
 # last-edited: 2026-11-07
 
@@ -22,10 +22,10 @@
 #                 container recreate on the same volume byte-identical. From F3
 #                 the same is asserted for secrets.keyring (OPS5-7, OPS6-10)
 #
-# The level probe (--print-storage-levels, R1-23) and the build-ID probe
-# (X-App-Build equals the embedded mediacore-build meta, R1-19) are wired in
-# image_probe.sh and OFF here: each task turns its own flag on below when the
-# subject exists.
+# The build-ID probe (X-App-Build equals the embedded mediacore-build meta,
+# R1-19) is ON in both runs below. The level probe (--print-storage-levels,
+# R1-23) is wired in image_probe.sh and OFF here: R1-23 turns its flag on below
+# when the subject exists.
 #
 # Trigger: every PR to main that touches a non-doc file, decided by the same
 # `changes` classifier as ci.yml (a web-only change rebuilds the image too, so
@@ -168,7 +168,7 @@ jobs:
         env:
           READY_TIMEOUT: '300'
           PROBE_STORAGE_LEVELS: '0'
-          PROBE_BUILD_ID: '0'
+          PROBE_BUILD_ID: '1'
         run: |
           set -eu
           docker volume create abo-data >/dev/null
@@ -194,7 +194,7 @@ jobs:
         env:
           READY_TIMEOUT: '300'
           PROBE_STORAGE_LEVELS: '0'
-          PROBE_BUILD_ID: '0'
+          PROBE_BUILD_ID: '1'
         run: |
           set -eu
           docker volume create abo-config >/dev/null
