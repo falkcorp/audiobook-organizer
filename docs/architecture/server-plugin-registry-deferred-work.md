@@ -1,6 +1,13 @@
 <!-- file: docs/architecture/server-plugin-registry-deferred-work.md -->
-<!-- version: 1.1.0 -->
-<!-- last-edited: 2026-05-13 -->
+<!-- version: 1.2.0 -->
+<!-- guid: 0a1d0e91-344f-46b7-8afa-2ca55b415079 -->
+<!-- last-edited: 2026-11-08 -->
+
+> **Superseded by 06 §6.11 (R1-34).** This document describes the removed `init()` /
+> `serviceregistry.Register` / `IncludeGroup` API. Services are now listed explicitly: each registering
+> package exports `ServiceDefs()`, `internal/server`'s `serviceDefs` is the one list, and the container is
+> built with `serviceregistry.NewContainerFrom`. See
+> `docs/agent-tasks/platform-core/R1-34-service-registry-explicit-list.md`. Kept for history only.
 
 # SERVER-PLUGIN-REG — Deferred Work Plan
 

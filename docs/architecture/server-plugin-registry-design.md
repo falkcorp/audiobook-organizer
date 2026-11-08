@@ -1,6 +1,13 @@
 <!-- file: docs/architecture/server-plugin-registry-design.md -->
-<!-- version: 1.0.0 -->
-<!-- last-edited: 2026-05-11 -->
+<!-- version: 1.1.0 -->
+<!-- guid: ae3fdc85-331b-425f-9cd5-c587702714b7 -->
+<!-- last-edited: 2026-11-08 -->
+
+> **Superseded by 06 §6.11 (R1-34).** This document describes the removed `init()` /
+> `serviceregistry.Register` / `IncludeGroup` API. Services are now listed explicitly: each registering
+> package exports `ServiceDefs()`, `internal/server`'s `serviceDefs` is the one list, and the container is
+> built with `serviceregistry.NewContainerFrom`. See
+> `docs/agent-tasks/platform-core/R1-34-service-registry-explicit-list.md`. Kept for history only.
 
 # SERVER-PLUGIN-REG — Service Registry Design
 
