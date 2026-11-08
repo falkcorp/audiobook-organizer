@@ -1,5 +1,5 @@
 // file: core/kernel/storage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 36b3a2eb-1f55-4a42-83bc-47c859649615
 // last-edited: 2026-11-08
 
@@ -402,8 +402,8 @@ func previousBuild(t *testing.T, path string, rec *recorder, probe func()) (*Ker
 // before the first start hook runs, and so by READY=1, so the next upgrade
 // takes its own checkpoint. A boot that writes from a start hook and dies
 // before READY=1 (its listener fails) has still marked the record, and the
-// next upgrade's fresh checkpoint holds that write. A record that cannot be
-// written stops the app before anything starts.
+// next upgrade's fresh checkpoint holds that write. A record the served
+// write cannot use stops the app before anything starts.
 func TestReadinessMarksCheckpointServed(t *testing.T) {
 	t.Run("served", func(t *testing.T) {
 		path, name := failedUpgrade(t)
@@ -422,25 +422,32 @@ func TestReadinessMarksCheckpointServed(t *testing.T) {
 			t.Fatalf("the record at READY=1: status %q, ready_at %v (%v); want served with ready_at", status, readyAt, readErr)
 		}
 	})
-	t.Run("unwritable", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root writes through a read-only directory")
-		}
+	t.Run("unusable-record", func(t *testing.T) {
 		path, name := failedUpgrade(t)
-		dir := filepath.Join(filepath.Dir(path), ".mediacore-checkpoints")
+		file := filepath.Join(filepath.Dir(path), ".mediacore-checkpoints", name+".json")
 		rec := &recorder{}
 		k, _ := previousBuild(t, path, rec, func() {})
-		if err := os.Chmod(dir, 0o500); err != nil {
+		// The record becomes a non-empty directory after the boot read it, so
+		// the served write's read-modify-write of it fails for every user,
+		// root included (a read-only directory stops only non-root ones).
+		// The record goes back afterwards to show it was left open.
+		aside := file + ".aside"
+		if err := os.Rename(file, aside); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		if err := os.MkdirAll(filepath.Join(file, "arkham"), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		// A Run that wrongly reaches readiness serves until ctx ends; the
 		// deadline turns that into a failure instead of a hang.
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 		err := k.Run(ctx)
+		if rerr := errors.Join(os.RemoveAll(file), os.Rename(aside, file)); rerr != nil {
+			t.Fatal(rerr)
+		}
 		if err == nil || !strings.Contains(err.Error(), "ready_at") {
-			t.Fatalf("Run with an unwritable record = %v, want the readiness write's error", err)
+			t.Fatalf("Run with an unusable record = %v, want the readiness write's error", err)
 		}
 		if slices.Contains(rec.list(), "ready") {
 			t.Fatal("READY=1 was sent although ready_at was not written")
