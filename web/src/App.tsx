@@ -1,7 +1,7 @@
 // file: web/src/App.tsx
-// version: 1.33.1
+// version: 1.34.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { Routes, Route, Navigate, useLocation } from 'react-router';
@@ -10,6 +10,7 @@ import { MainLayout } from './components/layout/MainLayout';
 import { WelcomeWizard } from './components/wizard/WelcomeWizard';
 import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { StaleBuildBanner } from './components/StaleBuildBanner';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { AcceptInvite } from './pages/AcceptInvite';
@@ -222,6 +223,10 @@ function App() {
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* Offers a reload when apiFetch sees a response from a newer build. Fixed
+          position, so it sits over the login page and the app alike. */}
+      <StaleBuildBanner />
+
       {/* Shutdown/Restart Overlay */}
       <Backdrop
         open={serverShutdown}
