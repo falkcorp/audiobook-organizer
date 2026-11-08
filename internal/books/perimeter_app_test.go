@@ -1,5 +1,5 @@
 // file: internal/books/perimeter_app_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d50ddd31-9468-4c34-9994-a64e31f28a71
 // last-edited: 2026-11-08
 
@@ -12,10 +12,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +24,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPerimeter_ThroughTheRunningApp (R1-15 review m5): internal/server's
-// parity table runs the perimeter shim over a router the test builds. This
-// runs cases from it through what serve listens with: the App running, its
+// TestPerimeter_ThroughTheRunningApp (R1-15 review m5, reworked for R1-17):
+// the cases run through what serve listens with: the App running, its
 // listener opened by books' R1Listen, so the shim wraps app.Handler(), core's
-// router with its stages and books' legacy mount. Each answer is compared
-// with HEAD's, the gin engine on its own. The cases are the kinds core
-// answers itself (the /api redirect, the legacy-shape 404, core's group)
-// with gzip and a same origin, the case review m5 found different, plus a
-// routed one.
+// router with its stages 0-11 and books' legacy mount. The cases are the
+// kinds core answers itself (the /api redirect, the legacy-shape 404, core's
+// group) with gzip and a same origin, the case review m5 found different,
+// plus a routed one.
+//
+// Since R1-17 the gin engine on its own has no perimeter, so it is HEAD's
+// reference for the status and the body only. The perimeter headers are
+// checked against what HEAD's compressionMiddleware and CORS middleware sent
+// (review m5's findings): the /api redirect's 301 and a routed answer are
+// gzipped with Vary: Origin, Accept-Encoding; an error status is sent
+// uncompressed with no Vary at all, CORS's Origin included. internal/server's
+// TestPerimeter_ParityWithHEAD diffs the other headers against HEAD's frozen
+// perimeter.
 func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 	r := runComposed(t)
 	c, addr := r.composed, r.addr
@@ -46,17 +51,22 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 	t.Cleanup(client.CloseIdleConnections)
-	gzipSame := map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}
+	const origin = "https://gotham.example"
+	gzipSame := map[string]string{"Accept-Encoding": "gzip", "Origin": origin}
 	for _, tc := range []struct {
 		name, path string
 		header     map[string]string
-		coreBody   bool // core's own problem body: compare status and headers only
+		coreBody   bool     // core's own problem body: compare the status only
+		gzip       bool     // the answer is gzipped
+		vary       []string // the answer's Vary values, nil for none
 	}{
-		{name: "/api redirect, gzip, same origin", path: "/api/audiobooks?batman=1", header: gzipSame},
+		{name: "/api redirect, gzip, same origin", path: "/api/audiobooks?batman=1", header: gzipSame,
+			gzip: true, vary: []string{"Origin", "Accept-Encoding"}},
 		{name: "/api redirect", path: "/api/audiobooks"},
 		{name: "legacy 404, gzip, same origin", path: "/api/v1/riddler-unrouted", header: gzipSame},
 		{name: "core group, gzip, same origin", path: "/api/core/v1/riddler", header: gzipSame, coreBody: true},
-		{name: "routed, gzip, same origin", path: "/api/v1/health", header: gzipSame},
+		{name: "routed, gzip, same origin", path: "/api/v1/health", header: gzipSame,
+			gzip: true, vary: []string{"Origin", "Accept-Encoding"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hreq := httptest.NewRequest(http.MethodGet, tc.path, nil)
@@ -78,20 +88,28 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, hw.Code, resp.StatusCode, "status")
-			gh, kh := hw.Result().Header.Clone(), resp.Header.Clone()
-			for _, v := range []string{"Date", "X-Request-Id", "Content-Length"} {
-				gh.Del(v)
-				kh.Del(v)
+			if !tc.coreBody {
+				want := readableBody(hw.Result().Header, hw.Body.Bytes())
+				if tc.gzip {
+					want = "gzip: " + want
+				}
+				assert.Equal(t, want, readableBody(resp.Header, body), "body")
+				assert.Equal(t, hw.Result().Header.Get("Content-Type"), resp.Header.Get("Content-Type"), "Content-Type")
+				assert.Equal(t, hw.Result().Header.Get("Location"), resp.Header.Get("Location"), "Location")
 			}
-			if tc.coreBody {
-				gh.Del("Content-Type")
-				kh.Del("Content-Type")
-			} else {
-				assert.Equal(t, readableBody(hw.Result().Header, hw.Body.Bytes()), readableBody(resp.Header, body), "body")
+			wantEncoding := ""
+			if tc.gzip {
+				wantEncoding = "gzip"
 			}
-			if !maps.EqualFunc(gh, kh, slices.Equal) {
-				t.Errorf("headers differ\nHEAD: %v\nApp:  %v", gh, kh)
+			assert.Equal(t, wantEncoding, resp.Header.Get("Content-Encoding"), "Content-Encoding")
+			assert.Equal(t, tc.vary, resp.Header.Values("Vary"), "Vary")
+			if tc.header["Origin"] != "" {
+				assert.Equal(t, origin, resp.Header.Get("Access-Control-Allow-Origin"), "CORS")
 			}
+			// Core's stages wrote the rest of the perimeter on this answer.
+			assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"), "security headers")
+			assert.NotEmpty(t, resp.Header.Get("Content-Security-Policy"), "CSP")
+			assert.Equal(t, "dev", resp.Header.Get("X-App-Build"), "X-App-Build")
 		})
 	}
 }
