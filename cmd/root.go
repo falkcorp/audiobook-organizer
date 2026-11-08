@@ -30,6 +30,27 @@ import (
 	"github.com/spf13/viper"
 )
 
+// shutdownBudgetEnv is the R1 reading of core.shutdown.budget's operator name (05-health §5H.4;
+// 05-config §1.12.1). F3 deletes it with R1Values: core config reads the variable from then on.
+const shutdownBudgetEnv = "ABO_CORE_SHUTDOWN_BUDGET"
+
+// shutdownBudgetFromEnv returns 0 (core's default) when the variable is unset or empty, the parsed
+// duration when it is a positive time.ParseDuration value, and an error naming the variable otherwise.
+func shutdownBudgetFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
+	raw, ok := lookup(shutdownBudgetEnv)
+	if !ok || raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", shutdownBudgetEnv, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s: %q must be a positive duration", shutdownBudgetEnv, raw)
+	}
+	return d, nil
+}
+
 var cfgFile string
 var rootDir string
 var databasePath string
