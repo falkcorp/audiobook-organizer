@@ -1,7 +1,7 @@
 // file: core/storage/batch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -272,7 +272,7 @@ func (b *Batch) expectable(h Handle, key []byte) ([]byte, error) {
 		return nil, err
 	}
 	if !serialized {
-		err := fmt.Errorf("storage: Expect on %q: %w", abs, ErrNotSerialized)
+		err := fmt.Errorf("storage: Expect on %s: %w", keyRef(abs), ErrNotSerialized)
 		b.poison(err)
 		return nil, err
 	}
@@ -412,7 +412,7 @@ func (b *Batch) stageRangeChecked(s handleOf, start, end []byte) error {
 		}
 	}
 	if bytes.Compare(lo, hi) >= 0 {
-		return fmt.Errorf("storage: DeleteRange [%q, %q) is empty or inverted", lo, hi)
+		return fmt.Errorf("storage: DeleteRange [%s, %s) is empty or inverted", keyRef(lo), keyRef(hi))
 	}
 	allStripes := false
 	if s.legacy {
@@ -424,7 +424,7 @@ func (b *Batch) stageRangeChecked(s handleOf, start, end []byte) error {
 	} else if info := s.db.owners[s.owner]; info != nil {
 		for _, sp := range info.serialized {
 			if sp.overlaps(lo, hi) {
-				return fmt.Errorf("storage: DeleteRange [%q, %q) over the Serialized range %q: %w", lo, hi, sp.start, ErrBlindWrite)
+				return fmt.Errorf("storage: DeleteRange [%s, %s) over the Serialized range %s: %w", keyRef(lo), keyRef(hi), keyRef(sp.start), ErrBlindWrite)
 			}
 		}
 	}
@@ -452,7 +452,7 @@ func (b *Batch) stageRangeChecked(s handleOf, start, end []byte) error {
 // remove rows the owner does not hold, which no dial may allow.
 func (db *DB) coverage(owner Owner, lo, hi []byte) (serialized bool, err error) {
 	refuse := func(at []byte, why string) error {
-		return fmt.Errorf("storage: DeleteRange [%q, %q) by %s %s at %q: %w", lo, hi, owner, why, at, ErrOutsideKeyspace)
+		return fmt.Errorf("storage: DeleteRange [%s, %s) by %s %s at %s: %w", keyRef(lo), keyRef(hi), owner, why, keyRef(at), ErrOutsideKeyspace)
 	}
 	for _, r := range []span{{start: []byte("c/"), end: []byte("c0")}, {start: []byte("m/"), end: []byte("m0")}} {
 		if r.overlaps(lo, hi) {
@@ -521,7 +521,7 @@ func (b *Batch) Commit(ctx context.Context, d Durability) error {
 	}
 	for k := range b.serialKeys {
 		if _, ok := b.expects[k]; !ok && !b.exclusive {
-			return fmt.Errorf("storage: write of %q in a Serialized range without an Expect on it: %w", k, ErrBlindWrite)
+			return fmt.Errorf("storage: write of %s in a Serialized range without an Expect on it: %w", keyRef([]byte(k)), ErrBlindWrite)
 		}
 	}
 	lockKeys := make([][]byte, 0, len(b.expects)+len(b.stripeKeys))
@@ -549,7 +549,7 @@ func (b *Batch) Commit(ctx context.Context, d Durability) error {
 			return err
 		}
 		if ok == want.absent || (ok && !bytes.Equal(got, want.value)) {
-			return fmt.Errorf("storage: precondition on %q: %w", k, ErrConflict)
+			return fmt.Errorf("storage: precondition on %s: %w", keyRef([]byte(k)), ErrConflict)
 		}
 	}
 	if b.db.hooks.beforeApply != nil {
