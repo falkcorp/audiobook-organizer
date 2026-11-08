@@ -1,5 +1,5 @@
 // file: core/kernel/logmetrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a3e8c14-9d52-4b70-b1f6-e4c05d27a9b8
 // last-edited: 2026-11-08
 
@@ -37,7 +37,7 @@ func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, er
 	}
 	m, prefix := sc.Meter(), sc.Prefix()
 	records, err := m.Int64ObservableCounter(prefix+".records",
-		metric.WithDescription("Log records that passed their level gate, by level and module."))
+		metric.WithDescription("Log records that passed their level gate, by level and module (the process default logger is module \"process\", an empty label would read as absent)."))
 	if err != nil {
 		return nil, fmt.Errorf("kernel: log records counter: %w", err)
 	}
@@ -56,7 +56,7 @@ func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, er
 		for mod, byLevel := range c.Records {
 			for lv, n := range byLevel {
 				o.ObserveInt64(records, int64(n), metric.WithAttributes(
-					attribute.String("level", levelLabel(lv)), attribute.String("module", mod)))
+					attribute.String("level", levelLabel(lv)), attribute.String("module", moduleLabel(mod))))
 			}
 		}
 		for sink, n := range c.Dropped {
@@ -76,6 +76,16 @@ func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, er
 // levelLabel is the level as the pipeline's lines render it: slog's names from
 // debug up, TRACE and TRACE+n below (log.replaceLevel's rule; the test
 // compares the two).
+// moduleLabel is the module label of a records series: the process default
+// logger counts under the empty module, which Prometheus reads as an absent
+// label, so it is named log.ProcessLabel.
+func moduleLabel(module string) string {
+	if module == "" {
+		return log.ProcessLabel
+	}
+	return module
+}
+
 func levelLabel(lv slog.Level) string {
 	switch {
 	case lv >= log.LevelDebug:
