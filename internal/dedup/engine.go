@@ -1,5 +1,5 @@
 // file: internal/dedup/engine.go
-// version: 1.96.7
+// version: 1.96.8
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
 // last-edited: 2026-11-08
 
@@ -739,42 +739,36 @@ const (
 // orphan), non-primary version. It returns the book for annIndex (its
 // metadata goes into the index) and the lookup error for annLookupError.
 func (de *Engine) classifyBookRow(e database.Embedding) (annVerdict, *database.Book, error) {
+	if v := de.classifyRowVector(e); v != annIndex {
+		return v, nil, nil
+	}
 	// GetBookByID returns (nil, nil) for a missing key and (nil, err) for a
 	// real fault — verified against PebbleStore.GetBookByID, which maps
 	// pebble.ErrNotFound to a bare nil rather than a sentinel. The two cases
 	// are counted separately: see BooksOrphaned/BooksLookupError.
-	return de.classifyBookRowWith(e, func() (*database.Book, error) { return de.bookStore.GetBookByID(e.EntityID) })
-}
-
-// classifyBookRowWith is classifyBookRow with the book lookup supplied, for a
-// caller that already holds the book (prepBookEmbed's cache hit). lookup runs
-// only for a row that passes the vector and model rules.
-func (de *Engine) classifyBookRowWith(e database.Embedding, lookup func() (*database.Book, error)) (annVerdict, *database.Book, error) {
-	if len(e.Vector) == 0 {
-		return annEmptyVector, nil, nil
-	}
-	if !de.embeddingModelMatches(e.Model) {
-		return annStaleModel, nil, nil
-	}
-	book, err := lookup()
+	book, err := de.bookStore.GetBookByID(e.EntityID)
 	if err != nil {
 		return annLookupError, nil, fmt.Errorf("book %s: %w", e.EntityID, err)
 	}
-	if book == nil {
-		return annOrphaned, nil, nil
-	}
-	// Skip non-primary versions — they should not participate in dedup
-	// matches and the on-disk row is stale.
-	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
-		return annNonPrimary, nil, nil
+	if v := classifyRowBook(book); v != annIndex {
+		return v, nil, nil
 	}
 	return annIndex, book, nil
 }
 
-// classifyAuthorRow applies the hydrate rules to one "author" embedding row:
-// empty vector, then stale model. There is no orphan rule; see the note on
-// HydrateStats.
-func (de *Engine) classifyAuthorRow(e database.Embedding) annVerdict {
+// classifyKnownBookRow is classifyBookRow for a caller that already holds the
+// row's book (prepBookEmbed's cache hit), so there is no lookup to fail and
+// no error to return. It applies the same rules in the same order.
+func (de *Engine) classifyKnownBookRow(e database.Embedding, book *database.Book) annVerdict {
+	if v := de.classifyRowVector(e); v != annIndex {
+		return v
+	}
+	return classifyRowBook(book)
+}
+
+// classifyRowVector applies the rules that need only the embedding row: empty
+// vector, then stale model. annIndex means the row passes them.
+func (de *Engine) classifyRowVector(e database.Embedding) annVerdict {
 	if len(e.Vector) == 0 {
 		return annEmptyVector
 	}
@@ -782,6 +776,27 @@ func (de *Engine) classifyAuthorRow(e database.Embedding) annVerdict {
 		return annStaleModel
 	}
 	return annIndex
+}
+
+// classifyRowBook applies the rules on the row's book: orphan (no book), then
+// non-primary version. annIndex means the book passes them.
+func classifyRowBook(book *database.Book) annVerdict {
+	if book == nil {
+		return annOrphaned
+	}
+	// Skip non-primary versions — they should not participate in dedup
+	// matches and the on-disk row is stale.
+	if book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
+		return annNonPrimary
+	}
+	return annIndex
+}
+
+// classifyAuthorRow applies the hydrate rules to one "author" embedding row:
+// empty vector, then stale model. There is no orphan rule; see the note on
+// HydrateStats.
+func (de *Engine) classifyAuthorRow(e database.Embedding) annVerdict {
+	return de.classifyRowVector(e)
 }
 
 // logHydrateAccounting emits the one summary line that explains the whole gap
@@ -3113,7 +3128,7 @@ func (de *Engine) markANNDiverged(reason string) {
 //
 // A cache hit writes nothing to Pebble, so the verdict watch behind the
 // clean-stop marker never sees it. When the hydrate rule would not index the
-// row (classifyBookRow; a non-primary version is the case that reaches here),
+// row (classifyKnownBookRow; a non-primary version is the case that reaches here),
 // the mirror has put a row in the graph that a boot's hydrate or reconcile
 // leaves out, and the graph is marked diverged as well (R1-15 round-2 review,
 // S2). This is a stopgap: the fix is a mirror that follows the hydrate rule
@@ -3124,8 +3139,7 @@ func (de *Engine) mirrorCachedBook(ctx context.Context, book *database.Book, row
 		de.annMirrorMissed(err)
 		return
 	}
-	verdict, _, _ := de.classifyBookRowWith(row, func() (*database.Book, error) { return book, nil })
-	if verdict != annIndex {
+	if de.classifyKnownBookRow(row, book) != annIndex {
 		de.markANNDiverged(fmt.Sprintf("the live mirror indexed book %s, which a boot's hydrate leaves out", book.ID))
 	}
 }
