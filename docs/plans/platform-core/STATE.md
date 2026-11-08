@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.45.0 -->
+<!-- version: 1.46.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-07 -->
 
@@ -99,6 +99,7 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W11 | R1-29 | #4443 `916303c18` | react-router-dom 7 to react-router 8.5.1 across 144 files; deployed 2026-11-07 16:31 |
 | W11 | R1-36 | #4445 `1f3e980dd` | T3: independent review, re-verification and delta review, last verdict 0 BLOCKER / 0 MAJOR; CodeQL fixed in code (ABO-side `SanitizeLogValue` barrier kept at flagged sites; flight recorder quotes outside values with `%q`, a recorded deviation from brief step 7); deployed 2026-11-07 16:55 |
 | W12 | R1-13 | #4450 `80077b7ea` | T4: independent review NOT MERGEABLE (1 BLOCKER: disabled modules' `/api/<id>/` and core's `/api/core/` never claimed; 3 MAJOR: shutdown budget overrun, native subtree routes, Go type names in 400 details; 10 MINOR), all fixed with tests; verification review mergeable plus a Router registration race fixed before merge; coined `Deps.RequestRestart` (owner asleep, recommended option); deadcode ratchet now runs per module and counts core's exported SDK surface as live |
+| W13 | R1-14 | #4452 `31af8a05c` | T3: independent review found 1 BLOCKER (the "/" fallback ran gin handlers the mux never admitted, e.g. `GET /files/..`), fixed with a root handler admitting only GET/HEAD "/"; staticcheck S1021 fixed; dropped from the merge queue once by a Repo Guards timeout (slow runner disk cleanup, fixed by #4454 `6abf6e9dd`); deployed 2026-11-07 22:40 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -117,13 +118,13 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 17 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13).
+None for agents. R0 complete (6/6). R1: 18 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
-W12 merged 2026-11-07: R1-13 (the kernel, app, module and httpapi skeleton). In progress, started stacked on R1-13 to save time: R1-14 (T3, legacy mount and manifest) and R1-20 (T4, core storage engine, dark), both rebasing onto main. Next: R1-15 after R1-14; R1-21 after R1-20. The activity parser exact-key fix merged as #4449 `636d2f8b1`, clearing that prerequisite for R1-15/R1-18. In plain terms: the new app framework core is in place underneath the audiobook server; nothing users see has changed yet.
+W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
