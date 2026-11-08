@@ -510,12 +510,17 @@ func (db *DB) guard() []error {
 		if gp == nil {
 			continue
 		}
-		v, ok, err := ipebble.ReadInt(fs, st.opts.Path+gp.SidecarSuffix)
+		side := st.opts.Path + gp.SidecarSuffix
+		v, ok, err := ipebble.ReadInt(fs, side)
 		if err != nil {
 			// The sidecar is this guard's only input: skipping it would let
 			// a store a newer build converted pass, and step 9 would then
-			// overwrite the evidence (review MINOR-3). Absent is ok == false.
-			errs = append(errs, fmt.Errorf("storage: %s's legacy projection sidecar is unreadable, so a store too new for this build cannot be ruled out: %w", o.owner, err))
+			// overwrite the evidence (review MINOR-3). Absent is ok == false,
+			// which is why deleting it is the remedy only when no newer build
+			// has opened the store.
+			errs = append(errs, fmt.Errorf("storage: %s's legacy projection sidecar %s is unreadable, so a store too new for this build cannot be ruled out. "+
+				"Make it readable by the service's user; if its content is damaged, restore it from a backup, or delete it only if no build newer than this one "+
+				"has opened this store (this build then rewrites it): %w", o.owner, side, err))
 			continue
 		}
 		would := gp.projection(st.supported[o.levelOwner()])

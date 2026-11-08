@@ -1,5 +1,5 @@
 // file: core/storage/levels_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2f27289-7885-482a-90f4-69b89cc07b94
 // last-edited: 2026-11-08
 
@@ -242,8 +242,13 @@ func TestUnreadableProjectionSidecarRefusesBoot(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.opts.FS = FS{fs: openFails{FS: e.fs, path: side(e)}}
-		if _, err := e.tryOpen(); !errors.Is(err, errScarecrow) {
+		_, err := e.tryOpen()
+		if !errors.Is(err, errScarecrow) {
 			t.Fatalf("boot with an unreadable projection sidecar = %v, want the read error", err)
+		}
+		// The refusal names the file and the operator's next step.
+		if msg := err.Error(); !strings.Contains(msg, side(e)) || !strings.Contains(msg, "restore it from a backup") {
+			t.Fatalf("the refusal %q names neither the sidecar nor the remedy", msg)
 		}
 	})
 	t.Run("garbled", func(t *testing.T) {
