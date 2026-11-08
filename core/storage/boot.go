@@ -78,7 +78,7 @@ type OpenOptions struct {
 
 	// Seams for this package's tests; zero in every other caller.
 	freeSpace   func(dir string) (uint64, error)
-	dirIdentity func(path string) (dev, ino uint64, err error)
+	dirIdentity func(path string) (fsid, ino uint64, err error)
 	sameDevice  func(a, b string) (bool, error)
 	chmod       func(path string, dir bool) error
 	hooks       testHooks
@@ -178,14 +178,14 @@ type installRecord struct {
 	Build     string    `json:"build"`
 }
 
-// epochRecord is c/storage/epoch, the store generation (§5S.3.7). DirDev and
-// DirIno are the DB directory's identity (osDirIdentity): the filesystem ID
-// statfs reports, not st_dev (the key keeps the dir_dev name), and the inode.
+// epochRecord is c/storage/epoch, the store generation (§5S.3.7). DirFSID
+// and DirIno are the DB directory's identity (osDirIdentity): the filesystem
+// ID statfs reports, not st_dev, and the inode.
 type epochRecord struct {
-	Epoch  uint64    `json:"epoch"`
-	DirDev uint64    `json:"dir_dev"`
-	DirIno uint64    `json:"dir_ino"`
-	At     time.Time `json:"at"`
+	Epoch   uint64    `json:"epoch"`
+	DirFSID uint64    `json:"dir_fsid"`
+	DirIno  uint64    `json:"dir_ino"`
+	At      time.Time `json:"at"`
 }
 
 type stampRecord struct {
@@ -765,7 +765,7 @@ func (db *DB) foreignKeys() error {
 // epoch+1, written at step 9 (§5S.3.7 "Store generation").
 func (db *DB) readEpoch(ctx context.Context) error {
 	st := db.boot
-	dev, ino, err := st.opts.dirIdentity(st.opts.Path)
+	fsid, ino, err := st.opts.dirIdentity(st.opts.Path)
 	if err != nil {
 		return fmt.Errorf("storage: DB directory identity: %w", err)
 	}
@@ -781,11 +781,11 @@ func (db *DB) readEpoch(ctx context.Context) error {
 		}
 		found = true
 	}
-	if found && rec.DirDev == dev && rec.DirIno == ino {
+	if found && rec.DirFSID == fsid && rec.DirIno == ino {
 		st.epoch = rec
 		return nil
 	}
-	st.epoch = epochRecord{Epoch: rec.Epoch + 1, DirDev: dev, DirIno: ino, At: st.opts.Clock().UTC()}
+	st.epoch = epochRecord{Epoch: rec.Epoch + 1, DirFSID: fsid, DirIno: ino, At: st.opts.Clock().UTC()}
 	st.epochNew = true
 	return nil
 }
