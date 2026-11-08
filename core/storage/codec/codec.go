@@ -1,5 +1,5 @@
 // file: core/storage/codec/codec.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2acc8d4a-3d33-42b8-ac68-1e9cd60ed5c0
 // last-edited: 2026-11-07
 
@@ -73,7 +73,9 @@ func (c jsonCodec[T]) Encode(v T) ([]byte, error) {
 	if _, clash := members["v"]; clash {
 		return nil, fmt.Errorf("codec: JSON v%d: %T has a member \"v\", which the version envelope owns", c.version, v)
 	}
-	out := make([]byte, 0, len(body)+12)
+	// The envelope header is at most 12 bytes; append grows out for the body.
+	// No len(body)+n capacity: that sum is an allocation-size overflow shape.
+	out := make([]byte, 0, 12)
 	out = append(out, tagJSON)
 	out = fmt.Appendf(out, `{"v":%d`, c.version)
 	if len(members) > 0 {
