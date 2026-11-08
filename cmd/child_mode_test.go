@@ -1,7 +1,7 @@
 // file: cmd/child_mode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e2b9c71-3f4a-4d86-a0e7-8c1f6b2d9a34
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package cmd
 
@@ -55,7 +55,7 @@ func TestChildModeHelperProcess(t *testing.T) {
 	default:
 		t.Fatalf("unknown helper mode %q", mode)
 	}
-	newServer = func(database.Store) *server.Server {
+	newServer = func(database.Store, ...server.ServerOption) *server.Server {
 		os.Exit(reachedServerExitCode)
 		return nil
 	}

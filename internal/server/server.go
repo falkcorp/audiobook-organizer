@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.13
+// version: 2.115.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -765,7 +765,35 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request) {
 // writes block, to prove nothing on the startup path waits on one.
 var activityStoreOverrideForTest database.ActivityStorer
 
-func NewServer(store database.Store) *Server {
+// ServerOption configures NewServer.
+type ServerOption func(*serverOptions)
+
+type serverOptions struct{ log *slog.Logger }
+
+// WithLogger is the logger the operations registry (and through it every op
+// reporter's Logger()) and the flight recorder write to. nil, and the absence
+// of the option, is slog.Default().
+//
+// The composition root passes a logger that is NOT the process default's
+// records: the App's pipeline marks records from the process default logger
+// as Process, and the Activity tap turns every one of those into a system
+// Activity row. The registry logs several info lines per op run (enqueued,
+// dispatched, started, finished), and those must reach the journal, the log
+// file and the per-op log store without becoming rows of their own: the op's
+// structured rows come from the registry's activity mirror.
+func WithLogger(log *slog.Logger) ServerOption {
+	return func(o *serverOptions) { o.log = log }
+}
+
+// NewServer builds the server over store. It takes options rather than a
+// second constructor so that database.Store, the wide type, is named by one
+// signature (TestStoreReferenceCount) and cmd's newServer seam stays one type.
+func NewServer(store database.Store, opts ...ServerOption) *Server {
+	var so serverOptions
+	for _, o := range opts {
+		o(&so)
+	}
+	log := so.log
 	// Set Gin to release mode (production) unless debug flag is set.
 	// In release mode, Gin suppresses route-registration logging and uses optimized
 	// middleware. See MED-9 in fable5-review-findings.md.
@@ -866,7 +894,7 @@ func NewServer(store database.Store) *Server {
 	// the server's database.ChangeObserver on it, which sees every write the
 	// store commits, whoever made it.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	flightRec := newFlightRecorder()
+	flightRec := newFlightRecorder(log)
 	server := &Server{
 		store:                  store,
 		bgCtx:                  bgCtx,
@@ -940,7 +968,7 @@ func NewServer(store database.Store) *Server {
 	opHub := opsregistry.NewEventHub()
 	// A nil logger is slog.Default(), the logger HEAD's init() registration
 	// gave the registry.
-	opRegistry, err := opsregistry.NewService(store, nil, opHub)
+	opRegistry, err := opsregistry.NewService(store, log, opHub)
 	if err != nil {
 		lifecycleLog.Error("ops registry: %v", err)
 		os.Exit(1)

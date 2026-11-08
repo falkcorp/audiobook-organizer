@@ -78,7 +78,7 @@ func stubCommandDeps(t *testing.T) {
 		return nil
 	}
 	syncConfigFromEnv = func() {}
-	newServer = func(_ database.Store) *server.Server { return &server.Server{} }
+	newServer = func(_ database.Store, _ ...server.ServerOption) *server.Server { return &server.Server{} }
 	getDefaultServerConfig = func() server.ServerConfig {
 		return server.ServerConfig{Host: "localhost", Port: "8484"}
 	}
