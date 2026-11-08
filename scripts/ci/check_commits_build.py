@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/check_commits_build.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7d26abe4-c5f0-4c24-b79b-29c26b8ed14f
 # last-edited: 2026-11-08
 """Every commit of a move PR builds, and every move is detectable (09 §9.2.1; MOD9-5).
@@ -30,9 +30,14 @@ Exit codes: 0 nothing to check, or every commit builds and every move is
 detectable; 1 a commit fails to build or a move is below the threshold; 2 the
 script could not run (bad ref, git failure).
 
-The loop is sequential on purpose: it walks the commits of one PR (a handful),
-and every build shares the one Go build cache, so a worker pool would add
-contention and no speed. Stdlib only.
+Within one run the loop is sequential on purpose: every build shares the one Go
+build cache and ``go build`` already uses every core, so a worker pool would add
+contention and no speed. A long PR is split across machines instead:
+``--shard K/N`` builds only the K-th of N contiguous slices of the commit list
+(contiguous, so each commit is an incremental build on top of the one before it)
+and reports the similarity check only in shard 1. #4453 (48 commits) ran past the
+job's 30-minute cap, which 09 §9.2.10 fixes for every extraction-gates job, so
+CI runs this as a matrix of shards rather than raising the timeout. Stdlib only.
 """
 
 from __future__ import annotations
@@ -211,10 +216,35 @@ def build_commit(commit: str, repo: pathlib.Path, wt: pathlib.Path) -> list[str]
     return failures
 
 
+def parse_shard(text: str) -> tuple[int, int]:
+    """``"2/4"`` -> (2, 4); raises ``argparse.ArgumentTypeError`` unless 1 <= K <= N."""
+    try:
+        k, n = (int(x) for x in text.split("/", 1))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--shard wants K/N, got {text!r}") from None
+    if n < 1 or not 1 <= k <= n:
+        raise argparse.ArgumentTypeError(f"--shard {text}: need 1 <= K <= N")
+    return k, n
+
+
+def shard_slice(commits: list[str], k: int, n: int) -> list[str]:
+    """The K-th of N contiguous, near-equal slices of ``commits`` (oldest first)."""
+    size, extra = divmod(len(commits), n)
+    start = (k - 1) * size + min(k - 1, extra)
+    return commits[start : start + size + (1 if k <= extra else 0)]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--base", help="base ref of the PR (default: origin/main, then main)")
     ap.add_argument("--head", default="HEAD", help="head ref of the PR (default: HEAD)")
+    ap.add_argument(
+        "--shard",
+        type=parse_shard,
+        default=(1, 1),
+        metavar="K/N",
+        help="build only the K-th of N contiguous slices of the commits (default 1/1)",
+    )
     args = ap.parse_args(argv)
     repo = pathlib.Path.cwd()
 
@@ -231,13 +261,22 @@ def main(argv: list[str] | None = None) -> int:
         print("no rename into core/: nothing to check")
         return 0
 
-    problems = similarity_problems(first, net)
+    k, n = args.shard
+    problems = similarity_problems(first, net) if k == 1 else []
+    mine = shard_slice(commits, k, n)
+    label = f" (shard {k}/{n}: {len(mine)} of {len(commits)})" if n > 1 else ""
+    if not mine:
+        print(f"shard {k}/{n}: no commits to build")
+        if problems:
+            print("\n".join(problems))
+            return 1
+        return 0
     scratch = pathlib.Path(tempfile.mkdtemp(prefix="check-commits-build-"))
     wt = scratch / "wt"
     try:
         try:
-            git(["worktree", "add", "--detach", "--quiet", str(wt), commits[0]], repo)
-            for commit in commits:
+            git(["worktree", "add", "--detach", "--quiet", str(wt), mine[0]], repo)
+            for commit in mine:
                 print(f"building {commit[:12]} ...", flush=True)
                 problems.extend(build_commit(commit, repo, wt))
         except GitError as err:
@@ -251,9 +290,10 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         print()
         print("\n".join(problems))
-        print(f"\n{len(problems)} problem(s) in {len(commits)} commit(s)")
+        print(f"\n{len(problems)} problem(s) in {len(mine)} commit(s){label}")
         return 1
-    print(f"ok: {len(commits)} commit(s) build in both modules; every move is a detected rename")
+    moves = "every move is a detected rename" if k == 1 else "moves are checked by shard 1"
+    print(f"ok: {len(mine)} commit(s) build in both modules{label}; {moves}")
     return 0
 
 
