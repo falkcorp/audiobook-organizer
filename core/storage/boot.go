@@ -178,6 +178,16 @@ type appliedRecord struct {
 	Build       string    `json:"build"`
 }
 
+// attemptRecord is c/storage/attempt: written by step 9's batch on a boot
+// that took or reused a checkpoint, deleted once that checkpoint is
+// completed. A key a boot finds names an attempt whose steps all committed
+// but whose completion a kill cut off (review BLOCKER-2).
+type attemptRecord struct {
+	Checkpoint string `json:"checkpoint"`
+}
+
+func codecAttempt() codec.Codec[attemptRecord] { return codec.JSON[attemptRecord](1) }
+
 type dmRecord struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"`
@@ -187,6 +197,7 @@ type dmRecord struct {
 // Relative keys of storage's own keyspace c/storage/ (notation §5S.3.3).
 func installKey() []byte      { return keys.Join(keys.Str("install")) }
 func epochKey() []byte        { return keys.Join(keys.Str("epoch")) }
+func attemptKey() []byte      { return keys.Join(keys.Str("attempt")) }
 func levelPrefix() []byte     { return keys.Join(keys.Str("level")) }
 func levelKey(o Owner) []byte { return keys.Join(keys.Str("level"), keys.Str(string(o))) }
 func versionKey(o Owner) []byte {
@@ -221,6 +232,7 @@ type bootState struct {
 	deferred  []*stepNode
 	needsCP   bool // the boot will write something a restore point must cover
 	cpName    string
+	attempt   string // c/storage/attempt's checkpoint, read at step 5: an attempt a kill left uncompleted
 	prepared  bool
 	migrated  bool
 	finished  bool // Migrate ran every step and step 9: the boot may reach readiness
@@ -348,6 +360,17 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 		if err := db.foreignKeys(); err != nil {
 			return err
 		}
+	}
+	switch raw, err := ks.Get(ctx, attemptKey()); {
+	case errors.Is(err, ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		rec, err := codecAttempt().Decode(raw)
+		if err != nil {
+			return fmt.Errorf("storage: attempt record unreadable: %w", err)
+		}
+		st.attempt = rec.Checkpoint
 	}
 	if err := db.readEpoch(ctx); err != nil {
 		return err
@@ -771,6 +794,9 @@ func newInstallID() string {
 // Prepare runs §5S.4 steps 6-7 (06 P4a): a fresh install's one batch and its
 // sidecars, or the pre-migration checkpoint (taken or reused) followed by the
 // install marker as the first store write after it; then the format ratchet.
+// First it completes the checkpoint of an attempt a kill stranded after step
+// 9's batch (c/storage/attempt), which writes checkpoint files only; the key
+// is deleted after the checkpoint.
 // The returned DB is ready for Migrate.
 func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 	db := o.db
@@ -779,6 +805,12 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 		return nil, errors.New("storage: Prepare called twice")
 	}
 	st.prepared = true
+	// A stranded attempt is completed before the checkpoint decision, so a
+	// later upgrade never reuses it; its key is deleted only after the
+	// checkpoint, which therefore still holds every row as it was.
+	if err := db.completeStranded(); err != nil {
+		return nil, err
+	}
 	switch {
 	case st.fresh:
 		if err := db.freshInstall(ctx); err != nil {
@@ -793,6 +825,12 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 				return nil, err
 			}
 		}
+	}
+	if st.attempt != "" {
+		if err := db.storageKS().Delete(ctx, attemptKey()); err != nil {
+			return nil, fmt.Errorf("storage: clearing the completed attempt: %w", err)
+		}
+		st.attempt = ""
 	}
 	if db.eng.NeedsRatchet() {
 		if err := db.eng.Ratchet(); err != nil {

@@ -119,6 +119,9 @@ type testHooks struct {
 	// beforeStampCommit runs inside a level step after the sidecars are
 	// written and before the stamp batch commits.
 	beforeStampCommit func() error
+	// beforeComplete runs in step 9 after the batch and the sidecars,
+	// before the attempt's checkpoint is completed.
+	beforeComplete func() error
 	// beforeApply runs inside Commit after the preconditions passed, under
 	// the stripes, before the batch is applied.
 	beforeApply func()

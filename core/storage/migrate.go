@@ -419,10 +419,12 @@ func (db *DB) runStep(ctx context.Context, n *stepNode) (err error) {
 	return b.Commit(ctx, Sync)
 }
 
-// finish is §5S.4 step 9: the claim ledgers and the store generation (each
-// only when it changed), the books marker cleared when no books Breaking
-// step is pending, the sidecars rewritten from the stamps, and the attempt's
-// checkpoint completed.
+// finish is §5S.4 step 9: one batch with the claim ledgers and the store
+// generation (each only when it changed), the books marker cleared when no
+// books Breaking step is pending, and c/storage/attempt naming this boot's
+// checkpoint; the sidecars rewritten from the stamps; the attempt's
+// checkpoint completed; then c/storage/attempt deleted. A kill after the
+// batch leaves the key, and the next boot's Prepare completes the record.
 func (db *DB) finish(ctx context.Context) (err error) {
 	st := db.boot
 	now := db.clock().UTC()
@@ -438,6 +440,15 @@ func (db *DB) finish(ctx context.Context) (err error) {
 			return err
 		}
 		if err := b.Set(epochKey(), raw); err != nil {
+			return err
+		}
+	}
+	if st.cpName != "" {
+		raw, err := enc(codecAttempt(), attemptRecord{Checkpoint: st.cpName})
+		if err != nil {
+			return err
+		}
+		if err := b.Set(attemptKey(), raw); err != nil {
 			return err
 		}
 	}
@@ -464,8 +475,18 @@ func (db *DB) finish(ctx context.Context) (err error) {
 	if err := db.writeSidecars(); err != nil {
 		return err
 	}
+	if h := db.hooks.beforeComplete; h != nil {
+		if err := h(); err != nil {
+			return err
+		}
+	}
 	if err := db.completeCheckpoint(now); err != nil {
 		return err
+	}
+	if st.cpName != "" {
+		if err := ks.Delete(ctx, attemptKey()); err != nil {
+			return fmt.Errorf("storage: clearing the completed attempt: %w", err)
+		}
 	}
 	st.finished = true
 	return nil

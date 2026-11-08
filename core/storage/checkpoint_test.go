@@ -474,3 +474,100 @@ func TestSecondUpgradeTakesFreshCheckpoint(t *testing.T) {
 		}
 	})
 }
+
+// TestStrandedAttemptCompletedNextBoot (05-storage §5S.4 step 9; review
+// BLOCKER-2, probe A): a kill between step 9's batch and the checkpoint's
+// completion leaves the record open with nothing left to run. The batch
+// names the attempt in c/storage/attempt, so the next boot completes the
+// record (record, then pointer) and deletes the key, and a later upgrade
+// takes its own checkpoint instead of reusing the stranded one. Resolving
+// is idempotent: a key whose record is already completed, or gone, is only
+// deleted.
+func TestStrandedAttemptCompletedNextBoot(t *testing.T) {
+	t.Run("killed-before-completion", func(t *testing.T) {
+		fs := vfs.NewCrashableMem()
+		e := headStore(t, fs, cpOwners()...)
+		crashed := errors.New("power cut")
+		var clone *vfs.MemFS
+		e.opts.hooks.beforeComplete = func() error {
+			clone = fs.CrashClone(vfs.CrashCloneCfg{})
+			return crashed
+		}
+		if _, err := e.tryOpen(); !errors.Is(err, crashed) {
+			t.Fatalf("boot = %v, want the simulated crash", err)
+		}
+		after := newEnvFS(t, clone, cpOwners()...)
+		after.path, after.opts.Path = e.path, e.path
+		name := readPointer(t, after).Name
+		if rec := readRecord(t, after, name); !rec.open() {
+			t.Fatalf("the killed attempt's record = %+v, want open", rec)
+		}
+		if got := rawKeys(t, clone, e.path, "c/storage/attempt"); len(got) != 1 {
+			t.Fatalf("attempt keys after the kill = %v, want one", got)
+		}
+		db := after.open()
+		if got := db.CheckpointName(); got != "" {
+			t.Fatalf("the next boot took or reused checkpoint %q", got)
+		}
+		rec := readRecord(t, after, name)
+		if rec.CompletedAt == nil || rec.DeleteAfter == nil || rec.Status != "completed" {
+			t.Fatalf("the stranded record after the next boot = %+v, want completed", rec)
+		}
+		if p := readPointer(t, after); p.Name != name || p.State != "completed" || p.DeleteAfter == nil || !p.DeleteAfter.Equal(*rec.DeleteAfter) {
+			t.Fatalf("pointer = %+v, want %s completed with the record's delete_after", p, name)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := rawKeys(t, clone, e.path, "c/storage/attempt"); len(got) != 0 {
+			t.Fatalf("attempt keys after the next boot = %v, want none", got)
+		}
+		after.opts.Owners = fixedOwners()
+		db = after.open()
+		if got := db.CheckpointName(); got == "" || got == name {
+			t.Fatalf("the later upgrade used checkpoint %q, want its own (not the stranded %q)", got, name)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := rawKeys(t, clone, e.path, "c/storage/attempt"); len(got) != 0 {
+			t.Fatalf("a completed upgrade left attempt keys %v", got)
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		target func(cp string) string
+	}{
+		{"already-completed", func(cp string) string { return cp }},
+		{"record-gone", func(string) string { return "20260101T000000Z-ba7ba7ba" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := headStore(t, vfs.NewMem(), cpOwners()...)
+			db := e.open()
+			cp := db.CheckpointName()
+			raw, err := codecAttempt().Encode(attemptRecord{Checkpoint: tc.target(cp)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.storageKS().Set(context.Background(), attemptKey(), raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, ptr := readRecord(t, e, cp), readPointer(t, e)
+			if err := e.open().Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := rawKeys(t, e.fs, e.path, "c/storage/attempt"); len(got) != 0 {
+				t.Fatalf("attempt keys = %v, want none", got)
+			}
+			if rec := readRecord(t, e, cp); !rec.CompletedAt.Equal(*before.CompletedAt) || !rec.DeleteAfter.Equal(*before.DeleteAfter) {
+				t.Fatalf("the completed record changed: %+v, was %+v", rec, before)
+			}
+			if p := readPointer(t, e); p.Name != ptr.Name || p.State != ptr.State {
+				t.Fatalf("pointer = %+v, was %+v", p, ptr)
+			}
+		})
+	}
+}
