@@ -1,7 +1,7 @@
 // file: internal/server/flight_recorder.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c64f779e-5ec5-46b3-8883-8d6f1b56bec9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -31,10 +31,9 @@ func newFlightRecorder() *diagflight.Recorder {
 		dir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "traces")
 	}
 	// The recorder formats its lines from paths and error text and relies on
-	// its logger's handler to quote them (core/health logf). Until R1-15 the
-	// default handler may be slog's built-in one, which writes messages
-	// unquoted, so the barrier is applied here.
-	return diagflight.New(diagflight.Config{Dir: dir, Logger: logger.Sanitizing(logger.FromContext(context.Background())).With("subsystem", "flight-recorder")})
+	// its logger's handler to quote them (core/health logf): the default
+	// logger is the App's pipeline, whose handler does.
+	return diagflight.New(diagflight.Config{Dir: dir, Logger: logger.FromContext(context.Background()).With("subsystem", "flight-recorder")})
 }
 
 // startFlightRecorder starts recording. Failure is logged and ignored: tracing
