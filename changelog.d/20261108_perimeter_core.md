@@ -55,5 +55,11 @@
   cross-origin (403) refusal comes before the gate and is
   `application/problem+json`, and every such request spends the client's
   `/api` rate-limit tokens even if the gate would have refused it.
+- When the Basic sign-in gate refuses a request to one of the app's own
+  routes from an allowed cross-origin page, and the client accepts gzip, the
+  401 no longer says `Vary: Origin`. A shared cache that stores 401 answers
+  could hand that one, with the first page's CORS header, to a page from
+  another origin. Until F3 moves the gate into the core perimeter, do not
+  cache 401 answers in front of the server.
 - A setting saved through the API for the listener, rate limit, body limits,
   peer allow-list or trusted proxies takes effect at the next restart.
