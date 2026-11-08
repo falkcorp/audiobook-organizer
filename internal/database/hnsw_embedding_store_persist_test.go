@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store_persist_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-11-08
 
@@ -78,6 +78,15 @@ func newExportTestStore(t *testing.T, n int) *database.HNSWEmbeddingStore {
 		require.NoError(t, s.Upsert(context.Background(), "book", id, exportTestVec(rng), map[string]string{"k": id}))
 	}
 	return s
+}
+
+// requireCleanStop writes s's clean-stop marker in dir, as a clean stop does
+// after its snapshot, and fails the test if the store refuses.
+func requireCleanStop(t *testing.T, s *database.HNSWEmbeddingStore, dir string) {
+	t.Helper()
+	written, reason, err := s.MarkCleanStop(dir)
+	require.NoError(t, err)
+	require.True(t, written, "MarkCleanStop refused: %s", reason)
 }
 
 // readTruthSidecar parses the truth sidecar the export wrote for "book".
@@ -212,6 +221,14 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		assert.Equal(t, 4, tc)
 		assert.Equal(t, 4, gc, "the row counted by truth must be in the serialized graph (truth read first)")
 
+		// The row landed after the export read its gen, so the store stays
+		// dirty and a clean stop exports once more before its marker. That
+		// export reads the same count and graph.
+		res, err := s.ExportIfDirty(dir, func(string) (int, error) { return pebbleRows, nil })
+		require.NoError(t, err)
+		require.True(t, res.Exported)
+		requireCleanStop(t, s, dir)
+
 		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
 		assert.False(t, fresh.NeedsReconcile(), "the snapshot is accepted as fresh")
@@ -257,7 +274,9 @@ func TestExport_TruthReadBeforeSerialization(t *testing.T) {
 		assert.Equal(t, 4, gc)
 
 		// A stale snapshot is installed too (pending a reconcile), so the
-		// count alone cannot tell fresh from stale: NeedsReconcile does.
+		// count alone cannot tell fresh from stale: NeedsReconcile does. The
+		// repaired snapshot is the graph, so a clean stop may vouch for it.
+		requireCleanStop(t, s, dir)
 		fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 		require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return pebbleRows, nil }))
 		assert.False(t, fresh.NeedsReconcile(), "the repaired snapshot is accepted as fresh")
@@ -277,6 +296,7 @@ func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 	src.SetComplete(true)
 	dir := t.TempDir()
 	require.NoError(t, src.ExportWithTruth(dir, func(string) (int, error) { return 4, nil }))
+	requireCleanStop(t, src, dir)
 
 	// Plain Import marks the store complete.
 	imp := database.NewHNSWEmbeddingStore(exportTestDim)
@@ -289,7 +309,7 @@ func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 	assert.ErrorIs(t, none.Import(t.TempDir()), database.ErrNoHNSWSnapshot)
 	assert.ErrorIs(t, none.Export(t.TempDir()), database.ErrHNSWIncomplete)
 
-	// Fresh by the staleness check: stays complete.
+	// Fresh by the staleness check (clean stop, count unchanged): stays complete.
 	fresh := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, fresh.ImportWithStalenessCheck(dir, func(string) (int, error) { return 4, nil }))
 	assert.False(t, fresh.NeedsReconcile())
@@ -298,7 +318,8 @@ func TestImport_SetsCompleteAndStaleImportPends(t *testing.T) {
 	assert.Equal(t, 4, n)
 	assert.NoError(t, fresh.Export(t.TempDir()))
 
-	// Stale: installed for queries, but incomplete and pending a reconcile.
+	// Stale (the fresh import took the marker, and the count moved too):
+	// installed for queries, but incomplete and pending a reconcile.
 	stale := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, stale.ImportWithStalenessCheck(dir, func(string) (int, error) { return 5, nil }))
 	assert.True(t, stale.NeedsReconcile())
@@ -406,6 +427,7 @@ func TestExportIfDirty_CleanAfterFreshImport(t *testing.T) {
 	dir := t.TempDir()
 	truth := func(string) (int, error) { return 3, nil }
 	require.NoError(t, src.ExportWithTruth(dir, truth))
+	requireCleanStop(t, src, dir)
 
 	imp := database.NewHNSWEmbeddingStore(exportTestDim)
 	require.NoError(t, imp.ImportWithStalenessCheck(dir, truth))

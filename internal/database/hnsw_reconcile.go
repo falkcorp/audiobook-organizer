@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_reconcile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 278c9ee2-6bbc-4472-8eef-50cef7140f62
 // last-edited: 2026-11-08
 
@@ -157,7 +157,7 @@ func (s *HNSWEmbeddingStore) NeedsReconcile() bool {
 // empty, incomplete and no longer pending, so a hydrate from Pebble starts
 // from empty (it re-Adds every key, which is only safe on an empty graph).
 func (s *HNSWEmbeddingStore) DiscardForRebuild() {
-	s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false, false)
+	s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false, false, "")
 }
 
 // Reconcile brings a stale snapshot up to date with the Pebble rows. truth
@@ -240,7 +240,7 @@ func (s *HNSWEmbeddingStore) Reconcile(ctx context.Context, truth map[string][]R
 				continue
 			}
 			s.setMetaLocked(entityType, id, tombstoneMeta())
-			s.gen++
+			s.bumpGenLocked()
 			c.Tombstoned++
 		}
 		report.ByType[entityType] = c
@@ -304,7 +304,7 @@ func (s *HNSWEmbeddingStore) reconcileRowLocked(entityType string, row Reconcile
 			c.Kept++
 		default:
 			s.setMetaLocked(entityType, row.ID, tombstoneMeta())
-			s.gen++
+			s.bumpGenLocked()
 			c.Tombstoned++
 		}
 
@@ -322,11 +322,11 @@ func (s *HNSWEmbeddingStore) reconcileRowLocked(entityType string, row Reconcile
 			switch {
 			case isTombstone(cur):
 				s.setMetaLocked(entityType, row.ID, want)
-				s.gen++
+				s.bumpGenLocked()
 				c.Restored++
 			case !maps.Equal(cur, want):
 				s.setMetaLocked(entityType, row.ID, want)
-				s.gen++
+				s.bumpGenLocked()
 				c.MetaRefreshed++
 			default:
 				c.Kept++
@@ -343,13 +343,13 @@ func (s *HNSWEmbeddingStore) reconcileRowLocked(entityType string, row Reconcile
 		}
 		g := s.graphFor(entityType)
 		if err := s.safeAdd(g, row.ID, row.Vector); err != nil {
-			s.gen++
+			s.bumpGenLocked()
 			s.markDamaged(entityType, row.ID, err)
 			report.addError(err)
 			return
 		}
 		s.setMetaLocked(entityType, row.ID, metaOrEmpty(row.Meta))
-		s.gen++
+		s.bumpGenLocked()
 		c.Added++
 
 	default: // ReconcileUnknown, or a verdict this store does not know

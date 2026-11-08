@@ -77,6 +77,8 @@ type annFixture struct {
 	vecs   map[string][]float32
 	rng    *rand.Rand
 	dir    string
+	// src is the store the snapshot was exported from (the previous process).
+	src *database.HNSWEmbeddingStore
 	// lookupErr, when set for an ID, is what GetBookByID returns for it.
 	lookupErr map[string]error
 }
@@ -110,7 +112,20 @@ func newANNFixture(t *testing.T, snapshotIDs []string) *annFixture {
 	if err := src.ExportWithTruth(f.dir, f.es.CountByType); err != nil {
 		t.Fatal(err)
 	}
+	f.src = src
+	// No clean-stop marker: by default the previous process crashed after
+	// this snapshot. cleanStop models the other ending.
 	return f
+}
+
+// cleanStop ends the previous process cleanly: its snapshot is the graph, so
+// it writes the clean-stop marker the next boot takes.
+func (f *annFixture) cleanStop(t *testing.T) {
+	t.Helper()
+	written, reason, err := f.src.MarkCleanStop(f.dir)
+	if err != nil || !written {
+		t.Fatalf("MarkCleanStop = %v, %q, %v", written, reason, err)
+	}
 }
 
 func (f *annFixture) vec() []float32 {
@@ -251,6 +266,84 @@ func TestPostInit_ChangedVectorFallsBackToRebuild(t *testing.T) {
 	out := logs.String()
 	if !strings.Contains(out, "cannot be reconciled in place") || !strings.Contains(out, "book/the-killing-joke") {
 		t.Errorf("the rebuild must be logged with the key that forced it:\n%s", out)
+	}
+}
+
+// MAJOR-1 (R1-15 follow-up): a crash window can change the embedding rows and
+// leave the row count where the snapshot recorded it. Without the clean-stop
+// marker the boot reconciles anyway.
+func TestPostInit_UncleanStopReconcilesAnUnchangedCount(t *testing.T) {
+	logs := captureLogs(t)
+	// 20 books, so one tombstone stays under the reconcile's rebuild share.
+	f := newANNFixture(t, annStorylines)
+	// The crash window: one book embedded, one deleted. 20 rows before, 20 after.
+	f.putRow(t, "zero-year")
+	f.deleteRow(t, "hush")
+
+	store := f.boot(t)
+
+	if store.NeedsReconcile() {
+		t.Fatal("still pending after PostInit")
+	}
+	if got := nearest(t, store, f.vecs["zero-year"]); len(got) == 0 || got[0] != "zero-year" {
+		t.Errorf("the row embedded in the crash window is missing: nearest = %v", got)
+	}
+	if got := nearest(t, store, f.vecs["hush"]); slices.Contains(got, "hush") {
+		t.Errorf("the row deleted in the crash window is still found: %v", got)
+	}
+	if got := tombstonesOnDisk(t, store); got != 1 {
+		t.Errorf("tombstones in the exported metadata = %d, want 1 (reconciled, not rebuilt)", got)
+	}
+	if out := logs.String(); !strings.Contains(out, "no clean-stop marker") {
+		t.Errorf("the boot must say why it reconciles a snapshot whose counts match:\n%s", out)
+	}
+}
+
+// A re-embed in the crash window changes a vector the snapshot holds and no
+// count. Without the marker the reconcile sees it and falls back to a rebuild
+// (the changed-vector path), so the graph serves the new vector.
+func TestPostInit_UncleanStopReembedTakesTheChangedVectorPath(t *testing.T) {
+	logs := captureLogs(t)
+	f := newANNFixture(t, annStorylines[:4])
+	f.putRow(t, "the-killing-joke") // re-embedded; the count stays 4
+
+	store := f.boot(t)
+
+	if store.NeedsReconcile() {
+		t.Fatal("still pending after the rebuild")
+	}
+	if got := nearest(t, store, f.vecs["the-killing-joke"]); len(got) == 0 || got[0] != "the-killing-joke" {
+		t.Errorf("the graph lacks the re-embedded vector: nearest = %v", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "cannot be reconciled in place") || !strings.Contains(out, "book/the-killing-joke") {
+		t.Errorf("the rebuild must be logged with the key that forced it:\n%s", out)
+	}
+}
+
+// After a clean stop with nothing changed, the snapshot loads as fresh: no
+// reconcile runs, and the boot consumes the marker.
+func TestPostInit_CleanStopSkipsTheReconcile(t *testing.T) {
+	logs := captureLogs(t)
+	f := newANNFixture(t, annStorylines[:4])
+	f.cleanStop(t)
+
+	store := f.boot(t)
+
+	if store.NeedsReconcile() {
+		t.Error("a clean-stop snapshot must not wait for a reconcile")
+	}
+	if got := nearest(t, store, f.vecs["year-one"]); len(got) == 0 || got[0] != "year-one" {
+		t.Errorf("the fresh snapshot is not serving: nearest = %v", got)
+	}
+	out := logs.String()
+	for _, line := range []string{"reconciled against Pebble", "no clean-stop marker", "cannot be reconciled in place"} {
+		if strings.Contains(out, line) {
+			t.Errorf("a clean-stop boot logged %q:\n%s", line, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "hnsw.clean-stop")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the boot must consume the marker: stat = %v", err)
 	}
 }
 

@@ -1003,6 +1003,10 @@ func (s *Server) StopHook(ctx context.Context) error {
 		ocancel()
 	}
 
+	// The writers this stop owns have stopped: mark the snapshot clean when
+	// it still describes the graph, so the next boot can skip the reconcile.
+	s.markHNSWCleanStop()
+
 	// Close embedding store
 	if s.embeddingStore != nil {
 		if err := s.embeddingStore.Close(); err != nil {
@@ -1428,6 +1432,47 @@ const hnswStopExportMargin = 3 * time.Second
 // this process has not exported yet (buffered: about 1-3 s at prod's size).
 const hnswUnmeasuredExport = 5 * time.Second
 
+// importHNSWSnapshot loads the HNSW snapshot in hnswDir into the container's
+// vector store, at boot and BEFORE PostInit, so dedup.Engine.PostInit can see
+// the populated store and skip HydrateChromem. Loading after PostInit caused a
+// crash loop: HydrateChromem re-inserted all ~38K existing keys into the
+// already-populated graph, triggering a nil-deref in coder/hnsw v0.6.1 when
+// Delete+Add violates the per-layer node invariant (HNSW-CRASH-2026-06-18).
+//
+// ARCH-1: the snapshot fast-path is guarded by a staleness check against the
+// Pebble source of truth, the clean-stop marker first and the row counts
+// second (ImportWithStalenessCheck). A stale snapshot is installed pending a
+// reconcile, which the dedup engine's PostInit runs in the background.
+//
+// When the vector store is not the HNSW store, nothing is loaded, but the
+// clean-stop marker is still taken: this run lets the snapshot fall behind
+// Pebble, so a later HNSW run must not find a marker vouching for it.
+func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
+	var hnswStore *database.HNSWEmbeddingStore
+	if raw, ok := serviceregistry.TryGet[database.VectorANNStore](c, "chromemstore"); ok && raw != nil {
+		hnswStore, _ = raw.(*database.HNSWEmbeddingStore)
+	}
+	if hnswStore == nil {
+		if _, err := database.TakeHNSWCleanStop(hnswDir); err != nil {
+			lifecycleLog.Error("hnsw: the vector store is not HNSW and %v", err)
+		}
+		return
+	}
+	var truthCount func(string) (int, error)
+	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
+		truthCount = embStore.CountByType
+	}
+	if err := hnswStore.ImportWithStalenessCheck(hnswDir, truthCount); err != nil {
+		if !errors.Is(err, database.ErrNoHNSWSnapshot) {
+			lifecycleLog.Warn("hnsw: import failed, will hydrate from PebbleDB: %v", err)
+		}
+		return
+	}
+	// reconcile_pending: the snapshot was stale and the dedup engine's
+	// PostInit brings it up to date in the background.
+	lifecycleLog.Info("hnsw: loaded from on-disk snapshot in %s (reconcile_pending=%t)", hnswDir, hnswStore.NeedsReconcile())
+}
+
 // hnswSnapshotStore returns the HNSW vector store and its truth-count source
 // when the snapshot is persisted (a database path is set and the vector
 // backend is HNSW).
@@ -1519,6 +1564,28 @@ func (s *Server) stopHNSWSnapshot(ctx context.Context) {
 		}
 	}
 	s.exportHNSWSnapshot("stop")
+}
+
+// markHNSWCleanStop writes the HNSW clean-stop marker at the end of a stop,
+// after the stop-time snapshot attempt and once the embed queue has stopped.
+// MarkCleanStop writes it only when the snapshot on disk is exactly the graph
+// (the stop-time export succeeded, or was skipped or failed with nothing
+// changed since the last successful one); otherwise the next boot reconciles
+// the snapshot against Pebble, and the line says why.
+func (s *Server) markHNSWCleanStop() {
+	hnswStore, _, ok := s.hnswSnapshotStore()
+	if !ok {
+		return
+	}
+	written, reason, err := hnswStore.MarkCleanStop(s.hnswPersistDir)
+	switch {
+	case err != nil:
+		lifecycleLog.Error("hnsw: clean-stop marker not written, so the next boot reconciles the snapshot: %v", err)
+	case written:
+		lifecycleLog.Info("hnsw: clean-stop marker written in %s", s.hnswPersistDir)
+	default:
+		lifecycleLog.Info("hnsw: clean-stop marker not written, so the next boot reconciles the snapshot: %s", reason)
+	}
 }
 
 // http3ServerQUICConfig is the QUIC configuration of the HTTP/3 server: 0-RTT
