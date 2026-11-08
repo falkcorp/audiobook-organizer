@@ -1,11 +1,12 @@
 // file: core/storage/keyspace_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 33d270b9-deec-461f-a288-8e9c004fa4a1
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -214,6 +215,44 @@ func TestFirstBootRefusesForeignKeys(t *testing.T) {
 	}
 	if got := rawKeys(t, e.fs, e.path, "c/storage/"); len(got) != 0 {
 		t.Fatalf("refused boot wrote %v", got)
+	}
+}
+
+// TestFirstBootLogsUnclaimedKeys (R1-23 review S1): the first boot of a
+// store an older release wrote counts the keys outside every claim and logs
+// the count with a sample. It refuses nothing, the keys stay where they are,
+// and a later boot (the install marker present) does not count again.
+func TestFirstBootLogsUnclaimedKeys(t *testing.T) {
+	e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}})
+	e.seedRaw("joker:1", "a", "joker_counter", "1", "bane:1", "b", "bane:2", "c", "riddler", "d", "zsasz:1", "e")
+	var buf bytes.Buffer
+	e.opts.Logger = slog.New(slog.NewTextHandler(&buf, nil))
+	db := e.open()
+	out := buf.String()
+	if !strings.Contains(out, "first boot found keys outside every claim") || !strings.Contains(out, "count=4") {
+		t.Fatalf("first boot log = %q, want the unclaimed count 4", out)
+	}
+	for _, k := range []string{"bane:1", "bane:2", "riddler", "zsasz:1"} {
+		if !strings.Contains(out, k) {
+			t.Errorf("sample %q does not name %s", out, k)
+		}
+	}
+	if strings.Contains(out, "joker:1") || strings.Contains(out, "joker_counter") {
+		t.Errorf("sample %q names a claimed key", out)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := rawKeys(t, e.fs, e.path, "bane:"); len(got) != 2 {
+		t.Fatalf("unclaimed keys after the boot = %v, want both left in place", got)
+	}
+	buf.Reset()
+	again := newEnvFS(t, e.fs, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}})
+	again.path, again.opts.Path = e.path, e.path
+	again.opts.Logger = slog.New(slog.NewTextHandler(&buf, nil))
+	again.open()
+	if strings.Contains(buf.String(), "outside every claim") {
+		t.Errorf("a marked store counted again: %q", buf.String())
 	}
 }
 

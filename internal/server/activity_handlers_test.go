@@ -1,7 +1,7 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.3.2
+// version: 5.3.3
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
@@ -246,7 +246,6 @@ func TestListOperationActivity_FallbackToOpLogs(t *testing.T) {
 	// Main store: PebbleStore implements OpsV2Store (has op_logs_v2 in Pebble).
 	sqlStore, err := database.NewPebbleStoreInMemory(filepath.Join(dir, "main.pebble"))
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(sqlStore))
 	defer sqlStore.Close()
 
 	// Activity service backed by a fresh empty store — no entries for the op.
@@ -391,7 +390,6 @@ func mergedActivityFixture(t *testing.T) (*gin.Engine, string, string, time.Time
 	dir := t.TempDir()
 	mainStore, err := database.NewPebbleStoreInMemory(filepath.Join(dir, "main.pebble"))
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(mainStore))
 	t.Cleanup(func() { mainStore.Close() })
 
 	actStore := newTestPebbleActivityStore(t)

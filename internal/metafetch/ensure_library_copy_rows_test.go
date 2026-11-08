@@ -1,7 +1,7 @@
 // file: internal/metafetch/ensure_library_copy_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a7b6c31-8e94-4f52-9d0a-6c1e5b83f742
-// last-edited: 2026-09-02
+// last-edited: 2026-11-08
 
 package metafetch
 
@@ -32,7 +32,6 @@ func libraryCopyFixture(t *testing.T) (*database.PebbleStore, *database.Book, st
 
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, database.RunMigrations(store))
 	t.Cleanup(func() { _ = store.Close() })
 
 	libRoot := t.TempDir()

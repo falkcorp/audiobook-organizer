@@ -1,7 +1,7 @@
 // file: internal/server/user_tags_authz_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7a4e9b3c-2f1d-4a6e-9c8b-5d3f0e1a2b4c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // Regression coverage for the book user-tags write routes' authorization
 // guard (fixed in this change). setupUserTagRoutes previously registered
@@ -53,9 +53,6 @@ func setupUserTagsAuthzTestServer(t *testing.T) (srv *Server, adminToken, viewer
 	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
-
-	err = database.RunMigrations(store)
-	require.NoError(t, err)
 
 	_, _, err = auth.SeedRoles(store)
 	require.NoError(t, err)

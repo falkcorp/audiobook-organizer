@@ -1,11 +1,12 @@
 // file: core/storage/boot.go
-// version: 1.0.2
+// version: 1.1.1
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-08
 
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -68,7 +69,7 @@ type OpenOptions struct {
 	MigrationBytes  int64         // core.storage.migration.max_batch_bytes; 0 = 64 MiB
 	MigrationOps    int           // core.storage.migration.max_batch_ops; 0 = 250 000
 	CloseTimeout    time.Duration // core.storage.close_timeout; 0 = 30 s
-	ClaimsShadow    bool          // core.storage.claims.mode=shadow (§5S.0 D-S2)
+	ClaimsShadow    bool          // core.storage.claims.mode=shadow (§5S.0 D-S2); point accesses only, scans stay clipped (DB.violation)
 	Logger          *slog.Logger  // nil discards
 	ExtendStart     func(step string)
 	Clock           func() time.Time // nil = time.Now
@@ -109,6 +110,13 @@ type FS struct{ fs vfs.FS }
 // store on it lives as long as the value and is never durable: tests only,
 // such as coretest's harness (06 §6.4.8).
 func MemFS() FS { return FS{fs: vfs.NewMem()} }
+
+// FSOf is a filesystem the caller built: a fault-injecting or stalling
+// wrapper over MemFS, for an app's tests of what its store does when the
+// disk misbehaves (ABO's close-drain and warmup tests). nil is the OS's. It
+// is never a production input: app.Options and kernel.Config still carry an
+// FS, and only tests have a reason to build one from a vfs.FS.
+func FSOf(fs vfs.FS) FS { return FS{fs: fs} }
 
 // defaults resolves the zero values. The filesystem is the first set of: o.fs
 // as defaults finds it (the in-package slot a boot seam fills, such as a
@@ -385,6 +393,9 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 	}
 	if !st.marker && !st.fresh {
 		if err := db.foreignKeys(); err != nil {
+			return err
+		}
+		if err := db.logUnclaimedKeys(); err != nil {
 			return err
 		}
 	}
@@ -761,6 +772,74 @@ func (db *DB) foreignKeys() error {
 		return &ForeignKeysError{Sample: sample}
 	}
 	return nil
+}
+
+// logUnclaimedKeys counts, on the first core boot of a store an older
+// release wrote, the keys outside every owner's claims (c/ and m/ aside,
+// which foreignKeys has just found empty) and logs the count with a sample.
+// It refuses nothing: such a key stays where it is, no handle can reach it
+// (strict claims refuse a point access and every scan is clipped to its
+// owner's claims), and registering its family in a later build makes it
+// reachable again. The count is the operator's one look at what the claims
+// miss before the first strict boot serves. It reads only.
+func (db *DB) logUnclaimedKeys() error {
+	n, sample, err := db.unclaimedKeys(8)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		db.log.Warn("storage: first boot found keys outside every claim; they stay in place and no owner can reach them",
+			"count", n, "sample", sample)
+	}
+	return nil
+}
+
+// unclaimedKeys counts the keys in the gaps between the claim index's
+// intervals, outside c/ and m/, and returns at most limit of them quoted.
+func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
+	release, err := db.lease()
+	if err != nil {
+		return 0, nil, err
+	}
+	defer release()
+	var gaps []Range
+	lo, open := []byte(nil), true
+	for _, iv := range db.claims.intervals {
+		if bytes.Compare(lo, iv.start) < 0 {
+			gaps = append(gaps, Range{Start: lo, End: iv.start})
+		}
+		if iv.end == nil { // a claim that runs to the end of the keyspace
+			open = false
+			break
+		}
+		if bytes.Compare(iv.end, lo) > 0 {
+			lo = iv.end
+		}
+	}
+	if open {
+		gaps = append(gaps, Range{Start: lo})
+	}
+	n, sample := 0, []string(nil)
+	for _, g := range gaps {
+		it, err := db.eng.DB().NewIter(&cpebble.IterOptions{LowerBound: g.Start, UpperBound: g.End})
+		if err != nil {
+			return 0, nil, fmt.Errorf("storage: iterator: %w", err)
+		}
+		for ok := it.First(); ok; ok = it.Next() {
+			k := it.Key()
+			if bytes.HasPrefix(k, []byte("c/")) || bytes.HasPrefix(k, []byte("m/")) {
+				continue
+			}
+			n++
+			if len(sample) < limit {
+				sample = append(sample, fmt.Sprintf("%q", k))
+			}
+		}
+		if err := errors.Join(it.Error(), it.Close()); err != nil {
+			return 0, nil, fmt.Errorf("storage: iterator: %w", err)
+		}
+	}
+	return n, sample, nil
 }
 
 // readEpoch reads the store generation and the directory identity: a record

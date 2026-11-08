@@ -1,5 +1,5 @@
 # file: .github/workflows/docker-image.yml
-# version: 1.0.3
+# version: 1.0.4
 # guid: b2699763-511a-4b87-bf7f-c52dc086fdcc
 # last-edited: 2026-11-08
 
@@ -167,7 +167,7 @@ jobs:
       - name: Run 1, seeded volume, probe
         env:
           READY_TIMEOUT: '300'
-          PROBE_STORAGE_LEVELS: '0'
+          PROBE_STORAGE_LEVELS: '1'
           PROBE_BUILD_ID: '1'
         run: |
           set -eu
@@ -193,7 +193,7 @@ jobs:
       - name: Run 2, encryption key beside the database and kept across recreate
         env:
           READY_TIMEOUT: '300'
-          PROBE_STORAGE_LEVELS: '0'
+          PROBE_STORAGE_LEVELS: '1'
           PROBE_BUILD_ID: '1'
         run: |
           set -eu

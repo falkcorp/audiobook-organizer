@@ -1,5 +1,5 @@
 // file: internal/books/books_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7d3e9b14-2c6a-4f80-b5d1-8e0a4c97f2b3
 // last-edited: 2026-11-08
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/version"
 )
 
@@ -85,7 +86,7 @@ func semver(t *testing.T, s string) [3]int {
 // is no newer than the core it is built with, so the kernel's P1 check
 // admits it.
 func TestBooksMinCoreVersion(t *testing.T) {
-	man := Module(nil).Manifest()
+	man := Module().Manifest()
 	min, core := semver(t, man.MinCoreVersion), semver(t, version.Version)
 	if slices.Compare(min[:], core[:]) > 0 {
 		t.Fatalf("books' MinCoreVersion %s is newer than core %s", man.MinCoreVersion, version.Version)
@@ -413,7 +414,7 @@ func TestBooksDisabledInert(t *testing.T) {
 	for _, abs := range []bool{false, true} {
 		t.Run("abs="+strconv.FormatBool(abs), func(t *testing.T) {
 			withConfig(t, config.Config{ABSAPIEnabled: abs})
-			mod := Module(nil)
+			mod := Module()
 			h := coretest.New(t, coretest.WithModules(mod), coretest.WithDisabled(ID))
 			coretest.AssertModuleInert(t, h, ID)
 			m := mod.(*booksModule)
@@ -436,7 +437,7 @@ func TestBooksDisabledInert(t *testing.T) {
 // disabled), books' R1Listen opens core's own listener, so the App still
 // serves what it has.
 func TestR1Listen_NoServerUsesCoreListener(t *testing.T) {
-	m := Module(nil).(*booksModule)
+	m := Module().(*booksModule)
 	ln, err := m.r1Listen(httpapi.ListenOptions{Addr: "127.0.0.1:0"}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "Alfred")
 	}), slog.New(slog.DiscardHandler))
@@ -480,11 +481,14 @@ func TestTelemetry_TracerFromEnv(t *testing.T) {
 	if tel.Tracing == nil || tel.Tracing.Endpoint != "http://192.0.2.1:4317" {
 		t.Fatalf("Telemetry.Tracing = %+v, want the env endpoint", tel.Tracing)
 	}
-	mod := Module(nil)
+	sandboxStateDir(t)
+	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "books.pebble")
+	mod := Module()
 	opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	opts.StorageFS = storage.MemFS()
 	opts.LogOutput = &syncBuffer{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

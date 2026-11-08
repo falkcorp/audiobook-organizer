@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_close_drain_test.go
-// version: 1.3.1
+// version: 1.3.3
 // guid: 7c2e9b14-5d3a-4f8e-9a61-2b0c4d8e7f35
 // last-edited: 2026-11-08
 
@@ -37,7 +37,7 @@ func seedCloseDrainStore(t *testing.T) *PebbleStore {
 		t.Fatal(err)
 	}
 	for i := range 64 {
-		if err := p.db.Set([]byte(fmt.Sprintf("closedrain:%03d", i)), []byte("v"), pebble.NoSync); err != nil {
+		if err := p.db.Set([]byte(fmt.Sprintf("quick_query_cache:closedrain:%03d", i)), []byte("v"), pebble.NoSync); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,7 +57,7 @@ func probeRefusesNewWork(p *PebbleStore) (refused bool) {
 			panic(rec)
 		}
 	}()
-	_, closer, err := p.db.Get([]byte("closedrain:000"))
+	_, closer, err := p.db.Get([]byte("quick_query_cache:closedrain:000"))
 	if err == nil {
 		_ = closer.Close()
 		return false
@@ -164,7 +164,7 @@ func TestPebbleStoreClose_WaitsForInFlightReaders(t *testing.T) {
 	})
 	t.Run("get closer", func(t *testing.T) {
 		runCloseDrainCase(t, func(p *PebbleStore) (io.Closer, error) {
-			_, closer, err := p.db.Get([]byte("closedrain:001"))
+			_, closer, err := p.db.Get([]byte("quick_query_cache:closedrain:001"))
 			return closer, err
 		})
 	})
@@ -177,7 +177,7 @@ func TestPebbleStoreClose_WaitsForInFlightReaders(t *testing.T) {
 func TestPebbleStoreClose_DrainTimeoutLeavesEngineOpen(t *testing.T) {
 	p := seedCloseDrainStore(t)
 	p.closeDrainTimeout = 50 * time.Millisecond
-	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("quick_query_cache:closedrain:"), UpperBound: []byte("quick_query_cache:closedrain;")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestPebbleStoreClose_RefusesNewWorkWithoutPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Nested lease while the outer one is held, before Close: must not block.
-	if _, c, err := p.db.Get([]byte("closedrain:002")); err != nil {
+	if _, c, err := p.db.Get([]byte("quick_query_cache:closedrain:002")); err != nil {
 		t.Fatal(err)
 	} else {
 		_ = c.Close()
@@ -222,21 +222,28 @@ func TestPebbleStoreClose_RefusesNewWorkWithoutPanic(t *testing.T) {
 		runtime.Gosched()
 	}
 
+	// Keys inside books' claims, so each refusal is the closing gate's and
+	// not core's claim check (which would also refuse, without ErrClosed).
+	key := []byte("quick_query_cache:closedrain:new")
 	refusals := map[string]error{
-		"Set":         p.db.Set([]byte("x"), []byte("y"), pebble.Sync),
-		"Delete":      p.db.Delete([]byte("x"), pebble.Sync),
-		"DeleteRange": p.db.DeleteRange([]byte("a"), []byte("b"), pebble.Sync),
-		"Flush":       p.db.Flush(),
+		"Set":    p.db.Set(key, []byte("y"), pebble.Sync),
+		"Delete": p.db.Delete(key, pebble.Sync),
+		"DeleteRange": p.db.DeleteRange([]byte("quick_query_cache:closedrain:a"),
+			[]byte("quick_query_cache:closedrain:b"), pebble.Sync),
+		"Flush": p.db.Flush(),
 	}
-	_, _, refusals["Get"] = p.db.Get([]byte("closedrain:000"))
+	_, _, refusals["Get"] = p.db.Get([]byte("quick_query_cache:closedrain:000"))
 	_, refusals["NewIter"] = p.db.NewIter(&pebble.IterOptions{})
-	_, refusals["Metrics"] = p.db.Metrics()
+	// The store core opened has no pebble.Metrics; its engine figures come
+	// from core's admin surface, which is the engine call to refuse here.
+	_, refusals["EngineSample"] = p.db.coreEngineSample()
+	_, refusals["Tables"] = p.db.tables(t.Context(), true, nil, nil, false)
 	snap := p.db.NewSnapshot()
 	_, refusals["Snapshot.NewIter"] = snap.NewIter(&pebble.IterOptions{})
-	_, _, refusals["Snapshot.Get"] = snap.Get([]byte("closedrain:000"))
+	_, _, refusals["Snapshot.Get"] = snap.Get([]byte("quick_query_cache:closedrain:000"))
 	refusals["Snapshot.Close"] = snap.Close()
 	b := p.db.NewBatch()
-	_ = b.Set([]byte("x"), []byte("y"), nil)
+	_ = b.Set(key, []byte("y"), nil)
 	refusals["Batch.Commit"] = b.Commit(pebble.Sync)
 	_ = b.Close()
 	for name, err := range refusals {
@@ -376,11 +383,11 @@ func TestPebbleStoreClose_DrainTimeoutStillSyncsCommittedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := []byte("closedrain:durable")
+	key := []byte("quick_query_cache:closedrain:durable")
 	if err := p.db.Set(key, []byte("v"), pebble.NoSync); err != nil {
 		t.Fatal(err)
 	}
-	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("quick_query_cache:closedrain:"), UpperBound: []byte("quick_query_cache:closedrain;")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,11 +412,11 @@ func TestPebbleStoreClose_WriterSyncDuringDrainSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := []byte("closedrain:writer")
+	key := []byte("quick_query_cache:closedrain:writer")
 	if err := p.db.Set(key, []byte("v"), pebble.NoSync); err != nil {
 		t.Fatal(err)
 	}
-	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("closedrain:"), UpperBound: []byte("closedrain;")})
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte("quick_query_cache:closedrain:"), UpperBound: []byte("quick_query_cache:closedrain;")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,22 +510,29 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 	t.Cleanup(func() { _ = p.Close() })
 	g := p.db.gate
 	calls := map[string]func() error{
-		"Set":         func() error { return p.db.Set([]byte("lease:a"), []byte("v"), pebble.NoSync) },
-		"Delete":      func() error { return p.db.Delete([]byte("lease:a"), pebble.NoSync) },
-		"DeleteRange": func() error { return p.db.DeleteRange([]byte("lease:a"), []byte("lease:b"), pebble.NoSync) },
-		"Barrier":     p.db.Barrier,
-		"SyncWAL":     p.db.SyncWAL,
-		"Flush":       p.db.Flush,
-		"Metrics":     func() error { _, err := p.db.Metrics(); return err },
+		"Set":    func() error { return p.db.Set([]byte("quick_query_cache:lease:a"), []byte("v"), pebble.NoSync) },
+		"Delete": func() error { return p.db.Delete([]byte("quick_query_cache:lease:a"), pebble.NoSync) },
+		"DeleteRange": func() error {
+			return p.db.DeleteRange([]byte("quick_query_cache:lease:a"), []byte("quick_query_cache:lease:b"), pebble.NoSync)
+		},
+		"Barrier": p.db.Barrier,
+		"SyncWAL": p.db.SyncWAL,
+		"Flush":   p.db.Flush,
+		// The store core opened has no pebble.Metrics or SSTables: its
+		// engine figures and table listing come from core's admin surface.
+		"EngineSample": func() error { _, err := p.db.coreEngineSample(); return err },
+		"Tables": func() error {
+			_, err := p.db.tables(t.Context(), true, nil, nil, false)
+			return err
+		},
 		"EstimateDiskUsage": func() error {
 			_, err := p.db.EstimateDiskUsage([]byte("a"), []byte("z"))
 			return err
 		},
-		"SSTables": func() error { _, err := p.db.SSTables(); return err },
 		"Batch.Commit": func() error {
 			b := p.db.NewBatch()
 			defer func() { _ = b.Close() }()
-			if err := b.Set([]byte("lease:b"), []byte("v"), nil); err != nil {
+			if err := b.Set([]byte("quick_query_cache:lease:b"), []byte("v"), nil); err != nil {
 				return err
 			}
 			return b.Commit(pebble.NoSync)
@@ -526,7 +540,7 @@ func TestGatedDB_EveryEngineCallIsLeased(t *testing.T) {
 		"IndexedBatch.Get": func() error {
 			b := p.db.NewIndexedBatch()
 			defer func() { _ = b.Close() }()
-			_, c, err := b.Get([]byte("closedrain:000"))
+			_, c, err := b.Get([]byte("quick_query_cache:closedrain:000"))
 			if err != nil {
 				return err
 			}

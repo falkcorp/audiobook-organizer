@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_scan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fabd968d-8245-4447-a90e-81e613cad611
-// last-edited: 2026-10-03
+// last-edited: 2026-11-08
 
 package database
 
@@ -28,18 +28,20 @@ func newOpChangeScanStore(t *testing.T) *PebbleStore {
 // row is visited once, in key order, and nothing under a neighbouring
 // prefix ("opchange" bare, "opchange;", "opchanges:", "opchang:") is.
 func TestScanOperationChanges_VisitsExactlyTheOpChangeRows(t *testing.T) {
-	s := newOpChangeScanStore(t)
+	// Neighbours a loose bound would sweep in. Their values are not JSON, so
+	// visiting one would also fail the scan. Outside books' claims, so they
+	// are in the engine before the store opens, as in a store HEAD wrote.
+	neighbours := map[string]string{}
+	for _, k := range []string{"opchange", "opchange;x", "opchanges:op:x", "opchang:op:x", "opchange\xff"} {
+		neighbours[k] = "not json"
+	}
+	s := openWithUnclaimedKeys(t, neighbours)
 	for _, c := range []*OperationChange{
 		{ID: "c1", OperationID: "op-a", BookID: "b1", ChangeType: "t", Source: "fixer-x"},
 		{ID: "c2", OperationID: "op-a", BookID: "b2", ChangeType: "t"},
 		{ID: "c3", OperationID: "op-b", BookID: "b1", ChangeType: "t"},
 	} {
 		require.NoError(t, s.CreateOperationChange(c))
-	}
-	// Neighbours a loose bound would sweep in. Their values are not JSON, so
-	// visiting one would also fail the scan.
-	for _, k := range []string{"opchange", "opchange;x", "opchanges:op:x", "opchang:op:x", "opchange\xff"} {
-		require.NoError(t, s.db.Set([]byte(k), []byte("not json"), pebble.Sync))
 	}
 	var seen []string
 	require.NoError(t, s.ScanOperationChanges(func(c *OperationChange) error {

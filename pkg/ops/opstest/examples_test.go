@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/examples_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b6d8e21-7c3f-4a95-9e12-0f5a3b7c8d64
-// last-edited: 2026-10-14
+// last-edited: 2026-11-08
 
 package opstest
 
@@ -322,8 +322,13 @@ func TestLoseLeaseAt(t *testing.T) {
 	}
 }
 
-// dirtyPrefix is the DirtySet the dirty-title example drains.
-const dirtyPrefix = "opstest-dirty:"
+// dirtyPrefix is the DirtySet the dirty-title example drains. It sits in the
+// opstest: family (internal/database/keyfamilies.go): the World's store is a
+// strict-claims store like production's, so an unregistered prefix is refused.
+// Not ident:dirty:, the one production DirtySet: the def retitles, and a
+// retitle re-marks ident:dirty:<id> (MarkIdentDirtyBestEffort), so the entry
+// would never drain.
+const dirtyPrefix = "opstest:dirty:"
 
 // dirtyTitleDef upper-cases the title of every book marked dirty: a DirtySet
 // source, drained a page per chunk, each entry deleted once its item

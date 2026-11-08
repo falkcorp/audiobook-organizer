@@ -1,7 +1,7 @@
 // file: internal/metadata/batch_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c3f5d21-7b49-4e06-a1d8-2f5b9c0e4a76
-// last-edited: 2026-09-19
+// last-edited: 2026-11-08
 
 package metadata
 
@@ -36,9 +36,6 @@ func setupBatchPebbleStore(t *testing.T) *database.PebbleStore {
 	store, err := database.NewPebbleStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("create pebble store: %v", err)
-	}
-	if err := database.RunMigrations(store); err != nil {
-		t.Fatalf("run migrations: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
