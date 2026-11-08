@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/writer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1ea9c2e4-9eb0-4d35-b6e3-3e1f2eab0555
 // last-edited: 2026-11-08
 
@@ -7,6 +7,7 @@ package httpmw
 
 import (
 	"bufio"
+	"errors"
 	"net"
 	"net/http"
 )
@@ -15,7 +16,7 @@ import (
 // the status and the bytes written, and calls before once, just before the
 // final status line goes out, so a stage can complete the headers then
 // (stage 5's CSP needs the owner the router picked). It implements Flush,
-// Hijack, CloseNotify and Unwrap, so http.ResponseController and the legacy
+// FlushError, Hijack, CloseNotify and Unwrap, so http.ResponseController and the legacy
 // gin engine reach the connection through it: gin's Flush asserts
 // http.Flusher, its Hijack http.Hijacker, and its c.Stream (the audio sample
 // route) http.CloseNotifier, each without a check.
@@ -27,6 +28,7 @@ type hookWriter struct {
 	wrote    bool
 	hijacked bool
 	n        int64
+	flushErr error // a failed Flush, returned by the next Write
 }
 
 func newHookWriter(w http.ResponseWriter, r *http.Request, before func(int)) *hookWriter {
@@ -51,6 +53,9 @@ func (w *hookWriter) WriteHeader(code int) {
 }
 
 func (w *hookWriter) Write(b []byte) (int, error) {
+	if w.flushErr != nil {
+		return 0, w.flushErr
+	}
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -59,13 +64,23 @@ func (w *hookWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Flush implements http.Flusher; a flush before any write sends the 200
-// headers, as net/http's does.
+// Flush implements http.Flusher. http.Flusher has no result, so a failure
+// is kept and returned by the next Write, as net/http's own writer reports
+// one; a writer below that cannot flush is not a failure.
 func (w *hookWriter) Flush() {
+	if err := w.FlushError(); err != nil && !errors.Is(err, http.ErrNotSupported) && w.flushErr == nil {
+		w.flushErr = err
+	}
+}
+
+// FlushError is what http.ResponseController.Flush calls, so a handler's
+// flush error crosses the stages: a flush before any write sends the 200
+// headers, as net/http's does, then the connection is flushed.
+func (w *hookWriter) FlushError() error {
 	if !w.wrote && !w.hijacked {
 		w.WriteHeader(http.StatusOK)
 	}
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // Hijack implements http.Hijacker (the /socket.io upgrade).

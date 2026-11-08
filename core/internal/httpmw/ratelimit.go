@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/ratelimit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea223112-e08c-4eb4-9223-9beba44d045a
 // last-edited: 2026-11-08
 
@@ -62,10 +62,7 @@ func (c *Chain) rateLimit(spec RouteSpec, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		secs := int(math.Ceil(wait.Seconds()))
-		if secs < 1 {
-			secs = 1
-		}
+		secs := max(int(math.Ceil(wait.Seconds())), 1)
 		h := http.Header{}
 		h.Set("Retry-After", strconv.Itoa(secs))
 		h.Set("RateLimit-Policy", `"`+spec.Class+`";q=`+strconv.Itoa(rs.perMinute)+`;w=60`)
@@ -113,10 +110,7 @@ type bucket struct {
 }
 
 func newLimiter(maxClients int, now func() time.Time) *limiter {
-	n := runtime.GOMAXPROCS(0)
-	if n < 1 {
-		n = 1
-	}
+	n := max(runtime.GOMAXPROCS(0), 1)
 	per := max(maxClients/n, 1)
 	l := &limiter{seed: maphash.MakeSeed(), now: now}
 	for range n {

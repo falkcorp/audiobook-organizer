@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/chain.go
-// version: 1.0.1
+// version: 1.0.3
 // guid: 43e0ed35-4635-49ca-aaab-d5bfe2f6fa1b
 // last-edited: 2026-11-08
 
@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,7 +123,10 @@ func New(d Deps, s Settings) (*Chain, error) {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
 	if d.Problem == nil {
-		d.Problem = plainProblem
+		logger := d.Log
+		d.Problem = func(w http.ResponseWriter, r *http.Request, status int, code string, header http.Header) {
+			plainProblem(logger, w, r, status, code, header)
+		}
 	}
 	c := &Chain{deps: d, refused: newOnceSet(deniedPeerLogCap), gzip: newGzipPool(), ifaces: net.Interfaces, rand: rand.Read}
 	maxClients := s.MaxClients
@@ -136,14 +140,11 @@ func New(d Deps, s Settings) (*Chain, error) {
 }
 
 // Set compiles s and swaps it in; readers see the old or the new value,
-// never a mix (05-http-api §9). An unusable entry is logged and dropped,
-// and returned joined; the rest of s applies.
+// never a mix (05-http-api §9). An unusable entry is dropped and returned
+// joined, for the caller to log; the rest of s applies.
 func (c *Chain) Set(s Settings) error {
 	cp, errs := compile(s, time.Now(), c.ifaces)
 	c.cur.Store(cp)
-	for _, e := range errs {
-		c.deps.Log.Warn("httpapi: perimeter setting ignored", "error", e)
-	}
 	return errors.Join(errs...)
 }
 
@@ -261,10 +262,10 @@ func (c *Chain) own(r *http.Request, st *State, p *Policy) {
 }
 
 func (c *Chain) compose(stages []stage, h http.Handler) http.Handler {
-	for i := len(stages) - 1; i >= 0; i-- {
-		h = stages[i].wrap(h)
+	for _, stage := range slices.Backward(stages) {
+		h = stage.wrap(h)
 		if c.deps.Trace != nil {
-			num, next := stages[i].num, h
+			num, next := stage.num, h
 			trace := c.deps.Trace
 			h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				trace(num)
@@ -275,8 +276,10 @@ func (c *Chain) compose(stages []stage, h http.Handler) http.Handler {
 	return h
 }
 
-// plainProblem is the fallback ProblemFunc: a minimal problem+json body.
-func plainProblem(w http.ResponseWriter, r *http.Request, status int, code string, header http.Header) {
+// plainProblem is the fallback ProblemFunc: a minimal problem+json body. A
+// failed write (the client went away) is logged at debug, as httpapi's
+// writeProblem does.
+func plainProblem(log *slog.Logger, w http.ResponseWriter, r *http.Request, status int, code string, header http.Header) {
 	for k, vs := range header {
 		for _, v := range vs {
 			w.Header().Add(k, v)
@@ -285,6 +288,8 @@ func plainProblem(w http.ResponseWriter, r *http.Request, status int, code strin
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, `{"type":"https://mediacore.dev/problems/%s","title":%q,"status":%d,"code":%q,"request_id":%q}`+"\n",
-		code, http.StatusText(status), status, code, RequestID(r.Context()))
+	if _, err := fmt.Fprintf(w, `{"type":"https://mediacore.dev/problems/%s","title":%q,"status":%d,"code":%q,"request_id":%q}`+"\n",
+		code, http.StatusText(status), status, code, RequestID(r.Context())); err != nil {
+		log.DebugContext(r.Context(), "httpapi: write response", "error", err)
+	}
 }

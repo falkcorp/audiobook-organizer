@@ -1,5 +1,5 @@
 // file: core/kernel/perimeter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a5d309f5-6a3d-4bcc-b110-4a74d851c77f
 // last-edited: 2026-11-08
 
@@ -46,9 +46,12 @@ func (k *Kernel) setPerimeter(v R1Values, configured bool) error {
 	if configured {
 		o.Limits.RateLimitEnabled = v.RateLimitEnabled
 	}
-	// Entries the router cannot use (a zone naming no interface) are logged
-	// by the router; the rest apply.
-	_ = k.router.SetPerimeter(o)
+	// An entry the router cannot use (a link-local address without a zone,
+	// a zone naming no interface, which is retried as requests arrive, or a
+	// bad CORS origin) is left out; the rest apply.
+	if err := k.router.SetPerimeter(o); err != nil {
+		k.coreLog("http").Warn("kernel: core.http perimeter entry ignored", "error", err)
+	}
 	return nil
 }
 

@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/compress.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1dcc991f-5931-42a7-be22-5dc86cf39509
 // last-edited: 2026-11-08
 
@@ -8,7 +8,9 @@ package httpmw
 import (
 	"bufio"
 	"compress/gzip"
+	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -21,8 +23,7 @@ import (
 // default.
 func newGzipPool() *sync.Pool {
 	return &sync.Pool{New: func() any {
-		gz, _ := gzip.NewWriterLevel(io.Discard, gzip.DefaultCompression)
-		return gz
+		return gzip.NewWriter(io.Discard) // gzip.DefaultCompression
 	}}
 }
 
@@ -52,15 +53,15 @@ func acceptsGzip(r *http.Request) bool {
 // Content-Length; an error status (>= 400) or a handler-set non-gzip
 // Content-Encoding is sent uncompressed with Vary, ETag and
 // Content-Encoding deleted; an answer with no body is sent with Vary
-// deleted. The writer implements Unwrap and Flush, so
-// http.ResponseController reaches the connection.
+// deleted. The writer implements Unwrap, Flush and FlushError, so
+// http.ResponseController reaches the connection and gets its error.
 func (c *Chain) compress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !acceptsGzip(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gw := &gzipWriter{ResponseWriter: w, r: r, st: From(r.Context()), pool: c.gzip}
+		gw := &gzipWriter{ResponseWriter: w, r: r, st: From(r.Context()), pool: c.gzip, log: c.deps.Log}
 		defer gw.finish()
 		next.ServeHTTP(gw, r)
 	})
@@ -78,7 +79,9 @@ type gzipWriter struct {
 	decided  bool
 	gz       *gzip.Writer // non-nil while compressing
 	pool     *sync.Pool
+	log      *slog.Logger
 	hijacked bool
+	flushErr error // a failed Flush, returned by the next Write
 }
 
 func (w *gzipWriter) WriteHeader(code int) {
@@ -103,6 +106,9 @@ func (w *gzipWriter) Write(b []byte) (int, error) {
 	if w.hijacked {
 		return 0, http.ErrHijacked
 	}
+	if w.flushErr != nil {
+		return 0, w.flushErr
+	}
 	if !w.decided {
 		w.decide(true)
 	}
@@ -117,18 +123,30 @@ func (w *gzipWriter) Write(b []byte) (int, error) {
 }
 
 // Flush flushes the compressor and the connection (an event stream that is
-// not text/event-stream still arrives incrementally).
+// not text/event-stream still arrives incrementally). http.Flusher has no
+// result, so a failure is kept and returned by the next Write, as net/http's
+// own writer reports one; a writer that cannot flush is not a failure.
 func (w *gzipWriter) Flush() {
+	if err := w.FlushError(); err != nil && !errors.Is(err, http.ErrNotSupported) && w.flushErr == nil {
+		w.flushErr = err
+	}
+}
+
+// FlushError is what http.ResponseController.Flush calls: Flush with the
+// compressor's or the connection's error returned.
+func (w *gzipWriter) FlushError() error {
 	if w.hijacked {
-		return
+		return nil
 	}
 	if !w.decided {
 		w.decide(true)
 	}
 	if w.gz != nil {
-		_ = w.gz.Flush()
+		if err := w.gz.Flush(); err != nil {
+			return err
+		}
 	}
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 func (w *gzipWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
@@ -206,7 +224,11 @@ func (w *gzipWriter) finish() {
 		w.decide(false)
 	}
 	if w.gz != nil {
-		_ = w.gz.Close()
+		if err := w.gz.Close(); err != nil {
+			// The trailer did not reach the client, which went away; the
+			// handler has returned, so there is no one else to tell.
+			w.log.DebugContext(w.r.Context(), "httpapi: finish gzip response", "error", err)
+		}
 		w.gz.Reset(io.Discard)
 		w.pool.Put(w.gz)
 		w.gz = nil

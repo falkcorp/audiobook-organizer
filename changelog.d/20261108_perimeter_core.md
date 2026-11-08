@@ -2,14 +2,15 @@
 
 - Every response carries an `X-App-Build` header naming the build (the
   `mediacore-build` tag of the embedded web app; `dev` for a build without
-  one).
+  one). The one exception is a request refused by the peer allow-list, which
+  is answered before any header is added.
 - Internal: the HTTP perimeter (peer allow-list, request IDs, tracing and the
   HTTP metrics, panic recovery, the access log, security headers, CORS,
   compression and the `/api` rate limit) runs in the core runtime instead of
   the gin engine. Only the Basic sign-in gate and the per-route body limits
   stay in gin for now.
-- Every response carries an `X-Request-ID` header, and an error's problem
-  body carries the same ID as `request_id`.
+- Every response carries an `X-Request-ID` header (again, except a refused
+  peer's), and an error's problem body carries the same ID as `request_id`.
 - A rate-limited request now gets an `application/problem+json` body with the
   code `rate_limited`, plus `RateLimit-Policy` and `RateLimit` headers next to
   `Retry-After`. When the tunnel connectors are listed in

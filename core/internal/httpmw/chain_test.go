@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/chain_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 6f0b8d2e-5a43-4c71-9e1d-2b7c8a4f3e10
 // last-edited: 2026-11-08
 
@@ -271,8 +271,7 @@ func TestBodyLimit_DeclaredAndStreamed(t *testing.T) {
 		t.Errorf("upload under 16 = %d, want 204", got)
 	}
 	serve(0, "application/json", "0123456789", true)
-	var mbe *http.MaxBytesError
-	if !errors.As(readErr, &mbe) {
+	if _, ok := errors.AsType[*http.MaxBytesError](readErr); !ok {
 		t.Errorf("streamed JSON over 8: read error %v, want *http.MaxBytesError", readErr)
 	}
 	if got := serve(-1, "application/json", strings.Repeat("x", 100), false); got != 204 || readErr != nil {
@@ -296,5 +295,46 @@ func TestEncodeULID_Vectors(t *testing.T) {
 	c.rand = func([]byte) (int, error) { return 0, errors.New("no entropy in the Batcave") }
 	if a, b := c.newRequestID(), c.newRequestID(); a != "local-1" || b != "local-2" {
 		t.Errorf("fallback IDs = %s, %s", a, b)
+	}
+}
+
+// brokenConn is a connection's writer whose flush fails, as net/http's does
+// once the client has gone.
+type brokenConn struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (b *brokenConn) FlushError() error { return b.err }
+
+// TestFlush_ErrorCrossesTheStages: a handler's http.ResponseController
+// flush gets the connection's error through every stage's writer (gzip
+// included), and a failed http.Flusher flush, which has no result, fails
+// the handler's next Write instead of vanishing.
+func TestFlush_ErrorCrossesTheStages(t *testing.T) {
+	gone := errors.New("joker cut the line")
+	c, err := New(Deps{}, Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gz := range []bool{false, true} {
+		var rcErr, writeErr error
+		h := c.Outer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			rcErr = http.NewResponseController(w).Flush()
+			w.(http.Flusher).Flush()
+			_, writeErr = w.Write([]byte("riddle me this"))
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/batsignal", nil)
+		if gz {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+		h.ServeHTTP(&brokenConn{ResponseRecorder: httptest.NewRecorder(), err: gone}, req)
+		if !errors.Is(rcErr, gone) {
+			t.Errorf("gzip %v: ResponseController.Flush = %v, want the connection's error", gz, rcErr)
+		}
+		if !errors.Is(writeErr, gone) {
+			t.Errorf("gzip %v: Write after a failed Flush = %v, want the flush error", gz, writeErr)
+		}
 	}
 }

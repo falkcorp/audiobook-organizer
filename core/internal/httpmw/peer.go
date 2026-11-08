@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/peer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b037bc9b-668f-488a-ac4e-4f8b7f86ae48
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,10 +53,8 @@ type peerSet struct {
 // matches only the same zone, since fe80::5 on en0 and on en1 are
 // different hosts (client_trust.go:133-201).
 func (p peerSet) contains(a netip.Addr) bool {
-	for _, z := range p.zoned {
-		if z == a {
-			return true
-		}
+	if slices.Contains(p.zoned, a) {
+		return true
 	}
 	bare := a.WithZone("").Unmap()
 	for _, pre := range p.prefixes {

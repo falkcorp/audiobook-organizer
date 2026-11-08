@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-08
 
@@ -233,8 +233,10 @@ func NewRouter(opts Options, deps Deps) *Router {
 // ignored) on the router and on the handler of its last Build. Requests
 // see the old or the new values, never a mix (05-http-api §9). The kernel
 // calls it at 06 §6.5.2 start step (7), before the first listener opens,
-// with the values app.Options.R1Values returned (05-config §1.12.1). An
-// unusable entry is left out, logged and returned joined; the rest apply.
+// with the values app.Options.R1Values returned (05-config §1.12.1). After
+// Build, an entry the chain cannot use (a zone naming no interface) is left
+// out and returned, joined, for the caller to log; the rest apply. Before
+// Build it returns nil, and Build logs what it cannot use.
 func (r *Router) SetPerimeter(o Options) error {
 	r.mu.Lock()
 	r.opts.PeerAllowlist, r.opts.TrustedProxies = slices.Clone(o.PeerAllowlist), slices.Clone(o.TrustedProxies)
@@ -243,15 +245,13 @@ func (r *Router) SetPerimeter(o Options) error {
 	chain := r.chain
 	r.mu.Unlock()
 	if chain == nil {
-		_, errs := perimeterSettings(o)
-		return errs
+		return nil
 	}
-	s, _ := perimeterSettings(o)
-	return chain.Set(s)
+	return chain.Set(perimeterSettings(o))
 }
 
 // perimeterSettings converts o's perimeter fields for httpmw.
-func perimeterSettings(o Options) (httpmw.Settings, error) {
+func perimeterSettings(o Options) httpmw.Settings {
 	peers := func(in []TrustedPeer) []httpmw.Peer {
 		out := make([]httpmw.Peer, 0, len(in))
 		for _, p := range in {
@@ -270,7 +270,7 @@ func perimeterSettings(o Options) (httpmw.Settings, error) {
 		MaxClients:     o.Limits.RateLimitMaxClients,
 		JSONMaxBytes:   o.Limits.JSONMaxBytes,
 		UploadMaxBytes: o.Limits.UploadMaxBytes,
-	}, nil
+	}
 }
 
 // ClientAddrFrom returns the client address stage 0 resolved for this request
@@ -684,7 +684,6 @@ func (r *Router) Build() (http.Handler, error) {
 // be created or a perimeter entry that cannot be used is logged: the chain
 // serves without it.
 func (r *Router) newChain() *httpmw.Chain {
-	s, _ := perimeterSettings(r.opts)
 	logger := r.deps.Log
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -710,9 +709,9 @@ func (r *Router) newChain() *httpmw.Chain {
 	if r.deps.TracerProvider != nil {
 		d.Tracer = r.deps.TracerProvider.Tracer("httpapi")
 	}
-	c, err := httpmw.New(d, s)
+	c, err := httpmw.New(d, perimeterSettings(r.opts))
 	if err != nil {
-		logger.Warn("httpapi: perimeter built with problems", "error", err)
+		logger.Warn("httpapi: perimeter built with problems; the rest of it serves", "error", err)
 	}
 	return c
 }
