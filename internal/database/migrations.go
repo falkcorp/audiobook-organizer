@@ -1,5 +1,5 @@
 // file: internal/database/migrations.go
-// version: 1.54.5
+// version: 1.55.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
 // last-edited: 2026-11-08
 
@@ -74,410 +74,332 @@ var migrations = []Migration{
 		Version:     1,
 		Description: "Initial schema with authors, series, books, playlists",
 		Up:          migration001Up,
-		Down:        nil,
 	},
 	{
 		Version:     2,
 		Description: "Add import paths and operations tables",
 		Up:          migration002Up,
-		Down:        nil,
 	},
 	{
 		Version:     3,
 		Description: "Add user preferences",
 		Up:          migration003Up,
-		Down:        nil,
 	},
 	{
 		Version:     4,
 		Description: "Add extended Pebble keyspace (users, sessions, segments, playback)",
 		Up:          migration004Up,
-		Down:        nil,
 	},
 	{
 		Version:     5,
 		Description: "Add media info and version management fields to books",
 		Up:          migration005Up,
-		Down:        nil,
 	},
 	{
 		Version:     6,
 		Description: "Add original and organized file hash tracking",
 		Up:          migration006Up,
-		Down:        nil,
 	},
 	{
 		Version:     7,
 		Description: "Rename import paths to import paths",
 		Up:          migration007Up,
-		Down:        nil,
 	},
 	{
 		Version:     8,
 		Description: "Add do_not_import table for hash blocklist",
 		Up:          migration008Up,
-		Down:        nil,
 	},
 	{
 		Version:     9,
 		Description: "Add state machine and lifecycle fields to books",
 		Up:          migration009Up,
-		Down:        nil,
 	},
 	{
 		Version:     10,
 		Description: "Add metadata_states table for metadata provenance",
 		Up:          migration010Up,
-		Down:        nil,
 	},
 	{
 		Version:     11,
 		Description: "Add iTunes import metadata fields to books",
 		Up:          migration011Up,
-		Down:        nil,
 	},
 	{
 		Version:     12,
 		Description: "Add created_at and updated_at timestamps to books table",
 		Up:          migration012Up,
-		Down:        nil,
 	},
 	{
 		Version:     13,
 		Description: "Add wanted state support and multi-path tracking",
 		Up:          migration013Up,
-		Down:        nil,
 	},
 	{
 		Version:     14,
 		Description: "Flag books with corrupted organize paths for review",
 		Up:          migration014Up,
-		Down:        nil,
 	},
 	{
 		Version:     15,
 		Description: "Add book_authors junction table, cover_url, and narrators_json",
 		Up:          migration015Up,
-		Down:        nil,
 	},
 	{
 		Version:     16,
 		Description: "Add users, sessions, book_segments, playback tables",
 		Up:          migration016Up,
-		Down:        nil,
 	},
 	{
 		Version:     17,
 		Description: "Add composite indexes and FTS5 full-text search",
 		Up:          migration017Up,
-		Down:        nil,
 	},
 	{
 		Version:     18,
 		Description: "Add itunes_library_state table for change detection",
 		Up:          migration018Up,
-		Down:        nil,
 	},
 	{
 		Version:     19,
 		Description: "Add metadata_changes_history table for undo support",
 		Up:          migration019Up,
-		Down:        nil,
 	},
 	{
 		Version:     20,
 		Description: "Add narrators and book_narrators tables",
 		Up:          migration020Up,
-		Down:        nil,
 	},
 	{
 		Version:     21,
 		Description: "Add operation_summary_logs table for persistent operation history",
 		Up:          migration021Up,
-		Down:        nil,
 	},
 	{
 		Version:     22,
 		Description: "Backfill book_authors by splitting '&'-joined author names; backfill book_narrators from legacy narrator field",
 		Up:          migration022Up,
-		Down:        nil,
 	},
 	{
 		Version:     23,
 		Description: "Add metadata_updated_at and last_written_at timestamp columns to books",
 		Up:          migration023Up,
-		Down:        nil,
 	},
 	{
 		Version:     24,
 		Description: "Add metadata_review_status column to books",
 		Up:          migration024Up,
-		Down:        nil,
 	},
 	{
 		Version:     25,
 		Description: "Add asin column to books",
 		Up:          migration025Up,
-		Down:        nil,
 	},
 	{
 		Version:     26,
 		Description: "Create book_tombstones table",
 		Up:          migration026Up,
-		Down:        nil,
 	},
 	{
 		Version:     27,
 		Description: "Add result_data column to operations",
 		Up:          migration027Up,
-		Down:        nil,
 	},
 	{
 		Version:     28,
 		Description: "Add external provider ID columns (open_library_id, hardcover_id, google_books_id)",
 		Up:          migration028Up,
-		Down:        nil,
 	},
 	{
 		Version:     29,
 		Description: "Add operation_changes table for undo/rollback tracking",
 		Up:          migration029Up,
-		Down:        nil,
 	},
 	{
 		Version:     30,
 		Description: "Add file_hash column to book_segments for auto-relinking",
 		Up:          migration030Up,
-		Down:        nil,
 	},
 	{
 		Version:     31,
 		Description: "Add system_activity_log table and logs_pruned flag",
 		Up:          migration031Up,
-		Down:        nil,
 	},
 	{
 		Version:     32,
 		Description: "Add scan cache columns for incremental scanning",
 		Up:          migration032Up,
-		Down:        nil,
 	},
 	{
 		Version:     33,
 		Description: "Add deferred_itunes_updates table for transcode path changes",
 		Up:          migration033Up,
-		Down:        nil,
 	},
 	{
 		Version:     34,
 		Description: "Add external_id_map table for PID/ASIN mapping",
 		Up:          migration034Up,
-		Down:        nil,
 	},
 	{
 		Version:     35,
 		Description: "Add book_path_history table for file rename/move tracking",
 		Up:          migration035Up,
-		Down:        nil,
 	},
 	{
 		Version:     36,
 		Description: "Add genre column to books table",
 		Up:          migration036Up,
-		Down:        nil,
 	},
 	{
 		Version:     37,
 		Description: "Add book_tags table for user-defined tags",
 		Up:          migration037Up,
-		Down:        nil,
 	},
 	{
 		Version:     38,
 		Description: "Add itunes_path column to books table",
 		Up:          migration038Up,
-		Down:        nil,
 	},
 	{
 		Version:     39,
 		Description: "Create book_files table and migrate book_segments data",
 		Up:          migration039Up,
-		Down:        nil,
 	},
 	{
 		Version:     40,
 		Description: "Add last_organize_operation_id and last_organized_at columns to books",
 		Up:          migration040Up,
-		Down:        nil,
 	},
 	{
 		Version:     41,
 		Description: "Add itunes_sync_status column to books for dirty tracking",
 		Up:          migration041Up,
-		Down:        nil,
 	},
 	{
 		Version:     42,
 		Description: "Drop dead tables and add missing indexes",
 		Up:          migration042Up,
-		Down:        nil,
 	},
 	{
 		Version:     43,
 		Description: "Drop deprecated book_segments table",
 		Up:          migration043Up,
-		Down:        nil,
 	},
 	{
 		Version:     44,
 		Description: "Add PID provenance and removed_at to external_id_map",
 		Up:          migration044Up,
-		Down:        nil,
 	},
 	{
 		Version:     45,
 		Description: "Add operation_results table for structured operation output",
 		Up:          migration045Up,
-		Down:        nil,
 	},
 	{
 		Version:     46,
 		Description: "Add book_alternative_titles table for search + dedup variant matching",
 		Up:          migration046Up,
-		Down:        nil,
 	},
 	{
 		Version:     47,
 		Description: "Add source column to book_tags so system-applied tags can be distinguished from user tags",
 		Up:          migration047Up,
-		Down:        nil,
 	},
 	{
 		Version:     48,
 		Description: "Add author_tags and series_tags tables for author/series-level tagging",
 		Up:          migration048Up,
-		Down:        nil,
 	},
 	{
 		Version:     49,
 		Description: "Add acoustid_fingerprint and acoustid_duration columns to book_files for content-based matching",
 		Up:          migration049Up,
-		Down:        nil,
 	},
 	{
 		Version:     50,
 		Description: "Replace single acoustid_fingerprint with 7 segment columns",
 		Up:          migration050Up,
-		Down:        nil,
 	},
 	{
 		Version:     51,
 		Description: "Add quarantine_reason and quarantined_at columns to books",
 		Up:          migration051Up,
-		Down:        nil,
 	},
 	{
 		Version:     52,
 		Description: "Add ai_jobs and ai_job_payloads tables for unified batch tracking",
 		Up:          migration052Up,
-		Down:        nil,
 	},
 	{
 		Version:     53,
 		Description: "Add post_metadata_hash column to book_files for post-write SHA tracking",
 		Up:          migration053Up,
-		Down:        nil,
 	},
 	{
 		Version:     54,
 		Description: "Add metadata_rejections table for auditing rejected metadata candidates",
 		Up:          migration054Up,
-		Down:        nil,
 	},
 	{
 		Version:     55,
 		Description: "Add metadata_source_hash column to books for metadata-based deduplication (MATCH-1)",
 		Up:          migration055Up,
-		Down:        nil,
 	},
 	{
 		Version:     56,
 		Description: "Add merged_into_book_id column to books for chapter consolidation (MATCH-2)",
 		Up:          migration056Up,
-		Down:        nil,
 	},
 	{
 		Version:     57,
 		Description: "Add unique index on (file_hash, source_import_path) to prevent duplicate audiobook records",
 		Up:          migration057Up,
-		Down:        nil,
 	},
 	{
 		Version:     58,
 		Description: "Add book signature columns for unified per-book audio fingerprint",
 		Up:          migration058Up,
-		Down:        nil,
 	},
 	{
 		Version:     59,
 		Description: "Add Unified Operations System v2 core schema",
 		Up:          migration059Up,
-		Down:        migration059Down,
 	},
 	{
 		Version:     60,
 		Description: "Add partial book signature mask/coverage and file fingerprint diagnosis columns",
 		Up:          migration060Up,
-		Down:        nil,
 	},
 	{
 		Version:     61,
 		Description: "Flag books whose organize path still holds an unresolved placeholder (the repair migration 14 never dispatched)",
 		Up:          migration061Up,
-		Down:        nil,
 	},
 	{
 		Version:     62,
 		Description: "Delete hollow operations-v2 rows written by an unguarded progress write after a discard",
 		Up:          migration062Up,
-		Down:        nil,
 	},
 	{
 		Version:     63,
 		Description: "Stamp book_authors/book_narrators rows with the book ID from their key (rows stored without book_id stalled memdb updates of the book)",
 		Up:          migration063Up,
-		Down:        nil,
 	},
 	{
 		Version:     64,
 		Description: "Backfill the dedup candidate and label entity indexes (pre-index verdicts were invisible to the repairs fixers' per-book re-plan)",
 		Up:          migration064Up,
-		Down:        nil,
 	},
 	{
 		Version:     65,
 		Description: "Build opv3: run records and indexes from opv2: operation rows (v2 rows are kept and stay mirrored)",
 		Up:          migration065Up,
-		Down:        migration065Down,
 	},
 	{
 		Version:     66,
 		Description: "Strip the inline rows from stored Repairs plan results (plans keep their rows beside the operation now; a stored plan of the old format is refused and re-run)",
 		Up:          migration066Up,
-		Down:        nil,
 	},
-}
-
-// setVersion updates the current schema version.
-//
-// Only migration065Down uses it (a Down core storage never runs); books'
-// VersionSource writes db_version together with the migration record.
-func setVersion(store migrationStore, version int) error {
-	payload, err := databaseVersionPayload(version)
-	if err != nil {
-		return err
-	}
-	return store.SetUserPreference(dbVersionPreferenceKey, payload)
 }
 
 // Migration implementations
@@ -1018,12 +940,6 @@ func migration059Up(store migrationStore) error {
 	return nil
 }
 
-// migration059Down removes the UOS v2 core schema added by migration059Up.
-func migration059Down(store migrationStore) error {
-	// SQLite-only migration; no-op for PebbleStore.
-	return nil
-}
-
 // migration060Up adds partial book-signature coverage columns to books and
 // structured fingerprint-failure diagnosis columns to book_files.
 func migration060Up(store migrationStore) error {
@@ -1207,6 +1123,19 @@ func migration064Up(store migrationStore) error {
 // key stays: the v2 store methods keep writing both families from here on
 // (the mirror, D25), so the previous binary can be redeployed.
 //
+// While a previous binary runs (a rollback), the runs it creates, changes or
+// deletes go stale in opv3:, and Up never runs again to see them: the store
+// is already at 65. ReconcileOpsV3WithV2 (pebble_store_ops_v3_reconcile.go),
+// which books' repairs start hook runs on every boot (RunBootRepairs), rebuilds
+// each record whose opv2 row's bytes no longer hash to its V2RowHash, through
+// Up's own projection, and removes each opv3 run whose opv2 row is gone,
+// before the operations registry starts. A rebuild keeps what the stored
+// record has and the row does not carry (approval, attempt, fence epoch, typed
+// progress; checkpoints, intents and events live under their own keys and
+// stay), and takes state, timestamps, error and result from the row through
+// Up's v2->v3 map: the v3-only nuance of a run the previous binary rewrote
+// (stopping, a wait reason other than deps) is what a rollback loses.
+//
 // A store that cannot build the records is an error, not a skip: returning
 // nil would record 65 as applied, so the records would never be built even
 // after the store is fixed, while the registry and the boot reconcile assume
@@ -1231,34 +1160,6 @@ func migration065Up(store migrationStore) error {
 		opsV3Log.Warn("migration 65: %d opv2 rows did not decode and have no opv3 run", rep.Undecodable)
 	}
 	return nil
-}
-
-// migration065Down only resets the schema version to 64. It deletes no
-// opv3: key: the previous binary ignores that prefix, and every run it reads
-// is current in opv2: because of the mirror.
-//
-// What this rollback does NOT do, stated so nothing relies on more:
-//   - The previous binary does not know migration 65, so a plain redeploy
-//     never runs this Down: the version stays 65, and on roll-forward Up does
-//     not run again.
-//   - Even after this Down, the applied-migration record for 65 is kept
-//     (migrationStore cannot delete a preference), so RunMigrations advances
-//     the version again without re-running Up.
-//
-// Neither is needed for roll-forward. While the previous binary runs, the
-// runs it creates, changes or deletes go stale in opv3:, and Up never sees
-// them again; ReconcileOpsV3WithV2 (pebble_store_ops_v3_reconcile.go), which
-// InitializeStore runs on EVERY boot after the migrations, rebuilds each
-// record whose opv2 row's bytes no longer hash to its V2RowHash, through Up's
-// own projection, and removes each opv3 run whose opv2 row is gone, before
-// the operations registry starts. A rebuild keeps what the stored record has
-// and the row does not carry (approval, attempt, fence epoch, typed progress;
-// checkpoints, intents and events live under their own keys and stay), and
-// takes state, timestamps, error and result from the row through Up's v2->v3
-// map: the v3-only nuance of a run the previous binary rewrote (stopping, a
-// wait reason other than deps) is what a rollback loses.
-func migration065Down(store migrationStore) error {
-	return setVersion(store, 64)
 }
 
 // BackfillDedupEntityIndexes runs migration 64's two backfills over this
