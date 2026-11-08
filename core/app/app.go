@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -49,18 +49,8 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 		return nil, err
 	}
 	c.StorageFS = opts.StorageFS
-	if c.StoragePath, err = storagePath(opts, mods); err != nil {
+	if c.StoragePath, c.StateDir, err = storagePath(opts, mods); err != nil {
 		return nil, err
-	}
-	if c.StoragePath != "" {
-		// P0a's state directory (06 §6.5.1): resolved once, from pre-boot
-		// inputs only, even when <PREFIX>_CORE_STORAGE_PATH names the store.
-		if c.StateDir, err = ResolveStateDir(opts); err != nil {
-			return nil, err
-		}
-		if c.StateDir, err = filepath.Abs(c.StateDir); err != nil {
-			return nil, fmt.Errorf("app: state directory: %w", err)
-		}
 	}
 	k, err := kernel.New(ctx, c)
 	if err != nil {
@@ -224,41 +214,43 @@ func lookupEnv(env []string, name string) string {
 	return ""
 }
 
-// storagePath is core.storage.path for New when a module of the app
-// declares storage, "" otherwise, so an app without storage needs no state
-// directory and creates none (R1: storage lands dark). Until config (F3) its
-// one operator layer is the environment: an absolute
-// <EnvPrefix>_CORE_STORAGE_PATH, a relative one refused (05-storage §5S.4
-// step 1); otherwise the compiled default <state_dir>/storage/main.pebble
-// (05-storage §5S.7) under ResolveStateDir's directory, made absolute.
+// storagePath is core.storage.path and P0a's state directory for New when
+// a module of the app declares storage, both "" otherwise, so an app without
+// storage needs no state directory and creates none (R1: storage lands
+// dark). Until config (F3) the store path's one operator layer is the
+// environment: an absolute <EnvPrefix>_CORE_STORAGE_PATH, a relative one
+// refused (05-storage §5S.4 step 1); otherwise the compiled default
+// <state_dir>/storage/main.pebble (05-storage §5S.7). The state directory is
+// ResolveStateDir's, made absolute, resolved once from pre-boot inputs only,
+// even when <EnvPrefix>_CORE_STORAGE_PATH names the store (06 §6.5.1).
 // Describe never calls it.
-func storagePath(opts Options, mods []module.Module) (string, error) {
+func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, err error) {
 	if !slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) }) {
-		return "", nil
+		return "", "", nil
 	}
 	prefix, err := envPrefix(opts)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	env := opts.Env
 	if env == nil {
 		env = os.Environ()
 	}
 	dbVar := prefix + "_CORE_STORAGE_PATH"
-	if p := lookupEnv(env, dbVar); p != "" {
-		if !filepath.IsAbs(p) {
-			return "", fmt.Errorf("app: %s %q is not an absolute path (core.storage.path)", dbVar, p)
-		}
-		return filepath.Clean(p), nil
+	dbPath = lookupEnv(env, dbVar)
+	if dbPath != "" && !filepath.IsAbs(dbPath) {
+		return "", "", fmt.Errorf("app: %s %q is not an absolute path (core.storage.path)", dbVar, dbPath)
 	}
-	dir, err := ResolveStateDir(opts)
-	if err != nil {
-		return "", err
+	if stateDir, err = ResolveStateDir(opts); err != nil {
+		return "", "", err
 	}
-	if dir, err = filepath.Abs(dir); err != nil {
-		return "", fmt.Errorf("app: state directory: %w", err)
+	if stateDir, err = filepath.Abs(stateDir); err != nil {
+		return "", "", fmt.Errorf("app: state directory: %w", err)
 	}
-	return filepath.Join(dir, "storage", "main.pebble"), nil
+	if dbPath != "" {
+		return filepath.Clean(dbPath), stateDir, nil
+	}
+	return filepath.Join(stateDir, "storage", "main.pebble"), stateDir, nil
 }
 
 // envPrefix is Options.EnvPrefix, default strings.ToUpper(AppID), checked

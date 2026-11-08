@@ -1,5 +1,5 @@
 // file: core/app/storage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cd83307e-c3ce-4393-b440-9d8ba60a7afb
 // last-edited: 2026-11-08
 
@@ -26,34 +26,36 @@ func (m manifestOnly) Register(r *module.Registrar) error { return nil }
 // declares storage; an absolute <EnvPrefix>_CORE_STORAGE_PATH wins and a
 // relative one is refused (05-storage §5S.4 step 1); otherwise
 // <state_dir>/storage/main.pebble, absolute even for a relative state
-// directory.
+// directory. The state directory comes back with it, absolute, in both
+// cases: New resolves it once (R1-21 review n4).
 func TestStoragePath_Rule(t *testing.T) {
 	t.Chdir(t.TempDir())
 	plain := manifestOnly{ID: "alfred", Version: "1.0.0"}
 	keeper := manifestOnly{ID: "alfred", Version: "1.0.0", Storage: storage.Spec{Keyspace: true}}
 	opts := Options{AppID: "gotham", StateDir: "gotham-state", Env: []string{}}
 
-	if p, err := storagePath(opts, []module.Module{plain}); err != nil || p != "" {
-		t.Fatalf("no module declares storage: path %q, %v; want none", p, err)
+	if p, dir, err := storagePath(opts, []module.Module{plain}); err != nil || p != "" || dir != "" {
+		t.Fatalf("no module declares storage: path %q, state %q, %v; want none", p, dir, err)
 	}
 	if _, err := os.Stat("gotham-state"); !os.IsNotExist(err) {
 		t.Fatalf("an app without storage created its state directory: %v", err)
 	}
 
-	p, err := storagePath(opts, []module.Module{plain, keeper})
+	p, dir, err := storagePath(opts, []module.Module{plain, keeper})
 	wd, _ := os.Getwd()
-	if want := filepath.Join(wd, "gotham-state", "storage", "main.pebble"); err != nil || p != want {
-		t.Fatalf("default path = %q, %v; want %q", p, err, want)
+	state := filepath.Join(wd, "gotham-state")
+	if want := filepath.Join(state, "storage", "main.pebble"); err != nil || p != want || dir != state {
+		t.Fatalf("default path = %q, state %q, %v; want %q in %q", p, dir, err, want, state)
 	}
 
 	abs := filepath.Join(t.TempDir(), "batcave.pebble")
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + abs}
-	if p, err := storagePath(opts, []module.Module{keeper}); err != nil || p != abs {
-		t.Fatalf("env path = %q, %v; want %q", p, err, abs)
+	if p, dir, err := storagePath(opts, []module.Module{keeper}); err != nil || p != abs || dir != state {
+		t.Fatalf("env path = %q, state %q, %v; want %q, state %q", p, dir, err, abs, state)
 	}
 
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=batcave.pebble"}
-	if _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+	if _, _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
 		t.Fatalf("relative env path = %v, want a refusal", err)
 	}
 }
