@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.3
+// version: 4.67.4
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -1427,6 +1428,14 @@ const hnswUnmeasuredExport = 5 * time.Second
 // second (ImportWithStalenessCheck). A stale snapshot is installed pending a
 // reconcile, which the dedup engine's PostInit runs in the background.
 //
+// Before the import the HNSW store is bound to the Pebble database the
+// embedding store shares with the main store, and to the dedup engine's
+// embedding model (BindTruthSource): from then on a write to a key the
+// reconcile reads makes the import reconcile and MarkCleanStop refuse, and a
+// marker from another model does not vouch. It is bound whether or not a
+// snapshot is on disk, because a graph hydrated from Pebble is marked at stop
+// too.
+//
 // When the vector store is not the HNSW store, nothing is loaded, but the
 // clean-stop marker is still taken: this run lets the snapshot fall behind
 // Pebble, so a later HNSW run must not find a marker vouching for it.
@@ -1463,9 +1472,12 @@ func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
 		return
 	}
 	var truthCount func(string) (int, error)
+	var truthDB *database.GatedDB
 	if embStore, ok := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore); ok && embStore != nil {
 		truthCount = embStore.CountByType
+		truthDB = embStore.PebbleDB()
 	}
+	hnswStore.BindTruthSource(truthDB, annEmbeddingModel(c))
 	if err := hnswStore.ImportWithStalenessCheck(hnswDir, truthCount); err != nil {
 		if !errors.Is(err, database.ErrNoHNSWSnapshot) {
 			lifecycleLog.Warn("hnsw: import failed, will hydrate from PebbleDB: %v", err)
@@ -1475,6 +1487,16 @@ func importHNSWSnapshot(c *serviceregistry.Container, hnswDir string) {
 	// reconcile_pending: the snapshot was stale and the dedup engine's
 	// PostInit brings it up to date in the background.
 	lifecycleLog.Info("hnsw: loaded from on-disk snapshot in %s (reconcile_pending=%t)", hnswDir, hnswStore.NeedsReconcile())
+}
+
+// annEmbeddingModel is the embedding model the dedup engine classifies
+// embedding rows against (dedup.Engine.EmbeddingModel), "" without an engine
+// or an embedding client.
+func annEmbeddingModel(c *serviceregistry.Container) string {
+	if e, ok := serviceregistry.TryGet[*dedup.Engine](c, serviceregistry.KeyDedup); ok && e != nil {
+		return e.EmbeddingModel()
+	}
+	return ""
 }
 
 // hnswSnapshotStore returns the HNSW vector store and its truth-count source

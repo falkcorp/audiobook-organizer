@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_migrate.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package database
 
@@ -364,7 +364,10 @@ func (p *PebbleStore) commitBookSigMigration(
 			return BookSigMigrateNotCandidate, fmt.Errorf("stage sidecar %q: %w", id, err)
 		}
 	}
-	if err := batch.Set(rowKey, stripped, nil); err != nil {
+	// Not a verdict write for the HNSW clean-stop marker: stripped is before
+	// with only the five signature keys removed (stripBookSigJSONKeys), and the
+	// reconcile reads none of them (hnsw_verdict_watch.go).
+	if err := batch.setJudged(rowKey, stripped, false); err != nil {
 		return BookSigMigrateNotCandidate, fmt.Errorf("stage stripped row %q: %w", id, err)
 	}
 	// The row's own book_atpath: key, UNCONDITIONALLY, for the same reason

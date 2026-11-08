@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.6
+// version: 1.8.7
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -135,8 +135,19 @@ type HNSWEmbeddingStore struct {
 	// vouches only for the directory the store wrote or loaded. Guarded by mu.
 	exportedDir string
 	// cleanStop is the clean-stop marker MarkCleanStop wrote in this process,
-	// "" if none. The next mutation removes it (bumpGenLocked). Guarded by mu.
+	// "" if none. The next mutation, or the next verdict write to the bound
+	// Pebble database, removes it (dropCleanStopLocked). Guarded by mu.
 	cleanStop string
+	// cleanStopLive is cleanStop != "", readable without mu, for the Pebble
+	// write hook's fast path (onPebbleVerdictWrite).
+	cleanStopLive atomic.Bool
+	// truthDB and model are what BindTruthSource bound: the Pebble database
+	// whose rows the graph projects (its verdict-write count makes
+	// MarkCleanStop refuse and the import reconcile) and the embedding model
+	// the reconcile classifies them against (recorded in the marker). nil and
+	// "" when unbound. Guarded by mu.
+	truthDB *GatedDB
+	model   string
 
 	// exportMu serializes exports (they share the .tmp paths). Lock order:
 	// exportMu before mu.
@@ -982,19 +993,22 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 }
 
 // ImportWithStalenessCheck is Import with a staleness guard (ARCH-1). It first
-// takes the clean-stop marker (TakeHNSWCleanStop, hnsw_clean_stop.go): without
-// it the previous process did not end with a clean stop whose snapshot
-// describes its graph, so the snapshot is stale whatever the row counts say,
-// because a crash can change rows and leave every count as it was. With the
-// marker it compares each entity type's recorded Pebble row count (the truth
-// sidecar) against a caller-supplied current truth count (e.g.
+// takes the clean-stop marker (TakeHNSWCleanStop, hnsw_clean_stop.go). The
+// snapshot is stale, whatever the row counts say, when there is no marker that
+// vouches (the previous process did not end with a clean stop whose snapshot
+// described its graph and Pebble alike: a crash can change rows and leave
+// every count as it was), when the marker records another embedding model than
+// the one bound (BindTruthSource), or when the bound Pebble database already
+// took a write the reconcile's verdict reads since it opened. Otherwise it
+// compares each entity type's recorded Pebble row count (the truth sidecar)
+// against a caller-supplied current truth count (e.g.
 // EmbeddingStore.CountByType, the emb: keyspace's source-of-truth count). If
 // every count matches, the snapshot is installed as complete and hydration is
 // skipped.
 //
-// If the marker is absent, any count differs (there is no tolerance), or a
-// type has no usable truth sidecar, the snapshot is stale: after an unclean
-// shutdown it lacks every write since its export. It is still installed, so the graph serves queries
+// A stale snapshot (any of the above, a count that differs with no tolerance,
+// or a type with no usable truth sidecar) lacks every write since its export.
+// It is still installed, so the graph serves queries
 // at once, but incomplete and pending a reconcile (NeedsReconcile). The dedup
 // engine's PostInit then runs Reconcile, which adds the keys the graph is
 // missing, tombstones the keys Pebble no longer indexes, and asks for a full
@@ -1016,7 +1030,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 	// The clean-stop marker is taken before anything else, even when the load
 	// below fails, so no run can leave it in place to vouch for a snapshot it
 	// lets fall behind (TakeHNSWCleanStop).
-	cleanStop, cerr := TakeHNSWCleanStop(dir)
+	rec, cerr := takeCleanStop(dir)
 	if cerr != nil {
 		hnswLog.Error("hnsw import: %v; the snapshot is treated as stale", cerr)
 	}
@@ -1030,14 +1044,19 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		return nil
 	}
 
-	// Without the marker the previous process did not stop cleanly, or its
-	// stop did not end with the snapshot describing its graph. Whatever changed
-	// in the crash window may have left every row count as it was (an add and
-	// a delete, a re-embed, a merge or primary change that flips a row's hydrate
-	// verdict), so the snapshot is reconciled whatever the counts say.
-	stale := !cleanStop
+	// Without a marker that vouches, the previous process did not stop
+	// cleanly, or its stop could not vouch for the snapshot. Whatever changed
+	// may have left every row count as it was (an add and a delete, a
+	// re-embed, a merge or primary change that flips a row's hydrate verdict),
+	// so the snapshot is reconciled whatever the counts say. The same goes for
+	// a marker from another embedding model, or a verdict write this process
+	// already made.
+	s.mu.RLock()
+	reason := s.cleanStopStaleReasonLocked(rec, dir)
+	s.mu.RUnlock()
+	stale := reason != ""
 	if stale {
-		hnswLog.Info("hnsw import: no clean-stop marker in %s: the previous process did not stop cleanly or its stop-time snapshot did not finish; the snapshot will be reconciled against Pebble", dir)
+		hnswLog.Info("hnsw import: %s; the snapshot will be reconciled against Pebble", reason)
 	}
 
 	// With the marker, the row counts are a second check. They run on the
