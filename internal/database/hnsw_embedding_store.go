@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -700,7 +700,9 @@ func syncDir(dir string) {
 	if err := d.Sync(); err != nil {
 		hnswLog.Warn("hnsw export: fsync %s: %v", dir, err)
 	}
-	d.Close()
+	if err := d.Close(); err != nil {
+		hnswLog.Warn("hnsw export: close %s after fsync: %v", dir, err)
+	}
 }
 
 // writeFileSynced writes data to path and fsyncs it before closing.
@@ -710,12 +712,10 @@ func writeFileSynced(path string, data []byte) error {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	return f.Close()
 }
