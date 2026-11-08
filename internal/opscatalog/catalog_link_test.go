@@ -1,7 +1,7 @@
 // file: internal/opscatalog/catalog_link_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 671b8f3a-97bd-4eba-bc0d-4927cf15d05e
-// last-edited: 2026-10-16
+// last-edited: 2026-11-08
 
 package opscatalog
 
@@ -22,8 +22,8 @@ const modulePath = "github.com/falkcorp/audiobook-organizer"
 
 // TestCatalogLinkedIntoBinary checks the server binary's real import graph --
 // `go list -deps` on the main package (the module root), which leaves out test
-// files -- for every package that registers with the service registry or
-// defines Ops(...) ops.Bundle, and requires every Ops package to be listed in
+// files -- for every package that exports a ServiceDefs function for the
+// service registry or defines Ops(...) ops.Bundle, and requires every Ops package to be listed in
 // All. A test-only import cannot satisfy it: that is how metafetch's ops passed
 // every test and were missing from prod for weeks. It replaces
 // internal/plugins TestEveryRegistryPluginIsLinkedIntoTheBinary, which checked
@@ -151,7 +151,8 @@ func importNames(f *ast.File) map[string]string {
 }
 
 // linkProblems walks root/internal for packages whose non-test files call
-// serviceregistry.Register or declare Ops(...) ops.Bundle, and reports each
+// declare ServiceDefs() []serviceregistry.ServiceDef or Ops(...) ops.Bundle,
+// and reports each
 // one that is not linked (or, for a bundle, not in inAll). It returns the
 // problems sorted and the number of such packages.
 func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bool) ([]string, int) {
@@ -169,8 +170,8 @@ func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bo
 		if d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".") {
 			return filepath.SkipDir
 		}
-		registers, bundle := scanPackage(t, path, module)
-		if !registers && !bundle {
+		defsList, bundle := scanPackage(t, path, module)
+		if !defsList && !bundle {
 			return nil
 		}
 		found++
@@ -184,7 +185,7 @@ func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bo
 				filepath.Base(path)+".Ops to All in internal/opscatalog/catalog.go")
 		}
 		if !linked[pkg] {
-			what := "registers with the service registry"
+			what := "exports ServiceDefs for the service registry"
 			if bundle {
 				what = "defines Ops(...) ops.Bundle"
 			}
@@ -199,10 +200,11 @@ func linkProblems(t *testing.T, root, module string, linked, inAll map[string]bo
 	return problems, found
 }
 
-// scanPackage reports whether dir's non-test Go files call
-// serviceregistry.Register and whether they declare a package-level
-// func Ops(...) ops.Bundle, with both packages resolved under module.
-func scanPackage(t *testing.T, dir, module string) (registers, bundle bool) {
+// scanPackage reports whether dir's non-test Go files declare a package-level
+// func ServiceDefs() []serviceregistry.ServiceDef and whether they declare a
+// package-level func Ops(...) ops.Bundle, with both packages resolved under
+// module.
+func scanPackage(t *testing.T, dir, module string) (defsList, bundle bool) {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
@@ -228,17 +230,32 @@ func scanPackage(t *testing.T, dir, module string) (registers, bundle bool) {
 				if x.Recv == nil && x.Name.Name == "Ops" && returnsBundle(x, opsName) {
 					bundle = true
 				}
-			case *ast.CallExpr:
-				if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Register" {
-					if id, ok := sel.X.(*ast.Ident); ok && regName != "" && id.Name == regName {
-						registers = true
-					}
+				if x.Recv == nil && x.Name.Name == "ServiceDefs" && returnsServiceDefs(x, regName) {
+					defsList = true
 				}
 			}
 			return true
 		})
 	}
-	return registers, bundle
+	return defsList, bundle
+}
+
+// returnsServiceDefs reports whether fn's one result is
+// []serviceregistry.ServiceDef, with the package imported as regName.
+func returnsServiceDefs(fn *ast.FuncDecl, regName string) bool {
+	if regName == "" || fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+		return false
+	}
+	arr, ok := fn.Type.Results.List[0].Type.(*ast.ArrayType)
+	if !ok || arr.Len != nil {
+		return false
+	}
+	sel, ok := arr.Elt.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "ServiceDef" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == regName
 }
 
 func returnsBundle(fn *ast.FuncDecl, opsName string) bool {

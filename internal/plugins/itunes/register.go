@@ -1,6 +1,6 @@
 // file: internal/plugins/itunes/register.go
-// version: 2.2.0
-// last-edited: 2026-08-23
+// version: 2.2.1
+// last-edited: 2026-11-08
 
 // Service registry registration for the iTunes UOS plugin (W5).
 //
@@ -39,21 +39,25 @@ func (p *Plugin) PostInit(_ context.Context, c *serviceregistry.Container) error
 	return p.Register(wrapper.Registry)
 }
 
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "itunesplugin",
-		Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyConfig},
-		Groups: []string{"plugins"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			cfg := config.GetConfig(c)
-			// Test-path guard: empty RootDir means tests without a real
-			// AppConfig — the mock store has no UpsertOpDefinitionV2
-			// expectations, so don't register ops.
-			if cfg.RootDir == "" {
-				return (*Plugin)(nil), nil
-			}
-			svc := serviceregistry.Get[*itunesservice.Service](c, serviceregistry.KeyITunes)
-			return New(svc), nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		{
+			Name:   "itunesplugin",
+			Needs:  []string{serviceregistry.KeyITunes, serviceregistry.KeyConfig},
+			Groups: []string{"plugins"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				cfg := config.GetConfig(c)
+				// Test-path guard: empty RootDir means tests without a real
+				// AppConfig — the mock store has no UpsertOpDefinitionV2
+				// expectations, so don't register ops.
+				if cfg.RootDir == "" {
+					return (*Plugin)(nil), nil
+				}
+				svc := serviceregistry.Get[*itunesservice.Service](c, serviceregistry.KeyITunes)
+				return New(svc), nil
+			},
 		},
-	})
+	}
 }

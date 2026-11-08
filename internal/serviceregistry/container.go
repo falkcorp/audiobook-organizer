@@ -1,6 +1,6 @@
 // file: internal/serviceregistry/container.go
-// version: 1.2.3
-// last-edited: 2026-10-19
+// version: 1.3.0
+// last-edited: 2026-11-08
 
 package serviceregistry
 
@@ -22,9 +22,11 @@ const (
 )
 
 // Container holds per-instance registry state. Created fresh per
-// NewServer() and per test. The factory list is global; each Container
-// builds its own service instances from it.
+// NewServer() and per test. The factory list is the container's own: it is
+// the defs NewContainerFrom was given, so two containers built from different
+// lists never see each other's services and no package-level state exists.
 type Container struct {
+	defs          map[string]ServiceDef
 	include       map[string]bool
 	overrides     map[string]any
 	built         map[string]any
@@ -33,13 +35,33 @@ type Container struct {
 	activeBuilder string // name of service whose Build is currently running
 }
 
-// NewContainer creates a new empty Container.
-func NewContainer() *Container {
-	return &Container{
-		include:   map[string]bool{},
+// NewContainerFrom creates a Container whose factory list is exactly defs
+// (06 §6.11.1 step 3). Every def passed is included in the build set; Include
+// and Override keep their meaning. With no defs it is the empty container.
+//
+// Panics on an empty Name, a nil Build or a duplicate Name among defs, so a
+// malformed list is caught when the container is made, never at runtime.
+func NewContainerFrom(defs ...ServiceDef) *Container {
+	c := &Container{
+		defs:      make(map[string]ServiceDef, len(defs)),
+		include:   make(map[string]bool, len(defs)),
 		overrides: map[string]any{},
 		built:     map[string]any{},
 	}
+	for _, def := range defs {
+		if def.Name == "" {
+			panic("serviceregistry: ServiceDef.Name is required")
+		}
+		if def.Build == nil {
+			panic(fmt.Sprintf("serviceregistry: ServiceDef.Build is required (name=%q)", def.Name))
+		}
+		if _, dup := c.defs[def.Name]; dup {
+			panic(fmt.Sprintf("serviceregistry: duplicate name: %q", def.Name))
+		}
+		c.defs[def.Name] = def
+		c.include[def.Name] = true
+	}
+	return c
 }
 
 // Include adds service names to the build set. Transitive deps are pulled
@@ -47,41 +69,6 @@ func NewContainer() *Container {
 func (c *Container) Include(names ...string) *Container {
 	for _, n := range names {
 		c.include[n] = true
-	}
-	return c
-}
-
-// IncludeAll adds every registered ServiceDef. Useful for tests that want
-// to verify the global dep graph builds; production code should prefer
-// IncludeGroup or explicit Include to keep the included set auditable.
-func (c *Container) IncludeAll() *Container {
-	for name := range registered {
-		c.include[name] = true
-	}
-	return c
-}
-
-// IncludeGroup adds every registered ServiceDef whose Groups field
-// contains any of the given group names. Transitive deps are pulled in
-// at Resolve time (same semantics as Include). Chainable.
-//
-// Group membership is declared on ServiceDef.Groups. Audit a group with
-//
-//	grep -rn 'Groups.*"<groupname>"' internal/ --include="*.go"
-//
-// Unknown group names are silently no-ops — they include zero services.
-func (c *Container) IncludeGroup(names ...string) *Container {
-	want := make(map[string]bool, len(names))
-	for _, g := range names {
-		want[g] = true
-	}
-	for name, def := range registered {
-		for _, g := range def.Groups {
-			if want[g] {
-				c.include[name] = true
-				break
-			}
-		}
 	}
 	return c
 }
@@ -124,7 +111,7 @@ func (c *Container) Build(ctx context.Context) error {
 			c.built[name] = instance
 			continue
 		}
-		def := registered[name]
+		def := c.defs[name]
 		c.activeBuilder = name
 		instance, err := def.Build(c)
 		c.activeBuilder = ""
@@ -244,7 +231,7 @@ func (c *Container) Stop(ctx context.Context) error {
 // offer.
 func Get[T any](c *Container, name string) T {
 	if c.activeBuilder != "" {
-		def := registered[c.activeBuilder]
+		def := c.defs[c.activeBuilder]
 		if !slices.Contains(def.Needs, name) {
 			panic(fmt.Sprintf(
 				"serviceregistry: service %q called Get[%T](%q) but %q is not in its Needs",

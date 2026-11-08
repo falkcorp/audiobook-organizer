@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/register.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 26480480-20ca-4dd1-88e0-4a747df80a96
-// last-edited: 2026-09-19
+// last-edited: 2026-11-08
 
 // Service registry registration for the acoustid UOS plugin (W5/W7).
 //
@@ -21,21 +21,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-func init() {
-	serviceregistry.Register(serviceregistry.ServiceDef{
-		Name:   "acoustidplugin",
-		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore},
-		Groups: []string{"plugins"},
-		Build: func(c *serviceregistry.Container) (any, error) {
-			engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
-			embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
-			if engine == nil || embStore == nil {
-				return (*Plugin)(nil), nil
-			}
-			store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
-			return New(engine, store, embStore), nil
+// ServiceDefs returns this package's service definitions for the composition
+// root's one explicit list (06 §6.11.1 step 3).
+func ServiceDefs() []serviceregistry.ServiceDef {
+	return []serviceregistry.ServiceDef{
+		{
+			Name:   "acoustidplugin",
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore},
+			Groups: []string{"plugins"},
+			Build: func(c *serviceregistry.Container) (any, error) {
+				engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
+				embStore, _ := serviceregistry.TryGet[*database.EmbeddingStore](c, serviceregistry.KeyEmbeddingStore)
+				if engine == nil || embStore == nil {
+					return (*Plugin)(nil), nil
+				}
+				store := serviceregistry.Get[pluginStore](c, serviceregistry.KeyStore)
+				return New(engine, store, embStore), nil
+			},
 		},
-	})
+	}
 }
 
 func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) error {

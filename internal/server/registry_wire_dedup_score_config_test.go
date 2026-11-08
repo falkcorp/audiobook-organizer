@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,15 +64,21 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	if err != nil {
 		t.Fatalf("ops registry: %v", err)
 	}
-	c := serviceregistry.NewContainer().
-		Include(serviceregistry.KeyDedup, "dedupplugin").
-		Override("opregistry", opReg).
-		Override(serviceregistry.KeyConfig, cfg).
-		Override(serviceregistry.KeyStore, pebble).
-		Override(serviceregistry.KeyEmbeddingStore, database.NewEmbeddingStore(pebble.DB())).
-		Override("embedclient", ai.NewEmbeddingClientWithOptions("test-key", "test-model", "")).
-		Override("llmparser", (*ai.OpenAIParser)(nil)).
-		Override(serviceregistry.KeyMerge, merge.NewService(pebble))
+	overrides := map[string]any{
+		"opregistry":                      opReg,
+		serviceregistry.KeyConfig:         cfg,
+		serviceregistry.KeyStore:          pebble,
+		serviceregistry.KeyEmbeddingStore: database.NewEmbeddingStore(pebble.DB()),
+		"embedclient":                     ai.NewEmbeddingClientWithOptions("test-key", "test-model", ""),
+		"llmparser":                       (*ai.OpenAIParser)(nil),
+		serviceregistry.KeyMerge:          merge.NewService(pebble),
+	}
+	// The production list's defs reachable from the two roots, minus every
+	// name overridden: what the old include-by-name container built.
+	c := serviceregistry.NewContainerFrom(defsReachableFrom(serviceDefs(false), overrides, serviceregistry.KeyDedup, "dedupplugin")...)
+	for name, instance := range overrides {
+		c.Override(name, instance)
+	}
 	if err := c.Build(context.Background()); err != nil {
 		return dedupWiring{}, err
 	}
@@ -87,6 +94,145 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 		t.Fatalf("configupdate service not built (ok=%v) — the dedup def must pull it in via Needs", ok)
 	}
 	return dedupWiring{engine: eng, update: upd, pebble: pebble}, nil
+}
+
+// headSetNames is the set of names the production container resolved at R1-34's
+// base (R1-15's head, b91bfec17) with DatabasePath set: captured by resolving
+// HEAD's group-based container (the core, ai, scheduler and plugins groups, plus
+// activity) with NewServer's seven overrides, before any R1-34 edit. Sorted.
+var headSetNames = []string{
+	"acoustidplugin",
+	"activity",
+	"activitystore",
+	"activitywriter",
+	"aijobsstore",
+	"aiscanstore",
+	"appversion",
+	"audiobook",
+	"batch",
+	"chromemstore",
+	"config",
+	"configupdate",
+	"dashboard",
+	"dedup",
+	"dedupplugin",
+	"delugeplugin",
+	"embedclient",
+	"embeddingstore",
+	"eventbus",
+	"filesystem",
+	"importpath",
+	"itunes",
+	"itunesplugin",
+	"llmparser",
+	"merge",
+	"metadatallmscorer",
+	"metadatascorer",
+	"metadatastate",
+	"metafetch",
+	"metafetchplugin",
+	"metricsstore",
+	"olservice",
+	"ophub",
+	"opregistry",
+	"organize",
+	"pebble-activitystore",
+	"pipelinemanager",
+	"quarantine",
+	"scan",
+	"searchindex",
+	"store",
+	"system",
+	"updater",
+	"updatescheduler",
+	"work",
+}
+
+// headSetActivityNames are the four defs of the activity group: present only
+// when DatabasePath is set.
+var headSetActivityNames = []string{"activity", "activitystore", "activitywriter", "pebble-activitystore"}
+
+// TestServiceDefs_BuildsHEADSet pins what the production container builds:
+// serviceDefs(true) resolves to exactly HEAD's 45 names and serviceDefs(false)
+// to the same minus the four activity names, with no def listed twice. The
+// container is made the way NewServer makes it, with the same seven
+// overrides, so the names include them.
+func TestServiceDefs_BuildsHEADSet(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		databasePathSet bool
+	}{
+		{"database path set", true},
+		{"database path unset", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := slices.Clone(headSetNames)
+			if !tc.databasePathSet {
+				want = slices.DeleteFunc(want, func(n string) bool { return slices.Contains(headSetActivityNames, n) })
+			}
+			defs := serviceDefs(tc.databasePathSet)
+			seen := map[string]bool{}
+			for _, d := range defs {
+				if seen[d.Name] {
+					t.Errorf("serviceDefs lists %q twice", d.Name)
+				}
+				seen[d.Name] = true
+			}
+			c := serviceregistry.NewContainerFrom(defs...).
+				Override("store", struct{}{}).
+				Override("config", struct{}{}).
+				Override("appversion", "test").
+				Override(serviceregistry.KeyOpHub, struct{}{}).
+				Override("opregistry", struct{}{}).
+				Override(serviceregistry.KeyUpdater, struct{}{}).
+				Override("updatescheduler", struct{}{})
+			if err := c.Resolve(); err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			got := c.Names()
+			slices.Sort(got)
+			slices.Sort(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("container resolves\n  %q\nwant HEAD's\n  %q", got, want)
+			}
+			if seen["batchpoller"] {
+				t.Error("batchpoller is in the list: HEAD never built it (it carries no Groups)")
+			}
+		})
+	}
+}
+
+// defsReachableFrom returns the defs in all that the roots reach through
+// Needs, leaving out any name in leaves (the caller overrides those). It lets a
+// test build part of the production list in isolation: every def handed to
+// NewContainerFrom is built, so the closure the include-by-name container used
+// to compute has to be cut from the list first.
+func defsReachableFrom(all []serviceregistry.ServiceDef, leaves map[string]any, roots ...string) []serviceregistry.ServiceDef {
+	byName := make(map[string]serviceregistry.ServiceDef, len(all))
+	for _, d := range all {
+		byName[d.Name] = d
+	}
+	seen := map[string]bool{}
+	var out []serviceregistry.ServiceDef
+	var walk func(name string)
+	walk = func(name string) {
+		if _, isLeaf := leaves[name]; isLeaf || seen[name] {
+			return
+		}
+		seen[name] = true
+		d, ok := byName[name]
+		if !ok {
+			return
+		}
+		out = append(out, d)
+		for _, dep := range d.Needs {
+			walk(dep)
+		}
+	}
+	for _, r := range roots {
+		walk(r)
+	}
+	return out
 }
 
 // restoreGlobalConfig snapshots the process-wide config.AppConfig and puts it
