@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -486,8 +486,8 @@ func notifySocket(t *testing.T) *net.UnixConn {
 // TestComposedApp_SystemdSignals runs the composed App under a fake
 // NOTIFY_SOCKET. R1-16 moved READY=1, STATUS= and STOPPING=1 from the server
 // into the kernel, and books wires its search index's long open step to
-// Deps.ExtendStart: the index open must ask for start time (once, before
-// READY=1), READY=1 must come after the listener is up, and the stop must
+// Deps.ExtendStart: the start hook and the index open must ask for start time
+// (before READY=1), READY=1 must come after the listener is up, and the stop must
 // send STOPPING=1.
 func TestComposedApp_SystemdSignals(t *testing.T) {
 	sock := notifySocket(t)
@@ -514,7 +514,10 @@ func TestComposedApp_SystemdSignals(t *testing.T) {
 		require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", msg, "only start-timeout extensions may precede READY=1")
 		extends++
 	}
-	require.Equal(t, 1, extends, "the search index open asks for start time once, through Deps.ExtendStart: %q", got)
+	// Two: books' start hook asks for the step budget up front (HEAD's start
+	// ran under TimeoutStartSec=300, the kernel's window is 60 s), and the
+	// search index open asks again before its long step.
+	require.Equal(t, 2, extends, "books' start and its search index open ask for start time through Deps.ExtendStart: %q", got)
 	require.Equal(t, "STATUS=Serving; readiness is reported by the health endpoint", next())
 
 	cancel()
