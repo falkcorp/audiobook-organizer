@@ -1,5 +1,5 @@
 // file: cmd/commands_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
 // last-edited: 2026-11-08
 
@@ -356,6 +356,24 @@ func TestServe_TelemetryReadBeforeStoredSettings(t *testing.T) {
 	}
 	if got := config.AppConfig.OTelExporterOTLPEndpoint; got != "http://192.0.2.9:4317" {
 		t.Fatalf("the stored settings did not apply to AppConfig: %q", got)
+	}
+}
+
+// serve hands the composition root the state directory it resolved, where the
+// App opens its log file (core.log.file.path, 05-logging section 11 item 1).
+func TestServe_PassesTheStateDirForTheLogFile(t *testing.T) {
+	stubCommandDeps(t)
+
+	started, in, err := serveWithStubs(t)
+	if err != nil {
+		t.Fatalf("serve failed: %v", err)
+	}
+	if !started {
+		t.Fatal("serve never reached the composition root")
+	}
+	want := os.Getenv(config.SecureStateDirEnv)
+	if want == "" || in.StateDir != want {
+		t.Fatalf("ServeInputs.StateDir = %q, want the resolved state directory %q", in.StateDir, want)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -82,9 +82,8 @@ type composed struct {
 	mod   *booksModule
 	srv   *server.Server
 	store *database.PebbleStore
-	// newLog is the App's output that is not for the activity feed: every
-	// line until Attach, and the scoped loggers' lines (core's own, module=)
-	// after it.
+	// newLog is the stream the App's log pipeline prints to (ServeInputs.
+	// LogOut); the activity feed is a tap beside it.
 	newLog *syncBuffer
 }
 
@@ -95,12 +94,20 @@ type composed struct {
 // process defaults back and closes the store.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
-	return bootComposedWith(t, abs, edit, pre, nil)
+	return bootComposedWith(t, abs, "", edit, pre, nil)
 }
 
-// bootComposedWith is bootComposed with opt, when set, adjusting the App's
+// bootComposedIn is bootComposed with serve's state directory: the log file
+// is opened under it (logSettings), as serve's composition passes
+// EnsureSecureStateDir's result. "" is no state directory: stream only.
+func bootComposedIn(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
+	t.Helper()
+	return bootComposedWith(t, abs, stateDir, edit, pre, nil)
+}
+
+// bootComposedWith is bootComposedIn with opt, when set, adjusting the App's
 // options after books.Options builds them and before app.New.
-func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
+func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dir := tempDir(t)
@@ -137,10 +144,9 @@ func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre fun
 
 	mod := Module(store).(*booksModule)
 	newLog := &syncBuffer{}
-	mod.logOut.stdout = newLog
 	cfg := server.GetDefaultServerConfig()
 	cfg.Host, cfg.Port = "127.0.0.1", "0"
-	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot()})
+	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot(), LogOut: newLog, StateDir: stateDir})
 	require.NoError(t, err)
 	if opt != nil {
 		opt(&opts)
@@ -152,6 +158,7 @@ func bootComposedWith(t *testing.T, abs bool, edit func(*config.Config), pre fun
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = a.Metrics().Shutdown(ctx)
+		_ = a.Logging().Close(ctx)
 	})
 	restore, err := app.InstallProcessDefaults(a)
 	require.NoError(t, err)
@@ -179,7 +186,7 @@ type runningApp struct {
 func runComposed(t *testing.T) *runningApp {
 	t.Helper()
 	addrs := make(chan net.Addr, 1)
-	c := bootComposedWith(t, false, nil, nil, func(o *app.Options) {
+	c := bootComposedWith(t, false, "", nil, nil, func(o *app.Options) {
 		listen := o.R1Listen
 		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
 			srv, err := listen(lo, h, l)
