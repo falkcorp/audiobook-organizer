@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c7f4e2a-9b13-4d58-a6e1-3f8d2c5b7a90
 // last-edited: 2026-11-08
 
@@ -35,20 +35,20 @@ import (
 //     middleware did before the gate.
 //   - Any other request goes to the kernel with a perimeterState in its
 //     context. perimeterSeen, the engine's first middleware, marks it. When
-//     the response's status is one of core's unrouted answers (301, 404,
-//     405) and the engine never ran, the shim applies the gate as for a
+//     the engine never ran, every answer core wrote itself is gated (fail
+//     closed: a native route added later cannot skip the gate) as for a
 //     request gin routed to no route (path exemptions only,
 //     BasicGateRefusesUnrouted). A refusal keeps the headers core's stages
 //     set (HEAD's 401 carried the security and CORS headers, which ran
 //     before the gate), drops what describes core's body, and writes the
-//     gate's 401. It also adds Alt-Svc where HEAD's late NoRoute middleware
-//     did.
+//     gate's 401. The shim also adds Alt-Svc to core's 404 and 405, where
+//     HEAD's late NoRoute middleware did.
 //
-// Core's other own answers (stage 0's peer refusal, stage 7's cross-origin
-// refusal, stage 10's 429, stage 11's 413, stage 3's 500) are not gated:
-// in HEAD the peer gate ran outside gin, stage 7 did not exist, and the
-// rate and body limits now run before gin (stage 8 sits inside the legacy
-// mount until F3).
+// The stages' own refusals are not gated (stageRefusal): stage 0's 403 and
+// its 425 for 0-RTT early data, stage 7's 403, stage 10's 429, stage 11's
+// 413 and stage 3's 500. In HEAD the peer gate ran outside gin, stage 7 did
+// not exist, and the rate and body limits now run before gin (stage 8 sits
+// inside the legacy mount until F3).
 //
 // Core's access log and HTTP metrics record the status core wrote, not the
 // gate's 401, for a refused unrouted request: they run inside the kernel's
@@ -102,12 +102,7 @@ func (w *perimeterWriter) decide(status int) {
 		return
 	}
 	w.decided = true
-	if w.st.gin.Load() {
-		return
-	}
-	switch status {
-	case http.StatusMovedPermanently, http.StatusNotFound, http.StatusMethodNotAllowed:
-	default:
+	if w.st.gin.Load() || stageRefusal(status) {
 		return
 	}
 	h := w.ResponseWriter.Header()
@@ -128,11 +123,25 @@ func (w *perimeterWriter) decide(status int) {
 		return
 	}
 	// HEAD's Alt-Svc middleware was added to the engine at listen time, so it
-	// sat in the NoRoute chain after the /api redirect middleware: every
-	// unrouted answer carried it except that 301.
-	if w.altSvc != "" && status != http.StatusMovedPermanently {
+	// sat in the NoRoute and NoMethod chains after the /api redirect
+	// middleware: a 404 or 405 carried it, that 301 did not.
+	if w.altSvc != "" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed) {
 		h.Set("Alt-Svc", w.altSvc)
 	}
+}
+
+// stageRefusal reports a status only a core stage writes as a refusal: 403
+// (stage 0's peer refusal, stage 7's cross-origin refusal), 413 (stage 11),
+// 425 (stage 0's 0-RTT early data), 429 (stage 10) and 500 (stage 3). The
+// shim lets these through ungated, as HEAD's peer gate and limits answered
+// before its Basic gate; every other answer core writes itself is gated.
+func stageRefusal(status int) bool {
+	switch status {
+	case http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusTooEarly,
+		http.StatusTooManyRequests, http.StatusInternalServerError:
+		return true
+	}
+	return false
 }
 
 func (w *perimeterWriter) WriteHeader(status int) {
