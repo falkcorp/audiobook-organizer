@@ -103,6 +103,19 @@ func (db *DB) writeSidecarsFor(stamps Levels) error {
 	return nil
 }
 
+// Levels reports, for every level owner the build serves, its committed
+// level stamp (store) and the build's supported level (supported): the two
+// kinds of <namespace>_storage_level (§5S.8, OPS2-24). After Migrate the
+// store side holds every raise the boot committed.
+func (db *DB) Levels() (store, supported Levels) {
+	st := db.boot
+	store = make(Levels, len(st.supported))
+	for lo := range st.supported {
+		store[lo] = st.stamps[lo]
+	}
+	return store, maps0(st.supported)
+}
+
 // Supported is the build's supported level vector, the --print-storage-levels
 // output (§5S.3.7 "Fast-exit flags"): computed from the specs alone.
 func Supported(owners []OwnerSpec) Levels {

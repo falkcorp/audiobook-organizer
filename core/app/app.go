@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-07
 
@@ -8,11 +8,11 @@
 // handling stays in main, which cancels Run's context, so Run is testable and
 // a host that embeds the app controls its own lifecycle.
 //
-// At release R1's skeleton New runs the boot phases whose members exist (06
-// §6.4.10): manifest validation and enablement, logging and metrics, each
-// module's Register, the consumption of registrations and the root handler.
-// Storage, config, auth and tasks, and the Options fields and phases that
-// need them, land with their packages.
+// At release R1 New runs the boot phases whose members exist (06 §6.4.10):
+// manifest validation and enablement, logging, storage when a module
+// declares it, metrics, each module's Register, the consumption of
+// registrations and the root handler. Config, auth and tasks, and the
+// Options fields and phases that need them, land with their packages.
 package app
 
 import (
@@ -35,15 +35,20 @@ import (
 // App is one booted process: the kernel behind New.
 type App struct{ k *kernel.Kernel }
 
-// New runs the boot phases that exist at R1 (06 §6.5.1 P1, P5, P6, P7, P8):
-// manifest validation and enablement, core services, Register of each enabled
-// module, consumption of registrations, and the HTTP handler. It starts no
+// New runs the boot phases that exist at R1 (06 §6.5.1 P1, P2, P4a, P4b, P5,
+// P6, P7, P8): manifest validation and enablement, the store with its
+// checkpoint or fresh install and its migrations when a module declares
+// storage, core services, Register of each enabled module, consumption of
+// registrations, and the HTTP handler. It starts no
 // module code that runs on its own (hooks, workers) and no listener. On
 // error nothing is left open (COR-24); a validation failure is a
 // *module.ValidationError listing every problem found.
 func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error) {
 	c, err := kernelConfig(opts, mods)
 	if err != nil {
+		return nil, err
+	}
+	if c.StoragePath, err = storagePath(opts, mods); err != nil {
 		return nil, err
 	}
 	k, err := kernel.New(ctx, c)
@@ -193,6 +198,43 @@ func lookupEnv(env []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// storagePath is core.storage.path for New when a module of the app
+// declares storage, "" otherwise, so an app without storage needs no state
+// directory and creates none (R1: storage lands dark). Until config (F3) its
+// one operator layer is the environment: an absolute
+// <EnvPrefix>_CORE_STORAGE_PATH, a relative one refused (05-storage §5S.4
+// step 1); otherwise the compiled default <state_dir>/storage/main.pebble
+// (05-storage §5S.7) under ResolveStateDir's directory, made absolute.
+// Describe never calls it.
+func storagePath(opts Options, mods []module.Module) (string, error) {
+	if !slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) }) {
+		return "", nil
+	}
+	prefix, err := envPrefix(opts)
+	if err != nil {
+		return "", err
+	}
+	env := opts.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	dbVar := prefix + "_CORE_STORAGE_PATH"
+	if p := lookupEnv(env, dbVar); p != "" {
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("app: %s %q is not an absolute path (core.storage.path)", dbVar, p)
+		}
+		return filepath.Clean(p), nil
+	}
+	dir, err := ResolveStateDir(opts)
+	if err != nil {
+		return "", err
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return "", fmt.Errorf("app: state directory: %w", err)
+	}
+	return filepath.Join(dir, "storage", "main.pebble"), nil
 }
 
 // envPrefix is Options.EnvPrefix, default strings.ToUpper(AppID), checked

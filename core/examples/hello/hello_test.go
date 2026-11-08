@@ -1,5 +1,5 @@
 // file: core/examples/hello/hello_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9824ef03-77bf-470b-bc4d-e48e03ef10d5
 // last-edited: 2026-11-07
 
@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,15 +22,19 @@ import (
 	"github.com/falkcorp/mediacore/examples/hello"
 )
 
-// TestHelloEndToEnd is 06 §6.10's row for the R1 surface: boot, GET
-// /api/hello/v1/greeting over a real listener, a clean stop. The task, the
-// seed migration, settings and /api/core/v1/modules are added by the rows
-// that land storage, tasks, config and modulehttp.
+// TestHelloEndToEnd is 06 §6.10's row for the R1 surface: boot over a fresh
+// store in a temporary state directory (the seed migration runs), GET
+// /api/hello/v1/greeting over a real listener with the seeded count, a clean
+// stop. The task, settings and /api/core/v1/modules are added by the rows
+// that land tasks, config and modulehttp.
 func TestHelloEndToEnd(t *testing.T) {
 	capture := logcapture.New(t)
+	stateDir := t.TempDir()
 	a, err := app.New(t.Context(), app.Options{
 		AppID:    "hello",
 		Logger:   capture.Logger(),
+		StateDir: stateDir,
+		Env:      []string{}, // no HELLO_CORE_* variable of the host leaks in
 		R1Values: func() app.R1Values { return app.R1Values{Listen: "localhost:0"} },
 	}, hello.New())
 	if err != nil {
@@ -55,8 +61,16 @@ func TestHelloEndToEnd(t *testing.T) {
 	}
 	code, body := get("Bruce Wayne")
 	var g hello.Greeting
-	if err := json.Unmarshal(body, &g); err != nil || code != http.StatusOK || g.Message != "Hello, Bruce Wayne" {
-		t.Fatalf("greeting = %d %s, want 200 Hello, Bruce Wayne", code, body)
+	if err := json.Unmarshal(body, &g); err != nil || code != http.StatusOK || g.Message != "Hello, Bruce Wayne" || g.Seen != 0 {
+		t.Fatalf("greeting = %d %s, want 200 Hello, Bruce Wayne, seen 0", code, body)
+	}
+	// seed-names ran on the fresh install: "world" was recorded once.
+	code, body = get("world")
+	if err := json.Unmarshal(body, &g); err != nil || code != http.StatusOK || g.Seen != 1 {
+		t.Fatalf("greeting of world = %d %s, want 200 with seen 1", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "storage", "main.pebble")); err != nil {
+		t.Fatalf("the store is not at <state_dir>/storage/main.pebble: %v", err)
 	}
 	if code, body := get(""); code != http.StatusUnprocessableEntity {
 		t.Fatalf("empty name = %d %s, want 422", code, body)

@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-07
 
@@ -8,14 +8,16 @@
 // across modules and core, and the supervisor of 06 §6.5.2. Apps never import
 // it; package app is its only caller.
 //
-// The phases whose members exist at release R1's skeleton run: P1 (manifest
-// validation and enablement), P5 (logging, metrics and the router), P6
-// (Register), P7 (consumption of registrations) and P8 (the root handler).
-// P0a, P0 and P2 to P4 arrive with config and storage; their members are
-// absent, not stubbed, and those phases are skipped (06 §6.4.10). 06 §6.4.6
-// sketches kernel/catalog, kernel/services and kernel/supervisor packages;
-// here they are files of this one package (kernel.go, boot.go,
-// supervisor.go) until the phases that fill them land.
+// The phases whose members exist at release R1 run: P1 (manifest validation
+// and enablement), P2, P4a and P4b (storage open, checkpoint or fresh
+// install, migrations; storage.go) when core.storage.path is set, P5
+// (metrics and the router), P6 (Register), P7 (consumption of registrations)
+// and P8 (the root handler). P0a, P0 and P3 arrive with config and the swap;
+// their members are absent, not stubbed, and those phases are skipped (06
+// §6.4.10). 06 §6.4.6 sketches kernel/catalog, kernel/services and
+// kernel/supervisor packages; here they are files of this one package
+// (kernel.go, boot.go, storage.go, supervisor.go) until the phases that fill
+// them land.
 package kernel
 
 import (
@@ -73,6 +75,12 @@ type Config struct {
 	Exit func(code int)
 	// Modules are the modules compiled into the app, enabled or not.
 	Modules []module.Module
+	// StoragePath is core.storage.path, absolute (05-storage §5S.4 step 1).
+	// Set, the kernel runs P2, P4a and P4b over it with core/storage and
+	// every module that declares storage as owners. "" = no store: boot is
+	// refused when an enabled module declares storage. Describe never opens
+	// the store.
+	StoragePath string
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
@@ -131,6 +139,8 @@ type Kernel struct {
 	router    *httpapi.Router
 	handler   http.Handler
 
+	store *kernelStore // P2 on; nil when no store was opened (storage.go)
+
 	hooks     []moduleHook
 	workers   []moduleWorker
 	lifecycle *Lifecycle
@@ -145,6 +155,7 @@ type entry struct {
 	mod     module.Module
 	man     module.Manifest
 	enabled bool
+	held    string               // ModuleState.Disabled when storage holds an enabled module (storage.go)
 	rec     module.Registrations // P6, enabled modules only
 }
 
@@ -159,9 +170,10 @@ func New(ctx context.Context, c Config) (*Kernel, error) {
 // Describe runs P1, P5, P6 and P7 with every module enabled and its logging
 // discarded, then Router.Build without serving (06 §6.4.5 Describe, COR2-13),
 // and returns core's OpenAPI document and each module's. Nothing is left
-// running. The phases that would touch storage or the state directory do
-// not exist yet, so it does no I/O beyond what Register itself is forbidden
-// to do (§6.4.1).
+// running. It skips P2 to P4 whatever Config.StoragePath says, so it opens no
+// store, touches no state directory and does no I/O beyond what Register
+// itself is forbidden to do (§6.4.1); a module's Deps.Storage handles are
+// zero values there.
 func Describe(ctx context.Context, c Config) (Description, error) {
 	k, err := boot(ctx, c, true)
 	if err != nil {
@@ -191,6 +203,9 @@ func (k *Kernel) Modules() []ModuleState {
 		s := ModuleState{ID: e.man.ID, Version: e.man.Version, Enabled: e.enabled}
 		if !e.enabled {
 			s.Disabled = disabledByDefault
+			if e.held != "" {
+				s.Disabled = e.held
+			}
 		}
 		out = append(out, s)
 	}
@@ -314,10 +329,11 @@ func (k *Kernel) register(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("kernel: metrics scope of module %s: %w", id, err))
 			continue
 		}
+		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(),
+			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id)}
 		r := module.NewRegistrar(module.RegistrarConfig{
-			Context: regCtx,
-			Deps: module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(),
-				RequestRestart: k.lifecycle.RequestRestart},
+			Context:       regCtx,
+			Deps:          deps,
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
 			// Err is read once, below: a call after Close (from a goroutine

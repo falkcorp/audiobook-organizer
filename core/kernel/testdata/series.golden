@@ -1,8 +1,11 @@
 # file: core/kernel/testdata/series.golden
-# version: 1.0.0
+# version: 1.0.1
 # guid: 483fa7ca-16d7-4a3c-a40e-896a5e918f37
 # last-edited: 2026-11-07
 #
-# The kernel scope's series (05-metrics §6 item 5): family<TAB>type<TAB>labels,
-# checked by metricstest.AssertSeries in TestKernelFamiliesGathered.
+# The series of the kernel scope and of the storage scope the kernel records
+# into (05-metrics §6 item 5, 05-storage §5S.8): family<TAB>type<TAB>labels,
+# checked over both scopes in TestKernelFamiliesGathered.
 mediacore_kernel_boot_phase_seconds	gauge	phase,step
+mediacore_storage_checkpoint_bytes	gauge	state
+mediacore_storage_level	gauge	kind,owner

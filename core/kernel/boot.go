@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-07
 
@@ -27,7 +27,7 @@ import (
 
 // The phase label values of <namespace>_kernel_boot_phase_seconds, spelled
 // exactly as 06 §6.9's one label set (OPS3-16). Only the phases that exist
-// at release R1's skeleton are listed.
+// at release R1 are listed; storage.go has P2, P4a and P4b.
 const (
 	phaseP1 = "P1"
 	phaseP5 = "P5"
@@ -45,7 +45,8 @@ type phaseTiming struct {
 
 // boot runs the phases of 06 §6.5.1 that exist, in the table's order. For
 // Describe it runs P1, P5, P6 and P7, then Router.Build without P8's
-// handler. On error everything P5 built is closed in reverse.
+// handler. Logging is built before storage opens (05-logging §4 steps 1-2).
+// On error everything built is closed in reverse.
 func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	k := &Kernel{cfg: c, notifier: c.Notifier, exit: c.Exit, listen: c.Listen, lifecycle: newLifecycle()}
 	if k.notifier == nil {
@@ -67,7 +68,29 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	if err := k.phase(phaseP1, func() error { return k.catalog(describe) }); err != nil {
 		return nil, err
 	}
-	if err := k.phase(phaseP5, func() error { return k.services(ctx, describe) }); err != nil {
+	if err := k.buildLogging(describe); err != nil {
+		return nil, err
+	}
+	// Before any module code runs, so a restart request refused before
+	// readiness is logged (Lifecycle.RequestRestart).
+	k.lifecycle.log = k.log
+	if open, err := k.storageWanted(describe); err != nil {
+		return nil, err
+	} else if open {
+		if err := k.phase(phaseP2, func() error { return k.openStorage(ctx) }); err != nil {
+			return nil, err
+		}
+		if err := k.phase(phaseP4a, func() error { return k.prepareStorage(ctx) }); err != nil {
+			return nil, err
+		}
+		if err := k.phase(phaseP4b, func() error { return k.migrateStorage(ctx) }); err != nil {
+			return nil, err
+		}
+	}
+	if err := k.phase(phaseP5, func() error { return k.services(ctx) }); err != nil {
+		return nil, err
+	}
+	if err := k.storageMetrics(ctx); err != nil {
 		return nil, err
 	}
 	if err := k.phase(phaseP6, func() error { return k.register(ctx) }); err != nil {
@@ -111,18 +134,10 @@ func (k *Kernel) flushTimings() {
 	k.timings = k.timings[:0]
 }
 
-// services is P5 at R1 (06 §6.5.1 P5, A8), in this fixed order: logging
-// (05-logging §4 step 1, which config precedes once it exists), the metrics
+// services is P5 at R1 (06 §6.5.1 P5, A8), in this fixed order: the metrics
 // Provider with its Prometheus registry (05-metrics §3), the kernel's own
-// scope and gauge, and the router. Describe discards its log output: it is
-// an offline generator and does no I/O (COR2-13).
-func (k *Kernel) services(ctx context.Context, describe bool) error {
-	if err := k.buildLogging(describe); err != nil {
-		return err
-	}
-	// Before any module code runs, so a restart request refused before
-	// readiness is logged (Lifecycle.RequestRestart).
-	k.lifecycle.log = k.log
+// scope and gauge, and the router. Logging is built before P2 (boot).
+func (k *Kernel) services(ctx context.Context) error {
 	ids := make([]string, 0, len(k.entries))
 	for _, e := range k.entries {
 		ids = append(ids, string(e.man.ID))
@@ -168,9 +183,11 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 }
 
 // buildLogging builds the App's log.Logging from core.log's defaults, or
-// adopts Config.Logger. Until config lands (F3) no layer can set core.log,
-// so the defaults (text, info, stderr) are the effective values, and the
-// file output, which needs core.paths.state_dir, cannot be selected yet.
+// adopts Config.Logger. Describe discards its log output: it is an offline
+// generator and does no I/O (COR2-13). Until config lands (F3) no layer can
+// set core.log, so the defaults (text, info, stderr) are the effective
+// values, and the file output, which needs core.paths.state_dir, cannot be
+// selected yet.
 func (k *Kernel) buildLogging(describe bool) error {
 	s := log.DefaultSettings()
 	k.redactor = log.NewRedactor(s.RedactKeys)
@@ -248,10 +265,10 @@ func listenHTTP(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (Server
 	return ln, nil
 }
 
-// closeCore closes what P5 built, in reverse: the metrics Provider, then
-// logging last (05-logging §4 step 4). It runs once, after the shutdown
-// budget if need be (06 §6.5.2: storage, and so everything after it, closes
-// regardless), with at least lateStopFloor to finish.
+// closeCore closes what boot built, in reverse: the metrics Provider, the
+// store, then logging last (05-logging §4 step 4). It runs once, after the
+// shutdown budget if need be (06 §6.5.2: storage, and so everything after
+// it, closes regardless), with at least lateStopFloor to finish.
 func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 	k.closeOnce.Do(func() {
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
@@ -261,6 +278,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 			if err := k.provider.Shutdown(cctx); err != nil {
 				errs = append(errs, fmt.Errorf("kernel: metrics shutdown: %w", err))
 			}
+		}
+		if err := k.closeStorage(); err != nil {
+			errs = append(errs, err)
 		}
 		if k.logging != nil {
 			if err := k.logging.Close(cctx); err != nil {
