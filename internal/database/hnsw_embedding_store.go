@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -45,6 +45,7 @@ package database
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/hnsw"
@@ -102,12 +104,21 @@ type HNSWEmbeddingStore struct {
 	// hydrate path sets it via SetComplete. Guarded by mu.
 	complete bool
 
-	// exportMu serializes exports (they share the .tmp paths) and guards the
-	// fields below. Lock order: exportMu before mu.
-	exportMu      sync.Mutex
-	exportedGen   uint64        // gen read before the last successful export's truth reads
-	lastExportAt  time.Time     // zero until an export has succeeded in this process
-	lastExportDur time.Duration // wall time of the last successful export
+	// exportedGen is the gen the on-disk snapshot is known to describe: the gen
+	// read before the last successful export's truth reads, or the gen a fresh
+	// snapshot import installed. exportedValid is false until one of those
+	// happened. ExportIfDirty is clean while gen == exportedGen. Guarded by mu.
+	exportedGen   uint64
+	exportedValid bool
+
+	// exportMu serializes exports (they share the .tmp paths). Lock order:
+	// exportMu before mu.
+	exportMu sync.Mutex
+	// lastExportAt (unix nanoseconds, 0 = none in this process) and
+	// lastExportDur are atomics so LastExport never waits behind a running
+	// export (the stop path reads them against a shutdown budget).
+	lastExportAt  atomic.Int64
+	lastExportDur atomic.Int64
 
 	// newGraphRng, when non-nil, supplies the *rand.Rand used for HNSW level
 	// generation on each lazily-created graph. Production leaves it nil, so the
@@ -175,9 +186,12 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	// surface it as an error, which callers (mirrorBookToChromem) already log and
 	// continue past.
 	if err := s.safeAdd(g, entityID, vec); err != nil {
-		// A recovered library panic can leave the graph part-mutated, so count it
-		// as a change: the cost is one extra export, never a missed one.
+		// A recovered library panic can leave the graph part-mutated: count it
+		// as a change, and mark the store incomplete so the damaged graph is
+		// never exported (the next boot rebuilds from the last good snapshot or
+		// from Pebble).
 		s.gen++
+		s.markDamaged(entityType, entityID, err)
 		return err
 	}
 	if meta == nil {
@@ -187,6 +201,17 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	s.meta[entityType][entityID] = copyMeta(meta)
 	s.gen++
 	return nil
+}
+
+// markDamaged records that a recovered library panic may have left the graph
+// part-mutated: the store stops being a complete projection, so no export
+// writes the damaged graph over the last good snapshot. Caller must hold s.mu
+// (write lock).
+func (s *HNSWEmbeddingStore) markDamaged(entityType, entityID string, err error) {
+	if s.complete {
+		hnswLog.Warn("hnsw: graph %s may be damaged after a recovered panic on %s; snapshots stop until it is rebuilt: %v", entityType, entityID, err)
+	}
+	s.complete = false
 }
 
 // safeAdd wraps coder/hnsw Graph.Add so a library panic becomes an error rather
@@ -244,6 +269,7 @@ func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID stri
 		if _, err := s.safeDelete(g, entityID); err != nil {
 			slog.Warn("hnsw delete: recovered library panic; continuing best-effort",
 				"entity_type", entityType, "entity_id", entityID, "err", err)
+			s.markDamaged(entityType, entityID, err)
 		}
 	}
 	if byID, ok := s.meta[entityType]; ok {
@@ -457,8 +483,9 @@ func (s *HNSWEmbeddingStore) ExportWithTruth(dir string, truth func(entityType s
 }
 
 // ExportIfDirty exports like ExportWithTruth unless nothing has changed since
-// the last successful export in this process, in which case it returns
-// Clean=true without touching the disk. An empty store that has never been
+// the last successful export in this process, or since a fresh snapshot was
+// imported (the file on disk already describes the graph), in which case it
+// returns Clean=true without touching the disk. An empty store that has never been
 // mutated is also Clean: it must never be written over a good snapshot. The
 // check and the export happen under one exportMu hold, so concurrent callers
 // cannot both export. An incomplete graph returns ErrHNSWIncomplete (checked
@@ -470,11 +497,12 @@ func (s *HNSWEmbeddingStore) ExportIfDirty(dir string, truth func(string) (int, 
 
 	s.mu.RLock()
 	gen, empty := s.gen, len(s.graphs) == 0
+	clean := s.exportedValid && gen == s.exportedGen
 	s.mu.RUnlock()
 	if gen == 0 && empty {
 		return ExportResult{Clean: true}, nil
 	}
-	if !s.lastExportAt.IsZero() && gen == s.exportedGen {
+	if clean {
 		return ExportResult{Clean: true}, nil
 	}
 
@@ -486,11 +514,14 @@ func (s *HNSWEmbeddingStore) ExportIfDirty(dir string, truth func(string) (int, 
 }
 
 // LastExport returns when the last successful export finished and how long it
-// took. Both are zero if no export has succeeded in this process.
+// took. Both are zero if no export has succeeded in this process. It never
+// blocks: a running export does not hold it up.
 func (s *HNSWEmbeddingStore) LastExport() (at time.Time, took time.Duration) {
-	s.exportMu.Lock()
-	defer s.exportMu.Unlock()
-	return s.lastExportAt, s.lastExportDur
+	ns := s.lastExportAt.Load()
+	if ns == 0 {
+		return time.Time{}, 0
+	}
+	return time.Unix(0, ns), time.Duration(s.lastExportDur.Load())
 }
 
 // pendingExport is one entity type's serialized-but-uncommitted snapshot.
@@ -500,41 +531,32 @@ type pendingExport struct {
 	binPath    string
 	metaTmp    string
 	metaPath   string
-	f          *os.File // open .bin.tmp, written and flushed but not yet synced
+	binBytes   []byte
 	metaBytes  []byte
 	graphCount int
 }
 
-// abortPending closes and removes every temp file of an export that failed
-// before its commit renames.
+// abortPending removes every temp file of an export that failed before its
+// commit renames.
 func abortPending(pending []*pendingExport) {
 	for _, p := range pending {
-		if p.f != nil {
-			p.f.Close()
-			p.f = nil
-		}
 		os.Remove(p.binTmp)
 		os.Remove(p.metaTmp)
 	}
 }
 
-// serializeSnapshot is the only part of an export that holds s.mu: it writes
-// every graph through a 1 MiB buffer to its .bin.tmp and marshals the metadata
-// into memory, under one RLock so they describe the same instant. Fsync, rename
-// and the sidecars happen after the lock is released.
-func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingExport, err error) {
+// serializeSnapshot is the only part of an export that holds s.mu: it encodes
+// every graph and marshals every metadata map into memory, under one RLock so
+// they describe the same instant. No file is touched under the lock (review
+// m3): the temp files, fsyncs and renames happen after it is released, so a
+// slow disk never stalls Upsert, Delete or FindSimilar.
+func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) ([]*pendingExport, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if !s.complete {
 		return nil, ErrHNSWIncomplete
 	}
-	defer func() {
-		if err != nil {
-			abortPending(pending)
-			pending = nil
-		}
-	}()
-
+	pending := make([]*pendingExport, 0, len(s.graphs))
 	for entityType, g := range s.graphs {
 		p := &pendingExport{
 			entityType: entityType,
@@ -545,34 +567,41 @@ func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingEx
 		p.binTmp = p.binPath + ".tmp"
 		p.metaTmp = p.metaPath + ".tmp"
 
-		f, cerr := os.Create(p.binTmp)
-		if cerr != nil {
-			return pending, fmt.Errorf("hnsw export: create %s: %w", p.binTmp, cerr)
+		// coder/hnsw's Export issues many tiny writes per node; a bytes.Buffer
+		// absorbs them in memory.
+		var buf bytes.Buffer
+		if err := g.Export(&buf); err != nil {
+			return nil, fmt.Errorf("hnsw export: encode graph %s: %w", entityType, err)
 		}
-		p.f = f
-		pending = append(pending, p)
-
-		// coder/hnsw's Export issues many tiny writes per node (about 92 syscalls
-		// each on an unbuffered *os.File), which dominated the export time.
-		bw := bufio.NewWriterSize(f, 1<<20)
-		if werr := g.Export(bw); werr != nil {
-			return pending, fmt.Errorf("hnsw export: write graph %s: %w", entityType, werr)
-		}
-		if ferr := bw.Flush(); ferr != nil {
-			return pending, fmt.Errorf("hnsw export: write graph %s: %w", entityType, ferr)
-		}
+		p.binBytes = buf.Bytes()
 
 		m := s.meta[entityType]
 		if m == nil {
 			m = map[string]map[string]string{}
 		}
-		b, merr := json.Marshal(m)
-		if merr != nil {
-			return pending, fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, merr)
+		b, err := json.Marshal(m)
+		if err != nil {
+			return nil, fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, err)
 		}
 		p.metaBytes = b
+		pending = append(pending, p)
 	}
 	return pending, nil
+}
+
+// syncDir fsyncs a directory so the renames into it are durable. Best-effort:
+// the files are already in place, and a failure leaves at worst the previous
+// snapshot after a crash.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		hnswLog.Warn("hnsw export: open %s for fsync: %v", dir, err)
+		return
+	}
+	if err := d.Sync(); err != nil {
+		hnswLog.Warn("hnsw export: fsync %s: %v", dir, err)
+	}
+	d.Close()
 }
 
 // writeFileSynced writes data to path and fsyncs it before closing.
@@ -649,19 +678,13 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	// file at a final path, and a previously committed good snapshot is never
 	// clobbered by a failed export attempt.
 	for _, p := range pending {
+		if err := writeFileSynced(p.binTmp, p.binBytes); err != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: write graph %s: %w", p.entityType, err)
+		}
 		if err := writeFileSynced(p.metaTmp, p.metaBytes); err != nil {
 			abortPending(pending)
 			return 0, fmt.Errorf("hnsw export: write meta %s: %w", p.entityType, err)
-		}
-		if err := p.f.Sync(); err != nil {
-			abortPending(pending)
-			return 0, fmt.Errorf("hnsw export: sync graph %s: %w", p.entityType, err)
-		}
-		cerr := p.f.Close()
-		p.f = nil
-		if cerr != nil {
-			abortPending(pending)
-			return 0, fmt.Errorf("hnsw export: close graph %s: %w", p.entityType, cerr)
 		}
 	}
 
@@ -684,6 +707,7 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 			return 0, fmt.Errorf("hnsw export: rename meta %s: %w", p.entityType, err)
 		}
 	}
+	syncDir(dir)
 
 	// Truth sidecars. Written last and best-effort: a missing sidecar makes the
 	// next import discard this snapshot (safe), whereas failing the whole export
@@ -718,10 +742,13 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 		}
 	}
 
+	syncDir(dir)
 	took := time.Since(start)
-	s.exportedGen = gen
-	s.lastExportAt = time.Now()
-	s.lastExportDur = took
+	s.mu.Lock()
+	s.exportedGen, s.exportedValid = gen, true
+	s.mu.Unlock()
+	s.lastExportDur.Store(int64(took))
+	s.lastExportAt.Store(time.Now().UnixNano())
 	hnswLog.Info("hnsw: snapshot exported to %s: %d entity type(s) in %s", dir, len(pending), took)
 	return took, nil
 }
@@ -795,13 +822,17 @@ func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[st
 }
 
 // installSnapshot swaps in decoded graphs/meta, bumps gen, and sets the
-// completeness flag, all under one write lock.
+// completeness flag, all under one write lock. A complete install came from a
+// snapshot on disk that describes it exactly, so that gen is the export
+// baseline and the first ExportIfDirty after boot does not rewrite the same
+// snapshot.
 func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete bool) {
 	s.mu.Lock()
 	s.graphs = graphs
 	s.meta = meta
 	s.gen++
 	s.complete = complete
+	s.exportedGen, s.exportedValid = s.gen, complete
 	s.mu.Unlock()
 }
 
