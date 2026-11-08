@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.2
+// version: 1.35.3
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package logger
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 267
-	slogRatchetCallCeiling = 1467
+	slogRatchetFileCeiling = 266
+	slogRatchetCallCeiling = 1452
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -63,7 +63,7 @@ var slogRatchet = map[string]int{
 	"internal/database/ai_scan_store.go":                         1,
 	"internal/database/author_bookref.go":                        1,
 	"internal/database/duration_sanity.go":                       1,
-	"internal/database/hnsw_embedding_store.go":                  10,
+	"internal/database/hnsw_embedding_store.go":                  3,
 	"internal/database/junction_bookid.go":                       1,
 	"internal/database/live_series_ref.go":                       2,
 	"internal/database/memdb_pending.go":                         5,
@@ -170,7 +170,7 @@ var slogRatchet = map[string]int{
 	"internal/openlibrary/downloader.go":                         2,
 	"internal/openlibrary/store.go":                              4,
 	"internal/operations/registry/activity_mirror.go":            1,
-	"internal/operations/registry/register.go":                   2,
+	"internal/operations/registry/register.go":                   1,
 	"internal/operations/registry/reporter_db.go":                9,
 	"internal/operations/registry/subprocess.go":                 3,
 	"internal/organizer/apply_failure.go":                        8,
@@ -268,7 +268,7 @@ var slogRatchet = map[string]int{
 	"internal/server/series_rename_ops.go":                       1,
 	"internal/server/server.go":                                  18,
 	"internal/server/server_helpers.go":                          3,
-	"internal/server/server_lifecycle.go":                        41,
+	"internal/server/server_lifecycle.go":                        35,
 	"internal/server/server_maintenance_deps.go":                 8,
 	"internal/server/server_search.go":                           13,
 	"internal/server/version_lifecycle.go":                       1,
@@ -277,7 +277,6 @@ var slogRatchet = map[string]int{
 	"internal/sweep/sweeper.go":                                  3,
 	"internal/sweep/temp_cleanup.go":                             1,
 	"internal/tagger/safe_write.go":                              2,
-	"internal/telemetry/telemetry.go":                            1,
 	"internal/tools/embed_queue.go":                              2,
 	"internal/tools/ollama_daemon.go":                            6,
 	"internal/transcode/transcode.go":                            6,
