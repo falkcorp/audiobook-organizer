@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -405,5 +406,61 @@ func TestScanLimitErrorAndStop(t *testing.T) {
 				t.Errorf("a consumer that broke after one pair saw %d", n)
 			}
 		})
+	}
+}
+
+// valueFails is a scanCursor over keys whose value read fails at bad: Value
+// returns nil and Err reports the failure, as *Iterator does when Pebble's
+// ValueAndErr fails (a blob file read, for one).
+type valueFails struct {
+	keys []string
+	bad  string
+	i    int
+	err  error
+}
+
+var errMadHatter = errors.New("mad hatter: blob read failed")
+
+func (c *valueFails) First() bool { c.i = 0; return len(c.keys) > 0 }
+func (c *valueFails) Last() bool  { c.i = len(c.keys) - 1; return len(c.keys) > 0 }
+func (c *valueFails) Next() bool  { c.i++; return c.i < len(c.keys) }
+func (c *valueFails) Prev() bool  { c.i--; return c.i >= 0 }
+func (c *valueFails) Key() []byte { return []byte(c.keys[c.i]) }
+func (c *valueFails) Value() []byte {
+	if c.keys[c.i] == c.bad {
+		c.err = errMadHatter
+		return nil
+	}
+	return []byte("value of " + c.keys[c.i])
+}
+func (c *valueFails) Err() error   { return c.err }
+func (c *valueFails) Close() error { return nil }
+
+// TestScanValueErrorYieldsNoNilValue (review MINOR-2): when a value read
+// fails mid-scan, the scan yields the error, once, and never the key with a
+// nil value that looks like a real (empty) row.
+func TestScanValueErrorYieldsNoNilValue(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		var kvs []KV
+		var errs []error
+		cur := &valueFails{keys: []string{"alfred", "bane", "catwoman"}, bad: "bane"}
+		yieldScan(cur, ScanOptions{Reverse: reverse}, slog.New(slog.DiscardHandler), func(kv KV, err error) bool {
+			if err != nil {
+				errs = append(errs, err)
+				return true
+			}
+			kvs = append(kvs, kv.Clone())
+			return true
+		})
+		want := "alfred"
+		if reverse {
+			want = "catwoman"
+		}
+		if len(kvs) != 1 || string(kvs[0].Key) != want || kvs[0].Value == nil {
+			t.Errorf("reverse=%v: pairs = %v, want only %s with its value", reverse, kvs, want)
+		}
+		if len(errs) != 1 || !errors.Is(errs[0], errMadHatter) {
+			t.Errorf("reverse=%v: errors = %v, want the value read's error once", reverse, errs)
+		}
 	}
 }
