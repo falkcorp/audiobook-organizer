@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.9
+// version: 4.66.10
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -210,11 +210,15 @@ func (s *Server) flushDeferredActivity() {
 // a write already in flight, and refuses any later write with an error
 // wrapping pebble.ErrClosed that Service.writeDeferred logs with a lost-entry
 // count, not a process panic (internal/database/pebble_gate.go).
-func (s *Server) closeActivityStore() {
+//
+// The wait is deferredActivityFlushBudget, clamped to stop's deadline (with
+// a reserve for the steps after it) when stop carries one: StopHook passes
+// the kernel's shutdown context, releaseUnstarted a background one.
+func (s *Server) closeActivityStore(stop context.Context) {
 	if s.activityService == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), deferredActivityFlushBudget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(stop), budgeted(stop, deferredActivityFlushBudget, 2*time.Second))
 	defer cancel()
 	if err := s.activityService.Close(ctx); err != nil {
 		lifecycleLog.Warn("activity log store not closed: %v", err)
@@ -261,7 +265,7 @@ func (s *Server) releaseUnstarted() {
 	case <-time.After(releaseUnstartedWait):
 	}
 	s.releaseSearchAndAuthority()
-	s.closeActivityStore()
+	s.closeActivityStore(context.Background())
 }
 
 // startupStepsFor stores the runner Start uses for its steps, creating one
@@ -804,11 +808,44 @@ func budgeted(ctx context.Context, d, reserve time.Duration) time.Duration {
 	return min(d, left)
 }
 
+// stopWithin runs one stop step whose API takes no deadline in its own
+// goroutine and waits for it at most budgeted(ctx, d, reserve), so the step
+// cannot hold StopHook past the kernel's shutdown budget. A step still
+// running then is left running, and StopHook goes on. That is safe for the
+// stores: every store StopHook closes after it (activity, embedding, AI scan)
+// shares the main store's GatedDB and closes as a no-op, and the main store's
+// Close (cmd, after Run) drains in-flight access, refuses later access with
+// an error wrapping pebble.ErrClosed, and leaves the engine open with the WAL
+// synced if an access outlives the drain (pebble_gate.go). It reports whether
+// the step finished.
+func stopWithin(ctx context.Context, d, reserve time.Duration, step string, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	wait := budgeted(ctx, d, reserve)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		lifecycleLog.Warn("Stop step %q still running after %s; going on with the shutdown", step, wait)
+		return false
+	}
+}
+
 // StopHook is books' stop hook: HEAD's shutdown after the HTTP drain, in
 // HEAD's order. ctx carries the kernel's shutdown deadline (06 §6.5.2,
-// 05-health §5H.4); every bounded wait is clamped to it (budgeted), and the
-// steps whose APIs take no deadline (the file I/O pool, the plugin and
-// container stops) run in order regardless. It closes Stopped on return.
+// 05-health §5H.4), and every wait is clamped to it with a reserve for the
+// steps after it (budgeted): a step that takes a context gets one that ends
+// at its share, and a step whose API takes none (the background goroutines,
+// the file I/O pool, the container's Stoppers, the scheduler's tasks) runs
+// under stopWithin, which leaves it running at its share. The reserves never
+// increase down the order and the last is zero. Only the flight recorder's
+// own 5s cap and the plugins' Shutdown(ctx) are not clamped here. It closes
+// Stopped on return.
 func (s *Server) StopHook(ctx context.Context) error {
 	defer s.markStopped()
 
@@ -868,10 +905,12 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// out) is only in memory; record it so the reconciler repairs it next boot.
 	s.markPendingIndexDirty()
 
-	// Stop the file I/O pool — waits for in-flight jobs to finish
+	// Stop the file I/O pool: waits for in-flight jobs to finish (the pool's
+	// own cap is 30s), within the budget. A job left running when the process
+	// exits is re-queued at the next boot (RecoverInterruptedFileOps).
 	if p := s.fileIOPool; p != nil {
 		slog.Info("Waiting for file I/O operations to complete...")
-		p.Stop()
+		stopWithin(ctx, 30*time.Second, 4*time.Second, "file I/O pool", func() { p.Stop() })
 	}
 
 	// Shut down the iTunes service (no-op in PR 1 since NewDisabled is
@@ -897,18 +936,27 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// SERVER-LIFECYCLE-FLIP: drive remaining Stoppers via the container, in
 	// reverse resolved order (the search index, the activity writer, the
 	// update scheduler, the ops registry, ...). Container.Stop is idempotent
-	// on services already stopped above.
-	if s.container != nil {
-		if err := s.container.Stop(context.WithoutCancel(ctx)); err != nil {
-			slog.Warn("container stop", "err", err)
-		}
+	// on services already stopped above. The Stoppers that take a context get
+	// one ending at the container's share; the activity Writer, the dedup
+	// engine and the search index's close do not read it, so the whole stop
+	// also runs under stopWithin.
+	if c := s.container; c != nil {
+		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), budgeted(ctx, 30*time.Second, 3*time.Second))
+		stopWithin(ctx, 30*time.Second, 3*time.Second, "container", func() {
+			if err := c.Stop(cctx); err != nil {
+				slog.Warn("container stop", "err", err)
+			}
+		})
+		ccancel()
 	}
 
 	// Close the activity log store, after writing anything still queued by
 	// RecordDeferred (a stop that lands right after boot would otherwise lose
-	// the startup entry). Container.Stop above has already stopped the
-	// activity Writer, so the deferred flush is the only writer left.
-	s.closeActivityStore()
+	// the startup entry). Container.Stop above has normally stopped the
+	// activity Writer, so the deferred flush is the only writer left; when it
+	// was left running, the store's close is a no-op over the main GatedDB
+	// anyway (closeActivityStore).
+	s.closeActivityStore(ctx)
 
 	// Stop every file watcher (one per import path). The supervisor goroutine
 	// has already returned via shutdown; this only tears down the live
@@ -929,10 +977,14 @@ func (s *Server) StopHook(ctx context.Context) error {
 	if s.embedQueue != nil {
 		s.embedQueue.Stop()
 	}
+	// StopWhenIdle SIGKILLs the daemon when its context ends, so a context
+	// ending at this step's share bounds it (its own fallback is 10s).
 	if s.ollamaDaemon != nil {
-		if err := s.ollamaDaemon.StopWhenIdle(context.WithoutCancel(ctx)); err != nil {
+		octx, ocancel := context.WithTimeout(context.WithoutCancel(ctx), budgeted(ctx, 10*time.Second, time.Second))
+		if err := s.ollamaDaemon.StopWhenIdle(octx); err != nil {
 			slog.Warn("ollama: stop failed", "err", err)
 		}
+		ocancel()
 	}
 
 	// Close embedding store
@@ -956,8 +1008,8 @@ func (s *Server) StopHook(ctx context.Context) error {
 
 	// The scheduler, ticker, snapshotter, watcher and session goroutines
 	// returned on shutdown (closed before the drain); wait for any task the
-	// scheduler was still running.
-	s.life.backgroundWG.Wait()
+	// scheduler was still running, with what is left of the budget.
+	stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() })
 	slog.Info("Server exited")
 	return nil
 }
