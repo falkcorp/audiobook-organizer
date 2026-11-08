@@ -1,5 +1,5 @@
 // file: internal/books/logging.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: bed10864-095d-4c93-8263-f11300b314b9
 // last-edited: 2026-11-08
 
@@ -31,7 +31,7 @@ const activityTapQueue = 4096
 // the spec's default, logs/<app-id>.log (05-logging section 8). HEAD wrote
 // logs/audiobook-organizer-<date>.log in the working directory, never rotated;
 // that path is not reproduced.
-const logFilePath = "logs/" + appID + ".log"
+const logFilePath = "logs/" + AppID + ".log"
 
 // logSettings is ABO's core.log section for release R1, which has no config
 // layer to read it from (04 section 8.1): the defaults, with the level from

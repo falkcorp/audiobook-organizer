@@ -1,5 +1,5 @@
 // file: internal/server/csp.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 95fa1ac8-51ae-43a4-8c85-5055eef7c9dd
 // last-edited: 2026-11-08
 
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"html"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"strings"
@@ -198,6 +199,25 @@ func buildIDFromIndex(indexHTML []byte) string {
 		v = m[2]
 	}
 	return strings.TrimSpace(html.UnescapeString(string(v)))
+}
+
+// embeddedIndexPath is where the build puts the bundle's entry page inside the
+// embedded filesystem (web/dist, `//go:embed web/dist`).
+const embeddedIndexPath = "web/dist/index.html"
+
+// BuildIDFromFS returns the UI build ID of the bundle fsys embeds: the
+// mediacore-build meta tag of web/dist/index.html, read by the same parse
+// the running server uses for X-App-Build (buildIDFromIndex). It returns ""
+// when there is no bundle (an API-only build embeds an empty filesystem) or
+// the page has no tag; the server's stage 5 sends "dev" for "", and
+// --version-json prints "dev" for it too (07 §7.6.3, 09 §9.4 R1). It needs
+// no store and no config, so a fast exit can call it.
+func BuildIDFromFS(fsys fs.FS) string {
+	index, err := fs.ReadFile(fsys, embeddedIndexPath)
+	if err != nil {
+		return ""
+	}
+	return buildIDFromIndex(index)
 }
 
 // LegacyPerimeter returns the legacy mount's stage 5 values (05-http-api
