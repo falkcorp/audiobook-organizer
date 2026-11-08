@@ -1,7 +1,7 @@
 // file: core/storage/helpers_test.go
 // version: 1.0.2
 // guid: 56109ea6-e975-416a-9681-1f2102068005
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -54,7 +54,7 @@ func newEnvFS(t *testing.T, fs vfs.FS, owners ...OwnerSpec) *env {
 	e := &env{t: t, fs: fs, path: path}
 	e.opts = OpenOptions{
 		Path: path, Owners: owners, Build: "batcomputer-1",
-		fs:        fs,
+		FS:        FS{fs: fs},
 		freeSpace: func(string) (uint64, error) { return 1 << 50, nil },
 	}
 	return e

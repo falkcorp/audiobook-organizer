@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -556,6 +558,20 @@ func TestHarness_InSynctestBubble(t *testing.T) {
 		}
 		AssertRoutesHavePermissions(t, h2)
 	})
+}
+
+// TestHarness_StorageInMemory (06 §6.4.8): a harness's store is in-memory
+// Pebble, so a boot whose module writes its keyspace leaves no store under
+// the harness's state directory.
+func TestHarness_StorageInMemory(t *testing.T) {
+	h := New(t, WithModules(hello.New()))
+	var g hello.Greeting
+	if status := h.Anonymous().GetJSON(t, "/api/hello/v1/greeting?name=Selina", &g); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(h.stateDir, "storage")); !os.IsNotExist(err) {
+		t.Fatalf("the harness left a store on disk under its state directory: %v", err)
+	}
 }
 
 // TestHarness_NoProcessGlobals is I2 over what a boot could leave behind in

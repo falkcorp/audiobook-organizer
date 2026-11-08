@@ -976,6 +976,13 @@ type Options struct {
 	// Logger overrides the default slog handler construction (tests); nil = from config.
 	Logger *slog.Logger
 
+	// StorageFS is the filesystem core storage opens the store on; the zero
+	// value is the OS's. Tests only: coretest's harness passes storage.MemFS()
+	// (in-memory Pebble, §6.4.8), so a harness boot leaves no store on disk.
+	// storage.FS keeps Pebble's vfs inside core/storage. A store on any other
+	// filesystem is not durable.
+	StorageFS storage.FS
+
 	// Updater configures core/updater (release source, asset naming; 05-updater).
 	// nil = the app ships no updater (e.g. a container-only app).
 	Updater *updater.Options
@@ -1023,11 +1030,12 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 // returns nil.
 func (a *App) Run(ctx context.Context) error
 
-// Close releases what New built, for an App that is never Run (coretest's
+// Close releases what New built, for an App that never Ran (coretest's
 // harness, §6.4.8, and a command that only boots): core services' internal
 // goroutines, storage and logging, in reverse order, within the default
-// shutdown budget. Once Run has started, Run owns the shutdown and Close does
-// nothing; a Run after Close fails, and a second Close does nothing.
+// shutdown budget. It is a no-op once Run has started: Run owns the shutdown.
+// Run after Close returns the kernel's errRunTwice ("Run called more than
+// once, or after Close"), and a second Close does nothing.
 func (a *App) Close(ctx context.Context) error
 
 // R1Values is the release-R1-only value Options.R1Values returns; 05-config
@@ -1370,9 +1378,10 @@ are gone with `DependsOn` (SIMP-22).
 ```go
 package coretest
 
-// Harness is an in-process App: in-memory Pebble (vfs.NewMem), a temp
-// state directory (Options.StateDir), no listeners; requests go straight to
-// App.Handler().
+// Harness is an in-process App: in-memory Pebble (vfs.NewMem, through
+// Options.StorageFS = storage.MemFS()), a temp state directory
+// (Options.StateDir), no listeners; requests go straight to App.Handler().
+// New registers App.Close with t.Cleanup.
 type Harness struct{ /* unexported */ }
 
 // New boots core with the given options. With no WithModules option it boots

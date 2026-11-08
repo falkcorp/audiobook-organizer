@@ -92,6 +92,7 @@ func (k *Kernel) openStorage(ctx context.Context) error {
 	}
 	o, err := storage.Open(ctx, storage.OpenOptions{
 		Path:        k.cfg.StoragePath,
+		FS:          k.cfg.StorageFS,
 		Owners:      owners,
 		Build:       build,
 		Logger:      k.coreLog("storage"),
