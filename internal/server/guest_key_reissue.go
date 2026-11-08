@@ -1,5 +1,5 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
 // last-edited: 2026-11-07
 
@@ -109,7 +109,7 @@ func (s *Server) guestKeyDeploymentBlocked() string {
 // guestKeyUserBlocked returns why u cannot be issued a key, or "": the account
 // must be active and its email verified. trustedEmailSource is unexported, so
 // the exported check is the store's verified-email lookup naming this same user.
-func guestKeyUserBlocked(store database.Store, u *database.User) string {
+func guestKeyUserBlocked(store database.UserReader, u *database.User) string {
 	if u == nil || u.Status != "active" {
 		return "the account is not active"
 	}
@@ -158,7 +158,7 @@ func (s *Server) checkGuestKeyIssue(userID string) (*database.User, *database.Gu
 // guestKeyRowBlocked is the per-row reason the panel disables its button, "" when
 // the click would be accepted. deployment is guestKeyDeploymentBlocked's answer,
 // computed once per list. rec is nil for a user with no record.
-func guestKeyRowBlocked(store database.Store, deployment string, u *database.User, rec *database.GuestServiceToken) string {
+func guestKeyRowBlocked(store database.UserReader, deployment string, u *database.User, rec *database.GuestServiceToken) string {
 	if rec != nil && guestTokenInFlight(rec.Status) {
 		return guestKeyStuckHint
 	}
