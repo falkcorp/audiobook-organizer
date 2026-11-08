@@ -179,15 +179,19 @@ type dmRecord struct {
 }
 
 // Relative keys of storage's own keyspace c/storage/ (notation §5S.3.3).
-func installKey() []byte              { return keys.Join(keys.Str("install")) }
-func epochKey() []byte                { return keys.Join(keys.Str("epoch")) }
-func levelPrefix() []byte             { return keys.Join(keys.Str("level")) }
-func levelKey(o Owner) []byte         { return keys.Join(keys.Str("level"), keys.Str(string(o))) }
-func versionKey(o Owner) []byte       { return keys.Join(keys.Str("ks"), keys.Str(string(o)), keys.Str("version")) }
-func appliedPrefix(o Owner) []byte    { return keys.Join(keys.Str("ks"), keys.Str(string(o)), keys.Str("applied")) }
-func claimsPrefix() []byte            { return keys.Join(keys.Str("claims")) }
-func claimsKey(o Owner) []byte        { return keys.Join(keys.Str("claims"), keys.Str(string(o))) }
-func dmKey(id string) []byte          { return keys.Join(keys.Str("dm"), keys.Str(id)) }
+func installKey() []byte      { return keys.Join(keys.Str("install")) }
+func epochKey() []byte        { return keys.Join(keys.Str("epoch")) }
+func levelPrefix() []byte     { return keys.Join(keys.Str("level")) }
+func levelKey(o Owner) []byte { return keys.Join(keys.Str("level"), keys.Str(string(o))) }
+func versionKey(o Owner) []byte {
+	return keys.Join(keys.Str("ks"), keys.Str(string(o)), keys.Str("version"))
+}
+func appliedPrefix(o Owner) []byte {
+	return keys.Join(keys.Str("ks"), keys.Str(string(o)), keys.Str("applied"))
+}
+func claimsPrefix() []byte     { return keys.Join(keys.Str("claims")) }
+func claimsKey(o Owner) []byte { return keys.Join(keys.Str("claims"), keys.Str(string(o))) }
+func dmKey(id string) []byte   { return keys.Join(keys.Str("dm"), keys.Str(id)) }
 func appliedKey(o Owner, v int) []byte {
 	return keys.Join(keys.Str("ks"), keys.Str(string(o)), keys.Str("applied"), keys.U64(uint64(v)))
 }
