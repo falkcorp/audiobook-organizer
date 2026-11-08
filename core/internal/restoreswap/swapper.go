@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-08
 
@@ -300,8 +300,11 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 
 // rejection is step a's one rule for every kind (05-backup §5B.3.4 a;
 // SEC7-5): an intent past its expires_at, with none, or staged by another
-// binary is rejected. It reads only pending.json: once the in-flight file
-// exists no journal is rejected by it.
+// binary is rejected, and so is one whose targets Stage would have refused
+// (restorejournal.ValidateTargets, R1-21 review m4, m5: a stager that wrote
+// the slot without Stage never moves restore/ or a swap's undo). It reads
+// only pending.json: once the in-flight file exists no journal is rejected
+// by it.
 func (s *Swapper) rejection(in restorejournal.Intent) string {
 	switch {
 	case in.ExpiresAt.IsZero():
@@ -310,6 +313,9 @@ func (s *Swapper) rejection(in restorejournal.Intent) string {
 		return fmt.Sprintf("the intent expired at %s", in.ExpiresAt.UTC().Format(time.RFC3339))
 	case in.StagedByBuild != s.o.BuildID:
 		return fmt.Sprintf("the intent was staged by binary %q, not this one", in.StagedByBuild)
+	}
+	if err := restorejournal.ValidateTargets(s.o.StateDir, in, s.legacySuffixes()); err != nil {
+		return err.Error()
 	}
 	return ""
 }

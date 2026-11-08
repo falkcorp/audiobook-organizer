@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restorejournal
 
@@ -44,14 +44,20 @@ func JournalDir(stateDir, id string) string { return filepath.Join(Dir(stateDir)
 // CreateIntent is CreateIntentFS over vfs.Default; tests and the crash
 // matrix stage through an in-memory fs with the same code.
 //
-// Order: the in-flight probe (ErrSwapPending while any swap is in flight),
-// a temp file written and fsynced, link(2) to pending.json (EEXIST →
-// ErrSwapPending, the temp removed), the temp removed, the directory
-// fsynced. link(2) is the exclusion between writers, across processes, with
-// no mutex: two creates race on one name and exactly one wins. The probe and
-// the link are two steps, so a P0a that renames pending.json to
-// inflight.json between them is not seen: stage only after P0a or with the
-// service stopped (CreateIntent).
+// Order: restore/ created and synced into the state directory, the
+// in-flight probe (ErrSwapPending while any swap is in flight), a temp file
+// written and fsynced, link(2) to pending.json (EEXIST → ErrSwapPending, the
+// temp removed), the temp removed, the directory fsynced. link(2) is the
+// exclusion between writers, across processes, with no mutex: two creates
+// race on one name and exactly one wins. The probe and the link are two
+// steps, so a P0a that renames pending.json to inflight.json between them is
+// not seen: stage only after P0a or with the service stopped (CreateIntent).
+//
+// Once the link succeeded the result says what P0a will find (R1-21 review
+// m1): a directory fsync that fails then is undone (pending.json taken back
+// and the directory synced) and reported; when the take-back cannot be made
+// durable either, the intent is put back and the result wraps
+// ErrIntentUnsynced: it is staged, and a crash may still lose it.
 func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return fmt.Errorf("restorejournal: state directory %q is not an absolute path", stateDir)
@@ -60,8 +66,8 @@ func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 		return fmt.Errorf("restorejournal: intent id %q is not one path segment", in.ID)
 	}
 	dir := Dir(stateDir)
-	if err := fs.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("restorejournal: create %s: %w", dir, err)
+	if err := mkdirSyncedFS(fs, dir); err != nil {
+		return err
 	}
 	if ids, err := InFlightIDs(fs, stateDir); err != nil {
 		return err
@@ -89,7 +95,69 @@ func CreateIntentFS(fs vfs.FS, stateDir string, in Intent) error {
 	// name that would not go away is a stray dot-file beside it, not a failed
 	// create, so it does not turn a created intent into an error the caller
 	// would retry.
-	return syncDirFS(fs, dir)
+	if err := syncDirFS(fs, dir); err != nil {
+		return takeBack(fs, dir, pending, err)
+	}
+	return nil
+}
+
+// ErrIntentUnsynced: CreateIntentFS linked the intent into the slot and
+// could neither make the link durable nor take it back durably, so the
+// intent stands, staged, and a crash may lose it (R1-21 review m1). A caller
+// reports the create as done, with a warning, never as failed: P0a applies
+// what the slot holds.
+var ErrIntentUnsynced = errors.New("restorejournal: the intent is staged but its directory was not synced")
+
+// takeBack undoes a linked intent whose directory fsync (cause) failed:
+// pending.json is renamed to a dot-name that no reader opens and the
+// directory is synced, so its absence is durable and the create fails with
+// cause; the dot-name is then removed. When that sync fails too the intent
+// is renamed back, so the slot holds what the result says (ErrIntentUnsynced).
+// A rename back that fails leaves the slot free with an error result; a
+// crash before any later sync may still bring the intent back, which three
+// failed operations in one directory can only report.
+func takeBack(fs vfs.FS, dir, pending string, cause error) error {
+	aside, err := tempName(dir)
+	if err != nil {
+		return errors.Join(ErrIntentUnsynced, cause, err)
+	}
+	if err := fs.Rename(pending, aside); err != nil {
+		return errors.Join(ErrIntentUnsynced, cause, fmt.Errorf("restorejournal: take back %s: %w", pending, err))
+	}
+	if err := syncDirFS(fs, dir); err != nil {
+		if rerr := fs.Rename(aside, pending); rerr != nil {
+			return errors.Join(cause, err, fmt.Errorf("restorejournal: put back %s (the slot is free; a crash may restore it): %w", pending, rerr))
+		}
+		return errors.Join(ErrIntentUnsynced, cause, err)
+	}
+	return errors.Join(cause, tempLeft(aside, fs.Remove(aside)))
+}
+
+// mkdirSyncedFS creates dir and its missing parents (0700) through fs and
+// fsyncs the parent of every directory it created, so restore/ is in the
+// state directory before an intent is linked into it (R1-21 review m2).
+func mkdirSyncedFS(fs vfs.FS, dir string) error {
+	var created []string
+	for d := filepath.Clean(dir); filepath.Dir(d) != d; d = filepath.Dir(d) {
+		if _, err := fs.Stat(d); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("restorejournal: stat %s: %w", d, err)
+		}
+		created = append(created, d)
+	}
+	if len(created) == 0 {
+		return nil
+	}
+	if err := fs.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("restorejournal: create %s: %w", dir, err)
+	}
+	for _, d := range created {
+		if err := syncDirFS(fs, filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // InFlightIDs lists the ids of every restore/<id>/inflight.json under
@@ -127,11 +195,10 @@ func InFlightIDs(fs vfs.FS, stateDir string) ([]string, error) {
 // writeTempFS writes b to a new temp file in dir through fs, fsynced and
 // closed; mode 0600 on the real filesystem (vfs.FS has no mode).
 func writeTempFS(fs vfs.FS, dir string, b []byte) (string, error) {
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		return "", fmt.Errorf("restorejournal: temp name: %w", err)
+	name, err := tempName(dir)
+	if err != nil {
+		return "", err
 	}
-	name := filepath.Join(dir, "."+pendingName+".tmp-"+hex.EncodeToString(suffix[:]))
 	f, err := fs.Create(name, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return "", fmt.Errorf("restorejournal: create temp intent: %w", err)
@@ -147,6 +214,16 @@ func writeTempFS(fs vfs.FS, dir string, b []byte) (string, error) {
 		return "", errors.Join(fmt.Errorf("restorejournal: write temp intent: %w", err), fs.Remove(name))
 	}
 	return name, nil
+}
+
+// tempName is a new dot-name for an intent file in dir: InFlightIDs and P0a
+// skip a name starting with a dot.
+func tempName(dir string) (string, error) {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("restorejournal: temp name: %w", err)
+	}
+	return filepath.Join(dir, "."+pendingName+".tmp-"+hex.EncodeToString(suffix[:])), nil
 }
 
 // syncDirFS fsyncs dir through fs so a create, link or remove in it is

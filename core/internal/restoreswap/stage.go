@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/stage.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f8808c55-579d-4ed5-81e1-2c5276a578b9
 // last-edited: 2026-11-08
 
@@ -24,9 +24,19 @@ import (
 // mutex), then the journal's staged record. A restore intent's Targets are
 // its placements ({From: staged item, To: live path}, decision D1) and every
 // From must exist; a KindReset intent's Targets are its set-aside pairs,
-// from the stager (R1-25's StageReset), each To its SetAsideDest, and its
-// Delete entries pass restorejournal.ValidateDelete (absolute, no kept path,
-// off the DB's filesystem); a restore deletes nothing.
+// from the stager (R1-25's StageReset), and its Delete entries pass
+// restorejournal.ValidateDelete (absolute, no kept path, off the DB's
+// filesystem); a restore deletes nothing. Both pass
+// restorejournal.ValidateTargets (ErrTargetsRefused: a placement at, or a
+// set-aside of, DBPath; no live path in or holding restore/, the state
+// directory or a swap's private directory; R1-21 review m4, m5).
+//
+// Once the create linked pending.json, Stage's result says what P0a will
+// do (R1-21 review m1): a create that could not sync the slot but left the
+// intent in it (restorejournal.ErrIntentUnsynced), and a staged record that
+// could not be written (P0a writes it, ensureStaged), are logged as
+// warnings and Stage succeeds. Only a create that left nothing in the slot
+// is reported as failed.
 //
 // Stage runs outside a boot (an offline command, or a request after P0a),
 // so its operations are not crash-matrix rows: a crash leaves the slot
@@ -56,16 +66,14 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 		if in.Reset != restorejournal.ResetStore && in.Reset != restorejournal.ResetFactory {
 			return fmt.Errorf("restoreswap: reset kind %q is neither store nor factory", in.Reset)
 		}
-		for _, t := range in.Targets {
-			if want := restorejournal.SetAsideDest(s.o.StateDir, in.DBPath, in.ID, t.From); filepath.Clean(t.To) != want {
-				return fmt.Errorf("restoreswap: reset target %s is set aside to %s, want %s (05-storage §5S.3.15's one rule)", t.From, t.To, want)
-			}
-		}
 		moves = in.Targets
 	case restorejournal.KindRewrite:
 		return fmt.Errorf("%w: M8 stages its own swap in process", ErrRewriteNotInThisBuild)
 	default:
 		return fmt.Errorf("restoreswap: unknown swap kind %q", in.Kind)
+	}
+	if err := restorejournal.ValidateTargets(s.o.StateDir, in, s.legacySuffixes()); err != nil {
+		return err
 	}
 	// S1: the early refusal; S4's create is the one that decides.
 	if ok, err := exists(s.fs, s.pendingPath()); err != nil {
@@ -95,13 +103,22 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 		if err := mkdirAllSynced(s.fs, dir); err != nil {
 			return err
 		}
-		if err := restorejournal.CreateIntentFS(s.fs, s.o.StateDir, in); err != nil {
+		if err := restorejournal.CreateIntentFS(s.fs, s.o.StateDir, in); errors.Is(err, restorejournal.ErrIntentUnsynced) {
+			s.o.Logger.Warn("restoreswap: intent staged, but the slot directory could not be synced; a crash may lose it",
+				"id", in.ID, "kind", string(in.Kind), "err", err)
+		} else if err != nil {
 			if rmErr := s.fs.RemoveAll(dir); rmErr != nil {
 				err = errors.Join(err, fmt.Errorf("restoreswap: remove %s: %w", dir, rmErr))
 			}
 			return err
 		}
-		// S5: a create without this record is completed by P0a.
-		return s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID})
+		// S5: a create without this record is completed by P0a
+		// (ensureStaged), so its failure does not make the staged intent a
+		// failed Stage.
+		if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}); err != nil {
+			s.o.Logger.Warn("restoreswap: intent staged; its staged record was not written and P0a writes it",
+				"id", in.ID, "kind", string(in.Kind), "err", err)
+		}
+		return nil
 	})
 }
