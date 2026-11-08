@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.7
+// version: 4.66.8
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -398,7 +398,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := ln.Shutdown(ctx); err != nil {
-		slog.Warn("HTTP server forced shutdown", "err", err)
+		lifecycleLog.Warn("HTTP server forced shutdown: %v", err)
 	}
 	// A listener that stopped serving is the run's failure (HEAD exited the
 	// process with status 1 there); the stop still runs first.
@@ -861,8 +861,8 @@ func (s *Server) StopHook(ctx context.Context) error {
 	case <-bgDone:
 		slog.Info("Background goroutines stopped")
 	case <-time.After(bgWait):
-		slog.Warn("Background goroutines did not stop in time — proceeding with shutdown anyway",
-			"waited", bgWait.String(), "still_running", s.bgWG.Running())
+		lifecycleLog.Warn("Background goroutines did not stop in %s (still running: %v) — proceeding with shutdown anyway",
+			bgWait, s.bgWG.Running())
 	}
 	// Whatever the index worker did not pop (wedged, or the wait above timed
 	// out) is only in memory; record it so the reconciler repairs it next boot.
@@ -1310,10 +1310,10 @@ func (l *R1Listener) Shutdown(ctx context.Context) error {
 		}
 	}
 	s.beforeDrain()
-	slog.Info("Stopping HTTP servers...")
+	lifecycleLog.Info("Stopping HTTP servers...")
 	if s.http3Server != nil {
 		if err := s.http3Server.Close(); err != nil {
-			slog.Warn("HTTP/3 server close error", "err", err)
+			lifecycleLog.Warn("HTTP/3 server close error: %v", err)
 		}
 	}
 	err := s.httpServer.Shutdown(ctx)
@@ -1394,11 +1394,11 @@ func (s *Server) exportHNSWSnapshot(why string) {
 	res, err := hnswStore.ExportIfDirty(s.hnswPersistDir, truthCount)
 	switch {
 	case errors.Is(err, database.ErrHNSWIncomplete):
-		slog.Info("hnsw: snapshot not written: the graph is still being built", "why", why)
+		lifecycleLog.Info("hnsw: snapshot not written (%s): the graph is still being built", why)
 	case err != nil:
-		slog.Error("hnsw: export failed", "why", why, "err", err)
+		lifecycleLog.Error("hnsw: export failed (%s): %v", why, err)
 	case res.Exported:
-		slog.Info("hnsw: snapshot saved", "why", why, "dir", s.hnswPersistDir, "took", res.Duration.String())
+		lifecycleLog.Info("hnsw: snapshot saved (%s) to %s in %s", why, s.hnswPersistDir, res.Duration)
 	}
 }
 
@@ -1423,9 +1423,8 @@ func (s *Server) stopHNSWSnapshot(ctx context.Context) {
 			if !at.IsZero() {
 				age = time.Since(at).Round(time.Second).String()
 			}
-			slog.Info("hnsw: stop-time snapshot skipped: not enough shutdown budget left",
-				"budget_left", left.Round(time.Millisecond).String(), "needed", (need + hnswStopExportMargin).String(),
-				"snapshot_age", age)
+			lifecycleLog.Info("hnsw: stop-time snapshot skipped: not enough shutdown budget left (left %s, needed %s, snapshot age %s)",
+				left.Round(time.Millisecond), need+hnswStopExportMargin, age)
 			return
 		}
 	}

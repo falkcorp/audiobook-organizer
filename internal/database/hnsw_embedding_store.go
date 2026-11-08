@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -61,6 +61,8 @@ import (
 	"time"
 
 	"github.com/coder/hnsw"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 const (
@@ -370,6 +372,9 @@ func metadataMatches(m, filter map[string]string) bool {
 	}
 	return true
 }
+
+// hnswLog logs the snapshot export and import.
+var hnswLog = logger.New("database")
 
 // ErrNoHNSWSnapshot is returned by Import when no snapshot files exist in dir.
 var ErrNoHNSWSnapshot = errors.New("hnsw: no snapshot found in directory")
@@ -686,24 +691,23 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 			continue
 		}
 		if tr.err != nil {
-			slog.Warn("hnsw export: truth count unavailable; snapshot will not be reusable",
-				"entity_type", p.entityType, "err", tr.err)
+			hnswLog.Warn("hnsw export: truth count for %s unavailable; snapshot will not be reusable: %v", p.entityType, tr.err)
 			continue
 		}
 		tb, merr := json.Marshal(snapshotTruth{TruthCount: tr.count, GraphCount: p.graphCount})
 		if merr != nil {
-			slog.Warn("hnsw export: marshal truth sidecar failed", "entity_type", p.entityType, "err", merr)
+			hnswLog.Warn("hnsw export: marshal truth sidecar for %s failed: %v", p.entityType, merr)
 			continue
 		}
 		tTmp := truthPath(dir, p.entityType) + ".tmp"
 		if werr := writeFileSynced(tTmp, tb); werr != nil {
 			os.Remove(tTmp)
-			slog.Warn("hnsw export: write truth sidecar failed", "entity_type", p.entityType, "err", werr)
+			hnswLog.Warn("hnsw export: write truth sidecar for %s failed: %v", p.entityType, werr)
 			continue
 		}
 		if rerr := os.Rename(tTmp, truthPath(dir, p.entityType)); rerr != nil {
 			os.Remove(tTmp)
-			slog.Warn("hnsw export: rename truth sidecar failed", "entity_type", p.entityType, "err", rerr)
+			hnswLog.Warn("hnsw export: rename truth sidecar for %s failed: %v", p.entityType, rerr)
 		}
 	}
 
@@ -711,7 +715,7 @@ func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType stri
 	s.exportedGen = gen
 	s.lastExportAt = time.Now()
 	s.lastExportDur = took
-	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(pending), "took", took)
+	hnswLog.Info("hnsw: snapshot exported to %s: %d entity type(s) in %s", dir, len(pending), took)
 	return took, nil
 }
 
@@ -809,7 +813,7 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 		return err
 	}
 	s.installSnapshot(graphs, meta, true)
-	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
+	hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 	return nil
 }
 
@@ -848,7 +852,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 	}
 	if truth == nil {
 		s.installSnapshot(graphs, meta, true)
-		slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
+		hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 		return nil
 	}
 
@@ -877,8 +881,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		// the warning that fired was a permanent fixture rather than a signal.
 		recorded, rerr := readSnapshotTruth(dir, entityType)
 		if rerr != nil {
-			slog.Warn("hnsw import: no usable truth sidecar; discarding snapshot (the next export will write one)",
-				"entity_type", entityType, "err", rerr)
+			hnswLog.Warn("hnsw import: no usable truth sidecar for %s; discarding snapshot (the next export will write one): %v", entityType, rerr)
 			stale = true
 			continue
 		}
@@ -894,7 +897,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		return nil
 	}
 	s.installSnapshot(graphs, meta, true)
-	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
+	hnswLog.Info("hnsw: snapshot imported from %s: %d entity type(s)", dir, n)
 	return nil
 }
 

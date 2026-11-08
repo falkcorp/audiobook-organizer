@@ -1,7 +1,7 @@
 // file: internal/server/bg_wg_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a2f7c41-9b6d-4e18-8c05-1d7a4e2b9f63
-// last-edited: 2026-08-30
+// last-edited: 2026-11-08
 
 package server
 
@@ -14,8 +14,8 @@ import (
 
 // TestNamedWaitGroupGoRegistersNameWhileRunning is the direct unit test for
 // the name registry that namedWaitGroup exists for. Its production consumer
-// is the 30s shutdown-grace log in Server.Shutdown
-// (server_lifecycle.go: "still_running", s.bgWG.Running()), which is not
+// is the shutdown-grace warning in Server.StopHook (server_lifecycle.go:
+// "did not stop in %s (still running: %v)", s.bgWG.Running()), which is not
 // itself exercised by any test — cache_warmers_bgwg_test.go only calls
 // Running() inside a t.Fatalf on timeout, so on the happy path it never
 // asserts that a name appears at all.

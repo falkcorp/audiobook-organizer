@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.9
+// version: 2.114.10
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -945,9 +945,11 @@ func NewServer(store database.Store) *Server {
 	// construction). An Override still gets the container's PostInit, Start
 	// and Stop, and the services that Need these names resolve them as before.
 	opHub := opsregistry.NewEventHub()
-	opRegistry, err := opsregistry.NewService(store, slog.Default(), opHub)
+	// A nil logger is slog.Default(), the logger HEAD's init() registration
+	// gave the registry.
+	opRegistry, err := opsregistry.NewService(store, nil, opHub)
 	if err != nil {
-		slog.Error("ops registry", "err", err)
+		lifecycleLog.Error("ops registry: %v", err)
 		os.Exit(1)
 	}
 	appUpdater := updater.NewService(appVersion)
