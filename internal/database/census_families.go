@@ -149,6 +149,14 @@ func (p *PebbleStore) censusFamilies(ctx context.Context, out *DBCensus) error {
 	if note := censusRangeDelNote(out.Families); note != "" {
 		out.Notes = append(out.Notes, note)
 	}
+	if p.db.onCore() {
+		es, err := p.db.coreEngineSample()
+		if err != nil {
+			return fmt.Errorf("census engine metrics: %w", err)
+		}
+		out.DiskSpaceUsage = uint64(es.DiskUsageBytes)
+		return nil
+	}
 	m, err := p.db.Metrics()
 	if err != nil {
 		return fmt.Errorf("census engine metrics: %w", err)
@@ -251,52 +259,46 @@ type censusSnap struct {
 // censusSnapshot reads the table set with properties, the per-range span
 // bytes, the range probe, and then the table set again.
 func (p *PebbleStore) censusSnapshot(ctx context.Context, ranges []keyRange) (*censusSnap, error) {
-	levels, err := p.db.SSTables(pebble.WithProperties())
+	all, err := p.db.tables(ctx, true, nil, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("db census: list sstables: %w", err)
 	}
 	snap := &censusSnap{tables: map[uint64]*censusTable{}, span: map[uint64]map[int]uint64{}, gone: map[uint64]bool{}}
-	for _, level := range levels {
-		for i := range level {
-			info := &level[i]
-			t := &censusTable{
-				smallest: append([]byte(nil), info.Smallest.UserKey...),
-				largest:  append([]byte(nil), info.Largest.UserKey...),
-				size:     info.Size,
-				virtual:  info.Virtual,
-			}
-			// For a virtual table Pebble already scales these to the
-			// table's share of its backing (GetScaledProperties).
-			if pr := info.Properties; pr == nil {
-				t.noProps = true
-			} else {
-				t.internal = float64(pr.NumEntries)
-				if pr.NumEntries > pr.NumDeletions {
-					t.entries = float64(pr.NumEntries - pr.NumDeletions)
-				}
-				t.deletions = float64(pr.NumDeletions)
-				t.rawKey = float64(pr.RawKeySize)
-				t.rawVal = float64(pr.RawValueSize)
-				t.rangeDels = pr.NumRangeDeletions > 0
-			}
-			snap.tables[uint64(info.FileNum)] = t
+	for _, info := range all {
+		t := &censusTable{
+			smallest: info.smallest,
+			largest:  info.largest,
+			size:     info.size,
+			virtual:  info.virtual,
 		}
+		// For a virtual table Pebble already scales these to the
+		// table's share of its backing (GetScaledProperties).
+		if !info.hasProps {
+			t.noProps = true
+		} else {
+			t.internal = float64(info.entries)
+			if info.entries > info.deletions {
+				t.entries = float64(info.entries - info.deletions)
+			}
+			t.deletions = float64(info.deletions)
+			t.rawKey = float64(info.rawKey)
+			t.rawVal = float64(info.rawVal)
+			t.rangeDels = info.rangeDels > 0
+		}
+		snap.tables[info.fileNum] = t
 	}
 
 	for ri, r := range ranges {
 		lo, hi := censusBounds(r)
-		got, err := p.db.SSTables(pebble.WithKeyRangeFilter(lo, hi), pebble.WithApproximateSpanBytes())
+		got, err := p.db.tables(ctx, false, lo, hi, true)
 		if err != nil {
 			return nil, fmt.Errorf("db census: sstables for %s: %w", r.Family, err)
 		}
-		for _, level := range got {
-			for i := range level {
-				fn := uint64(level[i].FileNum)
-				if snap.span[fn] == nil {
-					snap.span[fn] = map[int]uint64{}
-				}
-				snap.span[fn][ri] = level[i].ApproximateSpanBytes
+		for _, info := range got {
+			if snap.span[info.fileNum] == nil {
+				snap.span[info.fileNum] = map[int]uint64{}
 			}
+			snap.span[info.fileNum][ri] = info.span
 		}
 	}
 
@@ -322,15 +324,13 @@ func (p *PebbleStore) censusSnapshot(ctx context.Context, ranges []keyRange) (*c
 		}
 	}
 
-	after, err := p.db.SSTables()
+	after, err := p.db.tables(ctx, false, nil, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("db census: re-list sstables: %w", err)
 	}
 	still := map[uint64]bool{}
-	for _, level := range after {
-		for i := range level {
-			still[uint64(level[i].FileNum)] = true
-		}
+	for _, info := range after {
+		still[info.fileNum] = true
 	}
 	for fn := range snap.tables {
 		if !still[fn] {

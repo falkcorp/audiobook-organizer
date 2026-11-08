@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_list_index.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0a7e13-9c24-4b6f-8a51-3f7e2c9b40d8
-// last-edited: 2026-10-23
+// last-edited: 2026-11-08
 
 // The opchange_by_list: secondary index over the operation-change journal: the
 // carry rows of retired books into collections and playlists, filed by list.
@@ -38,12 +38,13 @@
 //
 // BACKFILL. A row written by a build that did not stage the entry (an earlier
 // build of this feature, or one that crashed between the row and its entry
-// before the two shared a batch) would be invisible to GetListChanges, so the
-// first open of a store runs one pass over the journal that stages every missing
-// entry (scanJournalAtOpen, pebble_store_journal_clock.go) and then writes its
-// own completion key, system:backfill:opchange_by_list_index_v1_done. The pass
-// is idempotent, logs its progress, and runs once; rows written afterwards keep
-// the invariant in their own batch.
+// before the two shared a batch) would be invisible to GetListChanges, so books'
+// Migration LegacyCap+2 runs one pass over the journal that stages every
+// missing entry (backfillOpChangeListIndexStep, booksspec.go) and its own
+// completion key, system:backfill:opchange_by_list_index_v1_done, in the
+// step's one batch. The pass is idempotent and runs once; rows written
+// afterwards keep the invariant in their own batch. Until release R1 the
+// store's first open ran it.
 
 package database
 

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.237.5
+// version: 1.238.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package database
 
@@ -209,6 +209,13 @@ type PebbleStore struct {
 	// journalClock stamps every CreatedAt and RevertedAt of the operation-change
 	// journal with a strictly increasing time (pebble_store_journal_clock.go).
 	journalClock journalClock
+	// journalClockRepair is set by a construction whose clock key was absent
+	// or malformed: the boot repairs persist the key (repairJournalClock).
+	journalClockRepair atomic.Bool
+	// identStampEmpty is set by a construction that found no identification
+	// marker on a store with no book and no cache row: the boot repairs stamp
+	// the empty index built (stampEmptyIdentIndex).
+	identStampEmpty atomic.Bool
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.

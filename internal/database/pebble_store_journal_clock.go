@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_journal_clock.go
-// version: 3.0.1
+// version: 3.1.0
 // guid: b81c4f26-7a39-4d0e-95c2-6e1f0a3d8b57
-// last-edited: 2026-10-23
+// last-edited: 2026-11-08
 
 // The journal clock: one strictly increasing sequence for every row the
 // operation-change journal writes or marks reverted.
@@ -50,16 +50,17 @@
 // most one window ahead of the last sequence. When the key is missing or
 // malformed (a journal written before the clock existed, or a damaged key; a
 // malformed key never stops the open) one scan of the journal finds the largest
-// stamp of any row and persists it. A store that has never held a journal row
-// starts at the wall clock.
+// stamp of any row. The constructor writes nothing (05-storage §5S.4 step 12):
+// the scan's result is held in memory, the first stamp persists a ceiling past
+// it, and books' boot repairs rewrite the key (repairJournalClock). A store
+// that has never held a journal row starts at the wall clock.
 //
-// BACKFILL OF THE LIST INDEX. The same scan stages the opchange_by_list: entry
-// of every user_content_follow row that lacks one (rows an earlier build wrote).
-// That backfill is gated on its OWN completion key, not on the clock key: a
+// BACKFILL OF THE LIST INDEX. The opchange_by_list: entry of every
+// user_content_follow row that lacks one (rows an earlier build wrote) is
+// staged by books' Migration LegacyCap+2 (backfillOpChangeListIndexStep,
+// booksspec.go), gated on its OWN completion key, not on the clock key: a
 // store whose clock key was written by a build that did not stage the entries
-// still gets its entries. The scan logs its progress every
-// journalScanLogEvery rows, since on a long-lived store it reads the whole
-// journal once.
+// still gets its entries. Until release R1 the open-time scan did both.
 
 package database
 
@@ -145,6 +146,30 @@ func (c *journalClock) seed(ceiling int64) {
 	c.reserved = max(c.reserved, ceiling)
 }
 
+// seedUnpersisted starts the clock at top, the largest stamp a journal scan
+// found, when no persisted ceiling covers it: the next stamp is past top and
+// persists a ceiling before it is handed out.
+func (c *journalClock) seedUnpersisted(top int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hw = max(c.hw, top)
+}
+
+// persistHigh persists the high-water mark as the ceiling, unless a ceiling at
+// or above it is persisted already.
+func (c *journalClock) persistHigh(persist func(ceiling int64) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reserved > 0 && c.reserved >= c.hw {
+		return nil
+	}
+	if err := persist(c.hw); err != nil {
+		return err
+	}
+	c.reserved = max(c.reserved, c.hw)
+	return nil
+}
+
 // high is the last sequence handed out (or the seed).
 func (c *journalClock) high() int64 {
 	c.mu.Lock()
@@ -223,9 +248,13 @@ const (
 	clockKeyMalformed
 )
 
-// seedJournalClock starts the clock at open (see OPEN) and runs the one-time
-// journal scan when the clock key is unusable or the list index was never
-// backfilled. With a good key and the backfill done it reads two keys.
+// seedJournalClock starts the clock at construction and writes nothing (a
+// books constructor commits no write, 05-storage §5S.4 step 12). A good clock
+// key seeds it. An absent or malformed key is recovered by one scan of the
+// journal for its largest stamp, held in memory only: nothing persisted is
+// at or above it yet, so the first stamp persists a ceiling past it, and the
+// key itself is rewritten by the boot repairs (repairJournalClock, books'
+// start hook, 06 §6.5.2 step 2). A crash before either write rescans.
 func (p *PebbleStore) seedJournalClock() error {
 	ceiling, state, err := p.readClockKey()
 	if err != nil {
@@ -233,40 +262,43 @@ func (p *PebbleStore) seedJournalClock() error {
 	}
 	if state == clockKeyOK {
 		p.journalClock.seed(ceiling)
-	}
-	backfilled := true
-	if _, closer, gerr := p.db.Get([]byte(opChangeByListBackfillKey)); gerr == nil {
-		closer.Close()
-	} else if errors.Is(gerr, pebble.ErrNotFound) {
-		backfilled = false
-	} else {
-		return fmt.Errorf("read %s: %w", opChangeByListBackfillKey, gerr)
-	}
-	if state == clockKeyOK && backfilled {
 		return nil
 	}
-	return p.scanJournalAtOpen(state, !backfilled)
+	top, rows, err := p.scanJournalTop()
+	if err != nil {
+		return err
+	}
+	p.journalClock.seedUnpersisted(top)
+	p.journalClockRepair.Store(rows > 0 || state == clockKeyMalformed)
+	return nil
 }
 
-// scanJournalAtOpen is the one-time pass over the journal: the largest stamp of
-// any row (when the clock key is unusable), and every opchange_by_list: entry a
-// user_content_follow row lacks (when the backfill was never done). It then
-// persists the result in one last batch: the clock key (state is not
-// clockKeyOK; skipped for a store with no rows), and the backfill-done key (when
-// stage). Idempotent: a second pass finds every entry. Progress is logged every
-// journalScanLogEvery rows.
-func (p *PebbleStore) scanJournalAtOpen(state clockKeyState, stage bool) error {
+// repairJournalClock persists the clock key the construction-time scan
+// recovered (HEAD wrote it at open): the high-water mark, unless a stamp has
+// persisted a ceiling since. A store without a journal row and with no key
+// gets none, as at HEAD.
+func (p *PebbleStore) repairJournalClock() error {
+	if !p.journalClockRepair.Load() {
+		return nil
+	}
+	if err := p.journalClock.persistHigh(p.persistJournalCeiling); err != nil {
+		return err
+	}
+	p.journalClockRepair.Store(false)
+	return nil
+}
+
+// scanJournalTop is the one-time read of the journal: the largest stamp of any
+// row and the number of rows read. Progress is logged every
+// journalScanLogEvery rows. A row that does not decode has no readable time,
+// and one corrupt row must not keep the store from opening: it is skipped
+// here (the readers that need it fail on it, as they always did).
+func (p *PebbleStore) scanJournalTop() (top int64, rows int, err error) {
 	started := time.Now()
-	// A row that does not decode has no readable time, and one corrupt row must
-	// not keep the store from opening: it is skipped here (the readers that
-	// need it fail on it, as they always did).
 	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: []byte(opChangeKeyPrefix), UpperBound: []byte("opchange;")})
 	if err != nil {
-		return fmt.Errorf("scan the journal at open: %w", err)
+		return 0, 0, fmt.Errorf("scan the journal at open: %w", err)
 	}
-	var top int64
-	rows := 0
-	var missing [][]byte
 	for iter.First(); iter.Valid(); iter.Next() {
 		var c journalScanRow
 		if json.Unmarshal(iter.Value(), &c) != nil {
@@ -274,75 +306,22 @@ func (p *PebbleStore) scanJournalAtOpen(state clockKeyState, stage bool) error {
 		}
 		rows++
 		if rows%journalScanLogEvery == 0 {
-			journalClockLog.Info("scanning the operation journal at open (one time): %d rows read, %d list index entries missing so far, %s elapsed", rows, len(missing), time.Since(started).Round(time.Millisecond))
+			journalClockLog.Info("scanning the operation journal at open (one time): %d rows read, %s elapsed", rows, time.Since(started).Round(time.Millisecond))
 		}
 		top = max(top, c.CreatedSeq, c.RevertedSeq, c.CreatedAt.UnixNano())
 		if c.RevertedAt != nil {
 			top = max(top, c.RevertedAt.UnixNano())
 		}
-		if !stage {
-			continue
-		}
-		kind, id, ok := opChangeListRef(&OperationChange{ChangeType: c.ChangeType, FieldName: c.FieldName})
-		if !ok || !opChangeListIndexable(id) {
-			continue
-		}
-		key := append(opChangeByListListPrefix(kind, id), iter.Key()[len(opChangeKeyPrefix):]...)
-		if _, closer, gerr := p.db.Get(key); gerr == nil {
-			closer.Close()
-			continue
-		} else if !errors.Is(gerr, pebble.ErrNotFound) {
-			iter.Close()
-			return fmt.Errorf("scan the journal at open: read list entry: %w", gerr)
-		}
-		missing = append(missing, key)
 	}
 	if err := iter.Error(); err != nil {
-		iter.Close()
-		return fmt.Errorf("scan the journal at open: %w", err)
+		_ = iter.Close()
+		return 0, 0, fmt.Errorf("scan the journal at open: %w", err)
 	}
-	iter.Close()
-	if state != clockKeyOK {
-		p.journalClock.seed(top)
-	}
-	const chunk = 2000
-	for start := 0; start < len(missing); start += chunk {
-		batch := p.db.NewBatch()
-		for _, key := range missing[start:min(start+chunk, len(missing))] {
-			if err := batch.Set(key, nil, nil); err != nil {
-				batch.Close()
-				return fmt.Errorf("stage opchange_by_list entry: %w", err)
-			}
-		}
-		err := batch.Commit(pebble.Sync)
-		batch.Close()
-		if err != nil {
-			return fmt.Errorf("scan the journal at open: %w", err)
-		}
-	}
-	// The keys go last: a crash before this batch redoes the scan.
-	batch := p.db.NewBatch()
-	defer batch.Close()
-	if state != clockKeyOK && (rows > 0 || state == clockKeyMalformed) {
-		var v [8]byte
-		binary.BigEndian.PutUint64(v[:], uint64(p.journalClock.high()))
-		if err := batch.Set([]byte(journalClockKey), v[:], nil); err != nil {
-			return fmt.Errorf("stage journal clock: %w", err)
-		}
-	}
-	if stage {
-		if err := batch.Set([]byte(opChangeByListBackfillKey), []byte("1"), nil); err != nil {
-			return fmt.Errorf("stage list index backfill marker: %w", err)
-		}
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return fmt.Errorf("scan the journal at open: %w", err)
-	}
-	if state != clockKeyOK {
-		p.journalClock.seed(p.journalClock.high())
+	if err := iter.Close(); err != nil {
+		return 0, 0, fmt.Errorf("scan the journal at open: %w", err)
 	}
 	if rows > 0 {
-		journalClockLog.Info("journal scan at open done: %d rows read, %d list index entries staged, took %s", rows, len(missing), time.Since(started).Round(time.Millisecond))
+		journalClockLog.Info("journal scan at open done: %d rows read, took %s", rows, time.Since(started).Round(time.Millisecond))
 	}
-	return nil
+	return top, rows, nil
 }

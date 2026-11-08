@@ -479,15 +479,15 @@ func (d *GatedDB) Delete(key []byte, opts *pebble.WriteOptions) error {
 	return d.db.Delete(key, opts)
 }
 
-// DeleteRange removes [start, end). On the core backend the whole range must
-// resolve to books' claims.
+// DeleteRange removes [start, end). On the core backend it removes the pieces
+// of the range books' claims cover (stageClaimedDeleteRange).
 func (d *GatedDB) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
 	if err := d.gate.acquire(); err != nil {
 		return err
 	}
 	defer d.gate.release()
 	if d.lr != nil {
-		return d.lr.write(opts, func(b *storage.Batch) error { return b.DeleteRange(start, end) })
+		return d.lr.write(opts, func(b *storage.Batch) error { return stageClaimedDeleteRange(b, start, end) })
 	}
 	return d.db.DeleteRange(start, end, opts)
 }
@@ -641,6 +641,74 @@ func (d *GatedDB) SSTables(opts ...pebble.SSTablesOption) ([][]pebble.SSTableInf
 	}
 	defer d.gate.release()
 	return d.db.SSTables(opts...)
+}
+
+// tableInfo is one sstable for the estimated census, on either backend.
+type tableInfo struct {
+	fileNum           uint64
+	smallest, largest []byte
+	size              uint64
+	virtual           bool
+	hasProps          bool
+	entries           uint64
+	deletions         uint64
+	rawKey, rawVal    uint64
+	rangeDels         uint64
+	span              uint64
+}
+
+// tables lists the engine's sstables: with withProps their properties, and
+// with lo/hi only the tables overlapping [lo, hi) and (span) each one's
+// approximate bytes inside it. The raw backend asks Pebble; the core backend
+// asks core's admin surface (storage.Admin.Tables).
+func (d *GatedDB) tables(ctx context.Context, withProps bool, lo, hi []byte, span bool) ([]tableInfo, error) {
+	if d.lr != nil {
+		a, err := d.lr.adminOf()
+		if err != nil {
+			return nil, err
+		}
+		got, err := a.Tables(ctx, storage.TablesOptions{Properties: withProps, Start: lo, End: hi, SpanBytes: span})
+		if err != nil {
+			return nil, legacyErr(err)
+		}
+		out := make([]tableInfo, 0, len(got))
+		for _, t := range got {
+			out = append(out, tableInfo{fileNum: t.FileNum, smallest: t.Smallest, largest: t.Largest, size: t.Size,
+				virtual: t.Virtual, hasProps: t.HasProperties, entries: t.Entries, deletions: t.Deletions,
+				rawKey: t.RawKeyBytes, rawVal: t.RawValueBytes, rangeDels: t.RangeDeletions, span: t.SpanBytes})
+		}
+		return out, nil
+	}
+	var opts []pebble.SSTablesOption
+	if withProps {
+		opts = append(opts, pebble.WithProperties())
+	}
+	if lo != nil {
+		opts = append(opts, pebble.WithKeyRangeFilter(lo, hi))
+	}
+	if span {
+		opts = append(opts, pebble.WithApproximateSpanBytes())
+	}
+	levels, err := d.SSTables(opts...)
+	if err != nil {
+		return nil, err
+	}
+	var out []tableInfo
+	for _, level := range levels {
+		for i := range level {
+			info := &level[i]
+			t := tableInfo{fileNum: uint64(info.FileNum), smallest: append([]byte(nil), info.Smallest.UserKey...),
+				largest: append([]byte(nil), info.Largest.UserKey...), size: info.Size, virtual: info.Virtual,
+				span: info.ApproximateSpanBytes}
+			if pr := info.Properties; pr != nil {
+				t.hasProps = true
+				t.entries, t.deletions = pr.NumEntries, pr.NumDeletions
+				t.rawKey, t.rawVal, t.rangeDels = pr.RawKeySize, pr.RawValueSize, pr.NumRangeDeletions
+			}
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 // EstimateDiskUsage estimates the on-disk size of [start, end).
@@ -1119,7 +1187,7 @@ func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) e
 		b.record(batchOpDeleteRange, start, end)
 		return nil
 	case b.lb != nil:
-		return legacyErr(b.lb.DeleteRange(start, end))
+		return legacyErr(stageClaimedDeleteRange(b.lb, start, end))
 	}
 	return b.b.DeleteRange(start, end, opts)
 }

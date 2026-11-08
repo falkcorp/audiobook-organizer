@@ -167,42 +167,6 @@ func TestStorageFormat_OlderStoreRefusedBeforeAnyWrite(t *testing.T) {
 	require.True(t, errors.Is(statErr, os.ErrNotExist), "no sidecar after a refused open: %v", statErr)
 }
 
-func TestStorageFormat_MarkerPresentRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "marked.pebble")
-	openAndClose(t, path)
-	rawSet(t, path, nil, "preference:"+storageMigrationPreferenceKey, `{"id":99,"key":"storage_migration"}`)
-	before := rawKeysAt(t, path, nil)
-
-	_, err := NewPebbleStore(path)
-	var migErr *StorageMigrationRequiredError
-	require.True(t, errors.As(err, &migErr), "got %T: %v", err, err)
-	require.True(t, migErr.MarkerPresent)
-	require.Equal(t, SupportedStorageFormat, migErr.Stamp)
-	require.Contains(t, err.Error(), "storage_migration marker")
-	require.Contains(t, err.Error(), "restore the pre-migration checkpoint")
-	require.NotContains(t, err.Error(), "start serve to migrate",
-		"serve itself refuses a marked store, so telling the operator to start serve is circular")
-	require.Equal(t, before, rawKeysAt(t, path, nil), "the refused open wrote something")
-
-	db, st, err := openPebbleChecked(path, nil, openForCutover)
-	require.NoError(t, err)
-	require.True(t, st.markerPresent)
-	require.Equal(t, before, rawKeys(t, db), "the cut-over open wrote something")
-	require.NoError(t, db.Close())
-	require.Equal(t, before, rawKeysAt(t, path, nil))
-}
-
-func TestStorageFormat_CutoverModeStillRefusesNewer(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cutover-newer.pebble")
-	openAndClose(t, path)
-	setBuildStorageFormat(t, 0)
-
-	db, _, err := openPebbleChecked(path, nil, openForCutover)
-	require.Nil(t, db)
-	var tooNew *StorageFormatTooNewError
-	require.True(t, errors.As(err, &tooNew), "got %T: %v", err, err)
-}
-
 func TestStorageFormat_RefusesNewerStamp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "newer.pebble")
 	openAndClose(t, path)

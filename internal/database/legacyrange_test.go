@@ -1,11 +1,12 @@
 // file: internal/database/legacyrange_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a1e9c34-5b2d-4f68-8c07-e4d3b6a9f512
 // last-edited: 2026-11-08
 
 package database
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -21,6 +22,13 @@ import (
 // core-backend GatedDB over books' LegacyRange, with its owned close and
 // core's admin surface (attached unless noAdmin).
 func coreGatedDB(t *testing.T, noAdmin bool) (*GatedDB, func(time.Duration) error) {
+	t.Helper()
+	d, closeFn, _ := coreGatedDBWithStore(t, noAdmin)
+	return d, closeFn
+}
+
+// coreGatedDBWithStore is coreGatedDB plus the core DB behind it.
+func coreGatedDBWithStore(t *testing.T, noAdmin bool) (*GatedDB, func(time.Duration) error, *storage.DB) {
 	t.Helper()
 	ctx := context.Background()
 	op, err := storage.Open(ctx, storage.OpenOptions{
@@ -47,11 +55,11 @@ func coreGatedDB(t *testing.T, noAdmin bool) (*GatedDB, func(time.Duration) erro
 	}
 	closeFn := d.ownedClose()
 	t.Cleanup(func() { _ = closeFn(time.Second) })
-	return d, closeFn
+	return d, closeFn, db
 }
 
 func TestCoreBackend_ReadWriteAndErrors(t *testing.T) {
-	d, _ := coreGatedDB(t, false)
+	d, _, core := coreGatedDBWithStore(t, false)
 	if !d.onCore() {
 		t.Fatal("onCore() = false")
 	}
@@ -80,16 +88,41 @@ func TestCoreBackend_ReadWriteAndErrors(t *testing.T) {
 	if _, _, err := d.Get([]byte("book:a")); err != pebble.ErrNotFound {
 		t.Fatalf("Get after Delete = %v", err)
 	}
-	// A range inside one family is admitted; one over a gap between
-	// families is refused (the whole range must resolve to books' claims).
+	// A range inside one family deletes it.
 	if err := d.DeleteRange([]byte("book:"), []byte("book;"), pebble.Sync); err != nil {
 		t.Fatalf("DeleteRange inside book: = %v", err)
 	}
 	if _, _, err := d.Get([]byte("book:b")); err != pebble.ErrNotFound {
 		t.Fatalf("Get after DeleteRange = %v", err)
 	}
-	if err := d.DeleteRange([]byte{0x00}, []byte{0xff, 0xff}, pebble.Sync); !errors.Is(err, storage.ErrOutsideKeyspace) {
-		t.Fatalf("DeleteRange over the whole key space = %v, want ErrOutsideKeyspace", err)
+	// A range over gaps between families, and over core's reserved c/ and
+	// m/, deletes the pieces books' claims cover and nothing else: HEAD's
+	// Reset wipes the whole key space, and core's rows survive it.
+	for _, k := range []string{"book:c", "ident:state:robin", "narrator_counter", "setting:config_blob"} {
+		if err := d.Set([]byte(k), []byte("x"), pebble.Sync); err != nil {
+			t.Fatalf("Set %s: %v", k, err)
+		}
+	}
+	if err := d.DeleteRange([]byte{0x00}, []byte{0xff, 0xff}, pebble.Sync); err != nil {
+		t.Fatalf("DeleteRange over the whole key space = %v", err)
+	}
+	for _, k := range []string{"book:c", "ident:state:robin", "narrator_counter", "setting:config_blob"} {
+		if _, _, err := d.Get([]byte(k)); err != pebble.ErrNotFound {
+			t.Fatalf("Get %s after the whole-key-space DeleteRange = %v, want ErrNotFound", k, err)
+		}
+	}
+	parts, err := core.Admin().Census(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var coreKeys uint64
+	for _, p := range parts {
+		if bytes.HasPrefix(p.Start, []byte("c/")) {
+			coreKeys += p.Keys
+		}
+	}
+	if coreKeys == 0 {
+		t.Fatalf("the whole-key-space DeleteRange removed core's c/ rows: census %+v", parts)
 	}
 	if got := d.FormatMajorVersion(); got != PebbleFormatMajorVersion {
 		t.Fatalf("FormatMajorVersion = %v, want %v", got, PebbleFormatMajorVersion)
