@@ -495,7 +495,10 @@ func (db *DB) guard() []error {
 		}
 		v, ok, err := ipebble.ReadInt(fs, st.opts.Path+gp.SidecarSuffix)
 		if err != nil {
-			db.log.Error("storage: legacy projection sidecar unreadable; it is rewritten at the end of this boot", "owner", string(o.owner), "err", err)
+			// The sidecar is this guard's only input: skipping it would let
+			// a store a newer build converted pass, and step 9 would then
+			// overwrite the evidence (review MINOR-3). Absent is ok == false.
+			errs = append(errs, fmt.Errorf("storage: %s's legacy projection sidecar is unreadable, so a store too new for this build cannot be ruled out: %w", o.owner, err))
 			continue
 		}
 		would := gp.projection(st.supported[o.levelOwner()])
