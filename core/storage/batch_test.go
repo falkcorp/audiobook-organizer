@@ -401,3 +401,33 @@ func put(ctx context.Context, ks Keyspace, k, v string) error {
 	}
 	return b.Commit(ctx, Sync)
 }
+
+// TestSequenceAdvancePastRacesNext (review NIT-2): a Next that loaded the
+// lease before AdvancePast(n) swapped it must not take an ID from that stale
+// lease: AdvancePast zeroes the old lease's limit before the swap, and Next
+// checks the limit after its Add. The seam runs AdvancePast exactly between
+// Next's load and its Add.
+func TestSequenceAdvancePastRacesNext(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, OwnerSpec{Owner: "wayne", Spec: wayneSpec(), Enabled: true})
+	var seq *Sequence
+	armed := false
+	e.opts.hooks.seqLoaded = func() {
+		if armed {
+			armed = false
+			if err := seq.AdvancePast(ctx, 1000); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	db := e.open()
+	ks, _ := db.Keyspace("wayne")
+	seq = ks.Sequence("ids")
+	if id, err := seq.Next(ctx); err != nil || id != 1 {
+		t.Fatalf("first id = %d, %v", id, err)
+	}
+	armed = true
+	if id, err := seq.Next(ctx); err != nil || id <= 1000 {
+		t.Fatalf("Next racing AdvancePast(1000) = %d, %v; want an id past 1000", id, err)
+	}
+}

@@ -122,6 +122,9 @@ type testHooks struct {
 	// beforeComplete runs in step 9 after the batch and the sidecars,
 	// before the attempt's checkpoint is completed.
 	beforeComplete func() error
+	// seqLoaded runs in Sequence.Next after it loaded the lease and before
+	// it takes an ID from it.
+	seqLoaded func()
 	// beforeApply runs inside Commit after the preconditions passed, under
 	// the stripes, before the batch is applied.
 	beforeApply func()
