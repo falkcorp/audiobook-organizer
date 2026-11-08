@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.8.6 -->
+<!-- version: 1.8.7 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # 05 — Logging (`core/log`)
 
@@ -144,10 +144,10 @@ type Logging struct{ /* unexported */ }
 
 func New(o Options) (*Logging, error)
 
-func (l *Logging) Root() *slog.Logger                          // module="core"
+func (l *Logging) Root() *slog.Logger                          // the process default: no module attribute, root level
 func (l *Logging) Module(id string) *slog.Logger               // module=id; panics never: invalid id -> error at kernel validation
 func (l *Logging) Scope(module, subsystem string) *slog.Logger // module + subsystem, own level gate
-func (l *Logging) Handler() slog.Handler                       // for adapters (gin bridge, logr sink)
+func (l *Logging) Handler() slog.Handler                       // Root's handler, for adapters standing in for the process default
 func (l *Logging) Redactor() *Redactor                         // the pipeline's redactor, for span redaction (05-metrics)
 func (l *Logging) SetLevels(root slog.Level, per map[string]slog.Level) (unknown []string)
 func (l *Logging) Level(scope string) slog.Level
@@ -308,7 +308,7 @@ opens. The invite shape needs no module rule: it is a default (SEC-21).
 
 ```go
 // InstallProcessDefaults points the process-wide defaults at this App's pipeline and telemetry:
-//   slog.SetDefault(a.Logging().Root())                       // also redirects the stdlib "log" package
+//   slog.SetDefault(a.Logging().Root())                       // no module attribute; also redirects the stdlib "log" package
 //   otel.SetLogger(valueDroppingSink)                          // logr sink that keeps message + key names, drops values
 //   otel.SetErrorHandler(rateLimited)                          // class-keyed limiter, logs through the App's pipeline
 //   otel.SetMeterProvider(a.metrics.MeterProvider())           // 05-metrics §3; code that still creates
@@ -320,8 +320,16 @@ opens. The invite shape needs no module rule: it is a default (SEC-21).
 func InstallProcessDefaults(a *App) (restore func(), err error)
 ```
 
+**The process default carries no module.** `Root()` and `Handler()` run the whole pipeline (level gate,
+redaction, primary output, taps) without a `module` attribute: what logs through slog's default is the
+application's own code and third-party libraries, not core. In R1 ABO keeps its direct `slog` calls and its
+Activity Log parses its text lines, so a `module=core` attribute would land on every ABO line and change its
+entries. `Root()` is gated at the root `level` (no `levels` entry applies), its records count under the module
+`""` in `Counters().Records`, and taps receive them with an empty `Record.Module`. Core's own components log
+through `Scope("core", subsystem)`, which carries `module=core`.
+
 The value-dropping sink is ABO's `sdkLogSink` (`internal/telemetry/sdklog.go:50-110`) moved, re-targeted at
-`Logging.Handler()`. `logr.FromSlogHandler` (`logr` v1.4.4 `slogr.go:30`) is **not** used, because it would
+core's `otel` scope (`Scope("core", "otel")`): the SDK's reports are core's lines. `logr.FromSlogHandler` (`logr` v1.4.4 `slogr.go:30`) is **not** used, because it would
 forward the SDK's raw values — the reason the sink exists. `logr` remains in the module graph regardless
 (OTel depends on it), so keeping the adapter costs no dependency.
 
@@ -703,3 +711,7 @@ Round 16 (2026-11-05): plan-gap fixes G13 (§5: confirmed the query route `GET /
 Round 16 (2026-11-05): review fixes X3 (§5: the query route, its 403 test and the SPA's move land at F5, replacing HEAD's logs route in the same PR; the live tail through realtime and the event half of `TestJournal_RequiresSystemManage` land at F6, the SPA's log view polling the query route between).
 
 Round 17 (2026-11-05): G20 (§5: the query route takes `limit`, default 50, cap 1000).
+
+R1-15 review M2 (2026-11-08): §3 `Root()` and `Handler()` are the process default logger and add no `module`
+attribute (gated at the root level, counted under `""`); core's components keep `module=core` through
+`Scope("core", …)`. The SDK sink logs through core's `otel` scope, not `Handler()`.

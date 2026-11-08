@@ -1,7 +1,7 @@
 // file: core/log/logging.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package log
 
@@ -66,8 +66,13 @@ const (
 	KeyError     = "err"
 )
 
-// rootModule is the module of Root() and Handler().
+// rootModule is the module of core's own scopes (Scope("core", subsystem)).
 const rootModule = "core"
+
+// processModule is the module of the process default logger (Root and
+// Handler): none. Its records carry no module attribute, are counted under
+// this empty key, and reach taps with an empty Record.Module.
+const processModule = ""
 
 // primarySink is the primary output's name in Counters().Dropped; Tap refuses
 // it as a tap name.
@@ -145,7 +150,7 @@ type Options struct {
 type Record struct {
 	Time      time.Time
 	Level     slog.Level
-	Module    string
+	Module    string // "core", a module ID, or "" for the process default logger (Root)
 	Subsystem string
 	Message   string
 	Attrs     []slog.Attr // resolved (LogValuer applied), groups preserved
@@ -159,7 +164,8 @@ type Record struct {
 // grow for the life of the Logging, and a stopped tap's drops stay counted.
 type Counters struct {
 	// Records counts records that passed their level gate and entered the
-	// pipeline, by module ("core" or a module ID) and level:
+	// pipeline, by module ("core", a module ID, or "" for the process
+	// default logger, Root) and level:
 	// mediacore_log_records_total{level,module}. A record whose primary
 	// write failed is still counted here (it reached the taps) and is also
 	// counted in Dropped["primary"].
@@ -186,7 +192,8 @@ type Logging struct {
 	now      func() time.Time // Options.Now, or nil: keep the record's own time
 	clock    func() time.Time // now, or time.Now: for the stderr rate limit
 	stderr   io.Writer        // where the pipeline reports its own failures
-	root     *scope           // Root() and Handler()
+	root     *scope           // the "core" scope, created up front so Levels["core"] is known
+	process  *scope           // Root() and Handler(): the process default logger, gated at the root level
 
 	mu     sync.Mutex
 	rootLv slog.Level            // SetLevels' root (guarded by mu)
@@ -262,6 +269,7 @@ func New(o Options) (*Logging, error) {
 	}
 	l.taps.Store(&[]*tap{})
 	l.root = l.scope(rootModule, "")
+	l.process = l.scope(processModule, "")
 	return l, nil
 }
 
@@ -292,8 +300,16 @@ func levelName(lv slog.Level) string {
 	return fmt.Sprintf("TRACE%+d", int(lv-LevelTrace))
 }
 
-// Root returns the core logger (module="core").
-func (l *Logging) Root() *slog.Logger { return slog.New(&handler{l: l, sc: l.root}) }
+// Root returns the process default logger: the one app.InstallProcessDefaults
+// makes slog's default (and so the stdlib log package's). It runs the whole
+// pipeline (level gate, redaction, primary output, taps) but adds no module
+// attribute, because what logs through slog's default is the application's
+// own code and third-party libraries, not core: in an app that keeps direct
+// slog calls (ABO in R1), a module=core attribute would land on every one of
+// its lines. Its level is the root level; no Levels entry applies to it.
+// Core's own components log through Scope("core", subsystem), which carries
+// module=core (05-logging §3).
+func (l *Logging) Root() *slog.Logger { return slog.New(&handler{l: l, sc: l.process}) }
 
 // Module returns module id's logger (module=id). It never panics: an invalid
 // id is refused at kernel validation, not here.
@@ -308,9 +324,9 @@ func (l *Logging) Scope(module, subsystem string) *slog.Logger {
 	return slog.New(&handler{l: l, sc: l.scope(module, subsystem)})
 }
 
-// Handler returns the core scope's handler, for adapters (the gin bridge, the
-// logr sink).
-func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.root} }
+// Handler returns Root's handler (the process default logger, no module
+// attribute), for adapters that stand in for the process default.
+func (l *Logging) Handler() slog.Handler { return &handler{l: l, sc: l.process} }
 
 // Redactor returns the pipeline's redactor, for span redaction (05-metrics).
 func (l *Logging) Redactor() *Redactor { return l.redactor }

@@ -1,5 +1,5 @@
 // file: core/app/defaults_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b7c4e2a-91d3-4f58-a6e0-3c8d5f2b7a19
 // last-edited: 2026-11-08
 
@@ -116,6 +116,19 @@ func TestInstallProcessDefaults_RestoreAndExclusive(t *testing.T) {
 	}
 	if !strings.Contains(got, "lucius checked the armory") {
 		t.Fatalf("the standard library's log did not reach the pipeline:\n%s", got)
+	}
+	// R1-15 review M2: the process default carries no module attribute (an
+	// app's own lines are not core's), while core's own loggers keep
+	// module=core.
+	for line := range strings.SplitSeq(strings.TrimSpace(got), "\n") {
+		if (strings.Contains(line, "alfred checked the cave") || strings.Contains(line, "lucius checked the armory")) &&
+			strings.Contains(line, "module=") {
+			t.Errorf("a line through slog's default carries a module attribute: %q", line)
+		}
+	}
+	a.k.CoreLogger("otel").Warn("core's own line")
+	if !strings.Contains(out.String(), `msg="core's own line" module=core subsystem=otel`) {
+		t.Errorf("core's logger lost module=core:\n%s", out.String())
 	}
 
 	// The SDK sink: message and key names kept, every value dropped.
