@@ -36,7 +36,24 @@
   core's route patterns (`/api/v1/audiobooks/{id}` where gin wrote
   `/api/v1/audiobooks/:id`). `http_server_response_body_size` measures bytes
   before compression.
-- HTTP access lines are written to standard output only, as gin's request log
-  was, and no longer appear in the Activity Log.
+- The HTTP access log changes format. gin's text lines
+  (`[GIN] 2026/11/08 - 05:00:00 | 200 | ...`) become structured records with
+  `msg="http access"` and the attributes `method`, `path`, `status`,
+  `duration`, `bytes`, `proto`, `client`, `request_id` and `route`. A Loki
+  query or alert that matches `[GIN]` no longer matches anything; match
+  `msg="http access"` instead. The lines still go to standard output only and
+  stay out of the Activity Log, as gin's did. A request whose handler panics
+  still gets its line, with status 500.
+- Server-sent event streams are no longer gzipped: every `text/event-stream`
+  response is sent uncompressed, where HEAD excluded only `/api/events`.
+- `error.type` on the `http_server_*` series and on request spans is set only
+  when the request ended early (the client went away or a deadline passed). A
+  gin handler's recorded error no longer sets it.
+- When the Basic sign-in gate is on, a request without credentials now meets
+  the core perimeter before the gate. Its 401 carries `X-App-Build` and
+  `X-Request-ID`. A rate-limit (429), body-limit (413), peer (403) or
+  cross-origin (403) refusal comes before the gate and is
+  `application/problem+json`, and every such request spends the client's
+  `/api` rate-limit tokens even if the gate would have refused it.
 - A setting saved through the API for the listener, rate limit, body limits,
   peer allow-list or trusted proxies takes effect at the next restart.
