@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-08
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
+	"github.com/falkcorp/mediacore/storage/restorejournal/restorejournaltest"
 )
 
 // TestBootCrashMatrix is core's instance of the boot crash matrix (05-storage
@@ -325,36 +326,10 @@ func reset(t *testing.T, kind restorejournal.ResetKind) crashmatrix.Fixture {
 	// The delete entry is a Recreatable auxiliary DB off the DB's
 	// filesystem (05-storage §5S.3.15); the test host has one, so the probe
 	// says the entry is on another.
-	if err := crashmatrix.StageWith(f, in, otherDevice{Probe: restorejournal.OSProbe(), dirs: in.Delete}); err != nil {
+	if err := crashmatrix.StageWith(f, in, restorejournaltest.OtherDevice{Probe: restorejournal.OSProbe(), Dirs: in.Delete}); err != nil {
 		t.Fatalf("fixture %s: stage: %v", name, err)
 	}
 	return f
-}
-
-// otherDevice is a probe that reports every path under dirs on a device of
-// its own.
-type otherDevice struct {
-	restorejournal.Probe
-	dirs []string
-}
-
-func (p otherDevice) shift(path string, dev uint64, err error) (uint64, error) {
-	for _, d := range p.dirs {
-		if err == nil && restorejournal.InTree(path, d) {
-			return dev + 1, nil
-		}
-	}
-	return dev, err
-}
-
-func (p otherDevice) ItemDev(path string) (uint64, error) {
-	dev, err := p.Probe.ItemDev(path)
-	return p.shift(path, dev, err)
-}
-
-func (p otherDevice) DirDev(path string) (uint64, error) {
-	dev, err := p.Probe.DirDev(path)
-	return p.shift(path, dev, err)
 }
 
 // unjournaled is a staged restore whose staged record a kill between

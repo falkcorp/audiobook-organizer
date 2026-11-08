@@ -1,15 +1,15 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package bootseam is the per-boot seam of the crash-matrix kit
 // (coretest/crashmatrix, 05-storage §5S.3.16; 06 §6.4.8): a context value
 // that carries, for one in-process boot, the filesystem every boot writer
 // uses (the store, its sidecars and checkpoints, the swap's journal and
-// renames), the binary ID and clock the swap's rejection rule reads, and the
-// labeller that names each durable operation for the writer table of 06
-// §6.5.1. Production boots carry no Seams: every accessor then returns the
+// renames), the binary ID, clock and device probe the swap's rejection rule
+// reads, and the labeller that names each durable operation for the writer
+// table of 06 §6.5.1. Production boots carry no Seams: every accessor then returns the
 // real filesystem, no label and no override.
 //
 // It holds no package state (03 R5): the value travels in the context that
@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // Seams is one boot's overrides; a nil field takes the production value.
@@ -34,6 +36,11 @@ type Seams struct {
 	// Clock replaces time.Now for the swap's expires_at check and the
 	// store's timestamps; nil = time.Now.
 	Clock func() time.Time
+	// Probe replaces the swap's device probe, which its rename pre-check
+	// and a reset's delete rule read at step a: a test on one filesystem
+	// models a delete entry on another. nil = restorejournal.OSProbe on the
+	// real filesystem, none in memory.
+	Probe restorejournal.Probe
 	// Labels names each durable operation; nil = no labels (production).
 	Labels Labeler
 }
