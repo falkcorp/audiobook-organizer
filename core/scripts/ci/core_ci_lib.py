@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: core/scripts/ci/core_ci_lib.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: d60ca7b1-bb62-4184-8eec-82dba792b0ec
 # last-edited: 2026-11-08
 """Shared helpers of core's version and readiness scripts (12 §12.3, §12.4).
@@ -77,15 +77,20 @@ def parse_semver(text: str) -> Semver:
     return Semver(int(m.group(1)), int(m.group(2)), int(m.group(3)), pre)
 
 
+def version_from_source(source: str, where: str = "version.go") -> str:
+    """The text of ``const Version`` in the source of core/version/version.go."""
+    found = _VERSION_CONST_RE.findall(source)
+    if len(found) != 1:
+        raise ValueError(f"{where}: expected exactly one 'const Version = \"...\"', found {len(found)}")
+    return found[0]
+
+
 def read_version(core: pathlib.Path) -> str:
     """The text of ``const Version`` in core/version/version.go."""
     path = core / "version" / "version.go"
     if not path.is_file():
         raise ValueError(f"{path} is missing")
-    found = _VERSION_CONST_RE.findall(path.read_text(encoding="utf-8"))
-    if len(found) != 1:
-        raise ValueError(f"{path}: expected exactly one 'const Version = \"...\"', found {len(found)}")
-    return found[0]
+    return version_from_source(path.read_text(encoding="utf-8"), str(path))
 
 
 def git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
