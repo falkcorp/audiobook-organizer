@@ -1,11 +1,12 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
 package server
 
 import (
+	"encoding/base64"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -96,8 +97,10 @@ func perimeterCases() []perimeterCase {
 		{name: "SPA page", method: http.MethodGet, path: "/library/riddler"},
 		{name: "SPA shared segment", method: http.MethodGet, path: "/login"},
 		{name: "legacy 404 under /api/v1", method: http.MethodGet, path: "/api/v1/riddler-unrouted"},
+		{name: "legacy 404 under /api/v1, same origin", method: http.MethodGet, path: "/api/v1/riddler-unrouted", header: same},
 		{name: "legacy 404 under a top segment", method: http.MethodGet, path: "/ping/riddler"},
 		{name: "unmatched method", method: http.MethodDelete, path: "/api/v1/health"},
+		{name: "unmatched method, same origin", method: http.MethodDelete, path: "/api/v1/health", header: same},
 		{name: "/api redirect", method: http.MethodGet, path: "/api/audiobooks?batman=1"},
 		{name: "/api redirect, same origin", method: http.MethodGet, path: "/api/audiobooks", header: same},
 		{name: "core group", method: http.MethodGet, path: "/api/core/v1/riddler", coreBody: true},
@@ -110,6 +113,26 @@ func perimeterCases() []perimeterCase {
 		{name: "CORS preflight, unrouted path", method: http.MethodOptions, path: "/api/v1/riddler-unrouted", header: preflight},
 		{name: "CORS preflight, core group", method: http.MethodOptions, path: "/api/core/v1/riddler", header: preflight},
 	}
+}
+
+// withHeader is cs with k: v added to every request, prefix on every name.
+func withHeader(cs []perimeterCase, prefix, k, v string) []perimeterCase {
+	out := make([]perimeterCase, len(cs))
+	for i, c := range cs {
+		h := maps.Clone(c.header)
+		if h == nil {
+			h = map[string]string{}
+		}
+		h[k] = v
+		c.header, c.name = h, prefix+c.name
+		out[i] = c
+	}
+	return out
+}
+
+// basicCredentials is the Authorization value for the gate's test account.
+func basicCredentials() string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte("alfred:synthetic-wayne-manor-gate"))
 }
 
 // TestPerimeterShim_ParityWithHEAD pins what the perimeter shim must keep
@@ -129,6 +152,16 @@ func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
 		}
 	})
 
+	// HEAD's compressionMiddleware ran on every answer gin wrote, the
+	// unrouted ones included: the /api redirect's 301 went out gzipped with
+	// Vary: Accept-Encoding, and an error status lost every Vary, CORS's
+	// Origin included (review m5).
+	t.Run("gzip", func(t *testing.T) {
+		for _, c := range withHeader(perimeterCases(), "gzip: ", "Accept-Encoding", "gzip") {
+			perimeterParity(t, head, r1, c)
+		}
+	})
+
 	t.Run("basic gate", func(t *testing.T) {
 		orig := config.AppConfig
 		t.Cleanup(func() { config.AppConfig = orig })
@@ -138,6 +171,22 @@ func TestPerimeterShim_ParityWithHEAD(t *testing.T) {
 		for _, c := range perimeterCases() {
 			c.name = "gated: " + c.name
 			perimeterParity(t, head, r1, c)
+		}
+		authed := withHeader(perimeterCases(), "gated, signed in: ", "Authorization", basicCredentials())
+		for _, c := range authed {
+			perimeterParity(t, head, r1, c)
+		}
+		for _, c := range withHeader(authed, "gzip: ", "Accept-Encoding", "gzip") {
+			perimeterParity(t, head, r1, c)
+		}
+		// Valid credentials pass the gate on the kernel's own answers too.
+		for p, want := range map[string]int{"/api/core/v1/riddler": http.StatusNotFound,
+			"/api/audiobooks": http.StatusMovedPermanently, "/api/v1/riddler-unrouted": http.StatusNotFound} {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, p, nil)
+			req.Header.Set("Authorization", basicCredentials())
+			r1.ServeHTTP(w, req)
+			assert.Equal(t, want, w.Code, "signed-in GET %s", p)
 		}
 		// The gate refuses the kernel's own answers as HEAD refused gin's
 		// unrouted ones, and keeps the health exemption.
@@ -186,6 +235,9 @@ func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 		c.Next()
 	})
 	for _, c := range perimeterCases() {
+		perimeterParity(t, head, r1, c)
+	}
+	for _, c := range withHeader(perimeterCases(), "gzip: ", "Accept-Encoding", "gzip") {
 		perimeterParity(t, head, r1, c)
 	}
 	w := httptest.NewRecorder()
