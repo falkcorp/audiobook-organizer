@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -44,6 +43,13 @@ type ServeInputs struct {
 	// apply, so the OTLP endpoints, interval and environment come from where
 	// they always did.
 	Telemetry config.Config
+	// StateDir is the state directory serve resolved (EnsureSecureStateDir):
+	// ABO's log file lives under it (core.log.file.path, 05-logging section
+	// 11 item 1). "" keeps the log on the stream only, with no file.
+	StateDir string
+	// LogOut is the stream the log pipeline prints to, beside the file when
+	// there is one; nil is os.Stdout, where HEAD's lines went.
+	LogOut io.Writer
 }
 
 // Options is ABO's app.Options for release R1 (06 §6.4.10, 05-config
@@ -60,7 +66,10 @@ type ServeInputs struct {
 //   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
 //     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
-//   - LogOutput: the activity feed's tee (see logTee);
+//   - LogOutput, R1Log and StateDir: the log pipeline's stream, its level
+//     (log_level, --log-level) and its file under the state directory
+//     (logSettings); the activity feed is a tap on the pipeline, registered
+//     by Attach;
 //   - ProcessDefaults: serve calls app.InstallProcessDefaults, so New
 //     installs the OTel SDK's value-dropping logger and error handler before
 //     it builds the Provider and the OTLP exporters, which read OTEL_* from
@@ -73,6 +82,10 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	}
 	cfg := in.Server
 	m.cfg.Store(&cfg)
+	logCfg, warn := logSettings(config.Snapshot().LogLevel, in.StateDir)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "Warning: "+warn)
+	}
 	return app.Options{
 		AppID:                 appID,
 		MetricNamespace:       metricNamespace,
@@ -84,7 +97,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot()) },
 		R1Listen:              m.r1Listen,
 		R1Telemetry:           r1Telemetry(in.Telemetry),
-		LogOutput:             &m.logOut,
+		LogOutput:             logStream(in.LogOut),
+		R1Log:                 &logCfg,
+		StateDir:              in.StateDir,
 		ProcessDefaults:       true,
 	}, nil
 }
@@ -161,7 +176,7 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 // Attach binds what needs the App once New has returned, before Run: the
 // legacy client_golang families register on the App's Provider registry,
 // which the gin /metrics route then serves (05-metrics §6, §13 item 2), and
-// the App's log output switches to the activity feed's writer. A disabled
+// the activity feed becomes a tap on the App's log pipeline. A disabled
 // books (no server built) has nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
@@ -176,26 +191,6 @@ func Attach(mod module.Module, a *app.App) error {
 	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
-	if w := srv.ActivityLogWriter(); w != nil {
-		m.logOut.set(w)
-	}
+	tapActivity(a, srv.ActivityLogWriter())
 	return nil
-}
-
-// logTee is the App's log output (app.Options.LogOutput): stdout until
-// Attach points it at the activity feed's writer, which tees every line to
-// stdout itself and parses it into the Activity Log. In HEAD NewServer made a
-// text handler over that writer the default logger; with the App's logger
-// installed as the default instead (app.InstallProcessDefaults), routing the
-// App's text output through the same writer keeps the Activity Log's
-// scheduler and operation lines. R1-18's activity tap replaces it.
-type logTee struct{ w atomic.Pointer[io.Writer] }
-
-func (t *logTee) set(w io.Writer) { t.w.Store(&w) }
-
-func (t *logTee) Write(p []byte) (int, error) {
-	if w := t.w.Load(); w != nil {
-		return (*w).Write(p)
-	}
-	return os.Stdout.Write(p)
 }

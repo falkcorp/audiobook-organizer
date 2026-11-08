@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.3
+// version: 1.35.4
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-11-08
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 266
-	slogRatchetCallCeiling = 1452
+	slogRatchetFileCeiling = 265
+	slogRatchetCallCeiling = 1450
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -22,9 +22,7 @@ const (
 // Lower a count when a file loses direct calls; delete the entry when it has
 // none left, and lower both ceilings to match. Never add an entry.
 //
-// cmd/root.go is listed like any other file: its two calls are setup logging
-// around slog.SetDefault, and it leaves the ratchet when those move onto the
-// logger package.
+// cmd/root.go left the ratchet with setupFileLogging (R1-18).
 var slogRatchet = map[string]int{
 	"cmd/dedup_bench.go":                                         26,
 	"cmd/dedup_bench_batch.go":                                   4,
@@ -33,7 +31,6 @@ var slogRatchet = map[string]int{
 	"cmd/dedup_bench_runner.go":                                  5,
 	"cmd/dedup_bench_status.go":                                  1,
 	"cmd/pebble-inject-skip/main.go":                             4,
-	"cmd/root.go":                                                2,
 	"internal/activity/changelog.go":                             3,
 	"internal/activity/register.go":                              2,
 	"internal/ai/dedup_review.go":                                2,

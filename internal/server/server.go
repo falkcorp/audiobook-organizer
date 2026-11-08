@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.10
+// version: 2.114.11
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -10,8 +10,6 @@ import (
 	"fmt"
 
 	"errors"
-	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -674,12 +672,9 @@ func newBaseRouter() *gin.Engine {
 
 // ActivityLogWriter is the activity feed's line writer, which tees each line
 // to stdout and parses it into the Activity Log, or nil when the activity
-// service is off. books points the App's log output at it (R1-15) until
-// R1-18's activity tap replaces the tee.
-func (s *Server) ActivityLogWriter() io.Writer {
-	if s.activityWriter == nil {
-		return nil
-	}
+// service is off. books feeds it from a tap on the App's log pipeline
+// (Writer.Feed), so the lines print once, through the pipeline's own stream.
+func (s *Server) ActivityLogWriter() *activity.Writer {
 	return s.activityWriter
 }
 
@@ -1271,33 +1266,14 @@ func NewServer(store database.Store) *Server {
 
 	// Activity-service fan-out into metafetch / audiobook / scanner now
 	// happens in those services' PostInit hooks.
-	// What's left in this block is genuinely server-internal: starting
-	// the writer, the global log.SetOutput,
-	// scanner.SetScanHooks (process-global),
-	// and the startup-record entry.
+	// What's left in this block is genuinely server-internal:
+	// scanner.SetScanHooks (process-global) and the startup-record entry.
 	if server.activityService != nil {
 		// activityWriter is started by Container.Start in Server.Start
-		// (SERVER-LIFECYCLE-FLIP). What stays inline here is the
-		// log.SetOutput global, which needs the writer reference but not
-		// its Start.
-		if aw := server.activityWriter; aw != nil {
-			log.SetOutput(aw)
-			// Also route the slog default to a text handler writing to
-			// the activity writer (in addition to stderr). Without this,
-			// the operations registry — which uses slog.Default() —
-			// emits "starting run" / "run finished" lines to stderr
-			// only, and the Activity Log page shows nothing for
-			// scheduler runs. The text handler emits a key=value line
-			// per record that the activity writer's line parser routes
-			// into an ActivityEntry.
-			// activity.Writer.Write already tees to os.Stdout before
-			// parsing, so writing to aw alone keeps systemd journal
-			// capture intact. Adding os.Stderr to a MultiWriter here
-			// produced duplicate journal lines (one via stderr, one
-			// via aw → stdout).
-			handler := slog.NewTextHandler(aw, &slog.HandlerOptions{Level: slog.LevelInfo})
-			slog.SetDefault(slog.New(handler))
-		}
+		// (SERVER-LIFECYCLE-FLIP). The slog default and the stdlib log
+		// output are the App's pipeline (app.InstallProcessDefaults); books
+		// taps the pipeline into the writer (Writer.Feed, R1-18), so this
+		// block installs no second default logger.
 
 		// Task 16: Scanner → activity log (via ScanHooks interface)
 		scanner.SetScanHooks(&serverScanHooks{
