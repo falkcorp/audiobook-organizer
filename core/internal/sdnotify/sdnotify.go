@@ -1,5 +1,5 @@
 // file: core/internal/sdnotify/sdnotify.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 96427de2-bc6f-4a85-9a35-774bdfed9ee7
 // last-edited: 2026-11-08
 
@@ -18,9 +18,10 @@
 // rollback drop-in (Type=simple plus the unit's NotifyAccess=main) the socket
 // is set; systemd accepts the messages but READY=1 does not gate the start.
 //
-// It is a leaf package (no module imports) so the store and search packages,
-// which run long startup steps, can extend the start timeout without
-// importing the server.
+// It is a leaf package (it imports only core/lifecycle's constants) so the
+// supervisor and the app's stateless ExtendStart can both use it. App code
+// reaches it through those two: the supervisor sends READY, STATUS and
+// STOPPING, and ExtendStart extends the start timeout.
 //
 // Nothing sent here may carry a path, version, count or credential: STATUS=
 // text is shown to anyone who can run `systemctl status`.
