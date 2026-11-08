@@ -2,7 +2,16 @@
 
 #### Dedup vector index: a crash that kept the row count no longer leaves the index wrong
 
-At startup the server trusted the saved vector index whenever the number of embedding rows still matched the number saved with it. A crash could change rows without changing that number (one book embedded and another deleted, a book re-embedded, a merge that changed which version is primary), and the index then stayed wrong until something rebuilt it. A clean stop now leaves a marker beside the snapshot, only when the snapshot is exactly the index in memory, and every startup removes it. A startup that finds no marker brings the snapshot up to date against the database whatever the counts say. The short-lived worker processes that run a single operation load the snapshot as it is and leave the marker alone, so they do not repeat that check for every operation.
+At startup the server trusted the saved vector index whenever the number of embedding rows still matched the number saved with it. A crash could change rows without changing that number (one book embedded and another deleted, a book re-embedded, a merge that changed which version is primary), and the index then stayed wrong until something rebuilt it.
+
+A clean stop now leaves a marker beside the snapshot, and a startup that finds no marker brings the snapshot up to date against the database whatever the counts say. The marker is written only when both of these hold:
+
+- the snapshot is exactly the index in memory (complete, undamaged, saved after its last change, and no write the index refused or failed to mirror during the run);
+- nothing during the run changed what that update would read from the database: an embedding row, or a book's existence, primary flag or series fields. The check sits where every database write passes, so merges, primary changes, embedding cleanups and re-embeds all count. A run that embedded anything therefore leaves no marker, so only quiet runs let the next start skip the update.
+
+It also records the embedding model, and a startup with another model brings the snapshot up to date. It is the last step of a stop, and is skipped when any stop step was still running or failed. Any process that opens the database removes the marker, so running a command-line tool between a stop and the next start costs that start one update. A marker that cannot be deleted is emptied, which makes it invalid. The short-lived worker processes that run a single operation leave the marker alone and check only the counts.
+
+Not covered: a tool that writes those database rows without going through the server's database layer (none does today), writes made by a worker process (no operation runs in one today), and the index holding non-primary books that a startup leaves out (tracked in TODO).
 
 #### Stop timeout: comments and the deploy example
 
