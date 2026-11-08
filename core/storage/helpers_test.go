@@ -1,5 +1,5 @@
 // file: core/storage/helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 56109ea6-e975-416a-9681-1f2102068005
 // last-edited: 2026-11-07
 
