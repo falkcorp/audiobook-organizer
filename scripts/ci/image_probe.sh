@@ -1,8 +1,8 @@
 #!/bin/sh
 # file: scripts/ci/image_probe.sh
-# version: 1.0.0
+# version: 1.0.1
 # guid: 2a1411e8-5147-4bcd-981d-3d653bf58b0d
-# last-edited: 2026-11-07
+# last-edited: 2026-11-08
 #
 # Probe a running audiobook-organizer container (the docker-image PR job, 09 §9.4 R1).
 #
@@ -14,8 +14,8 @@
 # Environment:
 #   READY_TIMEOUT        seconds to wait for "ready":true on /health (default 300)
 #   PROBE_STORAGE_LEVELS 1 runs `/app/audiobook-organizer --print-storage-levels` inside the
-#                        container and requires exit 0 and JSON on stdout. Off by default:
-#                        the flag does not exist until R1-23, which sets it in docker-image.yml.
+#                        container and requires exit 0 and JSON on stdout. Off by default
+#                        (a binary before R1-23 has no such flag); docker-image.yml sets it.
 #   PROBE_BUILD_ID       1 requires the X-App-Build response header of `/` to equal the
 #                        content of <meta name="mediacore-build"> in the served HTML
 #                        (TestBuildID_HeaderEqualsEmbeddedMeta). Off by default: the header
