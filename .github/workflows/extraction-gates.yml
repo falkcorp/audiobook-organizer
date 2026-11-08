@@ -1,5 +1,5 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.3.0
+# version: 1.4.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
 # last-edited: 2026-11-08
 
@@ -202,15 +202,33 @@ jobs:
       - name: Install system packages
         run: scripts/ci/apt_install.sh libtag1-dev
 
+      # The release tarball is cached by version and checksum. On 2026-11-08
+      # GitHub's release CDN answered runners with 504 for over an hour while
+      # it served other clients, and `--retry 3` gave up within 7 s, failing
+      # this required check on every PR. A cache hit skips the download.
+      # A miss retries with backoff for up to 5 minutes. The checksum is
+      # verified either way, so a cached file is trusted no more than a
+      # fresh one.
+      - name: Restore promtool tarball
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/promtool-dl
+          key: promtool-${{ env.PROMETHEUS_VERSION }}-${{ env.PROMETHEUS_SHA256 }}
+
       - name: Install promtool (pinned, checksum-verified)
         run: |
           set -euo pipefail
           tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
-          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
-            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
-          echo "${PROMETHEUS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          dl="${HOME}/.cache/promtool-dl"
+          mkdir -p "$dl"
+          if ! echo "${PROMETHEUS_SHA256}  ${dl}/${tarball}" | sha256sum -c --status - 2>/dev/null; then
+            curl -fsSL --retry 10 --retry-delay 15 --retry-max-time 300 --retry-all-errors \
+              -o "${dl}/${tarball}" \
+              "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          fi
+          echo "${PROMETHEUS_SHA256}  ${dl}/${tarball}" | sha256sum -c -
           mkdir -p "${RUNNER_TEMP}/promtool"
-          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/promtool" --strip-components=1 \
+          tar -xzf "${dl}/${tarball}" -C "${RUNNER_TEMP}/promtool" --strip-components=1 \
             "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
           echo "${RUNNER_TEMP}/promtool" >> "$GITHUB_PATH"
 
