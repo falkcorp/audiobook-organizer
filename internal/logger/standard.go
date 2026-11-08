@@ -1,5 +1,5 @@
 // file: internal/logger/standard.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 3f2504e0-4f89-11d3-9a0c-0305e82c3301
 // last-edited: 2026-11-08
 
@@ -45,27 +45,27 @@ type StandardLogger struct {
 // scopedLogger is a slog logger paired with the logger it was derived from.
 type scopedLogger struct{ from, l *slog.Logger }
 
-// New creates a StandardLogger for the given subsystem.
+// FromSlog returns a StandardLogger that writes to l; a nil l is the process
+// default, looked up at each call. It is the one constructor: New and
+// NewWithActivityLog are FromSlog over the default. The result is the
+// concrete type (assignable to Logger) so New can build on it.
+func FromSlog(l *slog.Logger) *StandardLogger {
+	return &StandardLogger{minStdout: LevelDebug, base: l}
+}
+
+// New creates a StandardLogger for the given subsystem, over the process
+// default.
 func New(subsystem string) *StandardLogger {
-	return &StandardLogger{
-		subsystem: subsystem,
-		minStdout: LevelDebug,
-	}
+	l := FromSlog(nil)
+	l.subsystem = subsystem
+	return l
 }
 
 // NewWithActivityLog creates a StandardLogger that also writes INFO+ to the system activity log.
 func NewWithActivityLog(subsystem string, writer ActivityLogWriter) *StandardLogger {
-	return &StandardLogger{
-		subsystem:      subsystem,
-		minStdout:      LevelDebug,
-		activityWriter: writer,
-	}
-}
-
-// FromSlog returns a Logger that writes to l, with the subsystem its With
-// calls build as the "subsystem" attribute. A nil l is the process default.
-func FromSlog(l *slog.Logger) Logger {
-	return &StandardLogger{minStdout: LevelDebug, base: l}
+	l := New(subsystem)
+	l.activityWriter = writer
+	return l
 }
 
 // slogger is the slog logger a record goes to: base, or the default, either
