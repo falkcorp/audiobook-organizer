@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-08-hnsw-clean-stop-executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 42dae9c5-6b36-4000-91ca-af79a8cacdbf -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -18,7 +18,7 @@
 - Restoring a backup replaces the database files directly, so the server could not see the change. A third review caught that a restore followed by a normal shutdown still left a note vouching for the old index. A restore now stops the note for the rest of that run and deletes any note beside the restored database. A test reproduced the problem first and fails without the fix.
 - Any program that opens the database removes the note, so a maintenance tool run between a shutdown and the next start cannot leave it vouching for records it changed.
 - The note records which fingerprint model the index was built with. A startup with a different model repairs the copy.
-- Each safeguard added in the second and third rounds has a test that was confirmed to fail when the safeguard is removed: 109 of 109 (72 from the second round, 37 from the third). The first round reported "13 of 13", but three of its safeguards had no such test; they have one now and are part of the 72. One change has no such test, because reaching it needs a disk failure: the clean-up after a note that could not be fully written.
+- Each safeguard added in the second and third rounds has a test that was confirmed to fail when the safeguard is removed: 115 of 115 (72 from the second round, 43 from the third). The first round reported "13 of 13", but three of its safeguards had no such test; they have one now and are part of the 72. One change has no such test, because reaching it needs a disk failure: the clean-up after a note that could not be fully written.
 - Not covered: a tool that edits those records without going through the server's database layer (none does today), changes made by a separate worker process (no task runs in one today), and the index holding secondary editions that a startup leaves out (logged as a to-do, with a recommendation). Until that is fixed, a run that adds a secondary edition to the index leaves no note, so the next startup repairs the copy.
 
 ## A crash could leave the index wrong
