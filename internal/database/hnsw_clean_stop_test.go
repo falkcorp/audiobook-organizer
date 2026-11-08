@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -204,7 +204,7 @@ func TestMarkCleanStop_NoMarkerAfterAFailedExport(t *testing.T) {
 }
 
 // TestCleanStop_AWriteAfterTheMarkerRemovesIt: a writer that outlives the
-// stop-time snapshot (the embed queue's drain) changes the graph after the
+// stop-time snapshot (a goroutine the stop never waits for) changes the graph after the
 // marker, so the marker must go and the next boot must reconcile.
 func TestCleanStop_AWriteAfterTheMarkerRemovesIt(t *testing.T) {
 	dir := t.TempDir()
@@ -339,7 +339,7 @@ func TestMarkCleanStop_RefusesAfterAWriteTheGraphMissed(t *testing.T) {
 }
 
 // TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt: a mirror that
-// failed after the stop-time marker (the embed queue's drain) removes it, and
+// failed after the stop-time marker (a writer the stop left running) removes it, and
 // the next boot reconciles.
 func TestCleanStop_AWriteTheGraphMissedAfterTheMarkerRemovesIt(t *testing.T) {
 	dir := t.TempDir()
