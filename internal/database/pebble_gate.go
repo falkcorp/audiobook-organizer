@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-11-08
 
@@ -333,6 +333,9 @@ type GatedDB struct {
 	// verdict counts the writes to the keys the HNSW reconcile's verdict
 	// reads (hnsw_verdict_watch.go).
 	verdict verdictWatch
+	// cleanStop is the HNSW clean-stop marker the store open took
+	// (claimCleanStop, hnsw_clean_stop.go), until the snapshot import pops it.
+	cleanStop atomic.Pointer[cleanStopClaim]
 }
 
 // NewGatedDB wraps an engine the caller opened, for a caller that keeps the
