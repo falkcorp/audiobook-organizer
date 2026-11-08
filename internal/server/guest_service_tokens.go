@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
-// last-edited: 2026-10-26
+// last-edited: 2026-11-07
 
 package server
 
@@ -23,7 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -57,6 +57,19 @@ import (
 // The revoke always tries the policy-rule removal when a token id is recorded
 // (idempotent, a read when nothing is there), so it does not depend on the
 // PolicyAdded flag having won a race.
+//
+// Issuing a key from the admin panel (guest_key_reissue.go) reuses all of the
+// above through the same mint core (mintGuestTokenCore) and adds three rules:
+//   - revoke first, then mint, never the other way round. The record holds one
+//     token id, and reapOrphanedMint deletes EVERY token named aorg-guest-<id>
+//     on the assumption that the pending record makes this the only mint for
+//     that guest; two live same-named tokens would break that;
+//   - the old record is REOPENED (revoked -> pending) by a status-checked
+//     update, so there is still exactly one record per guest and the keyspace
+//     does not change;
+//   - the revoke refuses an in-flight record (pending, minted, revoking) when a
+//     reissue asks for it: revokeGuestServiceToken is built to kill a mint in
+//     flight, and a double click must not destroy the first reissue's key.
 
 // guestTokenTimeout bounds one mint or revoke (token call plus policy edit).
 const guestTokenTimeout = 45 * time.Second
@@ -68,8 +81,8 @@ const guestTokenListTimeout = 10 * time.Second
 // Admin-facing wording. None of it goes to the guest.
 const (
 	guestTokenForbiddenMsg = "Cloudflare refused (HTTP 403): the server's API token (CF_POLICY_API_TOKEN) is missing the " +
-		"Account > Access: Service Tokens > Edit permission. Add it. This guest's account works in a browser; " +
-		"there is no way to issue a phone-app key to an account that has already accepted its invitation yet"
+		"Account > Access: Service Tokens > Edit permission. Add it, then use Reissue on this guest's row. " +
+		"This guest's account works in a browser"
 	// guestTokenUnavailableMsg is all the guest is told when a mint fails.
 	guestTokenUnavailableMsg = "Phone app access could not be set up automatically. Your account works in a browser; ask the person who invited you about the phone app."
 )
@@ -81,6 +94,11 @@ const (
 	auditGuestTokenMintFailed   = activity.TypeGuestServiceTokenPrefix + "mint_failed"
 	auditGuestTokenRevoked      = activity.TypeGuestServiceTokenPrefix + "revoked"
 	auditGuestTokenRevokeFailed = activity.TypeGuestServiceTokenPrefix + "revoke_failed"
+	// Admin-issued keys (guest_key_reissue.go): a key was issued by email, or
+	// the issue failed after a key was made and that key was revoked again.
+	// "Reissued" covers a first key as well as a replacement; the details say which.
+	auditGuestTokenReissued      = activity.TypeGuestServiceTokenPrefix + "reissued"
+	auditGuestTokenReissueFailed = activity.TypeGuestServiceTokenPrefix + "reissue_failed"
 )
 
 // guestTokenCloudflare is the slice of *cfservicetoken.Client the feature uses.
@@ -108,6 +126,12 @@ type guestTokenState struct {
 	err            error
 	apiOverride    guestTokenCloudflare
 	policyOverride guestTokenPolicy
+
+	// reissueGuard holds the user ids with an admin key issue in flight (see
+	// guest_key_reissue.go). reissueWait overrides how long the handler waits
+	// for one before answering 202 (tests); zero means the default.
+	reissueGuard sync.Map
+	reissueWait  time.Duration
 }
 
 // guestTokenClients returns the clients, or an error when the settings are
@@ -164,7 +188,9 @@ func warnGuestServiceTokensMisconfigured(snap config.Config) {
 // only place the client secret lives after Cloudflare answers, so every fmt
 // verb prints it redacted.
 type guestTokenIssue struct {
-	Issued       bool
+	Issued bool
+	// TokenID is the Cloudflare token's id: not a secret.
+	TokenID      string
 	ClientID     string
 	ClientSecret string
 	Message      string
@@ -289,6 +315,10 @@ func (s *Server) reapOrphanedMint(parent context.Context, api guestTokenCloudfla
 // session exist. It returns nil when the feature does not apply to this accept
 // (off, or the invite did not earn an SSO grant), otherwise the issue to put
 // in the response. It never fails the accept and never logs the secret.
+//
+// The accept-only parts live here (the flag, the invite's SSO gate, writing the
+// pending record, the opt-in email); the mint itself is mintGuestTokenCore,
+// shared with the admin's issue-a-key action.
 func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken string, user *database.User) *guestTokenIssue {
 	snap := config.Snapshot()
 	if !snap.CFGuestServiceTokens {
@@ -304,17 +334,41 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 		inviteAccessLog.Warn("guest service token: the store cannot hold token records, none minted")
 		return &guestTokenIssue{Message: guestTokenUnavailableMsg}
 	}
-	name := cfservicetoken.Name(user.ID)
 	if err := tokens.CreateGuestServiceToken(database.GuestServiceToken{
-		UserID: user.ID, Name: name, Status: database.GuestTokenPending,
+		UserID: user.ID, Name: cfservicetoken.Name(user.ID), Status: database.GuestTokenPending,
 	}); err != nil {
 		inviteAccessLog.Warn("guest service token: writing the pending record failed, none minted: %v", logger.SanitizeLogValue(err.Error()))
 		return &guestTokenIssue{Message: guestTokenUnavailableMsg}
 	}
-	fail := func(detail string) *guestTokenIssue {
-		s.finishGuestTokenFailed(tokens, user.ID, detail)
-		return &guestTokenIssue{Message: guestTokenUnavailableMsg}
+	issue, _ := s.mintGuestTokenCore(parent, store, tokens, user, "")
+	if issue.Issued {
+		s.emailGuestToken(user, issue)
 	}
+	return issue
+}
+
+// mintGuestTokenCore mints user's service token once the PENDING record exists:
+// the caller wrote it (accept created it, an admin issue created or reopened
+// it). It checks the settings, re-reads the user, creates the token at
+// Cloudflare (reaping an ambiguous failure), moves pending -> minted -> active
+// with the token in the books policy, and writes the minted audit entry. actorID
+// is the admin who asked ("" for accept) and only shows in that entry.
+//
+// It returns the guest-facing issue and, when the mint failed, the admin-facing
+// detail (guestTokenUnavailableMsg is written for the guest and says nothing
+// useful to an admin). The detail is the same text the record carries for the
+// Users page. On success the issue holds the secret, which lives only there.
+func (s *Server) mintGuestTokenCore(parent context.Context, store database.Store, tokens database.GuestServiceTokenStore, user *database.User, actorID string) (issue *guestTokenIssue, adminDetail string) {
+	snap := config.Snapshot()
+	name := cfservicetoken.Name(user.ID)
+	unavailable := func(detail string) (*guestTokenIssue, string) {
+		return &guestTokenIssue{Message: guestTokenUnavailableMsg}, detail
+	}
+	fail := func(detail string) (*guestTokenIssue, string) {
+		s.finishGuestTokenFailed(tokens, user.ID, detail)
+		return unavailable(detail)
+	}
+	const lostRaceDetail = "the account's phone-app key was revoked (or the account deactivated) while the new key was being made; the new token was deleted again"
 
 	if !snap.GuestServiceTokensEnabled() {
 		return fail("CF_GUEST_SERVICE_TOKENS is on but CF_ACCOUNT_ID, CF_POLICY_API_TOKEN and CF_SERVICE_AUTH_POLICY_ID are not all set, or CF_SERVICE_AUTH_POLICY_ID is the same policy as CF_GUESTS_POLICY_ID")
@@ -337,8 +391,9 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 		if created != nil && created.ID != "" {
 			// Cloudflare made a token but its answer was unusable: remove it.
 			if _, rerr := api.Revoke(ctx, created.ID); rerr != nil {
-				return s.finishRevokeFailed(tokens, user.ID, created.ID,
-					guestTokenErrText("minted token unusable, and removing it failed", rerr))
+				detail := guestTokenErrText("minted token unusable, and removing it failed", rerr)
+				s.finishRevokeFailed(tokens, user.ID, created.ID, detail)
+				return unavailable(detail)
 			}
 		}
 		detail := guestTokenErrText("creating the service token", err)
@@ -352,7 +407,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 	}
 
 	// cleanup removes the token (and any policy rule) this mint made.
-	cleanup := func(why string) *guestTokenIssue {
+	cleanup := func(why string) (*guestTokenIssue, string) {
 		var problems []string
 		if _, rerr := api.Revoke(ctx, created.ID); rerr != nil {
 			problems = append(problems, guestTokenErrText("deleting the token", rerr))
@@ -361,10 +416,11 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 			problems = append(problems, guestTokenErrText("removing the policy rule", rerr))
 		}
 		if len(problems) > 0 {
-			return s.finishRevokeFailed(tokens, user.ID, created.ID, why+"; cleanup incomplete: "+joinProblems(problems))
+			detail := why + "; cleanup incomplete: " + joinProblems(problems)
+			s.finishRevokeFailed(tokens, user.ID, created.ID, detail)
+			return unavailable(detail)
 		}
-		s.finishGuestTokenFailed(tokens, user.ID, why)
-		return &guestTokenIssue{Message: guestTokenUnavailableMsg}
+		return fail(why)
 	}
 
 	if _, err := tokens.UpdateGuestServiceToken(user.ID, func(g *database.GuestServiceToken) error {
@@ -377,7 +433,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 		if errors.Is(err, errGuestTokenLostRace) || errors.Is(err, database.ErrGuestServiceTokenNotFound) {
 			// Revoked while Cloudflare was answering: delete what was just made.
 			s.cleanupLostMint(ctx, api, policy, user.ID, created.ID)
-			return &guestTokenIssue{Message: guestTokenUnavailableMsg}
+			return unavailable(lostRaceDetail)
 		}
 		return cleanup("recording the minted token failed: " + logger.SanitizeLogValue(err.Error()))
 	}
@@ -400,16 +456,18 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 	}); err != nil {
 		if errors.Is(err, errGuestTokenLostRace) {
 			s.cleanupLostMint(ctx, api, policy, user.ID, created.ID)
-			return &guestTokenIssue{Message: guestTokenUnavailableMsg}
+			return unavailable(lostRaceDetail)
 		}
 		return cleanup("recording the active token failed: " + logger.SanitizeLogValue(err.Error()))
 	}
 
 	inviteAccessLog.Info("guest service token: minted and added to the books policy for account %s (token %s)", user.ID, created.ID)
-	s.recordGuestTokenAudit(auditGuestTokenMinted, "info", user.ID, created.ID, "", "a per-guest Cloudflare service token was minted and added to the books policy")
-	issue := &guestTokenIssue{Issued: true, ClientID: created.ClientID, ClientSecret: created.ClientSecret}
-	s.emailGuestToken(user, issue)
-	return issue
+	mintedDetail := ""
+	if actorID != "" {
+		mintedDetail = "by admin account " + actorID
+	}
+	s.recordGuestTokenAudit(auditGuestTokenMinted, "info", user.ID, created.ID, mintedDetail, "a per-guest Cloudflare service token was minted and added to the books policy")
+	return &guestTokenIssue{Issued: true, TokenID: created.ID, ClientID: created.ClientID, ClientSecret: created.ClientSecret}, ""
 }
 
 var errGuestTokenLostRace = errors.New("the record was revoked while the token was being made")
@@ -462,7 +520,7 @@ func (s *Server) finishGuestTokenFailed(tokens database.GuestServiceTokenStore, 
 
 // finishRevokeFailed records a token that exists at Cloudflare (or may) and
 // could not be removed, so the admin can retry the revoke.
-func (s *Server) finishRevokeFailed(tokens database.GuestServiceTokenStore, userID, tokenID, detail string) *guestTokenIssue {
+func (s *Server) finishRevokeFailed(tokens database.GuestServiceTokenStore, userID, tokenID, detail string) {
 	if _, err := tokens.UpdateGuestServiceToken(userID, func(g *database.GuestServiceToken) error {
 		if g.TokenID == "" {
 			g.TokenID = tokenID
@@ -474,7 +532,6 @@ func (s *Server) finishRevokeFailed(tokens database.GuestServiceTokenStore, user
 	}
 	inviteAccessLog.Warn("guest service token: account %s: token %s may still exist, remove it by hand: %s", userID, tokenID, logger.SanitizeLogValue(detail))
 	s.recordGuestTokenAudit(auditGuestTokenRevokeFailed, "warn", userID, tokenID, detail, "a per-guest Cloudflare service token may still exist")
-	return &guestTokenIssue{Message: guestTokenUnavailableMsg}
 }
 
 // errGuestTokenNone: the user has no token record.
@@ -487,24 +544,57 @@ var errGuestTokenNone = errors.New("no phone-app token record for this user")
 // automatic revoke on deactivation. A record with no Cloudflare token behind it
 // is simply closed. A second call on a revoked record is a no-op.
 func (s *Server) revokeGuestServiceToken(parent context.Context, userID, reason, actorID string) error {
-	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring())
-	if !ok {
-		return errGuestTokenNone
-	}
-	var snapshot database.GuestServiceToken
-	alreadyRevoked := false
-	if _, err := tokens.UpdateGuestServiceToken(userID, func(g *database.GuestServiceToken) error {
+	return s.revokeGuestServiceTokenOpts(parent, userID, reason, actorID, false)
+}
+
+// errGuestTokenBusy: a key is being set up or revoked right now (the record is
+// pending, minted or revoking) and the caller asked not to disturb it.
+var errGuestTokenBusy = errors.New("a phone-app key is being set up or revoked right now")
+
+// beginGuestTokenRevoke is the locked first half of a revoke: it marks the
+// record "revoking" and returns what the record held. alreadyRevoked is true
+// when it was revoked already (nothing is written). With refuseInFlight a
+// record that is pending, minted or revoking is refused with errGuestTokenBusy
+// and left untouched: the ordinary revoke is built to kill a mint in flight,
+// but an admin reissue must never destroy the key another reissue is making. A
+// revoking record is refused only then: the deactivation and the Revoke button
+// pass false, so one stuck in revoking stays retryable.
+func beginGuestTokenRevoke(tokens database.GuestServiceTokenStore, userID string, refuseInFlight bool) (snapshot database.GuestServiceToken, alreadyRevoked bool, err error) {
+	_, err = tokens.UpdateGuestServiceToken(userID, func(g *database.GuestServiceToken) error {
 		snapshot = *g
 		if g.Status == database.GuestTokenRevoked {
 			alreadyRevoked = true
 			return errGuestTokenLostRace // no write
 		}
+		if refuseInFlight && guestTokenInFlight(g.Status) {
+			return errGuestTokenBusy
+		}
 		g.Status, g.Detail = database.GuestTokenRevoking, ""
 		return nil
-	}); err != nil {
-		if alreadyRevoked {
-			return nil
-		}
+	})
+	if alreadyRevoked {
+		return snapshot, true, nil
+	}
+	return snapshot, false, err
+}
+
+// guestTokenInFlight reports a status in which a mint or a revoke is running.
+func guestTokenInFlight(status string) bool {
+	return status == database.GuestTokenPending || status == database.GuestTokenMinted || status == database.GuestTokenRevoking
+}
+
+// revokeGuestServiceTokenOpts is revokeGuestServiceToken with refuseInFlight
+// (see beginGuestTokenRevoke).
+func (s *Server) revokeGuestServiceTokenOpts(parent context.Context, userID, reason, actorID string, refuseInFlight bool) error {
+	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring())
+	if !ok {
+		return errGuestTokenNone
+	}
+	snapshot, alreadyRevoked, err := beginGuestTokenRevoke(tokens, userID, refuseInFlight)
+	if alreadyRevoked {
+		return nil
+	}
+	if err != nil {
 		if errors.Is(err, database.ErrGuestServiceTokenNotFound) {
 			return errGuestTokenNone
 		}
@@ -582,10 +672,20 @@ func (s *Server) revokeGuestServiceTokenAsync(userID, reason string) {
 // recordGuestTokenAudit writes an audit-tier activity entry. It carries account
 // and token ids only: never a secret, a client id or an address.
 func (s *Server) recordGuestTokenAudit(typ, level, userID, tokenID, detail, summary string) {
+	s.recordGuestTokenAuditWith(typ, level, userID, tokenID, detail, summary, nil)
+}
+
+// recordGuestTokenAuditWith is recordGuestTokenAudit plus extra details: only
+// non-secret ids and flags (previous_token_id, first_key). The callers pass
+// nothing else, and a value must never be a secret, a client id or an address.
+func (s *Server) recordGuestTokenAuditWith(typ, level, userID, tokenID, detail, summary string, extra map[string]any) {
 	if s.activityService == nil {
 		return
 	}
 	d := map[string]any{"user_id": userID}
+	for k, v := range extra {
+		d[k] = v
+	}
 	if tokenID != "" {
 		d["token_id"] = tokenID
 	}
@@ -603,7 +703,8 @@ func (s *Server) recordGuestTokenAudit(typ, level, userID, tokenID, detail, summ
 // emailGuestToken sends the credential to the guest's verified address when the
 // owner turned INVITE_EMAIL_SERVICE_TOKEN on. Off by default: an email is a
 // weaker place for a secret than the one-time page. Background, so a slow relay
-// never delays the accept; the secret stays in memory only.
+// never delays the accept; the secret stays in memory only. The body is the
+// same one the admin's issue-a-key action sends (handlers.RenderPhoneKeyEmail).
 func (s *Server) emailGuestToken(user *database.User, issue *guestTokenIssue) {
 	snap := config.Snapshot()
 	if !snap.InviteEmailServiceToken || user.Email == "" {
@@ -613,15 +714,15 @@ func (s *Server) emailGuestToken(user *database.User, issue *guestTokenIssue) {
 	if sender == nil {
 		return
 	}
-	msg := imail.Message{
-		To:      user.Email,
-		Subject: "Your Audiobook Organizer phone-app key",
-		Text: "Hello " + user.Username + ",\n\n" +
-			"Your phone app needs two custom headers on every request to " + snap.InviteBaseURL(s.externalURL) + ":\n\n" +
-			"  CF-Access-Client-Id: " + issue.ClientID + "\n" +
-			"  CF-Access-Client-Secret: " + issue.ClientSecret + "\n\n" +
-			"This key belongs to you alone. Do not share it. Delete this email once the app works.\n",
+	msg, err := handlers.RenderPhoneKeyEmail(handlers.PhoneKeyEmail{
+		Username: user.Username, ServerURL: snap.InviteBaseURL(s.externalURL),
+		ClientID: issue.ClientID, ClientSecret: issue.ClientSecret,
+	})
+	if err != nil {
+		inviteAccessLog.Warn("guest service token email: building the message failed for account %s: %v", user.ID, logger.SanitizeLogValue(err.Error()))
+		return
 	}
+	msg.To = user.Email
 	parent := s.bgCtx
 	if parent == nil {
 		parent = context.Background()

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_guest_tokens.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7e9a40-5b1d-4e83-9f06-d4a8b3c1e725
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 package database
 
@@ -72,6 +72,10 @@ type GuestServiceToken struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 	RevokeReason string     `json:"revoke_reason,omitempty"`
+	// ReissuedAt is when an admin last reopened this record to issue a new key
+	// (reissue). Nil for a record that was never reopened. Additive: a build
+	// that does not know the field ignores it.
+	ReissuedAt *time.Time `json:"reissued_at,omitempty"`
 }
 
 // GuestServiceTokenStore holds per-guest Cloudflare service token records.
@@ -124,7 +128,11 @@ func (p *PebbleStore) writeGuestServiceToken(g *GuestServiceToken) error {
 	return p.db.Set([]byte(guestServiceTokenPrefix+g.UserID), data, pebble.Sync)
 }
 
-// CreateGuestServiceToken implements GuestServiceTokenStore.
+// CreateGuestServiceToken implements GuestServiceTokenStore. It refuses any
+// existing record, a revoked one included: there is one record per user, and
+// issuing a user a new key after a revoke REOPENS that record with a
+// status-checked UpdateGuestServiceToken (revoked -> pending, see
+// reissueGuestKey in internal/server), so a reissue never changes the keyspace.
 func (p *PebbleStore) CreateGuestServiceToken(rec GuestServiceToken) error {
 	if rec.UserID == "" {
 		return errors.New("guest service token: user id required")
