@@ -1,19 +1,26 @@
 // file: internal/books/perimeter_app_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d50ddd31-9468-4c34-9994-a64e31f28a71
 // last-edited: 2026-11-08
 
 package books
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,13 +87,44 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 				gh.Del("Content-Type")
 				kh.Del("Content-Type")
 			} else {
-				assert.Equal(t, hw.Body.Bytes(), body, "body")
+				assert.Equal(t, readableBody(hw.Result().Header, hw.Body.Bytes()), readableBody(resp.Header, body), "body")
 			}
 			if !maps.EqualFunc(gh, kh, slices.Equal) {
 				t.Errorf("headers differ\nHEAD: %v\nApp:  %v", gh, kh)
 			}
 		})
 	}
+}
+
+// readableBody is a response body as the parity check compares and prints
+// it (internal/server's perimeter_shim_test.go has the same helper; the two
+// test packages cannot share it). A gzip-encoded body is decompressed, so the
+// check compares what a client reads (Content-Encoding and Vary are compared
+// with the headers) and a failure shows the text that differs, not two dumps
+// of compressed bytes. A body that is not a readable gzip stream, or is not
+// printable text, is shown as its length and SHA-256.
+func readableBody(h http.Header, b []byte) string {
+	opaque := func(what string, b []byte) string {
+		return fmt.Sprintf("<%s: %d bytes, sha256 %x>", what, len(b), sha256.Sum256(b))
+	}
+	prefix := ""
+	if h.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return opaque("unreadable gzip ("+err.Error()+")", b)
+		}
+		plain, err := io.ReadAll(zr)
+		if err != nil {
+			return opaque("unreadable gzip ("+err.Error()+")", b)
+		}
+		b, prefix = plain, "gzip: "
+	}
+	if !utf8.Valid(b) || strings.ContainsFunc(string(b), func(r rune) bool {
+		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+	}) {
+		return opaque(prefix+"binary", b)
+	}
+	return prefix + string(b)
 }
 
 // TestStop_EventStreamsEndBeforeTheDrain (R1-15 review m7): an open event
