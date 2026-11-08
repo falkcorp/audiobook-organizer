@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.114.4
+// version: 2.114.5
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-07
 
@@ -187,6 +187,9 @@ type Server struct {
 	// adminRoutes records every route registered through adminRoute /
 	// adminGroup ("METHOD /full/path"), for admin_routes_test.go.
 	adminRoutes map[string]adminRouteKind
+	// ownerRoutes records every route registered through ownerCredRoute
+	// ("METHOD /full/path"), for legacy_manifest_test.go's Guards.Owner check.
+	ownerRoutes map[string]bool
 	// metadataCacheH is the metadata-cache handler, kept so the startup
 	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
 	metadataCacheH *handlers.MetadataCacheHandler

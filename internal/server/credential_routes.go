@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7e3f5a-9c21-4d84-a6f3-5e8d2c1b7a90
-// last-edited: 2026-10-19
+// last-edited: 2026-11-07
 
 package server
 
@@ -50,11 +50,17 @@ func (s *Server) recordCredRoute(g *gin.RouterGroup, method, rel string, kind cr
 	if s.credRoutes == nil {
 		s.credRoutes = make(map[string]credRouteKind)
 	}
+	s.credRoutes[routeKey(g, method, rel)] = kind
+}
+
+// routeKey is "METHOD /full/path" for rel registered on g, the key the
+// route records (credRoutes, ownerRoutes) and gin's Routes() share.
+func routeKey(g *gin.RouterGroup, method, rel string) string {
 	full := path.Join(g.BasePath(), rel)
 	if rel != "" && rel[len(rel)-1] == '/' && full[len(full)-1] != '/' {
 		full += "/"
 	}
-	s.credRoutes[method+" "+full] = kind
+	return method + " " + full
 }
 
 // credRoute registers a route that changes credentials, identity, the

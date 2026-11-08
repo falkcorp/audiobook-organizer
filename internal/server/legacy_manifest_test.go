@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
 // last-edited: 2026-11-07
 
@@ -13,12 +13,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -135,7 +135,15 @@ func TestLegacyManifest_MatchesGinRoutes(t *testing.T) {
 					assert.True(t, lr.OwnAuth, key)
 					assert.Contains(t, body, "invalid access token", "%s: ABSRequireAuth expected", key)
 				case rbac.KindPublic:
-					assert.False(t, authRequired, "%s: Public, but the chain demands authentication", key)
+					if body, ok := publicHandlerRefusals[key]; ok {
+						// The handler itself answers an empty credential
+						// request 401; no gate runs before it.
+						assert.Equal(t, http.StatusUnauthorized, anon.Code, key)
+						assert.Equal(t, body, anon.Body.String(), "%s: not the handler's own refusal", key)
+						break
+					}
+					assert.NotContains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, anon.Code,
+						"%s: Public, but an anonymous request is refused: %d %s", key, anon.Code, anon.Body.String())
 				default:
 					t.Errorf("%s: unexpected requirement %s", key, lr.Perm)
 				}
@@ -148,6 +156,14 @@ func TestLegacyManifest_MatchesGinRoutes(t *testing.T) {
 			assert.Equal(t, 426, atoms, "s.perm routes: the 421 s.perm call sites plus the five worker routes of its one shared s.perm")
 		})
 	}
+}
+
+// publicHandlerRefusals are the Public routes whose handler, not a gate,
+// answers an anonymous request with no credentials 401: the body each
+// handler writes, so a gate added in front of them still fails the check.
+var publicHandlerRefusals = map[string]string{
+	"POST /auth/refresh": `{"error":"Session not found"}`,
+	"POST /login":        `{"error":"invalid credentials"}`,
 }
 
 // rateLimitedRoutes exhausts the /api limiter and returns the routes that
@@ -189,43 +205,52 @@ func assertAdminKind(t *testing.T, srv *Server, key string, perm rbac.Requiremen
 	}
 }
 
-// TestLegacyManifest_OwnerGuardsMatchSource: HEAD records no owner-gated
-// routes, so the Guards.Owner rows are checked against the source: every
-// ownerGateWhenOwnerSet() call site names a route whose row has Owner, and
-// no other row has it.
-func TestLegacyManifest_OwnerGuardsMatchSource(t *testing.T) {
+// TestLegacyManifest_OwnerGuardsMatchRegistrations: the Guards.Owner rows
+// are exactly the routes registered through ownerCredRoute, the one way a
+// route gets ownerGateWhenOwnerSet (s.ownerRoutes), one to one (review
+// MINOR-3). TestOwnerGateOnlyThroughOwnerCredRoute keeps it the one way.
+func TestLegacyManifest_OwnerGuardsMatchRegistrations(t *testing.T) {
+	for _, abs := range absModes() {
+		t.Run(absName(abs), func(t *testing.T) {
+			f := legacyEngine(t, abs, false)
+			manifest, err := f.srv.LegacyManifest()
+			require.NoError(t, err)
+			var rows []string
+			for _, lr := range manifest {
+				if lr.Guards.Owner {
+					rows = append(rows, lr.Method+" "+lr.GinPath)
+				}
+			}
+			var registered []string
+			for key := range f.srv.ownerRoutes {
+				registered = append(registered, key)
+			}
+			slices.Sort(rows)
+			slices.Sort(registered)
+			assert.Len(t, registered, 9, "ownerCredRoute registrations at the base")
+			assert.Equal(t, registered, rows, "Guards.Owner rows vs ownerCredRoute registrations")
+		})
+	}
+}
+
+// TestOwnerGateOnlyThroughOwnerCredRoute: no file of this package calls
+// ownerGateWhenOwnerSet except ownerCredRoute, so s.ownerRoutes sees every
+// owner-gated route.
+func TestOwnerGateOnlyThroughOwnerCredRoute(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
-	site := regexp.MustCompile(`http\.Method(\w+), "([^"]+)".*s\.ownerGateWhenOwnerSet\(\)`)
-	var fromSource []string
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
 		b, err := os.ReadFile(name)
 		require.NoError(t, err)
-		for _, line := range strings.Split(string(b), "\n") {
-			if !strings.Contains(line, "s.ownerGateWhenOwnerSet()") {
-				continue
-			}
-			m := site.FindStringSubmatch(line)
-			require.NotNil(t, m, "%s: an ownerGateWhenOwnerSet() call this scan cannot read: %q", name, line)
-			fromSource = append(fromSource, strings.ToUpper(m[1])+" "+m[2])
+		n := strings.Count(string(b), "s.ownerGateWhenOwnerSet()")
+		if name == "owner_routes.go" {
+			assert.Equal(t, 2, n, "owner_routes.go: only ownerCredRoute's two uses")
+			continue
 		}
-	}
-	var fromManifest []string
-	for _, lr := range legacyManifest(true) {
-		if lr.Guards.Owner {
-			fromManifest = append(fromManifest, lr.Method+" "+lr.GinPath)
-		}
-	}
-	require.Len(t, fromManifest, len(fromSource), "Owner rows %v, call sites %v", fromManifest, fromSource)
-	for _, s := range fromSource {
-		found := slices.ContainsFunc(fromManifest, func(m string) bool {
-			method, path, _ := strings.Cut(s, " ")
-			return strings.HasPrefix(m, method+" ") && strings.HasSuffix(m, path)
-		})
-		assert.True(t, found, "call site %s has no Owner row", s)
+		assert.Zero(t, n, "%s calls ownerGateWhenOwnerSet directly; register the route with ownerCredRoute", name)
 	}
 }
 
@@ -255,7 +280,7 @@ func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handle
 		Owner: "books", Handler: f.srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
 		Routes:      slices.Values(manifest),
 		Redirects:   f.srv.LegacyRedirects(),
-		TopSegments: []string{"ping", "status", "logout", "public", "socket.io"},
+		TopSegments: []string{"ping", "status", "logout", "public", "socket.io", "auth", "health", "metrics"},
 		SPAShared:   []string{"login"},
 	}))
 	h, err := r.Build()
@@ -433,6 +458,9 @@ func TestLegacyMount_MuxAndGinAgreeOnEncodedSlash(t *testing.T) {
 // 404, never core's problem 405; GET /login, whose only route is POST, is the
 // SPA's page (06 §6.10 TestReservedSegmentsDisjointFromNonSPA, request half).
 // Every manifest path is tried with every method gin has no route for.
+// Headers are not compared: gin's security headers and Basic gate are
+// perimeter stages 6 and 8, which R1-17 puts in front of the mux. OPTIONS is
+// the one known status difference (stage 5, also R1-17).
 func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 	for _, abs := range absModes() {
 		t.Run(absName(abs), func(t *testing.T) {
@@ -449,7 +477,7 @@ func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 				}
 				routed[lr.Method+" "+p] = true
 			}
-			methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+			methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
 			n := 0
 			for _, p := range paths {
 				for _, m := range methods {
@@ -458,6 +486,17 @@ func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 					}
 					n++
 					g, mt := probe(f.srv.router, m, p, ""), probe(h, m, p, "")
+					if m == http.MethodOptions {
+						// Known difference until R1-17 (review M1): gin's CORS
+						// middleware answers every OPTIONS 204 before routing;
+						// core has no CORS stage yet (05-http-api §4.2 stage 5),
+						// so the mount answers it as an unmatched method. R1-17
+						// puts stage 5 in front of the mux and this branch
+						// becomes the plain comparison below.
+						assert.Equal(t, http.StatusNoContent, g.Code, "gin OPTIONS %s", p)
+						assert.NotEqual(t, http.StatusNoContent, mt.Code, "OPTIONS %s now matches gin: R1-17's stage 5 landed, drop this branch", p)
+						continue
+					}
 					assert.Equal(t, g.Code, mt.Code, "%s %s", m, p)
 					assert.Equal(t, g.Header().Get("Content-Type"), mt.Header().Get("Content-Type"), "%s %s", m, p)
 					assert.Equal(t, g.Body.String(), mt.Body.String(), "%s %s", m, p)
@@ -466,6 +505,76 @@ func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
 			// The SPA-shared segment: gin serves GET /login from NoRoute.
 			assert.Equal(t, probe(f.srv.router, http.MethodGet, "/login", "").Code, probe(h, http.MethodGet, "/login", "").Code)
+		})
+	}
+}
+
+// notARouteHandler reports a response no gin route handler wrote: the
+// post-match check's legacy 404, core's problem 404 for an unclean /api/
+// path, or gin's NoRoute chain (the legacy 404, or the SPA page for a GET).
+func notARouteHandler(w *httptest.ResponseRecorder) bool {
+	switch {
+	case w.Code == http.StatusNotFound && w.Body.String() == legacyNotFoundBody:
+		return true
+	case w.Code == http.StatusNotFound && w.Header().Get("Content-Type") == "application/problem+json":
+		return true
+	case w.Code == http.StatusOK && strings.HasPrefix(w.Header().Get("Content-Type"), "text/html"):
+		return true
+	}
+	return false
+}
+
+// TestLegacyMount_FallbackNeverRunsARouteHandler is review B1 on the real
+// engine: the "/" fallback may reach gin's NoRoute chain and GET / only
+// (05-http-api §8.2). Every parameterised manifest route is sent through the
+// mount with each parameter "." and "..", an unclean path the mux never
+// matches and gin would route; plus an encoded slash on the SPAShared
+// segment. None may reach a route handler. On gin alone
+// /public/session/../track/1 runs PublicSessionTrack with session "..";
+// through the mount it is a 404 (a parity change 05-http-api §8.2 asks for).
+func TestLegacyMount_FallbackNeverRunsARouteHandler(t *testing.T) {
+	for _, abs := range absModes() {
+		t.Run(absName(abs), func(t *testing.T) {
+			f := legacyEngine(t, abs, false)
+			_, h := booksMount(t, f)
+			manifest, err := f.srv.LegacyManifest()
+			require.NoError(t, err)
+			n := 0
+			for _, lr := range manifest {
+				if !strings.ContainsAny(lr.GinPath, ":*") {
+					continue
+				}
+				for _, v := range []string{".", ".."} {
+					segs := strings.Split(lr.GinPath, "/")
+					for i, sg := range segs {
+						if strings.HasPrefix(sg, ":") || strings.HasPrefix(sg, "*") {
+							segs[i] = v
+						}
+					}
+					p := strings.Join(segs, "/")
+					n++
+					w := probe(h, lr.Method, p, "")
+					assert.True(t, notARouteHandler(w), "%s %s (%s) reached a handler: %d %q %.120q",
+						lr.Method, p, lr.GinPath, w.Code, w.Header().Get("Content-Type"), w.Body.String())
+				}
+			}
+			assert.Greater(t, n, 300, "too few parameterised routes; the scan is broken")
+			// Books has no GET route under /login, so gin answers these from
+			// its NoRoute chain (the Cloudflare-recovery redirect); the mount
+			// must give that answer, not a handler's.
+			for _, p := range []string{"/login/joker%2Friddler", "/login%2Fjoker"} {
+				g, mt := probe(f.srv.router, http.MethodGet, p, ""), probe(h, http.MethodGet, p, "")
+				assert.Equal(t, g.Code, mt.Code, "GET %s", p)
+				assert.Equal(t, g.Header().Get("Location"), mt.Header().Get("Location"), "GET %s", p)
+				assert.Equal(t, g.Body.String(), mt.Body.String(), "GET %s", p)
+			}
+			if abs {
+				p := "/public/session/../track/1"
+				g, mt := probe(f.srv.router, http.MethodGet, p, ""), probe(h, http.MethodGet, p, "")
+				assert.False(t, notARouteHandler(g), "gin alone no longer routes %s; the hole this test guards is gone from the fixture", p)
+				assert.Equal(t, http.StatusNotFound, mt.Code, p)
+				assert.Equal(t, legacyNotFoundBody, mt.Body.String(), p)
+			}
 		})
 	}
 }
@@ -604,4 +713,12 @@ func TestLegacyManifest_DriftFailsBoot(t *testing.T) {
 	err = checkLegacyManifest(walk, extra)
 	require.True(t, errors.Is(err, httpapi.ErrLegacyManifest), "%v", err)
 	assert.Contains(t, err.Error(), "GET /api/v1/batcave")
+	// Only GET / and HEAD / are the "/" owner's: a gin route with any other
+	// method on "/" needs a manifest row (review M2).
+	withPost := append(slices.Clone(walk), gin.RouteInfo{Method: http.MethodPost, Path: "/"})
+	err = checkLegacyManifest(withPost, m)
+	require.True(t, errors.Is(err, httpapi.ErrLegacyManifest), "POST / skipped by the drift check: %v", err)
+	assert.Contains(t, err.Error(), "POST /")
+	withHead := append(slices.Clone(walk), gin.RouteInfo{Method: http.MethodHead, Path: "/"})
+	require.NoError(t, checkLegacyManifest(withHead, m))
 }

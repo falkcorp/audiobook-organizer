@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.1
+// version: 4.66.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-07
 
@@ -1787,9 +1787,14 @@ func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
-	// The legacy mount's post-match check (05-http-api §4.8, SEC2-22) is the
-	// first middleware of every route: gin binds a route's chain when the
-	// route is registered, so it is installed before any route below.
+	// The legacy mount's post-match check (05-http-api §4.8, SEC2-22) runs
+	// before every route-level middleware and handler: gin binds a route's
+	// chain when the route is registered, so it is installed before any route
+	// below. It is not the first global middleware: the eight router.Use calls
+	// of NewServer (logger, recovery, security headers, CORS, Basic auth, raw
+	// response controller, compression, tracing) run before it. None of them
+	// runs a route handler, and R1-17, which replaces them with core's
+	// perimeter stages, must keep it that way.
 	s.router.Use(legacyMatchCheck())
 
 	// OAuth2/OIDC login + Cloudflare Access passthrough (both no-ops unless

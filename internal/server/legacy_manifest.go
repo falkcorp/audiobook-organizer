@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
 // last-edited: 2026-11-07
 
@@ -158,8 +158,8 @@ func checkLegacyManifest(walk gin.RoutesInfo, m []httpapi.LegacyRoute) error {
 	got := map[string]bool{}
 	for _, r := range walk {
 		key := r.Method + " " + r.Path
-		if r.Path == "/" {
-			continue // the "/" owner's, not a manifest route
+		if r.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			continue // the "/" owner's page, not a manifest route; any other method on "/" needs a row
 		}
 		got[key] = true
 		if !want[key] {
@@ -201,16 +201,17 @@ func (s *Server) LegacyRedirects() []httpapi.LegacyRedirect {
 }
 
 // legacyMatchCheck is the post-match check of 05-http-api §4.8 (SEC2-22),
-// the first middleware of every route: once gin has routed a request that
-// core's router handed over through a manifest pattern, a gin match that is
-// not that pattern's manifest entry (for a generalised pattern, one of its
-// members) gets 404 in the legacy error shape before any handler runs. A
-// request gin serves directly, or through the "/" fallback, carries no
-// pattern and passes. So does one gin routes to no route at all (FullPath
-// ""): its NoRoute chain serves no route's handler, and answering it exactly
-// as gin does (the /api redirect, the SPA, gin's 404) is what keeps a
-// mounted path byte-identical to HEAD, a wrong method or a HEAD request on a
-// GET-only route included.
+// installed by setupRoutes ahead of every route-level middleware and handler
+// (after NewServer's eight global ones, none of which runs a route handler).
+// Once gin has routed a request that core's router handed over, a gin match
+// the mux did not admit gets 404 in the legacy error shape before any handler
+// runs: for a manifest pattern, anything but its entry (for a generalised
+// pattern, one of its members); for the "/" fallback, anything but GET / and
+// HEAD /. A request gin serves directly carries no match and passes. So does
+// one gin routes to no route at all (FullPath ""): its NoRoute chain runs no
+// route's handler, and gin's own answer there (the /api redirect, the SPA,
+// gin's 404) keeps a mounted path's status, Content-Type and body what HEAD
+// answers, a wrong method or a HEAD request on a GET-only route included.
 func legacyMatchCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.FullPath() == "" {
