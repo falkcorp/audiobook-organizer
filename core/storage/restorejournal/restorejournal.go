@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/restorejournal.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6c954a92-88a0-4242-b599-92db9a12cae7
 // last-edited: 2026-11-08
 
@@ -127,6 +127,14 @@ const (
 // "hook_done", "rejected". In every kind restore/<id>/inflight.json is
 // created by renaming pending.json before the first live item is renamed
 // (R9-7).
+//
+// The file is JSON Lines, one Record per line, each line fsynced before
+// its step is acted on (05-storage §5S.3.15). A last line without its
+// newline, or one that does not decode, is a torn append, never
+// acknowledged: a reader drops it, and the next append rewrites the file
+// without it (temp, fsync, rename, directory fsync), so stale bytes past a
+// shorter line never survive. An undecodable line before the last is
+// corruption, and a reader stops (restoreswap.ErrJournalCorrupt).
 type Record struct {
 	At    time.Time `json:"at"`
 	Step  string    `json:"step"`
