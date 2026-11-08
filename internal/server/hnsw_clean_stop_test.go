@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -480,5 +480,23 @@ func TestHNSWCleanStop_AnotherEmbeddingModelAfterTheRestart(t *testing.T) {
 				t.Errorf("the boot's NeedsReconcile = %v, want %v", got, tc.stale)
 			}
 		})
+	}
+}
+
+// TestImportHNSWSnapshot_AChildReconcilesWhenTheCountsMoved (MINOR-3): a
+// child imports by the row counts alone, so a snapshot whose Pebble rows
+// moved since it was written is reconciled in the child, and the parent's
+// marker stays where it is.
+func TestImportHNSWSnapshot_AChildReconcilesWhenTheCountsMoved(t *testing.T) {
+	f := newChildModeFixture(t, true)
+	if err := f.es.Upsert(database.Embedding{EntityType: "book", EntityID: "the-black-mirror", Vector: []float32{0, 1, 0, 0}, Model: "bge-m3"}); err != nil {
+		t.Fatal(err)
+	}
+	store := f.boot(t, true)
+	if !store.NeedsReconcile() {
+		t.Error("a child whose snapshot's row counts moved must reconcile it")
+	}
+	if !cleanStopMarkerExists(t, f.dir) {
+		t.Error("the child took the parent's marker")
 	}
 }
