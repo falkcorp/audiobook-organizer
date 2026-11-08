@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -248,11 +248,12 @@ const rawResponseControllerKey = "server.rawResponseController"
 
 // captureRawResponseController stores an http.ResponseController for the
 // writer as it is when this middleware runs. It must be installed BEFORE any
-// middleware that replaces c.Writer with a wrapper lacking Unwrap: the gzip
-// middleware (compressionMiddleware) does, and a ResponseController built on
-// its writer cannot set connection deadlines (http.ErrNotSupported), which
-// silently disabled the body read deadline (accept-invite, password login) for every client
-// sending Accept-Encoding: gzip (every browser).
+// middleware that replaces c.Writer with a wrapper lacking Unwrap: HEAD's gin
+// gzip middleware did, and a ResponseController built on its writer cannot
+// set connection deadlines (http.ErrNotSupported), which silently disabled
+// the body read deadline (accept-invite, password login) for every client
+// sending Accept-Encoding: gzip (every browser). Since R1-17 compression is
+// core's stage 9, outside the engine, whose writers implement Unwrap.
 func captureRawResponseController() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set(rawResponseControllerKey, http.NewResponseController(c.Writer))

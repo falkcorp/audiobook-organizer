@@ -1,7 +1,7 @@
 // file: internal/server/metrics_gzip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 75ace827-acfe-4e59-8a02-2b989251a9cc
-// last-edited: 2026-09-19
+// last-edited: 2026-11-08
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -63,24 +64,28 @@ func isGzip(b []byte) bool {
 	return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b
 }
 
-// metricsRouter builds a router wired exactly as setupRoutes wires the real one:
-// the same global gzip middleware (compressionMiddleware), and promhttp on /metrics.
-func metricsRouter() *gin.Engine {
+// metricsRouter serves promhttp on /metrics behind core's stages as the kernel
+// serves books' engine: stage 9 is the production compressor since R1-17, and
+// /metrics is NoCompress in the manifest (legacy_manifest.go).
+func metricsRouter(t *testing.T) http.Handler {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(compressionMiddleware())
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	// A representative ordinary endpoint, to prove the exclusion is narrow.
 	r.GET("/api/v1/books", func(c *gin.Context) {
 		c.String(http.StatusOK, strings.Repeat("compress me. ", 200))
 	})
-	return r
+	_, h := stagesOver(t, r, httpapi.Deps{},
+		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/metrics", NoCompress: true},
+		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/books"},
+	)
+	return h
 }
 
 // 🔴 TestMetrics_NotDoubleCompressed is the production regression: after ONE gzip
 // decode the body must be parseable text, never more gzip.
 func TestMetrics_NotDoubleCompressed(t *testing.T) {
-	body := scrapeLikePrometheus(t, metricsRouter(), "/metrics")
+	body := scrapeLikePrometheus(t, metricsRouter(t), "/metrics")
 
 	if isGzip(body) {
 		t.Fatal("after one gzip decode the body is STILL gzip — /metrics is double-compressed, " +
@@ -97,7 +102,7 @@ func TestMetrics_NotDoubleCompressed(t *testing.T) {
 // decoded body must actually contain a HELP/TYPE header or a metric line, which is
 // what the scrape parser requires.
 func TestMetrics_ParsesAsExpositionFormat(t *testing.T) {
-	body := string(scrapeLikePrometheus(t, metricsRouter(), "/metrics"))
+	body := string(scrapeLikePrometheus(t, metricsRouter(t), "/metrics"))
 	if !strings.Contains(body, "# HELP") && !strings.Contains(body, "# TYPE") && !strings.Contains(body, "go_") {
 		t.Fatalf("no exposition-format content in the scraped body:\n%.300s", body)
 	}
@@ -109,7 +114,7 @@ func TestGzipStillAppliesToOrdinaryEndpoints(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/books", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
-	metricsRouter().ServeHTTP(rec, req)
+	metricsRouter(t).ServeHTTP(rec, req)
 
 	if enc := rec.Header().Get("Content-Encoding"); !strings.EqualFold(enc, "gzip") {
 		t.Fatalf("Content-Encoding = %q, want gzip — the exclusion is too broad", enc)
@@ -125,7 +130,7 @@ func TestMetrics_UncompressedClientStillWorks(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Accept-Encoding", "identity")
 	rec := httptest.NewRecorder()
-	metricsRouter().ServeHTTP(rec, req)
+	metricsRouter(t).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", rec.Code)

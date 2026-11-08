@@ -1,7 +1,7 @@
 // file: internal/server/otel_redaction_test.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: c57d8b27-c4fa-4a32-8074-be746f84c425
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package server
 
@@ -12,33 +12,38 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
-// TestOtelginSpansCarryNoQueryCredentials pins that the otelgin middleware the
-// router installs records no query string on its spans. ABS clients send the
-// bearer credential (JWT or abk_ API key) as ?token=; otelgin v0.71 records
-// url.path only, and an upgrade that starts recording url.query / url.full /
-// http.target would export live credentials to the trace backend. If this
-// fails after an upgrade, add a span processor or WithSpanStartOptions override
-// that redacts those attributes (see middleware.RedactQueryCredentials).
-func TestOtelginSpansCarryNoQueryCredentials(t *testing.T) {
+// TestStage2SpansCarryNoQueryCredentials pins that the span core's stage 2
+// records for a request (gin's tracing middleware's job until R1-17) carries no query
+// credential. ABS clients send the bearer credential (JWT or abk_ API key) as
+// ?token=; stage 2 records url.query through log.Redactor, which masks those
+// values.
+func TestStage2SpansCarryNoQueryCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
-	r := gin.New()
-	r.Use(otelgin.Middleware("audiobook-organizer", otelgin.WithTracerProvider(tp)))
-	r.GET("/api/items/:id/file/:ino", func(c *gin.Context) { c.Status(http.StatusOK) })
+	engine := gin.New()
+	engine.GET("/api/items/:id/file/:ino", func(c *gin.Context) { c.Status(http.StatusOK) })
+	_, r := stagesOver(t, engine, httpapi.Deps{TracerProvider: tp},
+		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/items/:id/file/:ino"})
 
 	secret := "abk_" + "span-secret"
 	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet,
 		"/api/items/a/file/b?token="+secret+"&api_key="+secret, nil))
+	// A credential after a "?" sent as %3F is path text in URL.Path, so it
+	// reaches url.path rather than url.query.
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet,
+		"/api/items/a/file/b%3Ftoken="+secret, nil))
 
 	spans := rec.Ended()
 	if len(spans) == 0 {
-		t.Fatal("no span recorded; the test is not observing otelgin")
+		t.Fatal("no span recorded; the test is not observing stage 2")
 	}
 	for _, s := range spans {
 		for _, kv := range s.Attributes() {
@@ -49,13 +54,13 @@ func TestOtelginSpansCarryNoQueryCredentials(t *testing.T) {
 	}
 }
 
-// TestTracingMiddlewareSpansCarryNoInviteToken pins that an invite token, a
-// bearer secret that lives in the request PATH, reaches no span: otelgin records
-// the raw path as url.path, so the router installs it through
-// tracingMiddleware. It runs the production constructor, for each invite route
-// plus the SPA page served by NoRoute, and checks every attribute of every span
-// and the span name, while the handler still sees the real token.
-func TestTracingMiddlewareSpansCarryNoInviteToken(t *testing.T) {
+// TestStage2SpansCarryNoInviteToken pins that an invite token, a bearer secret
+// that lives in the request PATH, reaches no span: stage 2 records url.path
+// through log.Redactor and names the span after the route's pattern. It runs
+// core's stages over a gin engine, for each invite route plus the SPA page
+// served by NoRoute, and checks every attribute of every span and the span
+// name, while the handler still sees the real token.
+func TestStage2SpansCarryNoInviteToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const tok = "span-invite-token-example"
 
@@ -73,7 +78,6 @@ func TestTracingMiddlewareSpansCarryNoInviteToken(t *testing.T) {
 			rec := tracetest.NewSpanRecorder()
 			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 			r := gin.New()
-			r.Use(tracingMiddleware(otelgin.WithTracerProvider(tp))...)
 
 			var sawPath, sawParam string
 			h := func(c *gin.Context) {
@@ -85,10 +89,16 @@ func TestTracingMiddlewareSpansCarryNoInviteToken(t *testing.T) {
 			r.POST("/api/v1/users/invites/:token/resend", h)
 			r.GET("/api/v1/users/invites", h)
 			r.NoRoute(h) // the SPA page /invite/:token is not a registered route
+			_, stack := stagesOver(t, r, httpapi.Deps{TracerProvider: tp},
+				httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/auth/invite/:token", Perm: rbac.Public, Public: true},
+				httpapi.LegacyRoute{Method: http.MethodDelete, GinPath: "/api/v1/users/invites/:token"},
+				httpapi.LegacyRoute{Method: http.MethodPost, GinPath: "/api/v1/users/invites/:token/resend"},
+				httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/users/invites"},
+			)
 
 			path, _, _ := strings.Cut(tc.target, "?")
 			w := httptest.NewRecorder()
-			r.ServeHTTP(w, httptest.NewRequest(tc.method, tc.target, nil))
+			stack.ServeHTTP(w, httptest.NewRequest(tc.method, tc.target, nil))
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d", w.Code)
 			}
@@ -101,7 +111,7 @@ func TestTracingMiddlewareSpansCarryNoInviteToken(t *testing.T) {
 
 			spans := rec.Ended()
 			if len(spans) == 0 {
-				t.Fatal("no span recorded; the test is not observing otelgin")
+				t.Fatal("no span recorded; the test is not observing stage 2")
 			}
 			foundPath := false
 			for _, s := range spans {

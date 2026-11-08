@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-08
 
@@ -63,6 +63,9 @@ var coreLayerOf = map[string]int{
 	// internal/openapi implements httpapi's OpenAPI (05-http-api §3, §7): R4
 	// gives an internal package the layer of the public package it implements.
 	"internal/openapi": 6,
+	// internal/httpmw implements httpapi's perimeter stages (05-http-api §3,
+	// §4.2; R1-17), the same rule.
+	"internal/httpmw": 6,
 	// L7
 	"module": 7,
 	// L8

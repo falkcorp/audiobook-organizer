@@ -1,7 +1,7 @@
 // file: core/httpapi/problem.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 58d791ab-c222-4ab1-b523-0444ce052274
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package httpapi
 
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/httpmw"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -243,12 +244,6 @@ func writeJSON(ctx context.Context, w http.ResponseWriter, status int, contentTy
 	}
 }
 
-// requestIDKey carries the request ID stage 1 (R1-17) resolves.
-type requestIDKey struct{}
-
-// RequestID returns the request ID of ctx (05-http-api §4.7), "" outside a
-// request that stage 1 has seen.
-func RequestID(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey{}).(string)
-	return id
-}
+// RequestID returns the request ID of ctx (05-http-api §4.7): the ULID
+// stage 1 assigned, "" outside a request that stage 1 has seen.
+func RequestID(ctx context.Context) string { return httpmw.RequestID(ctx) }
