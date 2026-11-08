@@ -1,0 +1,17 @@
+# file: core/web/.gitignore
+# version: 1.0.0
+# guid: 5f1f5dd6-5a0c-4c43-9b36-3d2a6b7d1c01
+# last-edited: 2026-11-08
+
+# Ignored outputs of the core/web npm workspace (07 §7.3.1). This file travels
+# with core/web into the split repository's web/, where the root .gitignore does
+# not apply; without it every `make web-deps` leaves an untracked node_modules,
+# Go's VCS stamping then marks every binary +dirty, and goreleaser's dirty-tree
+# validation may refuse the release.
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+blob-report/
