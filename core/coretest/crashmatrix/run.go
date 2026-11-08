@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
 // last-edited: 2026-11-08
 
@@ -56,7 +56,9 @@ func errnos() []error { return []error{syscall.ENOSPC, syscall.EACCES} }
 // and readiness in two modes: a kill, and an error return (ENOSPC, then
 // EACCES) from that one operation with the boot continuing, so a non-crash
 // failure must also leave a legal state (R10-6, DATA10-4). It reboots the
-// current build until readiness, then asserts I1–I6 (invariants.go). It
+// current build until readiness, then asserts I1–I6 (invariants.go); the
+// boots after each break are killed again at their swap kill points, one
+// level deep (nested, R1-21 review M6). It
 // fails on any durable operation that carries no writer-table label, and
 // after each fixture it diffs the fixture's real directories against what
 // they held before, so a file written past the boot filesystem fails the
@@ -130,7 +132,7 @@ type fixtureRun struct {
 }
 
 type stats struct {
-	boots, kills, errorRuns, events, pebbleKills int
+	boots, kills, errorRuns, events, pebbleKills, nested int
 }
 
 func (fr *fixtureRun) errorf(format string, args ...any) {
@@ -201,8 +203,8 @@ func (fr *fixtureRun) run(m mode) {
 		return
 	}
 	fr.matrix()
-	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs) over %d census operations in %s",
-		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.events, time.Since(start).Round(time.Millisecond))
+	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs; %d nested kill points) over %d census operations in %s",
+		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.nested, fr.stats.events, time.Since(start).Round(time.Millisecond))
 }
 
 // untouched adds the second legal store of a fixture with a staged or
@@ -271,13 +273,46 @@ func (fr *fixtureRun) matrix() {
 	wg.Wait()
 }
 
-// kill reboots the crash clone taken before census boot b's operation.
+// kill reboots the crash clone taken before census boot b's operation, and
+// kills the first reboot again at each of its nested kill points.
 func (fr *fixtureRun) kill(b int, c bootseamtest.Clone) {
 	c.FS.TestingSetDiskUsage(diskUsage())
 	at := fmt.Sprintf("kill before boot %d's %s", b+1, describe(c.Event))
 	fr.atKillPoint(at, c.FS)
-	ch := fr.chain(c.FS, func(int) bootseamtest.Options { return bootseamtest.Options{} })
+	ch := fr.chain(c.FS, func(boot int) bootseamtest.Options {
+		if boot == 0 {
+			return bootseamtest.Options{CloneIf: nested}
+		}
+		return bootseamtest.Options{}
+	})
 	fr.check(at, ch)
+	fr.killNested(at, ch, func(i int) string { return fmt.Sprintf("reboot %d", i+1) })
+}
+
+// nested reports a nested kill point (R1-21 review M6): an operation of the
+// swap's writers in a boot that runs after the matrix broke an earlier
+// one, the reboot after a kill or the rest of a boot after an injected
+// error. Those boots run the recovery writers no fault-free boot reaches
+// (step x after a failed P0a, a reset's move-back, a rejected reset, the
+// slot cleanup), so the matrix breaks them there.
+func nested(ev bootseamtest.Event) bool {
+	return !ev.Pebble() && strings.HasPrefix(ev.Label, "swap.")
+}
+
+// killNested reboots each nested clone ch took, one level deep: a nested
+// run takes no clones of its own. boot names ch's ith boot for a report.
+func (fr *fixtureRun) killNested(at string, ch chain, boot func(i int) string) {
+	for i, br := range ch.boots {
+		for _, c := range br.clones {
+			c.FS.TestingSetDiskUsage(diskUsage())
+			nat := fmt.Sprintf("%s, then kill before %s's %s", at, boot(i), describe(c.Event))
+			fr.atKillPoint(nat, c.FS)
+			fr.check(nat, fr.chain(c.FS, func(int) bootseamtest.Options { return bootseamtest.Options{} }))
+			fr.mu.Lock()
+			fr.stats.nested++
+			fr.mu.Unlock()
+		}
+	}
 }
 
 // inject reruns the fixture with errno returned from census boot b's
@@ -290,11 +325,23 @@ func (fr *fixtureRun) inject(b int, ev bootseamtest.Event, errno error) {
 	}
 	var mu sync.Mutex
 	hit := false
+	// The nested kill points are those after the error: the rest of the
+	// broken boot and its first reboot (R1-21 review M6). The ones before
+	// it are the census's own.
+	afterHit := func(got bootseamtest.Event) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return hit && nested(got)
+	}
 	ch := fr.chain(mem, func(boot int) bootseamtest.Options {
-		if boot != b {
+		switch boot {
+		case b:
+		case b + 1:
+			return bootseamtest.Options{CloneIf: afterHit}
+		default:
 			return bootseamtest.Options{}
 		}
-		return bootseamtest.Options{Fail: func(got bootseamtest.Event) error {
+		return bootseamtest.Options{CloneIf: afterHit, Fail: func(got bootseamtest.Event) error {
 			if got.Pebble() || got.Label != ev.Label || got.Ordinal != ev.Ordinal || got.Kind != ev.Kind {
 				return nil
 			}
@@ -313,6 +360,7 @@ func (fr *fixtureRun) inject(b int, ev bootseamtest.Event, errno error) {
 		return
 	}
 	fr.check(at, ch)
+	fr.killNested(at, ch, func(i int) string { return fmt.Sprintf("boot %d", i+1) })
 }
 
 // describe names an operation for a report.
