@@ -1,5 +1,5 @@
 // file: internal/database/migrations_runner.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6c1acba7-c650-40dc-abf4-87f9cc8d5b35
 // last-edited: 2026-11-08
 
@@ -39,7 +39,6 @@ type Migration struct {
 	Version     int
 	Description string
 	Up          MigrationFunc
-	Down        MigrationFunc // Optional rollback; never run by core storage
 }
 
 // MigrationRecord tracks applied migrations
