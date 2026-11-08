@@ -1,5 +1,5 @@
 // file: internal/logger/ctx.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 941538ef-bccb-4899-ab37-a24fe681513d
 // last-edited: 2026-11-08
 
@@ -75,9 +75,9 @@ func logCtx(l *slog.Logger, ctx context.Context, level slog.Level, msg string, a
 	_ = l.Handler().Handle(ctx, out)
 }
 
-// sanitizeAttr resolves a's value (a LogValuer becomes its group) and passes every string in it through
-// sanitizeLogLine, descending into groups. Keys are program constants and are
-// left alone.
+// sanitizeAttr resolves a's value (a LogValuer becomes its group) and passes
+// every string in it through sanitizeLogLine, descending into groups. Keys are
+// program constants and are left alone.
 func sanitizeAttr(a slog.Attr) slog.Attr {
 	v := a.Value.Resolve()
 	switch v.Kind() {
