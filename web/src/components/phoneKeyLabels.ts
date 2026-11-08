@@ -1,7 +1,7 @@
 // file: web/src/components/phoneKeyLabels.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b2d9e4c-1a63-4f58-9c0e-5d8a3b6f2e17
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 // Types and labels for the admin "Phone app keys" panel, kept out of the
 // component file so that file exports only components (react-refresh).
@@ -11,11 +11,17 @@ export interface GuestPhoneKey {
   user_id: string;
   username?: string;
   token_id?: string;
+  /** A lifecycle status, or "none": an eligible user with no key record yet. */
   status: string;
   detail?: string;
-  created_at: string;
+  /** Absent on a "none" row. */
+  created_at?: string;
   revoked_at?: string;
   revoke_reason?: string;
+  /** When an admin last reissued this guest's key. */
+  reissued_at?: string;
+  /** Why the Issue / Reissue button is disabled; empty when it works. */
+  reissue_blocked?: string;
   /** What Cloudflare reports; absent when it did not say. */
   last_seen_at?: string;
 }
@@ -35,6 +41,8 @@ export function phoneKeyStatusLabel(status: string): {
   color: 'success' | 'warning' | 'default' | 'error';
 } {
   switch (status) {
+    case 'none':
+      return { label: 'No key', color: 'default' };
     case 'active':
       return { label: 'Active', color: 'success' };
     case 'pending':
@@ -55,5 +63,19 @@ export function phoneKeyStatusLabel(status: string): {
 
 /** Whether the admin can still usefully revoke this key. */
 export function phoneKeyRevocable(status: string): boolean {
-  return status !== 'revoked';
+  return status !== 'revoked' && status !== 'none';
+}
+
+/**
+ * Whether the admin can issue this user a key by email: a first key when there
+ * is no record, a new one when the old key is live, revoked or failed. Not
+ * while a key is being set up or revoked (the server refuses it too).
+ */
+export function phoneKeyReissuable(status: string): boolean {
+  return ['none', 'active', 'revoked', 'failed', 'revoke_failed'].includes(status);
+}
+
+/** "Issue" for a user with no key yet, "Reissue" when a key record exists. */
+export function phoneKeyIssueVerb(status: string): 'Issue' | 'Reissue' {
+  return status === 'none' ? 'Issue' : 'Reissue';
 }
