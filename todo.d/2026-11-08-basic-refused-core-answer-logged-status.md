@@ -5,6 +5,9 @@
       stage 2 with the 401 the client got. Since R1-17 they record core's own
       status for it (R1-17 deviation 15): the shim wraps the kernel's
       handler, so it rewrites the status after stages 2 and 4 recorded it.
+      The byte count is core's too, although the client got none of core's
+      body: stage 2's `http.server.response.body.size` histogram and the
+      span's `http.response.body.size`, and stage 4's `bytes`.
       Accepted until F3, because the earlier fixes cost more: a new exported
       httpapi name for the outer writer to report the status it sent (the
       code contract forbids it), or ABO writing core's internal `State`. Add
