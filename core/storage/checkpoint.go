@@ -154,10 +154,15 @@ type checkpointRecord struct {
 	Status      string            `json:"status"` // open, served, completed, restore_left
 }
 
-// open reports a record that is still an upgrade attempt's rollback point.
-func (r checkpointRecord) open() bool {
-	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left" && r.ReadyAt == nil
+// pending reports a record whose attempt is unfinished: open or served, not
+// completed, released or left by a failed restore.
+func (r checkpointRecord) pending() bool {
+	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left"
 }
+
+// open reports a pending record no boot has served past: the one kind a
+// crash loop reuses.
+func (r checkpointRecord) open() bool { return r.pending() && r.ReadyAt == nil }
 
 // checkpointPointer is <db path>.migration-checkpoint.
 type checkpointPointer struct {
@@ -490,22 +495,83 @@ func (db *DB) completeCheckpoint(now time.Time) error {
 	if st.cpName == "" {
 		return nil
 	}
+	found, err := db.completeRecord(st.cpName, now, true)
+	if err == nil && !found {
+		err = fmt.Errorf("storage: the attempt's checkpoint record %s is gone", st.cpName)
+	}
+	return err
+}
+
+// completeStranded completes the checkpoint c/storage/attempt names: an
+// attempt whose step 9 batch committed, so every step it ran is applied, but
+// whose completion a kill cut off. It writes checkpoint files only. A record
+// already completed, or gone (pruned by hand), needs nothing; the caller
+// deletes the key either way.
+func (db *DB) completeStranded() error {
+	st := db.boot
+	if st.attempt == "" {
+		return nil
+	}
+	found, err := db.completeRecord(st.attempt, st.opts.Clock().UTC(), false)
+	if err != nil {
+		return fmt.Errorf("storage: completing the attempt a killed boot left open: %w", err)
+	}
+	if !found {
+		db.log.Warn("storage: the checkpoint record of a stranded upgrade attempt is gone; clearing the attempt", "name", st.attempt)
+		return nil
+	}
+	db.log.Info("storage: completed the upgrade attempt a killed boot left open", "name", st.attempt)
+	return nil
+}
+
+// completeRecord completes the named record, unless it is no longer pending
+// (already completed, released or restore_left), then the pointer: always
+// when latest (the attempt this boot ran), otherwise only when the pointer
+// still names that checkpoint and says open, so a stranded attempt's
+// resolution never repoints a newer attempt's pointer. It reports whether
+// the record exists. Each step is idempotent, so a kill anywhere in it is
+// finished by the next call.
+func (db *DB) completeRecord(name string, now time.Time, latest bool) (found bool, err error) {
 	recs, err := db.checkpointRecords()
 	if err != nil {
-		return err
+		return false, err
 	}
-	for _, r := range recs {
-		if r.name != st.cpName {
-			continue
-		}
+	i := slices.IndexFunc(recs, func(r namedRecord) bool { return r.name == name })
+	if i < 0 {
+		return false, nil
+	}
+	rec := recs[i].rec
+	if rec.pending() {
 		del := now.Add(checkpointRetention)
-		r.rec.CompletedAt, r.rec.DeleteAfter, r.rec.Status = &now, &del, "completed"
-		if err := db.writeRecord(r.name, r.rec); err != nil {
-			return err
+		rec.CompletedAt, rec.DeleteAfter, rec.Status = &now, &del, "completed"
+		if err := db.writeRecord(name, rec); err != nil {
+			return true, err
 		}
-		return db.writePointer(checkpointPointer{Name: r.name, State: "completed", DeleteAfter: &del})
 	}
-	return fmt.Errorf("storage: the attempt's checkpoint record %s is gone", st.cpName)
+	if rec.CompletedAt == nil {
+		return true, nil // released or restore_left: not this attempt's to complete
+	}
+	if !latest {
+		p, ok, err := db.pointer()
+		if err != nil || !ok || p.Name != name || p.State == "completed" {
+			return true, err
+		}
+	}
+	return true, db.writePointer(checkpointPointer{Name: name, State: "completed", DeleteAfter: rec.DeleteAfter})
+}
+
+// pointer reads <db path>.migration-checkpoint; ok is false when it is absent.
+func (db *DB) pointer() (p checkpointPointer, ok bool, err error) {
+	st := db.boot
+	path := st.opts.Path + ipebble.CheckpointSuffix
+	data, ok, err := ipebble.ReadFile(st.opts.fs, path)
+	if err != nil || !ok {
+		return p, false, err
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return p, false, fmt.Errorf("storage: %s unreadable: %w", path, err)
+	}
+	return p, true, nil
 }
 
 // CheckpointName is the checkpoint this boot took or reused; "" when none.
