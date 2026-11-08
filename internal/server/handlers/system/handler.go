@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.4
+// version: 1.28.5
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -115,6 +115,11 @@ type Handler struct {
 	// repairs.apply) the caller may see in GET /dashboard's recent_operations.
 	// Unset (nil) hides every Repairs operation: see WithRepairsOpAccess.
 	repairsAccess *opaccess.Repairs
+
+	// annDiverged marks the live HNSW vector store diverged
+	// (database.SnapshotDivergence) so this run's stop writes no clean-stop
+	// marker. RestoreBackup calls it: see WithANNSnapshotDivergence.
+	annDiverged func(reason string)
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs operation out of
@@ -126,6 +131,18 @@ type Handler struct {
 // pins the server's wiring.
 func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
 	h.repairsAccess = a
+	return h
+}
+
+// WithANNSnapshotDivergence installs fn, which marks the live HNSW vector
+// store diverged. POST /backup/restore calls it because extraction writes
+// Pebble files directly, behind the GatedDB whose writes the store counts
+// against its clean-stop marker: without it, a run that restores and then
+// stops quietly writes a marker, and the next boot trusts the old graph for
+// the restored rows. A setter for the same reason as WithRepairsOpAccess;
+// TestRestoreBackup_NoCleanStopMarkerAfterARestore pins the server's wiring.
+func (h *Handler) WithANNSnapshotDivergence(fn func(reason string)) *Handler {
+	h.annDiverged = fn
 	return h
 }
 
@@ -889,7 +906,18 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// filesystem path -- see backup.RestoreBackupIn's doc comment (CodeQL
 	// go/path-injection: sanitizing the filename is not a credited barrier in
 	// this repo, only resolving it against os.ReadDir's own results is).
+	//
+	// distrustANNSnapshot is deferred, so it runs whether the restore
+	// finished, failed partway through the extraction, or panicked in it. It
+	// is skipped only when RestoreBackupIn refused before writing anything.
+	refused := false
+	defer func() {
+		if !refused {
+			h.distrustANNSnapshot(targetPath)
+		}
+	}()
 	if err := backup.RestoreBackupIn(backupConfig.BackupDir, safeFilename, targetPath, req.Verify); err != nil {
+		refused = backup.RefusedBeforeWriting(err)
 		// backup.RestoreBackupIn distinguishes two verify=true failure shapes,
 		// both fail-closed (no extraction performed) rather than silently
 		// restoring unverified:
@@ -930,6 +958,44 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		"verified":         req.Verify,
 		"verify_requested": req.Verify,
 	})
+}
+
+// annRestoreReason is the divergence reason a restore gives the HNSW store.
+const annRestoreReason = "a backup restore wrote database files the write gate did not see"
+
+// distrustANNSnapshot stops the HNSW snapshot from being trusted after a
+// restore into targetPath (R1-15 round-2 review, B1). Extraction writes
+// Pebble files with plain file writes, so the GatedDB verdict watch never
+// counts them, and the restored rows can differ from the graph in every way.
+//
+//   - It marks the live store diverged, so this run's stop writes no
+//     clean-stop marker. It does so for every target: a custom target can
+//     still be the live database directory under another spelling (a
+//     symlink, a bind mount), and the cost of a needless mark is one boot
+//     that reconciles the snapshot instead of trusting it.
+//   - It removes a marker in the snapshot directory of the live database
+//     and in that of the database the restore wrote. Run after the
+//     extraction, it also removes a marker the archive itself carried.
+//
+// Called on a failed restore too, since an extraction can fail after writing
+// some files, unless backup.RefusedBeforeWriting says nothing was written.
+func (h *Handler) distrustANNSnapshot(targetPath string) {
+	if h.annDiverged != nil {
+		h.annDiverged(annRestoreReason)
+	}
+	dbPath := config.AppConfig.DatabasePath
+	if dbPath == "" {
+		return
+	}
+	live := database.HNSWSnapshotDir(dbPath)
+	// The archive holds the database directory under its own name, so the
+	// restore wrote it at targetPath/<name> (see backup.addToArchive).
+	restored := database.HNSWSnapshotDir(filepath.Join(targetPath, filepath.Base(dbPath)))
+	for _, dir := range slices.Compact([]string{live, restored}) {
+		if _, err := database.TakeHNSWCleanStop(dir); err != nil {
+			systemLog.Error("backup restore: %v", err)
+		}
+	}
 }
 
 // DeleteBackup deletes a backup file. Implements DELETE /backup/:filename.
