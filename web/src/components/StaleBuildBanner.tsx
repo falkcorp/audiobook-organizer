@@ -1,19 +1,20 @@
 // file: web/src/components/StaleBuildBanner.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: d406b9f4-517f-42bd-a224-bff3843a1eeb
 // last-edited: 2026-11-08
 
 import { useEffect, useState } from 'react';
 import { Alert, Button, Snackbar } from '@mui/material';
-import { getStaleReasons, onStaleBuild } from '../utils/apiFetch';
+import { getStaleReasons, onStaleBuild } from '@mediacore/api-client';
 
 /**
  * The reload banner (07 §7.5.2; 09 §9.4 R1): after an upgrade, an open tab
  * still runs the old bundle, whose lazy chunks the new server no longer has.
- * apiFetch's build-ID rule notes the first response that proves it (its
- * X-App-Build differs from this page's mediacore-build meta), and this offers
- * the reload. It is not dismissable: the tab cannot be trusted to keep working,
- * and there is one rule and one offer.
+ * The runtime's build-ID rule (@mediacore/api-client's checkBuild, run by
+ * apiFetch for legacy calls and by the generated client for native ones) notes
+ * the first response that proves it (its X-App-Build differs from this page's
+ * mediacore-build meta), and this offers the reload. It is not dismissable: the
+ * tab cannot be trusted to keep working, and there is one rule and one offer.
  *
  * It subscribes through onStaleBuild, which replays what was already detected,
  * so it shows even when it mounts after the auth probe's response. Mount it
