@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -212,9 +212,14 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 // swapFailed is a restore boot's failure exit from P2, P4a or P4b (05-backup
 // §5B.3.4 step x; DATA7-12): the store closed first, then step x, which
 // returns ErrSwappedBack once the original is back (the boot exits and the
-// restart boots it); a KindCheckpoint restore whose migrations failed in P4b
-// journals failed with this binary's ID instead and keeps its in-flight
-// file. A reset boot's failure halts boot and the next boot resumes it.
+// restart boots it). A KindCheckpoint restore in P4b is the exception: when
+// a migration step itself failed (a *storage.StepError, "the migration DAG
+// fails"), it journals failed with this binary's ID and keeps its in-flight
+// file; any other P4b failure (a sidecar, the checkpoint's record or
+// pointer, a cancelled boot) says nothing about the steps, so it journals
+// nothing and the next boot of this binary resumes the restore boot at
+// opened (R1-21 review (f)). A reset boot's failure halts boot and the next
+// boot resumes it.
 func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) error {
 	out := k.swap.out
 	if out.Boot != restoreswap.BootRestore {
@@ -225,6 +230,10 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 	}
 	k.store = nil
 	if phase == phaseP4b && out.Intent.Kind == restorejournal.KindCheckpoint {
+		var stepErr *storage.StepError
+		if !errors.As(cause, &stepErr) {
+			return cause
+		}
 		if err := k.swap.s.CheckpointFailed(ctx, out.ID); err != nil {
 			return errors.Join(cause, err)
 		}
