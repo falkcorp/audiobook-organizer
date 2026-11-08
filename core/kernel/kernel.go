@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -142,6 +142,10 @@ type Kernel struct {
 	notifier ReadinessNotifier
 	exit     func(int)
 	listen   func(httpapi.ListenOptions, http.Handler, *slog.Logger) (Server, error)
+
+	// startWin is the running hook Start's window, which Deps.ExtendStart
+	// extends (supervisor.go).
+	startWin startWindow
 
 	entries []*entry // every module, in ID order (P1)
 	timings []phaseTiming

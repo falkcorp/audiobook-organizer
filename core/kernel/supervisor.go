@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -279,23 +279,123 @@ type lateStart struct {
 	result <-chan error
 }
 
-// startHooks starts every hook in order, each within startTimeout and its
-// own goroutine, so a Start that never returns is abandoned at the timeout.
-// It returns the hooks whose Start succeeded (a hook with no Start counts as
-// started, so its Stop runs) and, when a Start was abandoned, that hook.
+// startWindow is the time the hook Start now running has left, the one
+// deadline of the start step that Deps.ExtendStart can move. A context's
+// deadline cannot move, so the hook's ctx carries none: the window's timer
+// cancels it with the cause context.DeadlineExceeded when the deadline
+// passes. Hooks start one at a time, so one window serves the whole boot.
+//
+// extend only moves the deadline later and only for the module whose Start is
+// running, so a step that makes real progress is not abandoned at
+// core.lifecycle.start_timeout while a hung step is still abandoned once its
+// own budget runs out (there is deliberately no ticker: HEAD's rule, see
+// sdnotify.StartupStepBudget). It is safe for concurrent use: the hook's
+// goroutine calls extend while the timer's goroutine reads the deadline.
+type startWindow struct {
+	mu       sync.Mutex
+	owner    module.ID
+	active   bool
+	gen      uint64 // of the open window: a stale timer callback compares it
+	deadline time.Time
+	timer    *time.Timer
+	expire   func()
+}
+
+// begin opens the window for owner's Start with d to run and calls expire,
+// at most once and without holding the lock, when the deadline passes with
+// the window still open. The returned func closes the window.
+func (w *startWindow) begin(owner module.ID, d time.Duration, expire func()) (end func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.gen++
+	gen := w.gen
+	w.owner, w.active, w.deadline, w.expire = owner, true, time.Now().Add(d), expire
+	w.timer = time.AfterFunc(d, func() { w.fire(gen) })
+	return func() { w.close(gen) }
+}
+
+// close ends window gen (a no-op for a window that already ended).
+func (w *startWindow) close(gen uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.gen != gen || !w.active {
+		return
+	}
+	w.active, w.expire = false, nil
+	w.timer.Stop()
+}
+
+// fire is the timer's callback for window gen: it re-arms the timer when
+// extend moved the deadline past it, and expires the window otherwise.
+func (w *startWindow) fire(gen uint64) {
+	w.mu.Lock()
+	if w.gen != gen || !w.active {
+		w.mu.Unlock()
+		return
+	}
+	if rest := time.Until(w.deadline); rest > 0 {
+		w.timer.Reset(rest)
+		w.mu.Unlock()
+		return
+	}
+	expire := w.expire
+	w.active, w.expire = false, nil
+	w.mu.Unlock()
+	expire()
+}
+
+// extend moves the deadline to at least d from now, never earlier than it
+// is, when owner's Start is the one running. It reports whether it did.
+func (w *startWindow) extend(owner module.ID, d time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.active || w.owner != owner {
+		return false
+	}
+	if later := time.Now().Add(d); later.After(w.deadline) {
+		w.deadline = later
+	}
+	return true
+}
+
+// startCtx is the ctx a hook's Start gets: Run's ctx, cancelled by the start
+// window. Err reports context.DeadlineExceeded when the window expired, as a
+// ctx with a deadline would, so a Start that returns ctx.Err() reports the
+// same error it always did; context.Cause says the same.
+type startCtx struct{ context.Context }
+
+func (c startCtx) Err() error {
+	err := c.Context.Err()
+	if err != nil && errors.Is(context.Cause(c.Context), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return err
+}
+
+// startHooks starts every hook in order, each in its own goroutine within a
+// start window of core.lifecycle.start_timeout that the hook's own
+// Deps.ExtendStart calls extend, so a Start that never returns is abandoned
+// when its window closes. It returns the hooks whose Start succeeded (a hook
+// with no Start counts as started, so its Stop runs) and, when a Start was
+// abandoned, that hook.
 func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, *lateStart, error) {
 	var started []moduleHook
 	for _, h := range k.hooks {
 		if h.hook.Start != nil {
-			sctx, cancel := context.WithTimeout(ctx, startTimeout)
+			began := time.Now()
+			wctx, cancel := context.WithCancelCause(ctx)
+			end := k.startWin.begin(h.module, startTimeout, func() { cancel(context.DeadlineExceeded) })
+			sctx := startCtx{wctx}
 			pending, err := k.await(sctx, h, "start", h.hook.Start)
-			cancel()
+			end()
+			cancel(nil)
 			switch {
-			case pending != nil && errors.Is(sctx.Err(), context.DeadlineExceeded):
+			case pending != nil && errors.Is(context.Cause(wctx), context.DeadlineExceeded):
+				took := time.Since(began).Round(time.Second)
 				k.log.ErrorContext(ctx, "kernel: hook start exceeded core.lifecycle.start_timeout",
-					"module", h.module, "hook", h.hook.Name, "timeout", startTimeout.String())
-				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s: %w",
-					h.hook.Name, startTimeout, context.DeadlineExceeded)
+					"module", h.module, "hook", h.hook.Name, "timeout", startTimeout.String(), "took", took.String())
+				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s, as extended by ExtendStart (after %s): %w",
+					h.hook.Name, startTimeout, took, context.DeadlineExceeded)
 			case pending != nil:
 				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, sctx.Err())
 			case err != nil:
