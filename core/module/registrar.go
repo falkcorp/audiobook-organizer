@@ -1,7 +1,7 @@
 // file: core/module/registrar.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b007ae28-2b2a-42a1-aa5a-047aa14d3b77
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package module
 
@@ -255,8 +255,14 @@ func (r *Registrar) Err() error {
 
 // Hook is a Start/Stop pair (06 §6.4.3).
 type Hook struct {
-	Name  string                          // "<ID>.<name>", unique
-	Start func(ctx context.Context) error // may be nil
+	Name string // "<ID>.<name>", unique
+	// Start may be nil. Its ctx has no deadline (Deadline reports ok=false):
+	// the kernel's start window can move later through Deps.ExtendStart, and
+	// a context's deadline cannot. When the window closes the kernel cancels
+	// ctx with the cause context.DeadlineExceeded (ctx.Err() reports
+	// context.DeadlineExceeded as well). A context derived from ctx should
+	// ask context.Cause(ctx), not only ctx.Err(), why it ended.
+	Start func(ctx context.Context) error
 	Stop  func(ctx context.Context) error // may be nil; ctx carries the stop deadline
 }
 
