@@ -1,5 +1,5 @@
 # file: core/Makefile
-# version: 1.2.0
+# version: 1.3.0
 # guid: 9ab46d35-36d2-4a7e-8b04-cddc8030d483
 # last-edited: 2026-11-07
 
@@ -18,7 +18,8 @@ export GOTOOLCHAIN := go1.27.3
 PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
-	errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor embed-check test-nightly
+	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
+	generate-api-client coverage-floor embed-check test-nightly
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
 print-toolchain:
@@ -33,13 +34,13 @@ print-toolchain:
 ## core does not have yet (web-test, mocks-check, coverage-floor) print one
 ## "not applicable" line and exit 0; each one fails loudly the moment its
 ## subject appears without the real check being wired, so "not applicable" can
-## not outlive its reason.
+## not outlive its reason. (web-test was one until core/web arrived, R1-30.)
 ##
 ## 12 §12.3.11's full list also has vet-darwin vet-integration staticcheck
 ## replace-check version-check; each joins this target in the PR that creates its
 ## subject or script (the darwin and integration vets run over core from the
 ## root's `make ci` already, R1-02).
-ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check web-test coverage-floor embed-check
+ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check openapi-check web-lint web-test coverage-floor embed-check
 	@echo "core ci passed"
 
 build:
@@ -116,13 +117,35 @@ mocks-check:
 	fi
 	@echo "mocks-check: not applicable (no core/.mockery.yaml yet)"
 
-## web-test: core/web's npm workspace tests, from R1-30 which creates core/web.
-## Not applicable until then; refuses if core/web appears before it is wired.
-web-test:
-	@if [ -e web ]; then \
-		echo "web-test: core/web exists but this target does not test it; wire it (09 §9.4 R1: web-test is per npm workspace)"; exit 1; \
-	fi
-	@echo "web-test: not applicable (no core/web yet)"
+## openapi-check: core/openapi/core.json is what core's own `hello openapi` emits
+## (05-http-api §4.6). Runs before web-lint and web-test so a stale core.json fails
+## core CI before the api-client generator reads it.
+openapi-check:
+	@sh scripts/ci/check_openapi_fresh.sh
+
+## openapi-regen: rewrite core/openapi/core.json (the file the api-client generates from).
+openapi-regen:
+	go run ./examples/hello/cmd/hello openapi
+
+## web-install: npm ci in core/web, exactly as locked (core/web's own lockfile).
+web-install:
+	cd web && npm ci --no-audit --no-fund
+
+## web-lint: core/web's type check, its ESLint (with the import boundary of 07 §7.3.1:
+## nothing in core/web imports from outside it) and the generated client's freshness.
+web-lint: web-install
+	cd web && npm run typecheck && npm run lint
+	cd web && npm run generate:check -w @mediacore/api-client
+
+## web-test: core/web's npm workspace tests (vitest in every workspace; the
+## api-client's generated-client coverage check is among them), after npm ci.
+web-test: web-install
+	cd web && npm test --workspaces --if-present -- --run
+
+## generate-api-client: regenerate @mediacore/api-client's src/generated/ from
+## openapi/core.json (07 §7.8). `make -C core web-lint` fails when it is stale.
+generate-api-client: web-install
+	cd web && npm run generate -w @mediacore/api-client
 
 ## coverage-floor: core's coverage ratchet floor, from the storage move (R1-23).
 ## No floor yet; refuses if a floor file appears before it is enforced.

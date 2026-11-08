@@ -1,7 +1,7 @@
 # file: .github/dependency-review-config.yml
-# version: 1.7.0
+# version: 1.7.1
 # guid: dep-review-cfg-2025-12-07
-# last-edited: 2026-11-06
+# last-edited: 2026-11-08
 
 # Dependency Review Configuration
 # This file configures the dependency-review-action for automated security scanning
@@ -114,6 +114,28 @@ allow-dependencies-licenses:
   # Both purl spellings of the scoped name (the spec encodes "@" as %40).
   - pkg:npm/%40isaacs/nonrecursive-glob-match
   - pkg:npm/@isaacs/nonrecursive-glob-match
+  # The core/web workspace lockfile (R1-30) adds four dev-only packages whose
+  # licenses are permissive but are not single entries in allow-licenses.
+  # web/'s lockfile already carries all four and ships them; they pass there
+  # only because Dependency Review checks CHANGED dependencies, and this
+  # lockfile is the first to add them. allow-licenses matches whole SPDX
+  # expressions, so naming the packages is the narrow fix; widening it would
+  # change the policy for every ecosystem. Listed without versions.
+  #
+  #   @csstools/color-helpers                    MIT-0  (MIT with the
+  #   @csstools/css-syntax-patches-for-csstree   MIT-0   attribution clause dropped)
+  #   argparse                                   Python-2.0  (PSF, permissive)
+  #   uri-js                                     BSD-2-Clause AND BSD-2-Clause-Views
+  #                                              (two BSD-2 variants; the compound
+  #                                              expression matches no single entry)
+  #
+  # Both purl spellings of the scoped names, as for @isaacs above.
+  - pkg:npm/%40csstools/color-helpers
+  - pkg:npm/@csstools/color-helpers
+  - pkg:npm/%40csstools/css-syntax-patches-for-csstree
+  - pkg:npm/@csstools/css-syntax-patches-for-csstree
+  - pkg:npm/argparse
+  - pkg:npm/uri-js
 
 # Deny specific packages
 # deny-packages:
