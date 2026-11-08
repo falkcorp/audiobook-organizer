@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.33 -->
+<!-- version: 10.78.34 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-07 -->
+<!-- last-edited: 2026-11-08 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,30 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **R1-32 redactor follow-ups** Gaps the independent review of #4436 left for later in `core/log/redactor.go`, each still passing through or still costing more than it should:
+  - XML element values: `<password><t></password>` is not a pair, so the scan leaves `<t>`.
+  - argv flags: `--password <t>` (and `-p <t>`) in a logged command line.
+  - Bracketed query names: `?apikey[]=<t>` (PHP and Rails array form) is not matched to `apikey`.
+  - Hash-router fragments: `#/cb?key=<t>` and `#/cb?code=<t>` read as a fragment parameter named `/cb?key`, so the credential name is never seen.
+  - The walk's node budget (4096) is charged for primitive leaves too, so a harmless `[]int` of 5,000 elements has its tail replaced with `[REDACTED:depth]`; charge containers and text leaves only, or skip slices of numbers.
+  - `normKey` allocates on every key and on every pair candidate in the text scan; hot paths could compare in place.
+  - `Attr`'s recursion into nested slog groups has no depth bound of its own (the KindAny walk has one).
+  - A typed-nil error (`(*myErr)(nil)`) panics in `Error()` and the whole value becomes `[REDACTED:panic]`, losing the rest of the line.
+  - `Record.Message` is not redacted by the Redactor itself; R1-36's pipeline must run it through `StringKinds` (decide the key it uses).
+
+- [ ] **R1-37 step 5** After R1-15 merges, add `internal/books/routes_permissions_test.go`. It boots ABO's real App (`app.New` with `books.Module(...)`, as R1-15 composes it) and runs `archtest.RoutesHavePermissions(t, app.Routes())`, so that the legacy manifest is checked against what is actually served (03 R6, 05-http-api §8.2). Measured at #4458: under the spec's legacy `RateExempt` rule, the manifest passes with ABS off and with ABS on.
+
+- [ ] **R1-23: enforce "a module constructor writes nothing"** 05-storage §5S.4 step 12 says `Register` writes nothing, and R1-20's served write (`ready_at`, at the start of `Run`) relies on it. It marks the open checkpoint records before the first module code that can write, which by that rule is start step (2). No code enforces the rule: `Register` receives live storage handles in `Deps`, so a constructor that writes makes a write before the mark. If that boot dies, the next upgrade reuses a checkpoint older than the write.
+  - Proposed fix: the storage handles in `Deps` refuse writes (a typed error naming the module and "Register") until the kernel opens them at the start of `Run`, just after the served write. Reads stay allowed.
+  - Goes with R1-23, which wires ABO's store onto core: books' constructors are the ones that could write. Add a kernel test where a writing `Register` fails boot, and check books' `Register` against it.
+
+- [ ] **R1-20 follow-up: Windows DB directory identity** Off unix, `core/storage`'s `osDirIdentity` (`fsid_other.go`) reads every directory's identity as 0/0. A checkpoint record therefore matches a marker-less store on its epoch alone there, so a different store swapped in at the same path, which lands on the same epoch number, could adopt another store's open record and reuse its checkpoint. Its rollback would then restore the other store's data. The store generation (05-storage §5S.3.7) has the same blind spot on Windows.
+  - Fix: a `fsid_windows.go` that opens the directory with `FILE_FLAG_BACKUP_SEMANTICS` and reads `VolumeSerialNumber` and `FileIndexHigh`/`FileIndexLow` with `windows.GetFileInformationByHandle` (`golang.org/x/sys/windows`, already in `core/go.mod`). About 25 lines.
+  - Plus a Windows-only test (two directories differ, a rename keeps the identity) and a Windows CI leg that runs it.
+  - Only needed if Windows becomes a supported server platform.
+
+- [ ] **TEST-REENTRANT** Make `cmd/root_test.go`'s `TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning` re-entrant. It passes once, but under `go test -count=2 -run 'TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning$' ./cmd/` the second iteration fails at its "appears N times" check: the removed `--enable-sqlite3-i-know-the-risks` flag is mentioned 2 times in the output, want 1. The test drives the package-level `rootCmd` through `Execute`, and its Cleanup resets the flag's value, `Changed` and serve's `help` flag, but some cobra/pflag state from the first `Execute` survives into the second. Found during R1-15's review verification (#4455) and left alone there: R1-15's `cmd/root.go` changes do not touch the flag, and its base commit fails the same way at `-count=2`. Fix the test's isolation (a fresh command tree per test, or reset what the first `Execute` leaves behind), not the count.
 
 - [ ] **MEDIAINFO-EXTENSION-SET** `mediainfo.Extract` accepts only `audioext.DefaultSet()` while the
       scanner admits the configured `SupportedExtensions`; decide whether mediainfo should honour the
