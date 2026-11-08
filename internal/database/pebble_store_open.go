@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-08
 
@@ -184,6 +184,12 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 		UseMemDB:      true, // in-memory query layer is the default after Phase 3
 		closingCtx:    closingCtx,
 		closingCancel: closingCancel,
+	}
+	// Before this process writes anything: take the HNSW clean-stop marker
+	// beside a database on disk, so no process that opens it leaves the
+	// marker vouching for rows it may change (claimCleanStop).
+	if fs == nil && path != "" && !hnswCleanStopClaimOff.Load() {
+		store.db.claimCleanStop(HNSWSnapshotDir(path))
 	}
 	store.seedWorksGeneration()
 	if err := store.seedJournalClock(); err != nil {
