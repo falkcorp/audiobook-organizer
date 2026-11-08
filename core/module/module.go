@@ -1,5 +1,5 @@
 // file: core/module/module.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e79e4b4-4709-49f9-9193-d1023779795d
 // last-edited: 2026-11-07
 
@@ -18,6 +18,7 @@ import (
 	"slices"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/ui"
 )
@@ -55,8 +56,8 @@ func reserved(s string, list []string) bool {
 func IsReserved(id ID, list []string) bool { return reserved(string(id), list) }
 
 // ReservedIDs returns the union of httpapi.ReservedSegments (server paths),
-// ui.ReservedSegments (shell routes, 07 §7.4.3) and rbac.ReservedNamespaces
-// ("core", "custom") (03 §3.6). It is static, so P1 can evaluate it; the
+// ui.ReservedSegments (shell routes, 07 §7.4.3), rbac.ReservedNamespaces
+// ("core", "custom") and log.ReservedModuleIDs ("process") (03 §3.6). It is static, so P1 can evaluate it; the
 // kernel adds the two app inputs in P1 (the first segment of every
 // manifest's LegacyPrefixes and app.Options.ReservedAPINamespaces, COR2-19,
 // FE2-11), and P7 re-checks IDs against every mount's TopSegments and
@@ -66,6 +67,7 @@ func ReservedIDs() []string {
 	out := httpapi.ReservedSegments()
 	out = append(out, ui.ReservedSegments()...)
 	out = append(out, rbac.ReservedNamespaces()...)
+	out = append(out, log.ReservedModuleIDs()...)
 	slices.Sort(out)
 	return slices.Compact(out)
 }

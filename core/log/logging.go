@@ -1,5 +1,5 @@
 // file: core/log/logging.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 00563821-7bde-4a0b-a1a7-ec6ede43cdb2
 // last-edited: 2026-11-08
 
@@ -83,6 +83,12 @@ const processKey = "process"
 // wherever an empty value would read as absent: the module label of
 // mediacore_log_records_total (kernel). It is processKey.
 const ProcessLabel = processKey
+
+// ReservedModuleIDs lists the module IDs this package owns as scope names: the
+// process default logger's Levels key ("process.<subsystem>") would collide
+// with a module of that ID. One input of module.ReservedIDs() (03 §3.6). A
+// fresh slice per call.
+func ReservedModuleIDs() []string { return []string{processKey} }
 
 // primarySink is the primary output's name in Counters().Dropped; Tap refuses
 // it as a tap name.
