@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -355,5 +355,76 @@ func TestI2TiesTheEndToTheStore(t *testing.T) {
 	}
 	if end, _ := endOfAll(map[string]journal{id: {last: restoreswap.StepSwappedBack}, "r-older": {last: restoreswap.StepApplied}}); end != endMixed {
 		t.Errorf("endOfAll over two different ends = %s, want %s", end, endMixed)
+	}
+}
+
+// TestStateKeyIsTheContent: the nested-kill dedupe's key (stateKey) is equal
+// for two filesystems with the same directories and file bytes however they
+// were built, and differs for any difference in a name, a byte, an empty
+// directory, or a file standing where a directory stood.
+func TestStateKeyIsTheContent(t *testing.T) {
+	t.Parallel()
+	type entry struct{ path, body string } // body "/" is a directory
+	build := func(entries ...entry) [32]byte {
+		t.Helper()
+		mem := vfs.NewMem()
+		for _, e := range entries {
+			if e.body == "/" {
+				if err := mem.MkdirAll(e.path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			if err := mem.MkdirAll(filepath.Dir(e.path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f, err := mem.Create(e.path, vfs.WriteCategoryUnspecified)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Write([]byte(e.body)); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		key, err := stateKey(mem)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	base := []entry{{"/cave/batmobile", "fuel"}, {"/cave/suits/mark-1", "cowl"}, {"/cave/gauntlet", ""}, {"/manor/attic", "/"}}
+	want := build(base...)
+	reversed := slices.Clone(base)
+	slices.Reverse(reversed)
+	if build(reversed...) != want {
+		t.Errorf("the same tree built in another order has another key")
+	}
+	// with is base with entry i replaced by e, and more appended (a later
+	// entry for one path rewrites the file).
+	with := func(i int, e entry, more ...entry) []entry {
+		out := slices.Clone(base)
+		if i == len(out) {
+			out = append(out, e)
+		} else {
+			out[i] = e
+		}
+		return append(out, more...)
+	}
+	for _, tc := range []struct {
+		name    string
+		entries []entry
+	}{
+		{"a byte", with(0, entry{"/cave/batmobile", "fuem"})},
+		{"a name", with(1, entry{"/cave/suits/mark-2", "cowl"})},
+		{"an empty directory", with(len(base), entry{"/cave/trophies", "/"})},
+		{"a file for a directory", with(3, entry{"/manor/attic", ""})},
+		{"a byte moved into the next file", with(0, entry{"/cave/batmobile", "fue"}, entry{"/cave/gauntlet", "l"})},
+	} {
+		if build(tc.entries...) == want {
+			t.Errorf("%s: the key did not change", tc.name)
+		}
 	}
 }

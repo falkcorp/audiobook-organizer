@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
 // last-edited: 2026-11-08
 
@@ -7,8 +7,10 @@ package crashmatrix
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path/filepath"
 	"runtime"
@@ -106,7 +108,7 @@ func run(tb testing.TB, rep reporter, s Scenario, m mode) map[string]bool {
 	}
 	observed := map[string]bool{}
 	for _, f := range s.Fixtures {
-		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, registered: registered, observed: observed}
+		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, registered: registered, observed: observed, nestedSeen: map[[sha256.Size]byte]bool{}}
 		fr.run(m)
 	}
 	return observed
@@ -129,10 +131,16 @@ type fixtureRun struct {
 	hadStore bool                   // a store was at the DB path before the first boot
 	intent   *restorejournal.Intent // the fixture's staged swap, nil when none
 	stats    stats
+	// nestedSeen holds the content key (stateKey) of every nested clone
+	// already booted: most nested kill points of one fixture leave a state
+	// another already left (hello's restore-archive: 272 distinct of 5,048),
+	// and a boot is a function of its filesystem, so one of each is booted.
+	nestedSeen map[[sha256.Size]byte]bool
 }
 
 type stats struct {
-	boots, kills, errorRuns, events, pebbleKills, nested int
+	boots, kills, errorRuns, events, pebbleKills int
+	nested, nestedDup                            int // nested kill points booted, and those that left a state already booted
 }
 
 func (fr *fixtureRun) errorf(format string, args ...any) {
@@ -203,8 +211,8 @@ func (fr *fixtureRun) run(m mode) {
 		return
 	}
 	fr.matrix()
-	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs; %d nested kill points) over %d census operations in %s",
-		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.nested, fr.stats.events, time.Since(start).Round(time.Millisecond))
+	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs; %d nested kill points booted, %d more that left a state already booted) over %d census operations in %s",
+		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.nested, fr.stats.nestedDup, fr.stats.events, time.Since(start).Round(time.Millisecond))
 }
 
 // untouched adds the second legal store of a fixture with a staged or
@@ -300,19 +308,85 @@ func nested(ev bootseamtest.Event) bool {
 }
 
 // killNested reboots each nested clone ch took, one level deep: a nested
-// run takes no clones of its own. boot names ch's ith boot for a report.
+// run takes no clones of its own. boot names ch's ith boot for a report. A
+// clone whose content an earlier nested clone of the fixture had is not
+// booted again (fixtureRun.nestedSeen); the first one's report stands for
+// both.
 func (fr *fixtureRun) killNested(at string, ch chain, boot func(i int) string) {
 	for i, br := range ch.boots {
 		for _, c := range br.clones {
-			c.FS.TestingSetDiskUsage(diskUsage())
 			nat := fmt.Sprintf("%s, then kill before %s's %s", at, boot(i), describe(c.Event))
+			key, err := stateKey(c.FS)
+			if err != nil {
+				fr.errorf("%s: reading the nested clone: %v", nat, err)
+				continue
+			}
+			fr.mu.Lock()
+			seen := fr.nestedSeen[key]
+			if seen {
+				fr.stats.nestedDup++
+			} else {
+				fr.nestedSeen[key] = true
+				fr.stats.nested++
+			}
+			fr.mu.Unlock()
+			if seen {
+				continue
+			}
+			c.FS.TestingSetDiskUsage(diskUsage())
 			fr.atKillPoint(nat, c.FS)
 			fr.check(nat, fr.chain(c.FS, func(int) bootseamtest.Options { return bootseamtest.Options{} }))
-			fr.mu.Lock()
-			fr.stats.nested++
-			fr.mu.Unlock()
 		}
 	}
+}
+
+// stateKey is a content key of fs: every directory and file under the root
+// in sorted order, with each file's bytes. Two filesystems with one key
+// boot alike.
+func stateKey(fs vfs.FS) ([sha256.Size]byte, error) {
+	h := sha256.New()
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		names, err := fs.List(dir)
+		if err != nil {
+			return err
+		}
+		slices.Sort(names)
+		for _, n := range names {
+			p := filepath.Join(dir, n)
+			fi, err := fs.Stat(p)
+			if err != nil {
+				return err
+			}
+			if fi.IsDir() {
+				fmt.Fprintf(h, "d %q\n", p)
+				if err := walk(p); err != nil {
+					return err
+				}
+				continue
+			}
+			f, err := fs.Open(p)
+			if err != nil {
+				return err
+			}
+			b, err := io.ReadAll(f)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "f %q %d\n", p, len(b))
+			h.Write(b)
+		}
+		return nil
+	}
+	var key [sha256.Size]byte
+	if err := walk(string(filepath.Separator)); err != nil {
+		return key, err
+	}
+	copy(key[:], h.Sum(nil))
+	return key, nil
 }
 
 // inject reruns the fixture with errno returned from census boot b's
