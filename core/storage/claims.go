@@ -23,7 +23,7 @@ import (
 // settings blob, R2's one cutover key that stays read-write because M2
 // rewrites it and M6 deletes it (§5S.9.1 row 7).
 type Claim struct {
-	Prefix      string    // e.g. "item:"; ends in a separator byte (':' '/' '_' '.') or is listed in BareAllow
+	Prefix      string    // e.g. "item:"; ends in a separator byte (':' '/' '_' '.'), else validation fails
 	Key         string    // exact single key, e.g. "item_counter"
 	Except      []string  // CROSS-OWNER carve-outs only: sub-prefixes or exact keys claimed by exactly one other owner
 	Mode        ClaimMode // zero rejected
@@ -219,6 +219,9 @@ func buildClaimIndex(refs []claimRef) *claimIndex {
 
 // validateClaims is kernel validation items 2 and 3 of §5S.3.4 over every
 // owner's claims, plus the claim's own shape. It returns every problem.
+// claimSeparators are the bytes a claim prefix may end in (§5S.3.4).
+const claimSeparators = ":/_."
+
 func validateClaims(refs []claimRef) []string {
 	var probs []string
 	reserved := []string{"m/", "c/"}
@@ -230,6 +233,19 @@ func validateClaims(refs []claimRef) []string {
 			continue
 		case c.Mode == ClaimInvalid || c.Mode > ClaimRetired:
 			probs = append(probs, fmt.Sprintf("%s: Mode %s is not a claim mode", r.name(), c.Mode))
+		}
+		if p := c.Prefix; p != "" {
+			// The separator rule: "joker" would also claim "jokerized:".
+			// A prefix of only 0xff bytes has no PrefixEnd, so its span would
+			// be open-ended; the rule already refuses it (0xff is no
+			// separator), and the check stays explicit for any later
+			// exception to the rule.
+			if !strings.ContainsRune(claimSeparators, rune(p[len(p)-1])) {
+				probs = append(probs, fmt.Sprintf("%s: a claim prefix ends in a separator byte (one of %q)", r.name(), claimSeparators))
+			}
+			if keys.PrefixEnd([]byte(p)) == nil {
+				probs = append(probs, fmt.Sprintf("%s: a prefix of only 0xff bytes has no end", r.name()))
+			}
 		}
 		t := r.target()
 		for _, res := range reserved {
