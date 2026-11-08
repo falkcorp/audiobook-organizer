@@ -303,11 +303,11 @@ func kindOf(r claimRef) string {
 
 // ledgerClaim is one claim as the claim ledger records it.
 type ledgerClaim struct {
-	Prefix     string `json:"prefix,omitempty"`
-	Key        string `json:"key,omitempty"`
+	Prefix     string   `json:"prefix,omitempty"`
+	Key        string   `json:"key,omitempty"`
 	Except     []string `json:"except,omitempty"`
-	Mode       string `json:"mode"`
-	Serialized bool   `json:"serialized,omitempty"`
+	Mode       string   `json:"mode"`
+	Serialized bool     `json:"serialized,omitempty"`
 }
 
 // claimLedger is c/storage/claims/<owner> = {claims, modes (by name), build,

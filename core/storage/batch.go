@@ -431,19 +431,36 @@ func (b *Batch) stageRangeChecked(s handleOf, start, end []byte) error {
 	return nil
 }
 
-// coverage checks that [lo, hi) lies wholly in owner's claims with modes that
-// admit deletes, and reports whether any part is Serialized.
+// coverage checks that every byte of [lo, hi) lies in intervals of owner's
+// claims, contiguously, with modes that admit deletes, and reports whether any
+// part is Serialized. It walks every interval the range overlaps; a gap, an
+// interval of another owner, or any overlap with the reserved roots [c/, c0)
+// and [m/, m0) refuses the whole range with ErrOutsideKeyspace, and nothing
+// is staged.
+//
+// The shadow dial (core.storage.claims.mode=shadow, §5S.0 D-S2) never applies
+// here: it exists to let a point access through while a claim set is being
+// corrected, and a range delete that ran on past the owner's claims would
+// remove rows the owner does not hold, which no dial may allow.
 func (db *DB) coverage(owner Owner, lo, hi []byte) (serialized bool, err error) {
+	refuse := func(at []byte, why string) error {
+		return fmt.Errorf("storage: DeleteRange [%q, %q) by %s %s at %q: %w", lo, hi, owner, why, at, ErrOutsideKeyspace)
+	}
+	for _, r := range []span{{start: []byte("c/"), end: []byte("c0")}, {start: []byte("m/"), end: []byte("m0")}} {
+		if r.overlaps(lo, hi) {
+			return false, refuse(r.start, "covers a reserved range")
+		}
+	}
 	at := lo
 	for _, iv := range db.claims.intervals {
 		if bytes.Compare(iv.end, at) <= 0 {
-			continue
+			continue // wholly before the uncovered remainder
 		}
-		if bytes.Compare(iv.start, hi) >= 0 {
-			break
+		if bytes.Compare(iv.start, at) > 0 {
+			return false, refuse(at, "runs into keys no claim holds")
 		}
-		if bytes.Compare(iv.start, at) > 0 || iv.owner != owner {
-			return false, db.violation(owner, opDelete, at)
+		if iv.owner != owner {
+			return false, refuse(at, "runs into a claim of "+string(iv.owner))
 		}
 		if !iv.mode.allows(opDelete) {
 			return false, fmt.Errorf("storage: DeleteRange over a %s claim of %s: %w", iv.mode, owner, ErrClaimMode)
@@ -454,7 +471,7 @@ func (db *DB) coverage(owner Owner, lo, hi []byte) (serialized bool, err error) 
 			return serialized, nil
 		}
 	}
-	return false, db.violation(owner, opDelete, at)
+	return false, refuse(at, "runs past the last claim")
 }
 
 // errBatchDone: a write or commit on a batch already committed or closed.
@@ -573,6 +590,6 @@ type batchWriter struct {
 	h Handle
 }
 
-func (w batchWriter) Set(key, value []byte) error      { return w.b.stage(w.h, opSet, key, value) }
-func (w batchWriter) Delete(key []byte) error          { return w.b.stage(w.h, opDelete, key, nil) }
+func (w batchWriter) Set(key, value []byte) error         { return w.b.stage(w.h, opSet, key, value) }
+func (w batchWriter) Delete(key []byte) error             { return w.b.stage(w.h, opDelete, key, nil) }
 func (w batchWriter) DeleteRange(start, end []byte) error { return w.b.stageRange(w.h, start, end) }

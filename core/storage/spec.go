@@ -91,7 +91,7 @@ func (r StepRef) String() string {
 
 // Migration is one forward-only step of one keyspace. There is no Down.
 type Migration struct {
-	Version     int             // 1..n, contiguous per owner; books' are numbered from LegacyCap+1, contiguous with its legacy track (DATA7-7)
+	Version     int // 1..n, contiguous per owner; books' are numbered from LegacyCap+1, contiguous with its legacy track (DATA7-7)
 	Name        string
 	Compat      MigrationCompat // zero rejected at registration
 	RaisesLevel int             // required when Compat == Breaking: the owner's new level (§5S.3.7)

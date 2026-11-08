@@ -8,6 +8,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -274,5 +275,64 @@ func TestReadOnlyOpenRefusesWrites(t *testing.T) {
 	}
 	if after := rawKeys(t, src.fs, other.path, ""); !slices.Equal(before, after) {
 		t.Fatalf("read-only open changed the store: %v -> %v", before, after)
+	}
+}
+
+// TestLegacyDeleteRangeStaysInClaims: a legacy DeleteRange is allowed only
+// when every byte of [start, end) lies in the owner's claims. A range that
+// runs into another owner's claim, into keys no claim holds, or over a
+// reserved root is refused with ErrOutsideKeyspace and deletes nothing, in
+// strict mode and under the shadow dial alike; a range that is exactly an
+// owned interval is allowed.
+func TestLegacyDeleteRangeStaysInClaims(t *testing.T) {
+	ctx := context.Background()
+	for _, shadow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shadow=%v", shadow), func(t *testing.T) {
+			e := newEnv(t,
+				OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: []Claim{
+					{Prefix: "joker:", Mode: ClaimReadWrite, Except: []string{"joker:harley:"}},
+					{Prefix: "bane:", Mode: ClaimReadWrite},
+				}}},
+				OwnerSpec{Owner: "arkham", Enabled: true, Spec: Spec{Claims: []Claim{
+					{Prefix: "joker:harley:", Mode: ClaimReadWrite},
+				}}},
+				OwnerSpec{Owner: "wayne", Enabled: true, Spec: wayneSpec()},
+			)
+			e.opts.ClaimsShadow = shadow
+			e.seedRaw("joker:1", "a", "joker:harley:1", "b", "joker:zed", "z", "jokes", "gap", "bane:1", "c")
+			db := e.open()
+			ks, _ := db.Keyspace("wayne")
+			if err := ks.Set(ctx, []byte("cowl"), []byte("black")); err != nil {
+				t.Fatal(err)
+			}
+			g, _ := db.Legacy("gotham")
+			for name, r := range map[string][2]string{
+				"into a foreign claim": {"joker:1", "joker:i"},
+				"into a gap":           {"joker:zed", "jokes~"},
+				"over a reserved root": {"bane:", "n"},
+				"over the core root":   {"bane:", "c1"},
+			} {
+				if err := g.DeleteRange(ctx, []byte(r[0]), []byte(r[1])); !errors.Is(err, ErrOutsideKeyspace) {
+					t.Errorf("%s: DeleteRange(%q, %q) = %v, want ErrOutsideKeyspace", name, r[0], r[1], err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			got := rawKeys(t, e.fs, e.path, "")
+			for _, k := range []string{"joker:1", "joker:harley:1", "joker:zed", "jokes", "bane:1", "m/wayne/cowl"} {
+				if !slices.Contains(got, k) {
+					t.Errorf("a refused DeleteRange removed %q", k)
+				}
+			}
+			db = e.open()
+			g, _ = db.Legacy("gotham")
+			if err := g.DeleteRange(ctx, []byte("bane:"), []byte("bane;")); err != nil {
+				t.Fatalf("DeleteRange of an owned interval: %v", err)
+			}
+			if _, err := g.Get(ctx, []byte("bane:1")); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("owned interval not deleted: %v", err)
+			}
+		})
 	}
 }
