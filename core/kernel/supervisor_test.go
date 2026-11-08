@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e9d797ab-e187-456c-b23a-12fae047e7b9
 // last-edited: 2026-11-07
 
@@ -195,15 +195,15 @@ func TestStartRollbackReverseOrder(t *testing.T) {
 		{name: "timeout honouring ctx", start: func(ctx context.Context, _ <-chan struct{}) error { <-ctx.Done(); return ctx.Err() },
 			want: context.DeadlineExceeded, took: startTimeout, stops: []string{"stop:alfred.cape", "stop:alfred.cowl"}},
 		// The review's m1: a Start abandoned at the timeout that returns nil
-		// later has started its hook, so the hook is stopped, first.
+		// within lateStopFloor has started its hook: the newest, so first.
 		{name: "timeout ignoring ctx, starts late", start: func(_ context.Context, release <-chan struct{}) error { <-release; return nil },
-			release: startTimeout + time.Second, want: context.DeadlineExceeded, took: startTimeout + time.Second,
+			release: startTimeout + lateStopFloor/2, want: context.DeadlineExceeded, took: startTimeout + lateStopFloor/2,
 			stops: []string{"stop:bane.venom", "stop:alfred.cape", "stop:alfred.cowl"}},
-		// Still running when the rollback's budget runs out: like a Stop that
-		// holds the budget, it starves the rest, whose Stops are then called
-		// unawaited; its own Stop runs in the background if it ever starts.
-		{name: "timeout ignoring ctx, never starts in time", start: func(_ context.Context, release <-chan struct{}) error { <-release; return nil },
-			release: never, want: context.DeadlineExceeded, took: startTimeout + defaultShutdownBudget,
+		// Still running after lateStopFloor: not started, so the rollback
+		// goes on (the verification review's Q5); its Stop runs in the
+		// background once the Start returns nil.
+		{name: "timeout ignoring ctx, still running", start: func(_ context.Context, release <-chan struct{}) error { <-release; return nil },
+			release: never, want: context.DeadlineExceeded, took: startTimeout + lateStopFloor,
 			stops: []string{"stop:alfred.cape", "stop:alfred.cowl", "stop:bane.venom"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,9 +232,8 @@ func TestStartRollbackReverseOrder(t *testing.T) {
 				if tc.took != 0 && took != tc.took {
 					t.Fatalf("Run returned after %s, want %s", took, tc.took)
 				}
-				// The Stops called unawaited after the budget run now; a Start
-				// still running can only be stopped once it returns, so its
-				// Stop comes last.
+				// A Start still running can only be stopped once it returns,
+				// so its Stop comes last.
 				synctest.Wait()
 				free()
 				synctest.Wait()
@@ -500,9 +499,11 @@ func TestR1ValuesPanic_StopsInOrder(t *testing.T) {
 func TestDepsRequestRestart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := &recorder{}
+		staged := make(chan struct{})
 		lucius := mod("lucius", func(r *module.Registrar) error {
 			d := r.Deps()
 			r.Worker(module.Worker{Name: "swap", Policy: module.DegradeOnExit, Run: func(ctx context.Context) error {
+				<-staged // after readiness: an earlier request is ignored
 				d.RequestRestart("Lucius staged a swap")
 				<-ctx.Done()
 				return ctx.Err()
@@ -510,7 +511,10 @@ func TestDepsRequestRestart(t *testing.T) {
 			return nil
 		})
 		k := mustNew(t, supervised(t, rec, hooked("alfred", rec), lucius))
-		err := k.Run(t.Context())
+		done := run(t.Context(), k)
+		synctest.Wait()
+		close(staged)
+		err := <-done
 		if !errors.Is(err, errRestartRequested) || !strings.Contains(err.Error(), "Lucius staged a swap") {
 			t.Fatalf("Run = %v, want errRestartRequested with the module's reason", err)
 		}
@@ -519,6 +523,107 @@ func TestDepsRequestRestart(t *testing.T) {
 		}
 		if rec.index("stop:alfred.cowl") < 0 || rec.index("stop:alfred.cowl") > rec.index("exit:75") {
 			t.Fatalf("exit(75) is not after the stop order: %v", rec.list())
+		}
+	})
+}
+
+// TestStartRollback_HungStartCapped is the verification review's Q5: a hook
+// whose Start hangs past core.lifecycle.start_timeout has not started, so the
+// rollback waits for it only lateStopFloor, then stops the earlier hooks in
+// reverse with a live ctx, waiting for each.
+func TestStartRollback_HungStartCapped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		const stopTime = 2 * time.Second
+		hang := make(chan struct{})
+		gcpd := mod("gcpd", func(r *module.Registrar) error {
+			for _, name := range []string{"gordon", "bullock"} {
+				r.Hook(module.Hook{Name: "gcpd." + name, Stop: func(ctx context.Context) error {
+					if ctx.Err() != nil {
+						rec.add("stop:%s:expired", name)
+						return ctx.Err()
+					}
+					time.Sleep(stopTime) // releases its resources, taking a while
+					rec.add("stop:%s:live", name)
+					return ctx.Err()
+				}})
+			}
+			return nil
+		})
+		joker := mod("joker", func(r *module.Registrar) error {
+			r.Hook(module.Hook{Name: "joker.gas",
+				Start: func(context.Context) error { <-hang; return nil }, // ignores its ctx
+				Stop:  func(context.Context) error { rec.add("stop:joker:late"); return nil }})
+			return nil
+		})
+		k := mustNew(t, supervised(t, rec, gcpd, joker))
+		begin := time.Now()
+		err := k.Run(t.Context())
+		took := time.Since(begin)
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "joker.gas") {
+			t.Fatalf("Run = %v, want the hung joker.gas start", err)
+		}
+		if strings.Contains(err.Error(), "gcpd.") {
+			t.Fatalf("Run = %v: an earlier hook's stop failed or was abandoned", err)
+		}
+		if want := startTimeout + lateStopFloor + 2*stopTime; took != want {
+			t.Fatalf("Run returned after %s, want start timeout + lateStopFloor + the two stops = %s", took, want)
+		}
+		if got, want := rec.matching("stop:"), []string{"stop:bullock:live", "stop:gordon:live"}; !slices.Equal(got, want) {
+			t.Fatalf("stops = %v, want the earlier hooks awaited in reverse with a live ctx: %v", got, want)
+		}
+		close(hang)
+		synctest.Wait()
+		if got := rec.matching("stop:joker"); !slices.Equal(got, []string{"stop:joker:late"}) {
+			t.Fatalf("late stops = %v, want joker.gas stopped once its Start returned nil", got)
+		}
+	})
+}
+
+// TestRequestRestart_BeforeReadyIgnored is the verification review's
+// MINOR-4: a restart requested from Register or a hook's Start would restart
+// the app in a loop, so before readiness it is logged at ERROR and ignored,
+// and a request after readiness still works with its own reason.
+func TestRequestRestart_BeforeReadyIgnored(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		capture := coretest.NewLogCapture(t)
+		var deps module.Deps
+		lucius := mod("lucius", func(r *module.Registrar) error {
+			deps = r.Deps()
+			deps.RequestRestart("from Register")
+			r.Hook(module.Hook{Name: "lucius.swap", Start: func(context.Context) error {
+				deps.RequestRestart("from a hook's Start")
+				return nil
+			}})
+			return nil
+		})
+		c := supervised(t, rec, lucius)
+		c.Logger = capture.Logger()
+		k := mustNew(t, c)
+		done := run(t.Context(), k)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("Run returned %v: a restart requested before readiness took effect", err)
+		default:
+		}
+		refused := 0
+		for _, r := range capture.Records() {
+			if r.Level == slog.LevelError && strings.Contains(r.Message, "restart requested before the app was ready") {
+				refused++
+			}
+		}
+		if refused != 2 {
+			t.Fatalf("logged %d refused restart requests, want 2: %v", refused, capture.Messages())
+		}
+		deps.RequestRestart("Lucius staged a swap")
+		err := <-done
+		if !errors.Is(err, errRestartRequested) || !strings.Contains(err.Error(), "Lucius staged a swap") {
+			t.Fatalf("Run = %v, want the request after readiness, with its own reason", err)
+		}
+		if got := rec.matching("exit:"); !slices.Equal(got, []string{"exit:75"}) {
+			t.Fatalf("exits = %v, want exactly one exit(75)", got)
 		}
 	})
 }
