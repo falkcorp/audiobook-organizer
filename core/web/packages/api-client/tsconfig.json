@@ -1,3 +1,7 @@
+// file: core/web/packages/api-client/tsconfig.json
+// version: 1.0.0
+// guid: aa8f27f6-84f1-4bbd-a89f-3e47c06f6d4d
+// last-edited: 2026-11-08
 {
   "compilerOptions": {
     "target": "ES2022",

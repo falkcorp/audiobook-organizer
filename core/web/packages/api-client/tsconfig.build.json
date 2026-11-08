@@ -1,3 +1,7 @@
+// file: core/web/packages/api-client/tsconfig.build.json
+// version: 1.0.0
+// guid: c52b0668-3bb4-4522-8af2-bf7649e0865f
+// last-edited: 2026-11-08
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
