@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R1-26-rename-database-to-books-store.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 320631e7-248c-44f9-9695-42e3a066fa6e -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # R1-26 — Rename the internal/database residue to internal/books/store (+storetest, aggtest, mocks), import paths only
 
@@ -65,11 +65,16 @@ imports of each other (aliased the same way).
 
 ## Dependency check
 
-R1-23 and R1-25 merged (the engine has left; the residue is final for R1; R1-24 touches no `internal/database` file):
+R1-23 and R1-25 merged (R1-24 touches no `internal/database` file). R1-23 did **not** move the engine files out:
+its brief step 3 is deferred to `todo.d/2026-11-08-r1-23-engine-rehome-into-core.md`, which runs **after** this
+task so its split of each file into an engine half and an ABO half lands on the final paths. So this rename carries
+`pebble_gate.go`, `pebble_store_open.go`, `storage_format.go`, `census*.go`, `store_init.go` and
+`migrations_runner.go` into `internal/books/store` with the rest of the residue, unchanged; the residue is final for
+R1 only once that follow-up has moved the engine halves to core. Check:
 `git grep -q 'func (h \*Handler) FactoryReset' -- internal/server/handlers/system || echo RESET_GONE` prints
 `RESET_GONE`, and `test -d core/storage && echo ok`.
 
-## Re-verify (counts at `ac4368bdb`; R1-23 lowers them)
+## Re-verify (counts at `ac4368bdb`; R1-23 kept the engine files here, so expect counts close to these)
 
 ```bash
 M=github.com/falkcorp/audiobook-organizer
