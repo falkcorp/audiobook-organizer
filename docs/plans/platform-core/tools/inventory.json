@@ -759,7 +759,12 @@
    "internal/server/testdata/",
    "core/httpapi/router.go",
    "core/httpapi/dispatch.go",
-   "core/kernel/kernel.go"
+   "core/kernel/kernel.go",
+   "internal/server/owner_routes.go",
+   "internal/server/credential_routes.go",
+   "internal/server/server.go",
+   "internal/server/wire_system_routes.go",
+   "internal/server/wire_library_routes.go"
   ],
   "spec": "05-http-api §4.8 (collision rule), §8.1 R1 row, §8.2; 09 §9.2.4; 09 §9.4 R1 Content: endpoints",
   "notes": "Tier: the ServeMux collision rule over 572 real routes, ABS on and off. The manifest records rbac.LegacyAtom(atom) for every s.perm route; R1-15 resolves them through books' atom table (04 §8.1 R1). Owns gate tests: TestLegacyManifest_RegistersAsMuxPatterns; TestNativePrefixesNotRedirected; TestCollidingNamespacesStillRedirect."
