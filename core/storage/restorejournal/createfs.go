@@ -1,5 +1,5 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
 // last-edited: 2026-11-08
 
@@ -232,7 +232,8 @@ func InFlightIDs(fs vfs.FS, stateDir string) ([]string, error) {
 }
 
 // writeTempFS writes b to a new temp file in dir through fs, fsynced and
-// closed; mode 0600 on the real filesystem (vfs.FS has no mode).
+// closed, made 0600 (ChmodFS) before b is written; a temp that cannot be
+// made private is removed with nothing written to it.
 func writeTempFS(fs vfs.FS, dir string, b []byte) (string, error) {
 	name, err := tempName(dir)
 	if err != nil {
@@ -242,17 +243,38 @@ func writeTempFS(fs vfs.FS, dir string, b []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("restorejournal: create temp intent: %w", err)
 	}
-	var cherr error
-	if vfs.Root(fs) == vfs.Default {
-		cherr = os.Chmod(name, 0o600)
+	if err := ChmodFS(fs, name, 0o600); err != nil {
+		return "", errors.Join(fmt.Errorf("restorejournal: create temp intent: %w", err), f.Close(), fs.Remove(name))
 	}
 	_, werr := f.Write(b)
 	serr := f.Sync()
 	cerr := f.Close()
-	if err := errors.Join(cherr, werr, serr, cerr); err != nil {
+	if err := errors.Join(werr, serr, cerr); err != nil {
 		return "", errors.Join(fmt.Errorf("restorejournal: write temp intent: %w", err), fs.Remove(name))
 	}
 	return name, nil
+}
+
+// ChmodFS sets mode on path, a file fs just created, before anything is
+// written to it (SEC-9: a state file can hold secrets and is 0600). vfs.FS
+// has no chmod, so ChmodFS fails closed on a filesystem it cannot see into:
+// on the real one (vfs.Root(fs) == vfs.Default, which sees through a
+// wrapper such as errorfs) it is os.Chmod; an in-memory one (*vfs.MemFS)
+// keeps no modes and needs none; any other is an error, since a file it
+// created may be a real one left at the umask's mode. A caller removes the
+// file and writes nothing to it when ChmodFS fails.
+func ChmodFS(fs vfs.FS, path string, mode os.FileMode) error {
+	root := vfs.Root(fs)
+	if root == vfs.Default {
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("restorejournal: chmod %s: %w", path, err)
+		}
+		return nil
+	}
+	if _, mem := root.(*vfs.MemFS); mem {
+		return nil
+	}
+	return fmt.Errorf("restorejournal: cannot make %s mode %o: filesystem %T is neither the real one nor in memory", path, mode, root)
 }
 
 // tempName is a new dot-name for an intent file in dir: InFlightIDs and P0a
