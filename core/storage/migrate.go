@@ -368,13 +368,13 @@ func (db *DB) Migrate(ctx context.Context) error {
 // runLegacy runs a books legacy step over the owner's own LegacyRange (not
 // atomic, §5S.3.5 "Atomicity"), then its bookkeeping through the owner's
 // VersionSource in its own batch.
-func (db *DB) runLegacy(ctx context.Context, n *stepNode) error {
+func (db *DB) runLegacy(ctx context.Context, n *stepNode) (err error) {
 	lr, _ := db.Legacy(n.owner.owner)
 	if err := n.legacy.Up(ctx, lr); err != nil {
 		return err
 	}
 	b := lr.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	step := AppliedStep{Version: n.ref.Version, Name: n.legacy.Name, AppliedAt: db.clock().UTC(), Build: db.boot.opts.Build}
 	if err := n.owner.spec.VersionSource.Stage(ctx, lr, b, step); err != nil {
 		return err
@@ -385,12 +385,12 @@ func (db *DB) runLegacy(ctx context.Context, n *stepNode) error {
 // runStep runs one versioned step: Up stages into an indexed batch over the
 // owner's keyspace and claims, then the version, the applied record and, for
 // a level step, the stamp join it, and the one batch commits.
-func (db *DB) runStep(ctx context.Context, n *stepNode) error {
+func (db *DB) runStep(ctx context.Context, n *stepNode) (err error) {
 	o := n.owner
 	ks := db.storageKS()
 	b := newBatch(ks, true)
 	b.exclusive = true
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	tx := &MigrationTx{b: b, log: db.log.With("step", n.ref.String()), maxBytes: db.set.migMaxBytes, maxOps: db.set.migMaxOps}
 	if own, ok := db.Keyspace(o.owner); ok {
 		b.Bind(own)
@@ -423,12 +423,12 @@ func (db *DB) runStep(ctx context.Context, n *stepNode) error {
 // only when it changed), the books marker cleared when no books Breaking
 // step is pending, the sidecars rewritten from the stamps, and the attempt's
 // checkpoint completed.
-func (db *DB) finish(ctx context.Context) error {
+func (db *DB) finish(ctx context.Context) (err error) {
 	st := db.boot
 	now := db.clock().UTC()
 	ks := db.storageKS()
 	b := ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := db.stageLedgers(b, now, false); err != nil {
 		return err
 	}

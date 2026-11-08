@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: core/scripts/ci/check-errcheck-ratchet.sh
-# version: 1.0.1
+# version: 1.0.2
 # guid: c13f1080-a3a4-46a7-95d6-d68fc528942a
 # last-edited: 2026-11-07
 #
@@ -104,6 +104,13 @@ linters:
         - (*encoding/json.Encoder).Encode
         - os.Remove
         - os.RemoveAll
+        # Progress reporting: storage.LogReporter is the two-method slice of
+        # ABO's registry.Reporter the compaction sampler needs, and its Log is
+        # the op-log write, whose only failure mode is that a progress line did
+        # not land. The root's .golangci.yml exempted it as
+        # internal/compactprogress.LogReporter until R1-20 moved the package
+        # into core/storage; the exemption moved with it.
+        - (github.com/falkcorp/mediacore/storage.LogReporter).Log
         # A type test, not a dropped error: in `_, ok := errors.AsType[T](err)`
         # the blank is the matched value and ok carries the answer. `go fix`
         # (fix-check) rewrites errors.As to this form, so without the

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -315,27 +316,44 @@ func (s *Snapshot) Scan(ctx context.Context, opts ScanOptions) iter.Seq2[KV, err
 			yield(KV{}, err)
 			return
 		}
-		defer func() { _ = it.Close() }()
-		ok := it.First()
+		yieldScan(it, opts, s.scope.db.log, yield)
+	}
+}
+
+// yieldScan drives a fresh iterator for a Scan, in opts' direction and up to
+// opts.Limit, then closes it. The iteration's error, or else the close's
+// (Pebble reports a failed read through Close too), is yielded once, last.
+// After the consumer stopped nothing is listening, so an error is logged
+// instead of yielded.
+func yieldScan(it *Iterator, opts ScanOptions, log *slog.Logger, yield func(KV, error) bool) {
+	var ok bool
+	if opts.Reverse {
+		ok = it.Last()
+	} else {
+		ok = it.First()
+	}
+	stopped := false
+	for n := 0; ok && (opts.Limit <= 0 || n < opts.Limit); n++ {
+		if !yield(KV{Key: it.Key(), Value: it.Value()}, nil) {
+			stopped = true
+			break
+		}
 		if opts.Reverse {
-			ok = it.Last()
+			ok = it.Prev()
+		} else {
+			ok = it.Next()
 		}
-		for n := 0; ok; n++ {
-			if opts.Limit > 0 && n >= opts.Limit {
-				return
-			}
-			if !yield(KV{Key: it.Key(), Value: it.Value()}, nil) {
-				return
-			}
-			if opts.Reverse {
-				ok = it.Prev()
-			} else {
-				ok = it.Next()
-			}
-		}
-		if err := it.Err(); err != nil {
-			yield(KV{}, err)
-		}
+	}
+	err := it.Err()
+	if cerr := it.Close(); err == nil {
+		err = cerr
+	}
+	switch {
+	case err == nil:
+	case stopped:
+		log.Warn("storage: scan iterator failed after its consumer stopped", "err", err)
+	default:
+		yield(KV{}, err)
 	}
 }
 

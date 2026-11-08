@@ -125,13 +125,12 @@ func (s *Sequence) commitHW(ctx context.Context, next func(hw uint64) uint64) (u
 		return 0, ErrReadOnly
 	}
 	var out uint64
-	err := RetryOnConflict(ctx, 8, func(ctx context.Context) error {
+	err := RetryOnConflict(ctx, 8, func(ctx context.Context) (err error) {
 		b := s.ks.NewBatch()
-		defer func() { _ = b.Close() }()
+		defer func() { err = errors.Join(err, b.Close()) }()
 		abs := append(slices.Clone(s.ks.prefix), s.key...)
 		info := s.ks.db.owners[s.ks.owner]
 		var raw []byte
-		var err error
 		if info != nil && info.isSerialized(abs) {
 			raw, err = b.GetForUpdate(ctx, s.ks, s.key)
 		} else {

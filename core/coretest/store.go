@@ -7,6 +7,7 @@ package coretest
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -92,8 +93,7 @@ func (s *Store) boot(owners []storage.OwnerSpec) *storage.DB {
 		err = db.Migrate(ctx)
 	}
 	if err != nil {
-		_ = o.Close()
-		s.tb.Fatalf("coretest.Store: boot: %v", err)
+		s.tb.Fatalf("coretest.Store: boot: %v", errors.Join(err, o.Close()))
 	}
 	return db
 }
