@@ -1,5 +1,5 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.4.0
+# version: 1.5.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
 # last-edited: 2026-11-08
 
@@ -175,6 +175,8 @@ jobs:
     timeout-minutes: 20
     env:
       PROMETHEUS_VERSION: 3.5.0
+      # The Go module tag of the same release, for the module-proxy fallback.
+      PROMETHEUS_MODULE: v0.305.0
       # sha256 of prometheus-3.5.0.linux-amd64.tar.gz, from the release's
       # sha256sums.txt.
       PROMETHEUS_SHA256: e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
@@ -202,13 +204,15 @@ jobs:
       - name: Install system packages
         run: scripts/ci/apt_install.sh libtag1-dev
 
-      # The release tarball is cached by version and checksum. On 2026-11-08
-      # GitHub's release CDN answered runners with 504 for over an hour while
-      # it served other clients, and `--retry 3` gave up within 7 s, failing
-      # this required check on every PR. A cache hit skips the download.
-      # A miss retries with backoff for up to 5 minutes. The checksum is
-      # verified either way, so a cached file is trusted no more than a
-      # fresh one.
+      # On 2026-11-08 GitHub's release CDN answered runners with 504 for over
+      # an hour (5 minutes of retries did not get through) while it served other
+      # clients, failing this required check on every PR. So promtool comes from
+      # the first source that works:
+      #   1. the release tarball cached by version and checksum;
+      #   2. the release download (checksum-verified, retried for 90 s);
+      #   3. a build of the same release's source from the Go module proxy,
+      #      which the Go cache step already depends on; v0.305.0 is Prometheus
+      #      3.5.0's module tag, and sumdb verifies the source (about 35 s).
       - name: Restore promtool tarball
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -221,16 +225,32 @@ jobs:
           tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
           dl="${HOME}/.cache/promtool-dl"
           mkdir -p "$dl"
-          if ! echo "${PROMETHEUS_SHA256}  ${dl}/${tarball}" | sha256sum -c --status - 2>/dev/null; then
-            curl -fsSL --retry 10 --retry-delay 15 --retry-max-time 300 --retry-all-errors \
+          bin="${RUNNER_TEMP}/promtool"
+          mkdir -p "$bin"
+          verified() { echo "${PROMETHEUS_SHA256}  ${dl}/${tarball}" | sha256sum -c --status - 2>/dev/null; }
+          if ! verified; then
+            curl -fsSL --retry 6 --retry-delay 15 --retry-max-time 90 --retry-all-errors \
               -o "${dl}/${tarball}" \
-              "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+              "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}" \
+              || rm -f "${dl}/${tarball}"
           fi
-          echo "${PROMETHEUS_SHA256}  ${dl}/${tarball}" | sha256sum -c -
-          mkdir -p "${RUNNER_TEMP}/promtool"
-          tar -xzf "${dl}/${tarball}" -C "${RUNNER_TEMP}/promtool" --strip-components=1 \
-            "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
-          echo "${RUNNER_TEMP}/promtool" >> "$GITHUB_PATH"
+          if verified; then
+            tar -xzf "${dl}/${tarball}" -C "$bin" --strip-components=1 \
+              "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          elif [ -e "${dl}/${tarball}" ]; then
+            echo "::error::promtool tarball checksum mismatch"; exit 1
+          else
+            echo "::warning::release download failed; building promtool ${PROMETHEUS_MODULE} from the Go module proxy"
+            # No tarball to cache: remove the empty directory so the cache step
+            # saves nothing, or the key would be taken by an empty entry forever.
+            rm -rf "$dl"
+            # Not `go install pkg@version`: Prometheus's go.mod has replace
+            # directives, which go install refuses. Build it as the main module.
+            src="$(GOFLAGS='' go mod download -json "github.com/prometheus/prometheus@${PROMETHEUS_MODULE}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["Dir"])')"
+            (cd "$src" && GOWORK=off GOFLAGS='-mod=mod' go build -o "${bin}/promtool" ./cmd/promtool)
+          fi
+          echo "$bin" >> "$GITHUB_PATH"
 
       - name: promtool version
         run: promtool --version
