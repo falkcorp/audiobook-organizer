@@ -47,10 +47,7 @@ func TestShim_SubsystemIsAttribute(t *testing.T) {
 	l.With("outer").With("inner").Warn("nested")
 	l.Info("bare")
 
-	var records []string
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		records = append(records, line)
-	}
+	records := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(records) != 4 {
 		t.Fatalf("want 4 records (the info of subsystem quiet is below its level), got %d:\n%s", len(records), buf.String())
 	}
