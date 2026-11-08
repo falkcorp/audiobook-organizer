@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -435,6 +435,91 @@ func TestCleanStop_AMarkerThatCannotBeRemovedIsEmptied(t *testing.T) {
 		}
 		if vouches(t, dir) {
 			t.Error("the marker a boot took still vouches for the boot after it")
+		}
+	})
+}
+
+// writeMarker writes a marker that vouches into dir, creating dir.
+func writeMarker(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cleanStopPath(dir), []byte(`{"version":1,"model":"bge-m3"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPebbleStoreOpen_TakesTheCleanStopMarker (R1-15 follow-up review,
+// MINOR-1): opening a database on disk takes the marker in the snapshot
+// directory beside it, and the import pops what the open took, once. An
+// in-memory database, and an open after DisableHNSWCleanStopClaim, leave it.
+func TestPebbleStoreOpen_TakesTheCleanStopMarker(t *testing.T) {
+	t.Run("a database on disk", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if markerExists(t, dir) {
+			t.Fatal("the open left the marker on disk")
+		}
+		s := NewHNSWEmbeddingStore(4)
+		s.BindTruthSource(ps.DB(), "bge-m3")
+		rec, err := s.takeCleanStopForImport(dir)
+		if err != nil || rec == nil || rec.Model != "bge-m3" {
+			t.Fatalf("the import's marker = %+v, %v; want the one the open took", rec, err)
+		}
+		if rec, err := s.takeCleanStopForImport(dir); err != nil || rec != nil {
+			t.Errorf("a second import got %+v, %v; the open's marker is popped once", rec, err)
+		}
+	})
+
+	t.Run("an import from another directory", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		writeMarker(t, HNSWSnapshotDir(dbPath))
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		s := NewHNSWEmbeddingStore(4)
+		s.BindTruthSource(ps.DB(), "bge-m3")
+		if rec, err := s.takeCleanStopForImport(t.TempDir()); err != nil || rec != nil {
+			t.Errorf("an import from a directory the open did not take from got %+v, %v; want that directory's own (none)", rec, err)
+		}
+	})
+
+	t.Run("an in-memory database", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStoreInMemory(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if !markerExists(t, dir) {
+			t.Error("an in-memory open took a marker on disk")
+		}
+	})
+
+	t.Run("claims turned off", func(t *testing.T) {
+		hnswCleanStopClaimOff.Store(true)
+		t.Cleanup(func() { hnswCleanStopClaimOff.Store(false) })
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if !markerExists(t, dir) {
+			t.Error("an open with claims turned off took the marker")
 		}
 	})
 }

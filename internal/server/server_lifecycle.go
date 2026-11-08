@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.6
+// version: 4.67.7
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -1467,12 +1467,16 @@ const hnswUnmeasuredExport = 5 * time.Second
 // clean-stop marker is still taken: this run lets the snapshot fall behind
 // Pebble, so a later HNSW run must not find a marker vouching for it.
 //
+// The store open already took the marker beside the database
+// (database.HNSWSnapshotDir); the import gets what it took, and takes whatever
+// marker is in hnswDir when the open took none there.
+//
 // An operation-runner child (opsregistry.IsChildMode) neither takes the marker
 // nor needs it (R1-15 follow-up review, MINOR-3): it imports with the row
 // counts alone (ImportCountChecked), so a snapshot whose Pebble rows moved
 // since it was written is reconciled, and one whose counts match loads as is.
-// The marker is the parent's, written by its clean stop for its own next boot,
-// and the child can never write
+// The marker is the parent's, written by its clean stop for its own next boot
+// (cmd/child_mode.go turns the open's take off), and the child can never write
 // the snapshot or a marker (it has no snapshotter and runs no StopHook), so
 // whatever its graph lacks ends with the child. Requiring the marker would
 // only cost: the parent took it at its own boot, so every child would find

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.115.3
+// version: 2.115.4
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -975,7 +975,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// already-populated graph, triggering a nil-deref in coder/hnsw v0.6.1 when
 	// Delete+Add violates the per-layer node invariant (HNSW-CRASH-2026-06-18).
 	if config.AppConfig.DatabasePath != "" {
-		hnswDir := filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
+		hnswDir := database.HNSWSnapshotDir(config.AppConfig.DatabasePath)
 		server.hnswPersistDir = hnswDir
 		importHNSWSnapshot(regContainer, hnswDir)
 	}
@@ -1134,7 +1134,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 
 		// Set HNSW persist directory alongside the main database.
 		if config.AppConfig.DatabasePath != "" {
-			server.hnswPersistDir = filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "hnsw")
+			server.hnswPersistDir = database.HNSWSnapshotDir(config.AppConfig.DatabasePath)
 		}
 
 		// Gate embedding client on Ollama availability. The old check was a
