@@ -1,5 +1,5 @@
 // file: core/log/handler.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 00d59f68-e217-4796-9d74-36dcbf58a4ed
 // last-edited: 2026-11-08
 
@@ -42,6 +42,8 @@ type handler struct {
 	sc     *scope
 	pre    []slog.Attr // WithAttrs before any WithGroup, unredacted
 	groups []openGroup // WithGroup names, each with the attrs added after it
+	// process marks Root and Handler and what is derived from them: Record.Process.
+	process bool
 }
 
 // openGroup is one WithGroup and the (unredacted) attrs added while it was
@@ -203,6 +205,7 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 			Attrs:     slices.Clone(flat),
 			TraceID:   traceID,
 			SpanID:    spanID,
+			Process:   h.process,
 		})
 	}
 	return nil
