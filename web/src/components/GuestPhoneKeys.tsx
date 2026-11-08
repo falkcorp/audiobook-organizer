@@ -1,11 +1,11 @@
 // file: web/src/components/GuestPhoneKeys.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4f8a2d6-93b1-4e07-8a5d-1e6b7c9d3f24
 // last-edited: 2026-11-07
 
 // Admin panel on the Users page: each guest's own Cloudflare phone-app key
 // (service token), with Revoke and Issue / Reissue actions. Issue and Reissue
-// email the key to the user's verified address; the server never returns the
+// email the key to the account's email address; the server never returns the
 // secret to the admin (the guest saw it once on the invitation page, or gets
 // it in the email). Users who could be given a first key but have none are
 // listed too, so the admin can click Issue. Renders nothing when the feature is
@@ -62,16 +62,29 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
   const [issueError, setIssueError] = useState('');
   const [issueBusy, setIssueBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  // load returns the list it fetched, or null when the fetch failed.
+  const load = useCallback(async (): Promise<GuestPhoneKeysBody | null> => {
     try {
       const resp = await apiFetch(ENDPOINT);
       if (!resp.ok) throw new Error(await responseErrorMessage(resp));
-      setBody(unwrapData<GuestPhoneKeysBody>(await resp.json()) || {});
+      const next = unwrapData<GuestPhoneKeysBody>(await resp.json()) || {};
+      setBody(next);
       setLoadFailed(false);
+      return next;
     } catch {
       setLoadFailed(true);
+      return null;
     }
   }, []);
+
+  // After a failed issue the record may have changed (a first-key attempt that
+  // failed leaves a "failed" record, so a retry is a Reissue, not an Issue):
+  // reload and point the open dialog at the fresh row, not the one clicked.
+  const reloadIssuingRow = async (userId: string) => {
+    const fresh = await load();
+    const row = fresh?.tokens?.find((t) => t.user_id === userId);
+    if (row) setIssuing(row);
+  };
 
   // Reload whenever the page reloads its user list: deactivating a guest
   // revokes their key in the background.
@@ -119,7 +132,7 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
       if (!resp.ok) {
         // The old key may already be revoked, so show the reason and reload.
         setIssueError(await responseErrorMessage(resp));
-        await load();
+        await reloadIssuingRow(target.user_id);
         return;
       }
       if (resp.status === 202) {
@@ -139,10 +152,11 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
         // The work continues on the server; the list shows how it ended.
         setNotice({ severity: 'info', text: STILL_RUNNING });
         setIssuing(null);
+        await load();
       } else {
         setIssueError(describeRequestError(err, 'Could not issue the phone-app key'));
+        await reloadIssuingRow(target.user_id);
       }
-      await load();
     } finally {
       setIssueBusy(false);
     }
@@ -173,7 +187,7 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Each guest on the phone app has their own Cloudflare key. Revoking one cuts off only that
-        guest, immediately. Issue or Reissue emails a key to the guest&apos;s verified address; you
+        guest, immediately. Issue or Reissue emails a key to the account&apos;s email address; you
         never see it.
       </Typography>
       {body.flag_on && !body.enabled && (
@@ -305,14 +319,15 @@ export default function GuestPhoneKeys({ refreshToken }: { refreshToken?: unknow
           {issuing?.status === 'none' ? (
             <Typography>
               Issue a phone-app key for <strong>{issuing.username || issuing.user_id}</strong>? A
-              key is emailed to their verified address; you will not see it. They will need to put
-              the key into their phone app.
+              key is emailed to the account&apos;s email address; you will not see it. They will
+              need to put the key into their phone app.
             </Typography>
           ) : (
             <Typography>
               Reissue the phone-app key for <strong>{issuing?.username || issuing?.user_id}</strong>
-              ? Their current key stops working right away. A new key is emailed to their verified
-              address; you will not see it. They will need to put the new key into their phone app.
+              ? Their current key stops working right away. A new key is emailed to the
+              account&apos;s email address; you will not see it. They will need to put the new key
+              into their phone app.
             </Typography>
           )}
           {issueError && (

@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
 // last-edited: 2026-11-07
 
@@ -99,9 +99,16 @@ type fakeTokenPolicy struct {
 	removeErr error
 	planErr   error
 	planned   []string
+	// onEnsure / onRemove run (without the lock) at the start of the call, to
+	// let a test act at a precise point of a mint or a revoke.
+	onEnsure func()
+	onRemove func()
 }
 
 func (f *fakeTokenPolicy) EnsureServiceToken(_ context.Context, id string) (cfaccesspolicy.Result, error) {
+	if f.onEnsure != nil {
+		f.onEnsure()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ensureErr != nil {
@@ -122,6 +129,9 @@ func (f *fakeTokenPolicy) PlanServiceToken(_ context.Context, id string) ([]byte
 }
 
 func (f *fakeTokenPolicy) RemoveServiceToken(_ context.Context, id string) (cfaccesspolicy.Result, error) {
+	if f.onRemove != nil {
+		f.onRemove()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = append(f.removed, id)

@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -282,12 +282,13 @@ func ambiguousCreateFailure(err error) bool {
 // this is the only mint for that guest) and deletes them. It runs on fresh
 // bounded contexts because the mint's own may be the thing that expired. It
 // returns text to append to the admin-facing detail, empty when nothing needed
-// saying.
-func (s *Server) reapOrphanedMint(parent context.Context, api guestTokenCloudflare, name string) string {
+// saying, and clean: false when Cloudflare could not be asked or an orphan
+// could not be deleted, so a token may still be live.
+func (s *Server) reapOrphanedMint(parent context.Context, api guestTokenCloudflare, name string) (note string, clean bool) {
 	ctx := context.WithoutCancel(parent)
 	list, err := listWithTimeout(ctx, api)
 	if err != nil {
-		return "; Cloudflare could not be asked whether a token named " + name + " was made: check the dashboard and delete it if it exists (" + guestTokenErrText("listing tokens", err) + ")"
+		return "; Cloudflare could not be asked whether a token named " + name + " was made: check the dashboard and delete it if it exists (" + guestTokenErrText("listing tokens", err) + ")", false
 	}
 	var problems []string
 	reaped := 0
@@ -306,11 +307,11 @@ func (s *Server) reapOrphanedMint(parent context.Context, api guestTokenCloudfla
 	}
 	switch {
 	case len(problems) > 0:
-		return "; an orphaned token named " + name + " was found but not deleted, delete it by hand: " + joinProblems(problems)
+		return "; an orphaned token named " + name + " was found but not deleted, delete it by hand: " + joinProblems(problems), false
 	case reaped > 0:
-		return fmt.Sprintf("; %d orphaned token(s) named %s were deleted", reaped, name)
+		return fmt.Sprintf("; %d orphaned token(s) named %s were deleted", reaped, name), true
 	}
-	return ""
+	return "", true
 }
 
 // mintGuestServiceToken is called by handleAcceptInvite after the account and
@@ -403,7 +404,8 @@ func (s *Server) mintGuestTokenCore(parent context.Context, store database.UserR
 			// Cloudflare may have made the token even though we got no usable
 			// answer (a timeout, a 5xx, a malformed reply): look for one with
 			// our exact name and delete it, so no unrecorded credential lives on.
-			detail += s.reapOrphanedMint(parent, api, name)
+			note, _ := s.reapOrphanedMint(parent, api, name)
+			detail += note
 		}
 		return fail(detail)
 	}
@@ -612,14 +614,6 @@ func (s *Server) revokeGuestServiceTokenOpts(parent context.Context, userID, rea
 			inviteAccessLog.Warn("guest service token: recording the revoke failed: %v", logger.SanitizeLogValue(err.Error()))
 		}
 	}
-	if snapshot.TokenID == "" {
-		// Nothing was made yet (pending or failed): a mint in flight sees
-		// "revoking" and deletes its own token.
-		closeRecord()
-		s.recordGuestTokenAudit(auditGuestTokenRevoked, "info", userID, "", reason, "a guest's phone-app token record was closed (no Cloudflare token existed yet)")
-		return nil
-	}
-
 	fail := func(detail string) error {
 		_, _ = tokens.UpdateGuestServiceToken(userID, func(g *database.GuestServiceToken) error {
 			g.Status, g.Detail = database.GuestTokenRevokeFailed, detail
@@ -628,6 +622,31 @@ func (s *Server) revokeGuestServiceTokenOpts(parent context.Context, userID, rea
 		inviteAccessLog.Warn("guest service token: revoking account %s token %s failed: %s", userID, snapshot.TokenID, logger.SanitizeLogValue(detail))
 		s.recordGuestTokenAudit(auditGuestTokenRevokeFailed, "warn", userID, snapshot.TokenID, detail, "revoking a guest's Cloudflare service token failed")
 		return errors.New(detail)
+	}
+	if snapshot.TokenID == "" {
+		// No token id is recorded. A mint in flight sees "revoking" and deletes
+		// its own token, but a pending or revoking record may also be what a
+		// crash left AFTER Cloudflare's Create succeeded and BEFORE the id was
+		// written: that token is live and nobody holds it. Revoke already means
+		// "kill any mint in flight", so reap by name, exactly as a failed mint
+		// does (reapOrphanedMint). A failed record has nothing to look for: its
+		// mint either reaped its own orphan or Cloudflare refused it.
+		if guestTokenInFlight(snapshot.Status) {
+			api, _, err := s.guestTokenClients()
+			if err != nil {
+				return fail("the Cloudflare settings are missing or invalid, so a token left by an interrupted mint could not be looked for; look for one named " + cfservicetoken.Name(userID) + " in the Cloudflare dashboard: " + logger.SanitizeLogValue(err.Error()))
+			}
+			note, clean := s.reapOrphanedMint(parent, api, cfservicetoken.Name(userID))
+			if !clean {
+				return fail("no token id was recorded" + note)
+			}
+			if note != "" {
+				reason += note
+			}
+		}
+		closeRecord()
+		s.recordGuestTokenAudit(auditGuestTokenRevoked, "info", userID, "", reason, "a guest's phone-app token record was closed (no Cloudflare token was recorded)")
+		return nil
 	}
 	api, policy, err := s.guestTokenClients()
 	if err != nil {
@@ -702,7 +721,7 @@ func (s *Server) recordGuestTokenAuditWith(typ, level, userID, tokenID, detail, 
 	}
 }
 
-// emailGuestToken sends the credential to the guest's verified address when the
+// emailGuestToken sends the credential to the account's email address when the
 // owner turned INVITE_EMAIL_SERVICE_TOKEN on. Off by default: an email is a
 // weaker place for a secret than the one-time page. Background, so a slow relay
 // never delays the accept; the secret stays in memory only. The body is the
@@ -743,7 +762,7 @@ func (s *Server) emailGuestToken(user *database.User, issue *guestTokenIssue) {
 // ── Admin routes ────────────────────────────────────────────────────────────
 
 // guestTokenStatusNone is the status of a list row for a user with no key
-// record: eligible for a first key (active, verified email), nothing issued yet.
+// record: eligible for a first key (active, non-admin, trusted email), nothing issued yet.
 const guestTokenStatusNone = "none"
 
 // guestTokenView is one row of the admin list. No secret, hash or client id.
@@ -815,7 +834,8 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 		if r.TokenID != "" {
 			v.LastSeenAt = seen[r.TokenID]
 		}
-		v.ReissueBlocked = guestKeyRowBlocked(store, deployment, u, r)
+		_, issuing := s.guestTokens.reissueGuard.Load(r.UserID)
+		v.ReissueBlocked = guestKeyRowBlocked(store, deployment, u, r, issuing)
 		views = append(views, v)
 	}
 	views = append(views, s.guestTokenNoKeyViews(store, deployment, hasRecord)...)
@@ -826,7 +846,7 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 }
 
 // guestTokenNoKeyViews lists the users who could be issued a FIRST key and have
-// no record: active, with a verified email address. It lists them only while
+// no record: active, not an admin or the owner, with a trusted email address. It lists them only while
 // CF_GUEST_SERVICE_TOKENS is on (with the flag off no key can be issued, and
 // the panel stays hidden when it has nothing to show). A user the admin cannot
 // issue a key to for deployment reasons is still listed, with that reason on the
@@ -844,11 +864,15 @@ func (s *Server) guestTokenNoKeyViews(store database.UserReader, deployment stri
 	var out []guestTokenView
 	for i := range users {
 		u := &users[i]
-		if hasRecord[u.ID] || guestKeyUserBlocked(store, u) != "" {
+		if hasRecord[u.ID] || guestKeyUserBlocked(store, u) != "" || guestKeyFirstKeyBlocked(u) != "" {
 			continue
 		}
+		blocked := deployment
+		if _, issuing := s.guestTokens.reissueGuard.Load(u.ID); issuing {
+			blocked = guestKeyIssuingNow
+		}
 		out = append(out, guestTokenView{
-			UserID: u.ID, Username: u.Username, Status: guestTokenStatusNone, ReissueBlocked: deployment,
+			UserID: u.ID, Username: u.Username, Status: guestTokenStatusNone, ReissueBlocked: blocked,
 		})
 	}
 	sort.Slice(out, func(a, b int) bool {

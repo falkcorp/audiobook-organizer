@@ -1,5 +1,5 @@
 // file: web/src/components/GuestPhoneKeys.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e1a7c93-2d48-4b6f-a0c7-8f3d9b2e6a41
 // last-edited: 2026-11-07
 
@@ -202,6 +202,41 @@ describe('GuestPhoneKeys', () => {
       await user.click(within(dialog).getByRole('button', { name: 'Issue and email' }));
       expect(await screen.findByText(/phone-app key was emailed to robin/i)).toBeInTheDocument();
       expect(posted).toBe('/api/v1/admin/guest-service-tokens/u-robin/reissue');
+    });
+
+    it('after a failed first key, the open dialog switches to Reissue (a failed record now exists)', async () => {
+      const noKey = { user_id: 'u-robin', username: 'robin', status: 'none' };
+      let failed = false;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (url.endsWith('/reissue')) {
+            failed = true;
+            return jsonResponse(
+              { error: 'No phone-app key could be made: refused', status: 502 },
+              502
+            );
+          }
+          return jsonResponse(
+            listBody([failed ? { ...noKey, status: 'failed', token_id: undefined } : noKey])
+          );
+        })
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<GuestPhoneKeys />);
+      await user.click(
+        await screen.findByRole('button', { name: 'Issue phone-app key for robin' })
+      );
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Issue and email' }));
+      expect(await within(dialog).findByText(/could be made/i)).toBeInTheDocument();
+      // The dialog was opened on the "none" row; the reloaded row is "failed", so
+      // a retry is a Reissue.
+      expect(
+        await within(dialog).findByRole('button', { name: 'Reissue and email' })
+      ).toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: 'Issue and email' })).toBeNull();
+      expect(within(dialog).getByText(/Reissue phone-app key/)).toBeInTheDocument();
     });
 
     it('disables the button with the server reason as tooltip when blocked', async () => {

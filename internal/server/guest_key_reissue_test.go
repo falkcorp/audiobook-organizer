@@ -1,5 +1,5 @@
 // file: internal/server/guest_key_reissue_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7adb11d4-24ec-4f03-a1b2-9e8a576a5ab1
 // last-edited: 2026-11-07
 
@@ -361,7 +361,7 @@ func TestReissue_PreflightRefusalsTouchNothing(t *testing.T) {
 		{"the account is not active", 409, guestKeyBlockedCode, "not active", func(t *testing.T, r *reissueFixture, u *database.User) {
 			r.lock(t, u.ID)
 		}},
-		{"the email is self-set, not verified", 409, guestKeyBlockedCode, "no verified email", func(t *testing.T, r *reissueFixture, u *database.User) {
+		{"the email is self-set, not verified", 409, guestKeyBlockedCode, "no trusted email", func(t *testing.T, r *reissueFixture, u *database.User) {
 			changed := *u
 			changed.Email = "robin.grayson@wayne.example"
 			if err := r.store.UpdateUser(&changed); err != nil {
@@ -441,7 +441,7 @@ func TestReissue_UnknownOrMalformedUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := r.post(u.ID); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no verified email") {
+	if w := r.post(u.ID); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no trusted email") {
 		t.Fatalf("no address: %d %s", w.Code, w.Body.String())
 	}
 	if created, _ := r.api.snapshot(); len(created) != 0 {

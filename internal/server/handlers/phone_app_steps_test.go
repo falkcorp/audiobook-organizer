@@ -1,5 +1,5 @@
 // file: internal/server/handlers/phone_app_steps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 17a9d2d3-c383-4119-8b22-80a2d492f512
 // last-edited: 2026-11-07
 
@@ -43,7 +43,7 @@ func TestRenderPhoneKeyEmail_CarriesBothHeadersAndTheSteps(t *testing.T) {
 			for _, want := range []string{
 				"CF-Access-Client-Id: " + testKeyID, "CF-Access-Client-Secret: " + testKeySecret,
 				"https://books.example.com", "AudioBooth", "Lissen", "org.grakovne.lissen", "Custom Headers",
-				"headers below", "replace both values", "Delete this email once the app works",
+				"headers below", "Delete this email once the app works",
 			} {
 				if !strings.Contains(part, want) {
 					t.Fatalf("reissue=%v: missing %q in %s", reissue, want, part)
@@ -135,6 +135,44 @@ func TestEmailSendBlocked(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("%s: EmailSendBlocked = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// The "already set up with your old key" line is for a guest who HAS an old key.
+func TestRenderPhoneKeyEmail_OldKeyLineIsForReissueOnly(t *testing.T) {
+	const line = "already set up with your old key"
+	for _, reissue := range []bool{true, false} {
+		msg, err := RenderPhoneKeyEmail(PhoneKeyEmail{
+			Username: "bruce.wayne", ServerURL: "https://books.example.com",
+			ClientID: testKeyID, ClientSecret: testKeySecret, Reissue: reissue,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range map[string]string{"text": msg.Text, "html": msg.HTML} {
+			if got := strings.Contains(body, line); got != reissue {
+				t.Errorf("reissue=%v %s part contains the old-key line = %v", reissue, name, got)
+			}
+		}
+	}
+}
+
+// A base URL with a trailing slash must not leak a double slash into the email.
+func TestRenderPhoneKeyEmail_TrimsTheServerURLSlash(t *testing.T) {
+	msg, err := RenderPhoneKeyEmail(PhoneKeyEmail{
+		Username: "bruce.wayne", ServerURL: "https://books.example.com/",
+		ClientID: testKeyID, ClientSecret: testKeySecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"text": msg.Text, "html": msg.HTML} {
+		if strings.Contains(body, "example.com/") {
+			t.Errorf("%s part keeps the trailing slash: %s", name, body)
+		}
+		if !strings.Contains(body, "https://books.example.com") {
+			t.Errorf("%s part lost the server address", name)
 		}
 	}
 }

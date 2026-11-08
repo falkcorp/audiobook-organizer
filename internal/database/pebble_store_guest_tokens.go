@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_guest_tokens.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c7e9a40-5b1d-4e83-9f06-d4a8b3c1e725
 // last-edited: 2026-11-07
 
@@ -132,7 +132,7 @@ func (p *PebbleStore) writeGuestServiceToken(g *GuestServiceToken) error {
 // existing record, a revoked one included: there is one record per user, and
 // issuing a user a new key after a revoke REOPENS that record with a
 // status-checked UpdateGuestServiceToken (revoked -> pending, see
-// reissueGuestKey in internal/server), so a reissue never changes the keyspace.
+// reopenGuestKeyRecord in internal/server), so a reissue never changes the keyspace.
 func (p *PebbleStore) CreateGuestServiceToken(rec GuestServiceToken) error {
 	if rec.UserID == "" {
 		return errors.New("guest service token: user id required")

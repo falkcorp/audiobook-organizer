@@ -1,5 +1,5 @@
 <!-- file: docs/operations/cloudflare-guest-service-tokens.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3a9d6f21-8c74-4e15-b0a2-6d1f4c8e7b95 -->
 <!-- last-edited: 2026-11-07 -->
 
@@ -105,22 +105,42 @@ For a guest who lost the key, whose key was revoked, or who never got one
 (the accept-time mint failed, or the flag was off when they joined):
 
 - **Admin action:** Users page > Phone app keys > **Reissue key** on the row,
-  or **Issue key** for an active user who has a verified email and no key yet
-  (such users are listed with the status "No key"). API:
+  or **Issue key** for an active, non-admin user who has a trusted email
+  address and no key yet (such users are listed with the status "No key").
+  Admins and the owner (the account whose email is `OWNER_EMAIL`) are never
+  listed for a first key and the server refuses one with 409: they sign in
+  through Cloudflare's own login and don't need a phone-app key. A user who
+  already has a key record, an admin included, can still be reissued. API:
   `POST /api/v1/admin/guest-service-tokens/<user id>/reissue` (owner only once
   an owner email is set, and not reachable with an API key, like Revoke).
 - Order: refuse first if mail or the Cloudflare settings are missing (nothing
   is revoked), then **revoke the current key**, then mint the new one, then
-  email it to the user's verified address. The admin never sees the secret;
+  email it to the account's email address. The admin never sees the secret;
   it is in the email only.
 - If the email cannot be sent after the mint, the new key is revoked again and
   the row shows "Failed" with the reason. The old key stays revoked, so
   retry Reissue once mail works.
-- The user must be active and have a verified email; a pending, minted or
+- The user must be active and have a trusted email address (one an admin set
+  on the Users page, or one confirmed by sign-in or an invitation; an address
+  the user typed in themselves does not count); a pending, minted or
   revoking row cannot be reissued. A second click while one is running is
   refused (409). The server waits up to 85 seconds (inside Cloudflare's 100 s
   proxy limit); past that it answers 202 and finishes in the background, and
   the list shows the result.
+- If the new key is made but the record then reads anything other than
+  "this key, active" (including a read error), the new key is revoked again,
+  nothing is emailed and the response says so; only when someone else's
+  revoke had already settled the record is it left alone.
+- **Shutdown.** The server checks that it is not shutting down before the
+  revoke, again after the revoke (before the record is reopened) and after the
+  mint (before the email). A stop after the revoke leaves the record
+  `revoked` and is audited as `reissue_failed`; a stop after the mint revokes
+  the unsent key. Residual window: a Cloudflare call already in flight when the
+  process dies (or one that outlives the 30 s shutdown wait) can leave a token
+  that no record names. Revoke on the guest's row (or deactivating them) looks
+  for such a token by name (`aorg-guest-<user id>`) when the record is pending
+  or revoking, and deletes it; if it cannot ask Cloudflare the row becomes
+  "Revoke failed" and can be retried.
 - The same per-user record is reused (revoked -> pending); `reissued_at` shows
   when. Audit entries: `guest_service_token_reissued` / `guest_service_token_reissue_failed`,
   with the user id and token id only.
