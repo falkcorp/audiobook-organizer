@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-10-13
+// last-edited: 2026-11-07
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -129,6 +129,20 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 			de.bgMu.Lock()
 			de.bgWg.Add(1)
 			de.bgMu.Unlock()
+			// The graph is about to be built from empty, so it is not a
+			// complete projection of the Pebble rows until the run below
+			// finishes. Mark it BEFORE the goroutine starts so no export can
+			// slip in between; a snapshot of a half-built graph would record
+			// the current Pebble row count beside it and the next boot would
+			// load it as fresh, with the missing vectors silently gone.
+			// Stays false if the run errors or is cut short (ctx cancelled
+			// at shutdown), and in the ChromemLazy branch above (an empty
+			// graph is never exported). The snapshot-loaded branch needs
+			// nothing: Import already marked the store complete.
+			completeness, _ := chromemStore.(database.SnapshotCompleteness)
+			if completeness != nil {
+				completeness.SetComplete(false)
+			}
 			go func() {
 				defer de.bgWg.Done()
 				hCtx, cancel := context.WithTimeout(bgCtx, 30*time.Minute)
@@ -155,6 +169,14 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 					"books", stats.BooksHydrated, "authors", stats.AuthorsHydrated,
 					"book_rows", stats.BookRows, "books_skipped", stats.BooksSkipped(),
 					"author_rows", stats.AuthorRows, "authors_skipped", stats.AuthorsSkipped())
+				if completeness != nil {
+					if reason := hydrateIncompleteReason(de, stats); reason != "" {
+						slog.Warn("[dedup] vector ANN store stays marked incomplete; no snapshot will be exported until it is rebuilt",
+							"reason", reason)
+					} else {
+						completeness.SetComplete(true)
+					}
+				}
 			}()
 		}
 	}
@@ -183,6 +205,27 @@ func (de *Engine) PostInit(ctx context.Context, c *serviceregistry.Container) er
 	}
 
 	return nil
+}
+
+// hydrateIncompleteReason returns why a HydrateChromem run that returned a nil
+// error still did not produce a complete projection of the Pebble rows, or ""
+// when it did. A snapshot of an incomplete graph would be reused at the next
+// boot with the missing vectors silently gone, so every way a row can fail to
+// reach the graph counts: a cut-short run (Incomplete), a row whose book lookup
+// faulted or whose mirror into the graph failed (these rows are not skipped by
+// design, they are lost), and a run that had no stores to read from.
+func hydrateIncompleteReason(de *Engine, stats HydrateStats) string {
+	switch {
+	case de.embedStore == nil || de.chromemStore == nil:
+		return "hydrate had no embedding store to read from"
+	case stats.Incomplete:
+		return "hydrate run was cut short"
+	case stats.BooksLookupError > 0:
+		return "book lookup errors dropped rows"
+	case stats.BooksMirrorError > 0 || stats.AuthorsMirrorError > 0:
+		return "mirror errors dropped rows"
+	}
+	return ""
 }
 
 // onBookImported is the EventHandler bound to EventBookImported. It runs

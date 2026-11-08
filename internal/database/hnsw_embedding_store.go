@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-07
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -32,8 +32,14 @@
 // by the filter (e.g. non-primary versions).
 //
 // Like chromem, this is a DERIVED in-memory index hydrated from the PebbleDB
-// EmbeddingStore on boot; it is not a source of truth. (On-disk persistence via
-// Graph.Export/Import is a documented follow-up.)
+// EmbeddingStore on boot; it is not a source of truth. It persists a snapshot
+// (Graph.Export/Import) so a restart can skip hydration. The server exports
+// periodically in the background (ExportIfDirty, which skips when nothing has
+// changed) and once more at stop when the shutdown budget allows. A snapshot is
+// only ever written from a graph that is known to be a COMPLETE projection of
+// the Pebble rows (see SetComplete and ErrHNSWIncomplete); exporting a graph
+// that is still being hydrated would record the current Pebble row count next
+// to a partial graph, and the next boot would load it as fresh.
 
 package database
 
@@ -52,6 +58,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/hnsw"
 )
@@ -82,6 +89,23 @@ type HNSWEmbeddingStore struct {
 	graphs map[string]*hnsw.Graph[string]          // entityType → graph
 	meta   map[string]map[string]map[string]string // entityType → id → metadata
 	dims   int
+
+	// gen counts mutations of graphs/meta (every successful Upsert, every Delete,
+	// every snapshot import/discard). ExportIfDirty compares it with exportedGen
+	// to skip exports when nothing changed. Guarded by mu.
+	gen uint64
+	// complete reports that graphs/meta are a complete projection of the Pebble
+	// rows, so a snapshot of them is safe to reuse at the next boot. A new store
+	// starts false; a snapshot import sets it, a stale discard clears it, and the
+	// hydrate path sets it via SetComplete. Guarded by mu.
+	complete bool
+
+	// exportMu serializes exports (they share the .tmp paths) and guards the
+	// fields below. Lock order: exportMu before mu.
+	exportMu      sync.Mutex
+	exportedGen   uint64        // gen captured when the last successful export began serializing
+	lastExportAt  time.Time     // zero until an export has succeeded in this process
+	lastExportDur time.Duration // wall time of the last successful export
 
 	// newGraphRng, when non-nil, supplies the *rand.Rand used for HNSW level
 	// generation on each lazily-created graph. Production leaves it nil, so the
@@ -149,6 +173,9 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	// surface it as an error, which callers (mirrorBookToChromem) already log and
 	// continue past.
 	if err := s.safeAdd(g, entityID, vec); err != nil {
+		// A recovered library panic can leave the graph part-mutated, so count it
+		// as a change: the cost is one extra export, never a missed one.
+		s.gen++
 		return err
 	}
 	if meta == nil {
@@ -156,6 +183,7 @@ func (s *HNSWEmbeddingStore) Upsert(_ context.Context, entityType, entityID stri
 	}
 	// Store a defensive copy so the caller can't mutate our sidecar.
 	s.meta[entityType][entityID] = copyMeta(meta)
+	s.gen++
 	return nil
 }
 
@@ -209,6 +237,7 @@ func (s *HNSWEmbeddingStore) Get(_ context.Context, entityType, entityID string)
 func (s *HNSWEmbeddingStore) Delete(_ context.Context, entityType, entityID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.gen++ // always: a delete removes meta even when the graph has no such key
 	if g, ok := s.graphs[entityType]; ok {
 		if _, err := s.safeDelete(g, entityID); err != nil {
 			slog.Warn("hnsw delete: recovered library panic; continuing best-effort",
@@ -345,9 +374,35 @@ func metadataMatches(m, filter map[string]string) bool {
 // ErrNoHNSWSnapshot is returned by Import when no snapshot files exist in dir.
 var ErrNoHNSWSnapshot = errors.New("hnsw: no snapshot found in directory")
 
+// ErrHNSWIncomplete is returned by the export methods when the graph is not
+// known to be a complete projection of the Pebble rows (see SetComplete). A
+// snapshot of a partially built graph would record the current Pebble row count
+// beside the incomplete graph, and the next boot would load it as fresh.
+var ErrHNSWIncomplete = errors.New("hnsw: the graph is not a complete projection of the store; snapshot not written")
+
+// SnapshotCompleteness is implemented by a VectorANNStore whose snapshot export
+// must know whether its graph is a complete projection (HNSWEmbeddingStore).
+type SnapshotCompleteness interface{ SetComplete(bool) }
+
+// SetComplete records that the graph is (or is no longer) a complete projection
+// of the Pebble rows; only a complete graph is exported.
+//
+// A new store starts incomplete. A successful snapshot Import marks it complete,
+// a stale discard marks it incomplete, and the hydrate-from-Pebble path calls
+// SetComplete(false) before it starts and SetComplete(true) only when it ran to
+// the end.
+func (s *HNSWEmbeddingStore) SetComplete(complete bool) {
+	s.mu.Lock()
+	s.complete = complete
+	s.mu.Unlock()
+}
+
 // Export writes the HNSW graph and metadata sidecar for each entityType to dir.
 // Files: hnsw-<entityType>.bin (graph) + hnsw-<entityType>.meta.json (metadata).
-// Called on clean shutdown (SIGTERM/SIGINT) so the next boot can skip hydration.
+// It writes no truth sidecar, so the next ImportWithStalenessCheck discards the
+// result; the server uses ExportIfDirty (periodically, and at stop when the
+// shutdown budget allows) so the next boot can skip hydration. Returns
+// ErrHNSWIncomplete for a graph that is not a complete projection.
 func (s *HNSWEmbeddingStore) Export(dir string) error {
 	return s.ExportWithTruth(dir, nil)
 }
@@ -369,120 +424,310 @@ func truthPath(dir, entityType string) string {
 	return filepath.Join(dir, "hnsw-"+entityType+".truth.json")
 }
 
+// ExportResult reports what ExportIfDirty did.
+type ExportResult struct {
+	Exported bool          // a snapshot was written
+	Clean    bool          // skipped: nothing changed since the last export in this process
+	Duration time.Duration // wall time of the export when Exported
+}
+
 // ExportWithTruth is Export plus a record of the Pebble truth count per entity
 // type, which ImportWithStalenessCheck needs to decide whether the snapshot has
 // fallen behind. truth may be nil, in which case no sidecar is written and the
 // next import will treat the snapshot as unverifiable and discard it.
+//
+// Returns ErrHNSWIncomplete, writing nothing, when the graph is not a complete
+// projection of the Pebble rows (see SetComplete).
+//
+// The truth counts are read BEFORE the graph is serialized. Reading them after
+// could record a count that includes Pebble rows the serialized graph lacks,
+// which the next boot would accept as fresh (vectors silently missing); reading
+// first can only make the snapshot look stale, which is safe. A truth error for
+// an entity type is best-effort: that type gets no truth sidecar.
 func (s *HNSWEmbeddingStore) ExportWithTruth(dir string, truth func(entityType string) (int, error)) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+	_, err := s.exportLocked(dir, truth)
+	return err
+}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("hnsw export: mkdir: %w", err)
+// ExportIfDirty exports like ExportWithTruth unless nothing has changed since
+// the last successful export in this process, in which case it returns
+// Clean=true without touching the disk. An empty store that has never been
+// mutated is also Clean: it must never be written over a good snapshot. The
+// check and the export happen under one exportMu hold, so concurrent callers
+// cannot both export. An incomplete graph returns ErrHNSWIncomplete (checked
+// after the clean checks, so a store that has nothing to export is not an
+// error while it is still hydrating).
+func (s *HNSWEmbeddingStore) ExportIfDirty(dir string, truth func(string) (int, error)) (ExportResult, error) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
+	s.mu.RLock()
+	gen, empty := s.gen, len(s.graphs) == 0
+	s.mu.RUnlock()
+	if gen == 0 && empty {
+		return ExportResult{Clean: true}, nil
+	}
+	if !s.lastExportAt.IsZero() && gen == s.exportedGen {
+		return ExportResult{Clean: true}, nil
 	}
 
-	// Each entity type is written to temp files first, then renamed into place
-	// only after both the .bin and .meta.json writes succeed (ARCH-2). A crash
-	// or write failure mid-export therefore cannot leave a truncated file at
-	// the final path, and a previously-committed good snapshot for that entity
-	// type is never clobbered by a failed export attempt.
-	for entityType, g := range s.graphs {
-		binPath := filepath.Join(dir, "hnsw-"+entityType+".bin")
-		binTmpPath := binPath + ".tmp"
-		f, err := os.Create(binTmpPath)
+	took, err := s.exportLocked(dir, truth)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	return ExportResult{Exported: true, Duration: took}, nil
+}
+
+// LastExport returns when the last successful export finished and how long it
+// took. Both are zero if no export has succeeded in this process.
+func (s *HNSWEmbeddingStore) LastExport() (at time.Time, took time.Duration) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+	return s.lastExportAt, s.lastExportDur
+}
+
+// pendingExport is one entity type's serialized-but-uncommitted snapshot.
+type pendingExport struct {
+	entityType string
+	binTmp     string
+	binPath    string
+	metaTmp    string
+	metaPath   string
+	f          *os.File // open .bin.tmp, written and flushed but not yet synced
+	metaBytes  []byte
+	graphCount int
+}
+
+// abortPending closes and removes every temp file of an export that failed
+// before its commit renames.
+func abortPending(pending []*pendingExport) {
+	for _, p := range pending {
+		if p.f != nil {
+			p.f.Close()
+			p.f = nil
+		}
+		os.Remove(p.binTmp)
+		os.Remove(p.metaTmp)
+	}
+}
+
+// serializeSnapshot is the only part of an export that holds s.mu: it writes
+// every graph through a 1 MiB buffer to its .bin.tmp, marshals the metadata into
+// memory, and captures gen, all under one RLock so they describe the same
+// instant. Fsync, rename and the sidecars happen after the lock is released.
+func (s *HNSWEmbeddingStore) serializeSnapshot(dir string) (pending []*pendingExport, gen uint64, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.complete {
+		return nil, 0, ErrHNSWIncomplete
+	}
+	defer func() {
 		if err != nil {
-			return fmt.Errorf("hnsw export: create %s: %w", binTmpPath, err)
+			abortPending(pending)
+			pending = nil
 		}
-		if err := g.Export(f); err != nil {
-			f.Close()
-			os.Remove(binTmpPath)
-			return fmt.Errorf("hnsw export: write graph %s: %w", entityType, err)
+	}()
+	gen = s.gen
+
+	for entityType, g := range s.graphs {
+		p := &pendingExport{
+			entityType: entityType,
+			binPath:    filepath.Join(dir, "hnsw-"+entityType+".bin"),
+			metaPath:   filepath.Join(dir, "hnsw-"+entityType+".meta.json"),
+			graphCount: g.Len(),
 		}
-		if err := f.Sync(); err != nil {
-			f.Close()
-			os.Remove(binTmpPath)
-			return fmt.Errorf("hnsw export: sync graph %s: %w", entityType, err)
+		p.binTmp = p.binPath + ".tmp"
+		p.metaTmp = p.metaPath + ".tmp"
+
+		f, cerr := os.Create(p.binTmp)
+		if cerr != nil {
+			return pending, 0, fmt.Errorf("hnsw export: create %s: %w", p.binTmp, cerr)
 		}
-		if err := f.Close(); err != nil {
-			os.Remove(binTmpPath)
-			return fmt.Errorf("hnsw export: close graph %s: %w", entityType, err)
+		p.f = f
+		pending = append(pending, p)
+
+		// coder/hnsw's Export issues many tiny writes per node (about 92 syscalls
+		// each on an unbuffered *os.File), which dominated the export time.
+		bw := bufio.NewWriterSize(f, 1<<20)
+		if werr := g.Export(bw); werr != nil {
+			return pending, 0, fmt.Errorf("hnsw export: write graph %s: %w", entityType, werr)
+		}
+		if ferr := bw.Flush(); ferr != nil {
+			return pending, 0, fmt.Errorf("hnsw export: write graph %s: %w", entityType, ferr)
 		}
 
-		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
-		metaTmpPath := metaPath + ".tmp"
 		m := s.meta[entityType]
 		if m == nil {
 			m = map[string]map[string]string{}
 		}
-		b, err := json.Marshal(m)
-		if err != nil {
-			os.Remove(binTmpPath)
-			return fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, err)
+		b, merr := json.Marshal(m)
+		if merr != nil {
+			return pending, 0, fmt.Errorf("hnsw export: marshal meta %s: %w", entityType, merr)
 		}
-		if err := os.WriteFile(metaTmpPath, b, 0o644); err != nil {
-			os.Remove(binTmpPath)
-			return fmt.Errorf("hnsw export: write meta %s: %w", entityType, err)
-		}
-
-		// Both temp files are on disk and synced/written successfully — commit
-		// by renaming into place. os.Rename is atomic on POSIX filesystems.
-		if err := os.Rename(binTmpPath, binPath); err != nil {
-			os.Remove(binTmpPath)
-			os.Remove(metaTmpPath)
-			return fmt.Errorf("hnsw export: rename graph %s: %w", entityType, err)
-		}
-		if err := os.Rename(metaTmpPath, metaPath); err != nil {
-			os.Remove(metaTmpPath)
-			return fmt.Errorf("hnsw export: rename meta %s: %w", entityType, err)
-		}
-
-		// Truth sidecar. Written last and best-effort: a missing sidecar makes
-		// the next import discard this snapshot (safe), whereas failing the
-		// whole export would throw away a good graph over a bookkeeping file.
-		if truth != nil {
-			tc, terr := truth(entityType)
-			if terr != nil {
-				slog.Warn("hnsw export: truth count unavailable; snapshot will not be reusable",
-					"entity_type", entityType, "err", terr)
-				_ = os.Remove(truthPath(dir, entityType))
-				continue
-			}
-			tb, merr := json.Marshal(snapshotTruth{TruthCount: tc, GraphCount: g.Len()})
-			if merr != nil {
-				slog.Warn("hnsw export: marshal truth sidecar failed", "entity_type", entityType, "err", merr)
-				continue
-			}
-			tTmp := truthPath(dir, entityType) + ".tmp"
-			if werr := os.WriteFile(tTmp, tb, 0o644); werr != nil {
-				slog.Warn("hnsw export: write truth sidecar failed", "entity_type", entityType, "err", werr)
-				continue
-			}
-			if rerr := os.Rename(tTmp, truthPath(dir, entityType)); rerr != nil {
-				os.Remove(tTmp)
-				slog.Warn("hnsw export: rename truth sidecar failed", "entity_type", entityType, "err", rerr)
-			}
-		}
+		p.metaBytes = b
 	}
-	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(s.graphs))
-	return nil
+	return pending, gen, nil
 }
 
-// Import loads HNSW graphs and metadata sidecars from dir.
-// Returns ErrNoHNSWSnapshot if no snapshot files exist.
+// writeFileSynced writes data to path and fsyncs it before closing.
+func writeFileSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// exportLocked is the body of every export. The caller must hold s.exportMu,
+// which serializes exports because they share the .tmp paths. It returns the
+// wall time of the whole export and, on success, records exportedGen,
+// lastExportAt and lastExportDur.
+func (s *HNSWEmbeddingStore) exportLocked(dir string, truth func(entityType string) (int, error)) (time.Duration, error) {
+	start := time.Now()
+
+	// Cheap early refusal, and the entity-type list the truth reads need. The
+	// authoritative completeness check is the one inside serializeSnapshot.
+	s.mu.RLock()
+	if !s.complete {
+		s.mu.RUnlock()
+		return 0, ErrHNSWIncomplete
+	}
+	types := make([]string, 0, len(s.graphs))
+	for et := range s.graphs {
+		types = append(types, et)
+	}
+	s.mu.RUnlock()
+
+	// Truth FIRST, with no lock held. See ExportWithTruth.
+	type truthReading struct {
+		count int
+		err   error
+	}
+	var truths map[string]truthReading
+	if truth != nil {
+		truths = make(map[string]truthReading, len(types))
+		for _, et := range types {
+			c, terr := truth(et)
+			truths[et] = truthReading{count: c, err: terr}
+		}
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, fmt.Errorf("hnsw export: mkdir: %w", err)
+	}
+
+	pending, gen, err := s.serializeSnapshot(dir)
+	if err != nil {
+		return 0, err
+	}
+
+	// Each entity type is written to temp files first, then renamed into place
+	// only after every temp file has been written and synced (ARCH-2). A crash
+	// or write failure before the renames therefore cannot leave a truncated
+	// file at a final path, and a previously committed good snapshot is never
+	// clobbered by a failed export attempt.
+	for _, p := range pending {
+		if err := writeFileSynced(p.metaTmp, p.metaBytes); err != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: write meta %s: %w", p.entityType, err)
+		}
+		if err := p.f.Sync(); err != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: sync graph %s: %w", p.entityType, err)
+		}
+		cerr := p.f.Close()
+		p.f = nil
+		if cerr != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: close graph %s: %w", p.entityType, cerr)
+		}
+	}
+
+	// Drop the previous truth sidecars before the new graph lands, so a crash
+	// between the renames and the new sidecar leaves "unverifiable, discard"
+	// rather than an old count paired with a new graph.
+	for _, p := range pending {
+		_ = os.Remove(truthPath(dir, p.entityType))
+	}
+
+	// Every temp file is on disk and synced: commit by renaming into place.
+	// os.Rename is atomic on POSIX filesystems.
+	for _, p := range pending {
+		if err := os.Rename(p.binTmp, p.binPath); err != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: rename graph %s: %w", p.entityType, err)
+		}
+		if err := os.Rename(p.metaTmp, p.metaPath); err != nil {
+			abortPending(pending)
+			return 0, fmt.Errorf("hnsw export: rename meta %s: %w", p.entityType, err)
+		}
+	}
+
+	// Truth sidecars. Written last and best-effort: a missing sidecar makes the
+	// next import discard this snapshot (safe), whereas failing the whole export
+	// would throw away a good graph over a bookkeeping file.
+	for _, p := range pending {
+		if truth == nil {
+			continue
+		}
+		tr, ok := truths[p.entityType]
+		if !ok {
+			// The graph for this type was created after the truth reads began.
+			continue
+		}
+		if tr.err != nil {
+			slog.Warn("hnsw export: truth count unavailable; snapshot will not be reusable",
+				"entity_type", p.entityType, "err", tr.err)
+			continue
+		}
+		tb, merr := json.Marshal(snapshotTruth{TruthCount: tr.count, GraphCount: p.graphCount})
+		if merr != nil {
+			slog.Warn("hnsw export: marshal truth sidecar failed", "entity_type", p.entityType, "err", merr)
+			continue
+		}
+		tTmp := truthPath(dir, p.entityType) + ".tmp"
+		if werr := writeFileSynced(tTmp, tb); werr != nil {
+			os.Remove(tTmp)
+			slog.Warn("hnsw export: write truth sidecar failed", "entity_type", p.entityType, "err", werr)
+			continue
+		}
+		if rerr := os.Rename(tTmp, truthPath(dir, p.entityType)); rerr != nil {
+			os.Remove(tTmp)
+			slog.Warn("hnsw export: rename truth sidecar failed", "entity_type", p.entityType, "err", rerr)
+		}
+	}
+
+	took := time.Since(start)
+	s.exportedGen = gen
+	s.lastExportAt = time.Now()
+	s.lastExportDur = took
+	slog.Info("hnsw: snapshot exported", "dir", dir, "entity_types", len(pending), "took", took)
+	return took, nil
+}
+
+// loadSnapshot decodes every snapshot in dir into local maps without touching
+// the store. Returns ErrNoHNSWSnapshot if no snapshot files exist.
 //
-// Import is all-or-nothing (ARCH-2): entries are decoded into local maps
-// first, and s.graphs/s.meta are only replaced after every entity type has
-// either parsed successfully or been legitimately skipped for a dimension
-// mismatch (the existing discard path, unchanged in effect). Any other hard
-// failure (bin open/parse, or a meta read/unmarshal error that isn't "file
-// not found") aborts the whole call and returns before touching s.graphs/
-// s.meta at all, so the caller's existing hydrate-from-Pebble fallback (which
-// runs when CountByType==0) actually runs instead of operating on a partially
-// installed graph.
-func (s *HNSWEmbeddingStore) Import(dir string) error {
+// It is all-or-nothing (ARCH-2): any hard failure (bin open/parse, or a meta
+// read/unmarshal error that isn't "file not found") returns before the caller
+// installs anything, so the existing hydrate-from-Pebble fallback (which runs
+// when CountByType==0) actually runs instead of operating on a partially
+// installed graph. A snapshot whose dimension no longer matches is skipped (the
+// existing discard path).
+func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[string], map[string]map[string]map[string]string, int, error) {
 	entries, err := filepath.Glob(filepath.Join(dir, "hnsw-*.bin"))
 	if err != nil || len(entries) == 0 {
-		return ErrNoHNSWSnapshot
+		return nil, nil, 0, ErrNoHNSWSnapshot
 	}
 
 	newGraphs := map[string]*hnsw.Graph[string]{}
@@ -494,7 +739,7 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 
 		f, err := os.Open(binPath)
 		if err != nil {
-			return fmt.Errorf("hnsw import: open %s: %w", binPath, err)
+			return nil, nil, 0, fmt.Errorf("hnsw import: open %s: %w", binPath, err)
 		}
 		g := hnsw.NewGraph[string]()
 		// Distance/M/EfSearch are restored from the binary by g.Import itself;
@@ -503,7 +748,7 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 		// os.File does not implement.
 		if err := g.Import(bufio.NewReader(f)); err != nil {
 			f.Close()
-			return fmt.Errorf("hnsw import: read graph %s: %w", entityType, err)
+			return nil, nil, 0, fmt.Errorf("hnsw import: read graph %s: %w", entityType, err)
 		}
 		f.Close()
 		// Discard a snapshot whose dimension no longer matches the configured
@@ -527,37 +772,60 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 				newMeta[entityType] = map[string]map[string]string{}
 				continue
 			}
-			return fmt.Errorf("hnsw import: read meta %s: %w", entityType, err)
+			return nil, nil, 0, fmt.Errorf("hnsw import: read meta %s: %w", entityType, err)
 		}
 		var m map[string]map[string]string
 		if err := json.Unmarshal(b, &m); err != nil {
-			return fmt.Errorf("hnsw import: unmarshal meta %s: %w", entityType, err)
+			return nil, nil, 0, fmt.Errorf("hnsw import: unmarshal meta %s: %w", entityType, err)
 		}
 		newMeta[entityType] = m
 	}
+	return newGraphs, newMeta, len(entries), nil
+}
 
+// installSnapshot swaps in decoded graphs/meta, bumps gen, and sets the
+// completeness flag, all under one write lock.
+func (s *HNSWEmbeddingStore) installSnapshot(graphs map[string]*hnsw.Graph[string], meta map[string]map[string]map[string]string, complete bool) {
 	s.mu.Lock()
-	s.graphs = newGraphs
-	s.meta = newMeta
+	s.graphs = graphs
+	s.meta = meta
+	s.gen++
+	s.complete = complete
 	s.mu.Unlock()
+}
 
-	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", len(entries))
+// Import loads HNSW graphs and metadata sidecars from dir.
+// Returns ErrNoHNSWSnapshot if no snapshot files exist.
+//
+// Import is all-or-nothing (ARCH-2): entries are decoded into local maps
+// first, and s.graphs/s.meta are only replaced after every entity type has
+// either parsed successfully or been legitimately skipped for a dimension
+// mismatch. Any other hard failure aborts the whole call before touching
+// s.graphs/s.meta at all. A successful import marks the store complete: the
+// snapshot was only ever written from a complete graph.
+func (s *HNSWEmbeddingStore) Import(dir string) error {
+	graphs, meta, n, err := s.loadSnapshot(dir)
+	if err != nil {
+		return err
+	}
+	s.installSnapshot(graphs, meta, true)
+	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
 	return nil
 }
 
-// ImportWithStalenessCheck wraps Import with a staleness guard (ARCH-1): after
-// a successful on-disk import, it compares each imported entity type's
-// in-memory graph count against a caller-supplied Pebble-side truth count
+// ImportWithStalenessCheck is Import with a staleness guard (ARCH-1): after
+// decoding the on-disk snapshot, it compares each entity type's recorded Pebble
+// row count (the truth sidecar) against a caller-supplied current truth count
 // (e.g. EmbeddingStore.CountByType, the emb: keyspace's source-of-truth
 // count). The HNSW snapshot fast-path otherwise skips Pebble hydration
 // unconditionally — after any unclean shutdown, every vector upserted since
-// the last clean-shutdown Export would be silently and permanently missing
-// from the graph. If the imported graph undercounts the truth for any entity
-// type at all (any undercount is unsafe — there is no positive tolerance),
-// the ENTIRE imported snapshot (all entity types) is discarded, not just the
-// stale one, so the caller's existing hydrate-from-Pebble fallback (which
-// runs when CountByType("book")==0) runs normally; no new hydration
-// mechanism is introduced here.
+// the last export would be silently and permanently missing from the graph. If
+// the counts differ for any entity type at all (there is no tolerance), the
+// ENTIRE snapshot (all entity types) is discarded, not just the stale one, so
+// the caller's existing hydrate-from-Pebble fallback (which runs when
+// CountByType("book")==0) runs normally; no new hydration mechanism is
+// introduced here. A fresh snapshot leaves the store complete; a discard leaves
+// it empty and incomplete.
 //
 // Discarding all-or-nothing (rather than per-entity-type) is deliberate:
 // dedup/lifecycle.go's PostInit gates hydration on the "book" count alone,
@@ -574,18 +842,21 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 // (e.g. callers/tests without a Pebble store handy) and Import's result is
 // returned unchanged.
 func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(entityType string) (int, error)) error {
-	if err := s.Import(dir); err != nil {
+	graphs, meta, n, err := s.loadSnapshot(dir)
+	if err != nil {
 		return err
 	}
 	if truth == nil {
+		s.installSnapshot(graphs, meta, true)
+		slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
 		return nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	// The staleness check runs on the decoded local graphs, so the Pebble truth
+	// reads happen with no store lock held and the swap below is one atomic step
+	// (the store is never briefly "complete" with a stale graph installed).
 	stale := false
-	for entityType, g := range s.graphs {
+	for entityType, g := range graphs {
 		currentTruth, err := truth(entityType)
 		if err != nil {
 			// Can't verify against the truth source; don't treat this entity
@@ -606,7 +877,7 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		// the warning that fired was a permanent fixture rather than a signal.
 		recorded, rerr := readSnapshotTruth(dir, entityType)
 		if rerr != nil {
-			slog.Warn("hnsw import: no usable truth sidecar; discarding snapshot (a clean shutdown will write one)",
+			slog.Warn("hnsw import: no usable truth sidecar; discarding snapshot (the next export will write one)",
 				"entity_type", entityType, "err", rerr)
 			stale = true
 			continue
@@ -619,16 +890,18 @@ func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(ent
 		}
 	}
 	if stale {
-		s.graphs = map[string]*hnsw.Graph[string]{}
-		s.meta = map[string]map[string]map[string]string{}
+		s.installSnapshot(map[string]*hnsw.Graph[string]{}, map[string]map[string]map[string]string{}, false)
+		return nil
 	}
+	s.installSnapshot(graphs, meta, true)
+	slog.Info("hnsw: snapshot imported", "dir", dir, "entity_types", n)
 	return nil
 }
 
 // readSnapshotTruth loads the truth sidecar for one entity type. A missing or
 // unparseable sidecar is an error, which the caller treats as "unverifiable,
 // therefore stale" — the safe direction, and self-healing because the next
-// clean shutdown writes a fresh one.
+// export writes a fresh one.
 func readSnapshotTruth(dir, entityType string) (snapshotTruth, error) {
 	var st snapshotTruth
 	b, err := os.ReadFile(truthPath(dir, entityType))
@@ -641,5 +914,8 @@ func readSnapshotTruth(dir, entityType string) (snapshotTruth, error) {
 	return st, nil
 }
 
-// Compile-time assertion.
-var _ VectorANNStore = (*HNSWEmbeddingStore)(nil)
+// Compile-time assertions.
+var (
+	_ VectorANNStore       = (*HNSWEmbeddingStore)(nil)
+	_ SnapshotCompleteness = (*HNSWEmbeddingStore)(nil)
+)
