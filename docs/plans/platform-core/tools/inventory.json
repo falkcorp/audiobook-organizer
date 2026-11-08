@@ -1278,7 +1278,21 @@
    ".github/workflows/release-prod.yml",
    ".github/workflows/split-readiness.yml",
    "scripts/ci/core_consumer_smoke.py",
-   "scripts/ci/web_build_against_tarballs.py"
+   "scripts/ci/web_build_against_tarballs.py",
+   "core/scripts/ci/core_ci_lib.py",
+   "core/scripts/ci/core_vulncheck.py",
+   "core/scripts/ci/readiness_report.py",
+   "core/scripts/ci/test_check_core_version.py",
+   "core/scripts/ci/test_core_api_gate.py",
+   "core/scripts/ci/test_core_coverage_by_package.py",
+   "core/scripts/ci/test_readiness.py",
+   ".github/workflows/scripts/core_checkpoint.py",
+   ".github/workflows/scripts/test_core_checkpoint.py",
+   "scripts/ci/fold_split_readiness.py",
+   "scripts/tests/test_core_consumer_smoke.py",
+   "scripts/tests/test_fold_split_readiness.py",
+   "scripts/tests/test_web_build_against_tarballs.py",
+   "docs/plans/platform-core/split-readiness.md"
   ],
   "spec": "12 §12.3 (SC1-SC10 commands), §12.3.11 (readiness target), §12.4.1 (core-checkpoint job), §12.4.3; 09 §9.4 R1 CI classification (check_core_version.py, core-checkpoint)",
   "notes": "Tier: report-only scripts over fixed commands; no runtime code. Readiness is report-only and never writes outside core/; the root-side nightly job folds its artifact into docs/plans/platform-core/split-readiness.md through a PR. Thresholds follow OWNER-01's Q-G answer. Owns gate tests: check_core_version.py; core-checkpoint (release-prod.yml)."
