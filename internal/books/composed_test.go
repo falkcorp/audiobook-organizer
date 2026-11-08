@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-08
 
@@ -465,4 +465,17 @@ func probe(h http.Handler, method, path string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req.WithContext(ctx))
 	return w
+}
+
+// ServeInputs.ShutdownBudget (serve's ABO_CORE_SHUTDOWN_BUDGET reading) reaches
+// R1Values.ShutdownBudget, which the kernel reads as core.shutdown.budget; zero
+// stays zero so core's default applies (R1-33).
+func TestOptions_ShutdownBudgetReachesR1Values(t *testing.T) {
+	c := bootComposed(t, false, nil, nil)
+	snap := config.Snapshot()
+	for _, want := range []time.Duration{0, 40 * time.Second} {
+		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, ShutdownBudget: want})
+		require.NoError(t, err)
+		assert.Equal(t, want, opts.R1Values().ShutdownBudget)
+	}
 }

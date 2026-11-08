@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -46,6 +47,9 @@ type ServeInputs struct {
 	// apply, so the OTLP endpoints, interval and environment come from where
 	// they always did.
 	Telemetry config.Config
+	// ShutdownBudget is core.shutdown.budget as serve read it from
+	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
+	ShutdownBudget time.Duration
 }
 
 // Options is ABO's app.Options for release R1 (06 §6.4.10, 05-config
@@ -54,8 +58,8 @@ type ServeInputs struct {
 //   - ABO's identity and build version;
 //   - R1Values: the listener and perimeter values of the effective config
 //     (stored settings and env overrides applied), which the kernel reads
-//     once at start step 7; ShutdownBudget stays 0, core's default (R1-33
-//     reads ABO_CORE_SHUTDOWN_BUDGET into it);
+//     once at start step 7; ShutdownBudget is ServeInputs.ShutdownBudget
+//     (serve's ABO_CORE_SHUTDOWN_BUDGET reading, 0 = core's default);
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
 //   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
@@ -83,7 +87,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		Version:               telemetry.Version(),
 		ReservedAPINamespaces: reservedAPINamespaces(),
 		LegacyAuthGinUntil:    ID,
-		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot()) },
+		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot(), in.ShutdownBudget) },
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),
 		LogOutput:             &m.logOut,
@@ -93,8 +97,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 
 // r1Values maps serve's flags and the effective config onto R1Values (05-config
 // §1.12.1): HEAD's --host/--port and TLS flags, ALLOWED_PEER_CIDRS,
-// TUNNEL_CONNECTOR_ADDRS, the rate limit and the body limits (MiB to bytes).
-func r1Values(cfg server.ServerConfig, c config.Config) app.R1Values {
+// TUNNEL_CONNECTOR_ADDRS, the rate limit and the body limits (MiB to bytes),
+// and the shutdown budget serve read from ABO_CORE_SHUTDOWN_BUDGET.
+func r1Values(cfg server.ServerConfig, c config.Config, shutdownBudget time.Duration) app.R1Values {
 	return app.R1Values{
 		Listen:             net.JoinHostPort(cfg.Host, cfg.Port),
 		TLSCertFile:        cfg.TLSCertFile,
@@ -105,6 +110,7 @@ func r1Values(cfg server.ServerConfig, c config.Config) app.R1Values {
 		RateLimitPerMinute: c.APIRateLimitPerMinute,
 		JSONMaxBytes:       int64(c.JSONBodyLimitMB) << 20,
 		UploadMaxBytes:     int64(c.UploadBodyLimitMB) << 20,
+		ShutdownBudget:     shutdownBudget,
 	}
 }
 
