@@ -1,5 +1,5 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
 // last-edited: 2026-11-08
 
@@ -403,6 +403,50 @@ func TestResetHookDoneAfterMigrationList(t *testing.T) {
 	}
 	if _, err := os.Stat(aux); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the delete entry after hook_done: %v, want it removed", err)
+	}
+}
+
+// TestPostResetHookSkipsKeptPaths (05-storage §5S.3.15 rule (4), the kernel's
+// no-hook case; R1-21 review M1, probe 1): a reset intent that lists the
+// DB's parent and the state directory among its delete entries (written
+// past Stage, which refuses it) completes with both recorded as kept and
+// neither removed: the set-aside original and the fresh store survive, and
+// the one auxiliary entry is removed.
+func TestPostResetHookSkipsKeptPaths(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.config(nil)))
+	aux := filepath.Join(filepath.Dir(h.state), "batcave-index")
+	if err := os.MkdirAll(aux, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const id = "z-kept"
+	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: restorejournal.ResetFactory, DBPath: h.db,
+		Delete:        []string{filepath.Dir(h.db), h.state, aux},
+		StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}
+	for _, p := range []string{h.db, h.db + restorejournal.LevelsSuffix} {
+		in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(h.state, h.db, id, p)})
+	}
+	if err := os.MkdirAll(restorejournal.JournalDir(h.state, id), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := restorejournal.CreateIntent(h.state, in); err != nil {
+		t.Fatal(err)
+	}
+	h.mustBoot(h.config(nil))
+	recs := h.journal(id)
+	last := recs[len(recs)-1]
+	if want := []string{filepath.Dir(h.db), h.state}; last.Step != "hook_done" || !slices.Equal(last.Kept, want) || len(last.Failed) != 0 {
+		t.Fatalf("hook_done = %+v, want kept %v and nothing failed", last, want)
+	}
+	prev := restorejournal.SetAsideDest(h.state, h.db, id, h.db)
+	if ms, _ := filepath.Glob(filepath.Join(prev, "MANIFEST-*")); len(ms) == 0 {
+		t.Fatalf("the set-aside original store %s is gone: the reset's undo was deleted", prev)
+	}
+	if ms, _ := filepath.Glob(filepath.Join(h.db, "MANIFEST-*")); len(ms) == 0 {
+		t.Fatal("the fresh store is gone")
+	}
+	if _, err := os.Stat(aux); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the auxiliary delete entry: %v, want it removed", err)
 	}
 }
 

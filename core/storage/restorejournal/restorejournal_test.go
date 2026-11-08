@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/restorejournal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8fca2d0f-d53c-4cee-a545-9c2ff8169c20
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package restorejournal
 
@@ -268,9 +268,9 @@ func jsonKeys(t *testing.T, v any) []string {
 func TestRestoreJournalJSONKeys(t *testing.T) {
 	at := time.Date(1940, 4, 25, 9, 0, 0, 0, time.UTC)
 	full := Record{At: at, Step: "moved", Seq: 7, Actor: "core/storage", Note: "reset", From: "/gotham/main.pebble",
-		To: "/gotham/.mediacore-restore/r1/previous/main.pebble", Failed: []string{"/gotham/cache"},
+		To: "/gotham/.mediacore-restore/r1/previous/main.pebble", Failed: []string{"/gotham/cache"}, Kept: []string{"/gotham"},
 		InstallID: "wayne-1", HooksOwed: true, StepID: "storage/8"}
-	want := []string{"actor", "at", "failed", "from", "hooks_owed", "install_id", "note", "seq", "step", "step_id", "to"}
+	want := []string{"actor", "at", "failed", "from", "hooks_owed", "install_id", "kept", "note", "seq", "step", "step_id", "to"}
 	if got := jsonKeys(t, full); !slices.Equal(got, want) {
 		t.Fatalf("Record keys = %v, want %v", got, want)
 	}
