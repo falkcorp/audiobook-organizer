@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_export.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -46,6 +46,15 @@ func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
 func PebbleSampleFromDB(db *GatedDB) (s metrics.PebbleSample, ok bool) {
 	if db == nil {
 		return metrics.PebbleSample{}, false
+	}
+	if db.onCore() {
+		// Core's sample is field for field metrics.PebbleSample, so the
+		// pebble_* families keep their names on the store core opened.
+		s, err := db.coreEngineSample()
+		if err != nil {
+			return metrics.PebbleSample{}, false
+		}
+		return metrics.PebbleSample(s), true
 	}
 	m, err := db.Metrics()
 	if err != nil {
