@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.9
+// version: 1.28.10
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -32,6 +32,8 @@ import (
 
 // shutdownBudgetEnv is the R1 reading of core.shutdown.budget's operator name (05-health §5H.4;
 // 05-config §1.12.1). F3 deletes it with R1Values: core config reads the variable from then on.
+// serve reads it first thing and passes it as books.ServeInputs.ShutdownBudget, which books.Options
+// sets as R1Values.ShutdownBudget.
 const shutdownBudgetEnv = "ABO_CORE_SHUTDOWN_BUDGET"
 
 // shutdownBudgetFromEnv returns 0 (core's default) when the variable is unset or empty, the parsed
@@ -275,6 +277,13 @@ var serveCmd = &cobra.Command{
 	Short: "Start the web server",
 	Long:  `Start the web server to provide a web interface for audiobook management.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// An invalid ABO_CORE_SHUTDOWN_BUDGET refuses the start, before the
+		// store opens or anything binds (R1-33).
+		shutdownBudget, err := shutdownBudgetFromEnv(os.LookupEnv)
+		if err != nil {
+			return fmt.Errorf("serve: %w", err)
+		}
+
 		// Setup file logging (logs to both file and stdout)
 		logFile, err := setupFileLogging()
 		if err != nil {
@@ -445,7 +454,7 @@ var serveCmd = &cobra.Command{
 		// degraded step of this process.
 		cfg.StartupSteps = steps
 
-		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg})
+		return runApp(cmd.Context(), store, books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
 	},
 }
 
