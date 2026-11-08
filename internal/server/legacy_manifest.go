@@ -200,6 +200,54 @@ func (s *Server) LegacyRedirects() []httpapi.LegacyRedirect {
 	}}
 }
 
+// LegacyTopSegments are the mount's top-level server segments (03 §3.6,
+// httpapi.LegacyMount.TopSegments): nonSPASegments, the first segments whose
+// unmatched paths 404 instead of serving the SPA shell, sorted.
+func LegacyTopSegments() []string {
+	out := make([]string, 0, len(nonSPASegments))
+	for seg := range nonSPASegments {
+		out = append(out, seg)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// LegacySPAShared are the top-level segments the mount shares with shell
+// pages (httpapi.LegacyMount.SPAShared): "login", whose POST is the ABS
+// surface's and whose GET is the SPA's login page (05-http-api §3.5; see
+// nonSPASegments).
+func LegacySPAShared() []string { return []string{"login"} }
+
+// LegacyPrefixes are the claims of books' gin mount for an engine built with
+// the ABS surface on or off (05-http-api §4.9, Manifest.LegacyPrefixes): the
+// subtree of every manifest route's first segment ("/ping/", which also
+// covers "/ping") or, under /api, of its second ("/api/v1/"); and every top
+// segment and SPA-shared segment, routed or not, so an unmatched path under
+// one gets the legacy 404 HEAD's NoRoute answered ("/socket.io/" has no
+// route: HEAD answered the Engine.IO probe 404). The kernel requires every
+// TopSegments and SPAShared entry to be a declared prefix (06 §6.5.1 P7).
+// Sorted.
+func LegacyPrefixes(absEnabled bool) []string {
+	set := map[string]bool{}
+	for _, lr := range legacyManifest(absEnabled) {
+		segs := strings.Split(strings.TrimPrefix(lr.GinPath, "/"), "/")
+		if segs[0] == "api" && len(segs) > 1 {
+			set["/api/"+segs[1]+"/"] = true
+			continue
+		}
+		set["/"+segs[0]+"/"] = true
+	}
+	for _, seg := range slices.Concat(LegacyTopSegments(), LegacySPAShared()) {
+		set["/"+seg+"/"] = true
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // legacyMatchCheck is the post-match check of 05-http-api §4.8 (SEC2-22),
 // installed by setupRoutes ahead of every route-level middleware and handler
 // (after NewServer's eight global ones, none of which runs a route handler).
