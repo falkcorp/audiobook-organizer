@@ -1,5 +1,5 @@
 // file: core/internal/httpmw/state.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1519fbdb-d993-45c7-afd5-d1d3296554cd
 // last-edited: 2026-11-08
 
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync/atomic"
+	"time"
 )
 
 // State is the one per-request carrier the stages share (05-http-api §4.2
@@ -26,6 +27,7 @@ import (
 // written inside the router or a handler and read by an outer stage after
 // it returns are atomic.
 type State struct {
+	start           time.Time // the chain's entry: the access record's duration
 	client          netip.Addr
 	attributed      bool
 	requestID       string
@@ -39,6 +41,10 @@ type State struct {
 
 	compressed   atomic.Bool  // stage 9 compressed the body
 	uncompressed atomic.Int64 // bytes the handler wrote through stage 9 when it compressed
+	// accessLogged is set by the one access record the request gets: stage
+	// 4's when the handler returns, stage 3's when a panic unwound past
+	// stage 4 (emitAccess).
+	accessLogged atomic.Bool
 }
 
 // Policy is what the owner of a response decides for the stages outside the
