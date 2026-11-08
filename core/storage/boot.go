@@ -23,6 +23,7 @@ import (
 	cpebble "github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	ipebble "github.com/falkcorp/mediacore/internal/pebble"
 	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/keys"
@@ -82,6 +83,7 @@ type OpenOptions struct {
 	sameDevice  func(a, b string) (bool, error)
 	chmod       func(path string, dir bool) error
 	hooks       testHooks
+	seams       *bootseam.Seams // the crash-matrix kit's, from Open's ctx (swap.go)
 
 	// cpDir is the checkpoint directory itself:
 	// <CheckpointDir or the DB's parent>/.mediacore-checkpoints.
@@ -275,6 +277,7 @@ type Opened struct {
 // for foreign keys and plans the migration DAG. It writes nothing to the
 // store; every refusal leaves the store as it found it.
 func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
+	opts.adoptSeams(ctx)
 	opts.defaults()
 	if !filepath.IsAbs(opts.Path) {
 		return nil, fmt.Errorf("storage: core.storage.path %q is not absolute", opts.Path)
@@ -840,7 +843,7 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 	// A stranded attempt is completed before the checkpoint decision, so a
 	// later upgrade never reuses it; its key is deleted only after the
 	// checkpoint, which therefore still holds every row as it was.
-	if err := db.completeStranded(); err != nil {
+	if err := db.labelled(labelStranded, db.completeStranded); err != nil {
 		return nil, err
 	}
 	switch {
@@ -859,13 +862,13 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 		}
 	}
 	if st.attempt != "" {
-		if err := db.storageKS().Delete(ctx, attemptKey()); err != nil {
+		if err := db.labelled(labelAttemptClear, func() error { return db.storageKS().Delete(ctx, attemptKey()) }); err != nil {
 			return nil, fmt.Errorf("storage: clearing the completed attempt: %w", err)
 		}
 		st.attempt = ""
 	}
 	if db.eng.NeedsRatchet() {
-		if err := db.eng.Ratchet(); err != nil {
+		if err := db.labelled(labelRatchet, db.eng.Ratchet); err != nil {
 			return nil, fmt.Errorf("storage: %w", err)
 		}
 	}
@@ -884,7 +887,7 @@ func (db *DB) writeMarker(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := db.storageKS().Set(ctx, installKey(), raw); err != nil {
+	if err := db.labelled(labelMarkerBatch, func() error { return db.storageKS().Set(ctx, installKey(), raw) }); err != nil {
 		return fmt.Errorf("storage: install marker: %w", err)
 	}
 	db.boot.marker = true
@@ -944,7 +947,7 @@ func (db *DB) freshInstall(ctx context.Context) (err error) {
 	if err := db.stageLedgers(b, now, true); err != nil {
 		return err
 	}
-	if err := b.Commit(ctx, Sync); err != nil {
+	if err := db.labelled(labelFreshBatch, func() error { return b.Commit(ctx, Sync) }); err != nil {
 		return fmt.Errorf("storage: fresh install: %w", err)
 	}
 	st.marker, st.epoch, st.epochNew = true, ep, false
@@ -956,7 +959,7 @@ func (db *DB) freshInstall(ctx context.Context) (err error) {
 			st.applied[o][step.Version] = step
 		}
 	}
-	if err := db.writeSidecars(); err != nil {
+	if err := db.labelled(labelFreshSidecars, db.writeSidecars); err != nil {
 		return err
 	}
 	return db.planDAG(ctx)

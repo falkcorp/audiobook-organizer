@@ -302,7 +302,7 @@ func (db *DB) sweepGarbage() error {
 func (db *DB) takeCheckpoint(ctx context.Context) error {
 	st := db.boot
 	st.opts.ExtendStart("storage.checkpoint")
-	if err := db.sweepGarbage(); err != nil {
+	if err := db.labelled(labelSweep, db.sweepGarbage); err != nil {
 		return err
 	}
 	recs, err := db.checkpointRecords()
@@ -314,7 +314,9 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		if r.rec.InstallID == st.installID && r.rec.ofStore(st.epoch) && r.rec.open() && r.rec.FromVector.ancestorOf(cur) {
 			st.cpName = r.name
 			db.log.Info("storage: reusing the upgrade attempt's checkpoint", "name", r.name)
-			return db.writePointer(checkpointPointer{Name: r.name, State: "open"})
+			return db.labelled(labelCheckpointReuse, func() error {
+				return db.writePointer(checkpointPointer{Name: r.name, State: "open"})
+			})
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -362,41 +364,46 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	now := st.opts.Clock().UTC()
 	name := now.Format(checkpointStamp) + "-" + newInstallID()[:8]
 	tmp := filepath.Join(dir, name+".tmp")
-	if err := db.mkdirPrivate(dir); err != nil {
+	if err := db.labelled(labelCheckpointMkdir, func() error { return db.mkdirPrivate(dir) }); err != nil {
 		return err
 	}
-	if err := db.mkdirPrivate(tmp); err != nil {
+	if err := db.labelled(labelCheckpointMkdir, func() error { return db.mkdirPrivate(tmp) }); err != nil {
 		return err
 	}
 	// A copy that fails checkpointInto's read-only check stays behind as
 	// <name>.tmp, which the next boot's sweep removes.
-	if err := db.checkpointInto(filepath.Join(tmp, "db")); err != nil {
+	if err := db.labelled(labelCheckpointPebble, func() error { return db.checkpointInto(filepath.Join(tmp, "db")) }); err != nil {
 		return err
 	}
-	files, err := db.copyStateFiles(filepath.Join(tmp, "state"))
-	if err != nil {
+	var files []stateFileRecord
+	if err := db.labelled(labelCheckpointState, func() (err error) {
+		files, err = db.copyStateFiles(filepath.Join(tmp, "state"))
+		return err
+	}); err != nil {
 		return err
 	}
 	if err := db.privateTree(tmp); err != nil {
 		return err
 	}
 	final := filepath.Join(dir, name)
-	if err := fs.Rename(tmp, final); err != nil {
-		return fmt.Errorf("storage: checkpoint rename: %w", err)
-	}
-	if err := ipebble.SyncDir(fs, dir); err != nil {
+	if err := db.labelled(labelCheckpointRename, func() error {
+		if err := fs.Rename(tmp, final); err != nil {
+			return fmt.Errorf("storage: checkpoint rename: %w", err)
+		}
+		return ipebble.SyncDir(fs, dir)
+	}); err != nil {
 		return err
 	}
 	rec := checkpointRecord{
 		InstallID: st.installID, Epoch: st.epoch.Epoch, DirFSID: st.epoch.DirFSID, DirIno: st.epoch.DirIno,
 		FromVector: cur, FromRelease: st.opts.FromRelease, StateFiles: files, TakenAt: now, Status: "open",
 	}
-	if err := db.writeRecord(name, rec); err != nil {
+	if err := db.labelled(labelCheckpointRecord, func() error { return db.writeRecord(name, rec) }); err != nil {
 		return err
 	}
 	st.cpName = name
 	db.log.Info("storage: pre-migration checkpoint taken", "name", name, "bytes", storeBytes)
-	return db.writePointer(checkpointPointer{Name: name, State: "open"})
+	return db.labelled(labelCheckpointPtr, func() error { return db.writePointer(checkpointPointer{Name: name, State: "open"}) })
 }
 
 // errCopyRefused marks a checkpoint copy checkpointInto made and refused: it
@@ -669,7 +676,7 @@ func (db *DB) MarkServed(now time.Time) error {
 			continue
 		}
 		r.rec.ReadyAt, r.rec.Status = &now, "served"
-		if err := db.writeRecord(r.name, r.rec); err != nil {
+		if err := db.labelled(labelCheckpointReady, func() error { return db.writeRecord(r.name, r.rec) }); err != nil {
 			return err
 		}
 		db.log.Info("storage: an open upgrade checkpoint was served past; it will not be reused", "name", r.name)

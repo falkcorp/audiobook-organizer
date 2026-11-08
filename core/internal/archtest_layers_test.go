@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-08
 
@@ -32,8 +32,9 @@ const corePath = "github.com/falkcorp/mediacore"
 //
 // R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
 // §3.5.1 item 2), never this table; the exceptions are R1-13's
-// internal/openapi entry, R1-20's internal/pebble entry and R1-16's internal/sdnotify entry, R4 packages the
-// table missed.
+// internal/openapi entry, R1-20's internal/pebble entry, R1-16's
+// internal/sdnotify entry and R1-21's internal/bootseam entry, R4 packages
+// the table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -42,6 +43,9 @@ var coreLayerOf = map[string]int{
 	// internal/sdnotify (R1-16) is the systemd notify protocol over the
 	// standard library; its one core import is lifecycle's constants.
 	"internal/sdnotify": 0,
+	// internal/bootseam is R1-21's per-boot seam of the crash-matrix kit: the
+	// layer of its consumers' lowest, so storage (L1) may read it.
+	"internal/bootseam": 0,
 	// L1 (internal/restoreswap imports only storage and its L0 leaves;
 	// internal/pebble implements storage, so it takes storage's layer, R4)
 	"storage": 1, "storage/index": 1, "internal/restoreswap": 1, "internal/pebble": 1,

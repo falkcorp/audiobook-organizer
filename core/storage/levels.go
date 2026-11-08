@@ -1,5 +1,5 @@
 // file: core/storage/levels.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b872a575-c708-488a-9a3c-5f0dd05d0e70
 // last-edited: 2026-11-07
 
@@ -39,7 +39,7 @@ func (db *DB) commitWithRaise(ctx context.Context, b *Batch, o *ownerInfo, raise
 	stored := st.stamps[lo]
 	level := max(stored, raises)
 	if level == stored {
-		return b.Commit(ctx, Sync)
+		return db.labelled(labelStepBatch, func() error { return b.Commit(ctx, Sync) })
 	}
 	ks := db.storageKS()
 	b.Bind(ks)
@@ -59,16 +59,16 @@ func (db *DB) commitWithRaise(ctx context.Context, b *Batch, o *ownerInfo, raise
 	}
 	next := maps0(st.stamps)
 	next[lo] = level
-	if err := db.writeSidecarsFor(next); err != nil {
-		return errors.Join(err, db.writeSidecars())
+	if err := db.labelled(labelLevelSidecars, func() error { return db.writeSidecarsFor(next) }); err != nil {
+		return errors.Join(err, db.labelled(labelLevelRollback, db.writeSidecars))
 	}
 	if h := db.hooks.beforeStampCommit; h != nil {
 		if err := h(); err != nil {
 			return err // the crash tests stop here: sidecar written, stamp not
 		}
 	}
-	if err := b.Commit(ctx, Sync); err != nil {
-		return errors.Join(fmt.Errorf("storage: level step for %s: %w", lo, err), db.writeSidecars())
+	if err := db.labelled(labelStepBatch, func() error { return b.Commit(ctx, Sync) }); err != nil {
+		return errors.Join(fmt.Errorf("storage: level step for %s: %w", lo, err), db.labelled(labelLevelRollback, db.writeSidecars))
 	}
 	st.stamps[lo] = level
 	return nil
