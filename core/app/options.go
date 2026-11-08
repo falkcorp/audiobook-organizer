@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -88,13 +89,21 @@ type Options struct {
 	// A store on any other filesystem is not durable.
 	StorageFS storage.FS
 	// LogOutput is where the App's log pipeline writes its primary output;
-	// nil = core.log.output's stream (stderr until config lands). Ignored when
-	// Logger is set. ABO points it at its activity writer in R1, which tees
-	// each line to stdout and parses it into a system activity entry, so the
-	// slog-fed Activity page keeps its entries once InstallProcessDefaults
-	// makes the pipeline slog's default (R1-18 replaces that with a
-	// Logging.Tap and the file output of 05-logging §11 item 1).
+	// nil = core.log.output's stream (stderr until config lands). With
+	// R1Log's output "file" it is the stream that also receives each line
+	// (R1Log.File.TeeStderr), stderr when nil. Ignored when Logger is set.
+	// ABO sets it to stdout, where HEAD's lines went, and feeds its
+	// Activity page from a Logging tap, not from this stream.
 	LogOutput io.Writer
+	// R1Log is the core.log section (05-logging §8) in release R1, when core
+	// config has no layers to read it from: the level, the per-module levels
+	// and the file output. nil = log.DefaultSettings(); a non-nil value is the
+	// whole section, so build it from log.DefaultSettings(). With output
+	// "file", File.Path is relative to the state directory (StateDir, or
+	// ResolveStateDir's other rules), which New resolves and creates, and an
+	// open failure fails boot. An invalid level, format or output fails boot.
+	// Ignored when Logger is set. Release R1 only: F3 deletes the field.
+	R1Log *log.Settings
 	// ProcessDefaults says the composition root will call
 	// InstallProcessDefaults for this App (05-logging §3). New then installs
 	// the OTel SDK's logger and error handler, the value-dropping sink and

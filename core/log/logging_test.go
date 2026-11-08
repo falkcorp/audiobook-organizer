@@ -981,3 +981,55 @@ func TestRoot_ProcessDefaultCarriesNoModule(t *testing.T) {
 		t.Errorf("tap modules = %v; want \"\", \"\", core", recs)
 	}
 }
+
+// TestWithAttrs_SubsystemMovesTheScope: adding a subsystem attribute to a
+// logger moves it to that module.subsystem scope, so Levels["core.scanner"]
+// gates it as Scope("core", "scanner") would (R1-18's books shim logs with
+// subsystem as an attribute and relies on this for per-subsystem levels). The
+// line carries one subsystem=, the record's, and a tap sees it as
+// Record.Subsystem, not among Attrs.
+func TestWithAttrs_SubsystemMovesTheScope(t *testing.T) {
+	var out syncBuffer
+	l := newTestLogging(t, &out, FormatText, LevelInfo, map[string]slog.Level{"process.scanner": LevelDebug, "process.mixer": LevelError})
+	rec := &tapRecorder{}
+	l.Tap("t", LevelDebug, 8, rec.fn)
+	ctx := context.Background()
+
+	scanner := l.Root().With(KeySubsystem, "scanner")
+	mixer := l.Root().With("k", "v").With(KeySubsystem, "mixer")
+	if !scanner.Enabled(ctx, LevelDebug) {
+		t.Error("process.scanner: debug not enabled through its own Levels entry")
+	}
+	if mixer.Enabled(ctx, LevelWarn) {
+		t.Error("core.mixer: warn enabled despite Levels[process.mixer]=error")
+	}
+	if l.Root().Enabled(ctx, LevelDebug) {
+		t.Error("the root logger was moved by a derived logger's subsystem")
+	}
+	scanner.Debug("found", "n", 2)
+
+	if got := strings.Count(out.String(), KeySubsystem+"="); got != 1 {
+		t.Errorf("line has %d subsystem= attrs, want 1: %q", got, out.String())
+	}
+	closeDrained(t, l)
+	recs := rec.records()
+	if len(recs) != 1 || recs[0].Subsystem != "scanner" || recs[0].Module != "" {
+		t.Fatalf("tap saw %+v, want one process/scanner record", recs)
+	}
+	if _, ok := attrString(recs[0].Attrs, KeySubsystem); ok {
+		t.Errorf("subsystem is also among Attrs: %v", recs[0].Attrs)
+	}
+
+	// A live SetLevels reaches the derived logger, and a subsystem inside an
+	// open group is an ordinary attribute of that group.
+	l.SetLevels(LevelInfo, nil)
+	if scanner.Enabled(ctx, LevelDebug) {
+		t.Error("SetLevels did not reach the logger moved to process.scanner")
+	}
+	var grouped syncBuffer
+	g := newTestLogging(t, &grouped, FormatText, LevelInfo, nil)
+	g.Root().WithGroup("grp").With(KeySubsystem, "inside").Info("x")
+	if !strings.Contains(grouped.String(), "grp.subsystem=inside") || strings.Contains(grouped.String(), " subsystem=inside") {
+		t.Errorf("a subsystem attr inside a group was treated as the scope: %q", grouped.String())
+	}
+}

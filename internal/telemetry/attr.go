@@ -1,7 +1,7 @@
 // file: internal/telemetry/attr.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package telemetry
 
@@ -47,6 +47,9 @@ const (
 	// Site names the call site (a store method) a counter was incremented from;
 	// a small fixed set of method names.
 	Site = attribute.Key("site")
+	// Sink names a log sink in mediacore_log_dropped_total: "primary" or a
+	// registered tap's name, a small fixed set (rule C1).
+	Sink = attribute.Key("sink")
 )
 
 // Keys already carried by the client_golang families pinned in the series
@@ -90,7 +93,7 @@ const (
 // instrumentKeys may be used by any instrument created through Meter.
 var instrumentKeys = []attribute.Key{
 	Outcome, DefID, Provider, Model, Task, Reason, Direction, Class, Kind, Plugin,
-	State, Phase, Accepted, Capability, Endpoint, Site,
+	State, Phase, Accepted, Capability, Endpoint, Site, Sink,
 	Type, Field, Alias, Entry, Cache, Scope, Backend, OpType, Shape, Source, View,
 	Fixer, Store, Level,
 }
