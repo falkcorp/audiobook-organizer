@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -740,18 +742,29 @@ func (s *Server) emailGuestToken(user *database.User, issue *guestTokenIssue) {
 
 // ── Admin routes ────────────────────────────────────────────────────────────
 
+// guestTokenStatusNone is the status of a list row for a user with no key
+// record: eligible for a first key (active, verified email), nothing issued yet.
+const guestTokenStatusNone = "none"
+
 // guestTokenView is one row of the admin list. No secret, hash or client id.
 type guestTokenView struct {
-	UserID       string     `json:"user_id"`
-	Username     string     `json:"username,omitempty"`
-	TokenID      string     `json:"token_id,omitempty"`
-	Status       string     `json:"status"`
-	Detail       string     `json:"detail,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username,omitempty"`
+	TokenID  string `json:"token_id,omitempty"`
+	// Status is a database.GuestToken* status, or guestTokenStatusNone.
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	// CreatedAt is absent on a row with no record.
+	CreatedAt    *time.Time `json:"created_at,omitempty"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 	RevokeReason string     `json:"revoke_reason,omitempty"`
+	// ReissuedAt is when an admin last reissued this guest's key.
+	ReissuedAt *time.Time `json:"reissued_at,omitempty"`
 	// LastSeenAt is what Cloudflare reports; absent when it did not say.
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// ReissueBlocked is why the Issue / Reissue button is disabled, "" when
+	// clicking it would be accepted (guestKeyRowBlocked).
+	ReissueBlocked string `json:"reissue_blocked,omitempty"`
 }
 
 func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, lastSeenNote string, err error) {
@@ -785,23 +798,63 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 			}
 		}
 	}
-	for _, r := range recs {
+	deployment := s.guestKeyDeploymentBlocked()
+	hasRecord := make(map[string]bool, len(recs))
+	for i := range recs {
+		r := &recs[i]
+		hasRecord[r.UserID] = true
+		created := r.CreatedAt
 		v := guestTokenView{
 			UserID: r.UserID, TokenID: r.TokenID, Status: r.Status, Detail: r.Detail,
-			CreatedAt: r.CreatedAt, RevokedAt: r.RevokedAt, RevokeReason: r.RevokeReason,
+			CreatedAt: &created, RevokedAt: r.RevokedAt, RevokeReason: r.RevokeReason, ReissuedAt: r.ReissuedAt,
 		}
-		if u, uerr := store.GetUserByID(r.UserID); uerr == nil && u != nil {
+		u, uerr := store.GetUserByID(r.UserID)
+		if uerr == nil && u != nil {
 			v.Username = u.Username
 		}
 		if r.TokenID != "" {
 			v.LastSeenAt = seen[r.TokenID]
 		}
+		v.ReissueBlocked = guestKeyRowBlocked(store, deployment, u, r)
 		views = append(views, v)
 	}
+	views = append(views, s.guestTokenNoKeyViews(store, deployment, hasRecord)...)
 	if views == nil {
 		views = []guestTokenView{}
 	}
 	return views, lastSeenNote, nil
+}
+
+// guestTokenNoKeyViews lists the users who could be issued a FIRST key and have
+// no record: active, with a verified email address. It lists them only while
+// CF_GUEST_SERVICE_TOKENS is on (with the flag off no key can be issued, and
+// the panel stays hidden when it has nothing to show). A user the admin cannot
+// issue a key to for deployment reasons is still listed, with that reason on the
+// row. Sorted by username. The verified check scans the users once per
+// candidate (user counts are small), under the store's lock.
+func (s *Server) guestTokenNoKeyViews(store database.Store, deployment string, hasRecord map[string]bool) []guestTokenView {
+	if !config.Snapshot().CFGuestServiceTokens {
+		return nil
+	}
+	users, err := store.ListUsers()
+	if err != nil {
+		inviteAccessLog.Warn("guest service token list: listing users for first keys failed: %v", logger.SanitizeLogValue(err.Error()))
+		return nil
+	}
+	var out []guestTokenView
+	for i := range users {
+		u := &users[i]
+		if hasRecord[u.ID] || guestKeyUserBlocked(store, u) != "" {
+			continue
+		}
+		out = append(out, guestTokenView{
+			UserID: u.ID, Username: u.Username, Status: guestTokenStatusNone, ReissueBlocked: deployment,
+		})
+	}
+	sort.Slice(out, func(a, b int) bool {
+		return strings.ToLower(out[a].Username) < strings.ToLower(out[b].Username)
+	})
+	return out
 }
 
 // handleListGuestServiceTokens handles GET /api/v1/admin/guest-service-tokens.

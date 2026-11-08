@@ -1,5 +1,5 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.17.4
+// version: 1.17.5
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-11-07
 
@@ -210,12 +210,14 @@ func (s *Server) wireLibraryRoutes(
 	// still gets 401, a non-admin 403, and only an admin learns it is gone.
 	s.adminRoute(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/recompact-digests",
 		gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
-	// Per-guest Cloudflare service tokens (guest_service_tokens.go). All three
-	// are credential routes, GET included: the list names guests and their
-	// token ids and makes the server call Cloudflare, and the plan reads the
-	// real books policy, so no API key (a leaked or delegated one) may use
-	// them; the revoke ends one guest's phone-app access, and the plan and
-	// revoke also need the owner once one is set (ownerGateWhenOwnerSet). So
+	// Per-guest Cloudflare service tokens (guest_service_tokens.go,
+	// guest_key_reissue.go). All four are credential routes, GET included: the
+	// list names guests and their token ids and makes the server call
+	// Cloudflare, and the plan reads the real books policy, so no API key (a
+	// leaked or delegated one) may use them; the revoke ends one guest's
+	// phone-app access, and the reissue revokes the old key and mints and
+	// emails a new one (or a first one), so the plan, revoke and reissue also
+	// need the owner once one is set (ownerGateWhenOwnerSet). So
 	// even the two reads keep RequireAdmin and answer 401 with authentication
 	// off: they are not introspection. The admin gate runs before the
 	// credential guard.
@@ -225,4 +227,6 @@ func (s *Server) wireLibraryRoutes(
 		http.MethodGet, "/admin/guest-service-tokens/plan", s.handlePlanGuestServiceToken)
 	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke"),
 		http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.handleRevokeGuestServiceToken)
+	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/guest-service-tokens/:userId/reissue"),
+		http.MethodPost, "/admin/guest-service-tokens/:userId/reissue", s.handleReissueGuestServiceToken)
 }

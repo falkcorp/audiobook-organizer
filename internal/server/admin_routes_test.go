@@ -1,7 +1,7 @@
 // file: internal/server/admin_routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 77227bb9-356c-49c7-bb9b-98245ccb7bed
-// last-edited: 2026-10-31
+// last-edited: 2026-11-07
 
 package server
 
@@ -37,17 +37,18 @@ import (
 // them. A route belongs here when it deletes or rewrites data, or is a
 // credential surface.
 var adminAlwaysAuthenticatedRoutes = map[string]string{
-	"POST /api/v1/maintenance/wipe":                          "retired library wipe stub (410): a wipe verb stays behind a login",
-	"POST /api/v1/cache/invalidate":                          "retired cache flush stub (410): a flush verb stays behind a login",
-	"POST /api/v1/admin/recompact-digests":                   "retired stub (410) of a digest rewrite",
-	"GET /api/v1/admin/guest-service-tokens":                 "credential surface: names guests and token ids, calls Cloudflare",
-	"GET /api/v1/admin/guest-service-tokens/plan":            "credential surface: reads the real books policy",
-	"POST /api/v1/admin/guest-service-tokens/:userId/revoke": "revokes a guest's phone-app access",
-	"POST /api/v1/system/reset":                              "wipes the store, users included",
-	"POST /api/v1/system/factory-reset":                      "wipes the store and the settings",
-	"PATCH /api/v1/admin/debug/books/:id":                    "raw book row edit (preview and apply share the route)",
-	"PATCH /api/v1/admin/debug/book-files/:id":               "raw book_file row edit (preview and apply share the route)",
-	"POST /api/v1/admin/debug/edits/:edit_id/undo":           "rewrites a row back from an undo image",
+	"POST /api/v1/maintenance/wipe":                           "retired library wipe stub (410): a wipe verb stays behind a login",
+	"POST /api/v1/cache/invalidate":                           "retired cache flush stub (410): a flush verb stays behind a login",
+	"POST /api/v1/admin/recompact-digests":                    "retired stub (410) of a digest rewrite",
+	"GET /api/v1/admin/guest-service-tokens":                  "credential surface: names guests and token ids, calls Cloudflare",
+	"GET /api/v1/admin/guest-service-tokens/plan":             "credential surface: reads the real books policy",
+	"POST /api/v1/admin/guest-service-tokens/:userId/revoke":  "revokes a guest's phone-app access",
+	"POST /api/v1/admin/guest-service-tokens/:userId/reissue": "revokes a guest's phone-app key and mints and emails a new (or first) one",
+	"POST /api/v1/system/reset":                               "wipes the store, users included",
+	"POST /api/v1/system/factory-reset":                       "wipes the store and the settings",
+	"PATCH /api/v1/admin/debug/books/:id":                     "raw book row edit (preview and apply share the route)",
+	"PATCH /api/v1/admin/debug/book-files/:id":                "raw book_file row edit (preview and apply share the route)",
+	"POST /api/v1/admin/debug/edits/:edit_id/undo":            "rewrites a row back from an undo image",
 }
 
 // adminReadOnlyRoutes use adminRole: RequireAdmin with authentication on, open

@@ -1,7 +1,7 @@
 // file: internal/database/guest_tokens_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a1f4d92-3c68-4b05-8e27-f9b0c5d2a841
-// last-edited: 2026-10-23
+// last-edited: 2026-11-07
 
 package database
 
@@ -65,4 +65,52 @@ func TestGuestServiceToken_KeyFamilyRegistered(t *testing.T) {
 		}
 	}
 	t.Fatalf("%s is not in the key-family registry", guestServiceTokenPrefix)
+}
+
+// A reissue reopens a revoked record in place: one record per user, the new
+// field round-trips, and a status check inside the callback is atomic.
+func TestGuestServiceToken_ReopenRevokedRecordRoundTripsReissuedAt(t *testing.T) {
+	s := newInviteTestStore(t)
+	if err := s.CreateGuestServiceToken(GuestServiceToken{UserID: "U1", Name: "aorg-guest-U1", Status: GuestTokenPending}); err != nil {
+		t.Fatal(err)
+	}
+	revokedAt := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := s.UpdateGuestServiceToken("U1", func(g *GuestServiceToken) error {
+		g.TokenID, g.SecretHash, g.Status, g.PolicyAdded = "tok-1", "hash", GuestTokenRevoked, true
+		g.RevokedAt, g.RevokeReason = &revokedAt, "revoked by an admin"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A second create is still refused: the keyspace keeps one record per user.
+	if err := s.CreateGuestServiceToken(GuestServiceToken{UserID: "U1", Name: "x", Status: GuestTokenPending}); !errors.Is(err, ErrGuestServiceTokenExists) {
+		t.Fatalf("create over a revoked record = %v, want exists", err)
+	}
+	errNotRevoked := errors.New("not revoked")
+	reopen := func() error {
+		now := time.Now().UTC()
+		_, err := s.UpdateGuestServiceToken("U1", func(g *GuestServiceToken) error {
+			if g.Status != GuestTokenRevoked {
+				return errNotRevoked
+			}
+			g.Status, g.TokenID, g.SecretHash, g.PolicyAdded, g.Detail = GuestTokenPending, "", "", false, ""
+			g.RevokedAt, g.RevokeReason, g.CreatedAt, g.ReissuedAt = nil, "", now, &now
+			return nil
+		})
+		return err
+	}
+	if err := reopen(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetGuestServiceToken("U1")
+	if got.Status != GuestTokenPending || got.TokenID != "" || got.RevokedAt != nil || got.ReissuedAt == nil || got.Name != "aorg-guest-U1" {
+		t.Fatalf("reopened record = %+v", got)
+	}
+	if err := reopen(); !errors.Is(err, errNotRevoked) {
+		t.Fatalf("second reopen = %v, want the status check to refuse a pending record", err)
+	}
+	list, _ := s.ListGuestServiceTokens()
+	if len(list) != 1 || list[0].ReissuedAt == nil {
+		t.Fatalf("list = %+v", list)
+	}
 }

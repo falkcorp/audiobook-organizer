@@ -314,6 +314,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/v1/admin/debug/lookup", pNeed("books:admin.view"), fRated},
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens", pNeed("core:admin"), fRated | fInteractive},
 		{http.MethodPost, "/api/v1/admin/guest-service-tokens/:userId/revoke", pNeed("core:admin"), fRated | fInteractive | fOwner},
+		{http.MethodPost, "/api/v1/admin/guest-service-tokens/:userId/reissue", pNeed("core:admin"), fRated | fInteractive | fOwner},
 		{http.MethodGet, "/api/v1/admin/guest-service-tokens/plan", pNeed("core:admin"), fRated | fInteractive | fOwner},
 		{http.MethodPost, "/api/v1/admin/recompact-digests", pNeed("core:admin"), fRated},
 		{http.MethodGet, "/api/v1/ai-jobs", pAtom("settings.manage"), fRated},

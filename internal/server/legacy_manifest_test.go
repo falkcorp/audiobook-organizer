@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -230,7 +230,7 @@ func TestLegacyManifest_OwnerGuardsMatchRegistrations(t *testing.T) {
 			}
 			slices.Sort(rows)
 			slices.Sort(registered)
-			assert.Len(t, registered, 9, "ownerCredRoute registrations at the base")
+			assert.Len(t, registered, 10, "ownerCredRoute registrations at the base")
 			assert.Equal(t, registered, rows, "Guards.Owner rows vs ownerCredRoute registrations")
 		})
 	}
@@ -387,11 +387,11 @@ func TestLegacyManifest_RegistersAsMuxPatterns(t *testing.T) {
 				_, ok := served[gr.Method+" "+gr.Path]
 				assert.True(t, ok, "gin route %s %s is not served by a mux pattern", gr.Method, gr.Path)
 			}
-			want := 496
+			want := 497
 			if abs {
-				want = 575
+				want = 576
 			}
-			assert.Equal(t, want, n, "gin routes besides GET / (497 and 576 with it)")
+			assert.Equal(t, want, n, "gin routes besides GET / (498 and 577 with it)")
 			assert.Len(t, served, n)
 
 			gen, kept := generalised(abs)

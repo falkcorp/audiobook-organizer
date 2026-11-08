@@ -1,7 +1,7 @@
 // file: internal/activity/user_data.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 8f75db40-9f7a-4cb3-ad7f-757dd64ea827
-// last-edited: 2026-10-27
+// last-edited: 2026-11-07
 
 package activity
 
@@ -39,10 +39,12 @@ const (
 	// an email back from unverified accounts (summary and details name the new
 	// and the displaced account ids).
 	TypeAuthEmailDisplaced = "auth_email_displaced"
-	// TypeGuestServiceTokenPrefix starts the four guest-token audit types
-	// (minted, mint_failed, revoked, revoke_failed): each names the guest's
-	// account id and the Cloudflare token id, and the failures carry the
-	// Cloudflare error text.
+	// TypeGuestServiceTokenPrefix starts the six guest-token audit types
+	// (minted, mint_failed, revoked, revoke_failed, and the admin-issued
+	// reissued and reissue_failed): each names the guest's account id and the
+	// Cloudflare token id (reissue entries also the previous one), and the
+	// failures carry the Cloudflare error text. NamesOthersUserData matches the
+	// prefix, so a new type under it is withheld without a change here.
 	TypeGuestServiceTokenPrefix = "guest_service_token_"
 	// TypeUserMerge: an admin merged one account into another (or undid it).
 	TypeUserMerge = "user_merge"
