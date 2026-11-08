@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
 // version: 1.0.4
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -38,6 +38,7 @@ import (
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/version"
 
@@ -81,6 +82,9 @@ type Config struct {
 	// refused when an enabled module declares storage. Describe never opens
 	// the store.
 	StoragePath string
+	// StorageFS is the filesystem P2 opens the store on; the zero value is
+	// the OS's. Tests only: coretest's harness passes storage.MemFS().
+	StorageFS storage.FS
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app

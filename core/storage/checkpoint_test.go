@@ -677,7 +677,7 @@ func TestUnreadableCheckpointRecordFailsBoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.opts.fs = openFails{FS: mem, path: filepath.Join(cpDir(e), name+".json")}
+	e.opts.FS = FS{fs: openFails{FS: mem, path: filepath.Join(cpDir(e), name+".json")}}
 	e.opts.Owners = fixedOwners()
 	if _, err := e.tryOpen(); !errors.Is(err, errScarecrow) {
 		t.Fatalf("boot with an unreadable record = %v, want the read error", err)

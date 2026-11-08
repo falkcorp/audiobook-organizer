@@ -71,9 +71,12 @@ type OpenOptions struct {
 	Logger          *slog.Logger  // nil discards
 	ExtendStart     func(step string)
 	Clock           func() time.Time // nil = time.Now
+	FS              FS               // the filesystem the store opens on; zero = the OS's (tests: MemFS)
+
+	// fs is FS's filesystem, else the OS's (defaults).
+	fs vfs.FS
 
 	// Seams for this package's tests; zero in every other caller.
-	fs          vfs.FS
 	freeSpace   func(dir string) (uint64, error)
 	dirIdentity func(path string) (dev, ino uint64, err error)
 	sameDevice  func(a, b string) (bool, error)
@@ -95,7 +98,18 @@ const (
 	checkpointRetention   = 7 * 24 * time.Hour
 )
 
+// FS is the filesystem a store opens on. The zero value is the OS's; MemFS
+// is the one other, for tests. It keeps Pebble's vfs inside this package:
+// app.Options and kernel.Config carry an FS, never a vfs.FS.
+type FS struct{ fs vfs.FS }
+
+// MemFS returns a new, empty in-memory filesystem (Pebble's vfs.NewMem). A
+// store on it lives as long as the value and is never durable: tests only,
+// such as coretest's harness (06 §6.4.8).
+func MemFS() FS { return FS{fs: vfs.NewMem()} }
+
 func (o *OpenOptions) defaults() {
+	o.fs = o.FS.fs
 	if o.fs == nil {
 		o.fs = vfs.Default
 	}

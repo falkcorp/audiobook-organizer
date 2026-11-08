@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package app
 
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
@@ -74,6 +75,12 @@ type Options struct {
 	// Logger overrides the default slog handler construction (tests); nil =
 	// from config (05-logging §4).
 	Logger *slog.Logger
+
+	// StorageFS is the filesystem core storage opens the store on; the zero
+	// value is the OS's. Tests only: coretest's harness passes
+	// storage.MemFS(), so a harness boot leaves no store on disk (06 §6.4.8).
+	// A store on any other filesystem is not durable.
+	StorageFS storage.FS
 }
 
 // R1Values is the release-R1-only value Options.R1Values returns (05-config

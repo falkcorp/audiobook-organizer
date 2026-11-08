@@ -85,3 +85,33 @@ func TestCloseReleasesTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStorageFSKeepsTheStoreOffDisk: Options.StorageFS reaches the store, so
+// an App on storage.MemFS leaves nothing under its state directory; the zero
+// value is the OS's, where the store is on disk (the control).
+func TestStorageFSKeepsTheStoreOffDisk(t *testing.T) {
+	keeper := manifestOnly{ID: "alfred", Version: "1.0.0", Storage: storage.Spec{Keyspace: true}}
+	for _, tc := range []struct {
+		name   string
+		fs     storage.FS
+		onDisk bool
+	}{
+		{"in-memory", storage.MemFS(), false},
+		{"os", storage.FS{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := Options{AppID: "gotham", StateDir: t.TempDir(), Args: []string{}, Env: []string{}, StorageFS: tc.fs}
+			a, err := New(t.Context(), opts, keeper)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, err = os.Stat(filepath.Join(opts.StateDir, "storage", "main.pebble"))
+			if onDisk := err == nil; onDisk != tc.onDisk {
+				t.Fatalf("store on disk = %v (%v), want %v", onDisk, err, tc.onDisk)
+			}
+		})
+	}
+}

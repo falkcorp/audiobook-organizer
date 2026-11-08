@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // harnessAppID is the AppID every harness boots with.
@@ -37,9 +38,9 @@ const harnessAppID = "coretest"
 // At release R1 the App has no config layer and no core authentication, and
 // app.New starts no hook, worker or listener (06 §6.5.2's start order is
 // Run's, and Run opens a listener). A module that declares storage (hello's
-// keyspace) gets a Pebble store under the temp state directory: on disk, not
-// 06 §6.4.8's in-memory vfs.NewMem, until app.Options can carry a
-// filesystem. A harness therefore boots P1 to P8 and serves requests; nothing
+// keyspace) gets an in-memory Pebble store (Options.StorageFS =
+// storage.MemFS(), 06 §6.4.8), so nothing lands under the temp state
+// directory. A harness therefore boots P1 to P8 and serves requests; nothing
 // it boots runs on its own, and its cleanup closes the App. Each harness owns its
 // logger (a logcapture.Capture handed to the App as Options.Logger), its state
 // directory and its App: it never touches slog.Default or any other process
@@ -198,6 +199,9 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 		Args:   []string{},
 		Env:    []string{},
 		Logger: h.logs.Logger(),
+		// In-memory Pebble (06 §6.4.8): a store hello's keyspace opens
+		// leaves nothing under the state directory.
+		StorageFS: storage.MemFS(),
 	}
 	a, err := app.New(t.Context(), appOpts, mods...)
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: core/storage/levels_test.go
 // version: 1.0.0
 // guid: b2f27289-7885-482a-90f4-69b89cc07b94
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package storage
 
@@ -241,7 +241,7 @@ func TestUnreadableProjectionSidecarRefusesBoot(t *testing.T) {
 		if err := e.open().Close(); err != nil {
 			t.Fatal(err)
 		}
-		e.opts.fs = openFails{FS: e.fs, path: side(e)}
+		e.opts.FS = FS{fs: openFails{FS: e.fs, path: side(e)}}
 		if _, err := e.tryOpen(); !errors.Is(err, errScarecrow) {
 			t.Fatalf("boot with an unreadable projection sidecar = %v, want the read error", err)
 		}

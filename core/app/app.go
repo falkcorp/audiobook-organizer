@@ -48,6 +48,7 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	if err != nil {
 		return nil, err
 	}
+	c.StorageFS = opts.StorageFS
 	if c.StoragePath, err = storagePath(opts, mods); err != nil {
 		return nil, err
 	}
@@ -65,12 +66,12 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 // budget is returned joined with the cause of the stop.
 func (a *App) Run(ctx context.Context) error { return a.k.Run(ctx) }
 
-// Close releases what New built, for an App that is never Run (coretest's
+// Close releases what New built, for an App that never Ran (coretest's
 // harness, a command that only boots): the store, the metrics Provider and
-// logging. Once Run has started, Run owns the shutdown and Close does
-// nothing; a Run after Close fails, and a second Close does nothing. Added
-// to 06 §6.4.5's App with storage, the first thing New opens that must be
-// closed (R1-20).
+// logging (06 §6.4.5). It is a no-op once Run has started: Run owns the
+// shutdown. Run after Close returns the kernel's errRunTwice, and a second
+// Close does nothing. Added with storage, the first thing New opens that must
+// be closed (R1-20).
 func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
 
 // Handler is the fully assembled root handler (for tests and embedding in
