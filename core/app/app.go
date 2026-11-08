@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -63,13 +65,20 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	// and before the Provider is built (Options.ProcessDefaults).
 	var diag *otelDiagnostics
 	if opts.ProcessDefaults {
-		c.BeforeTelemetry = func(log *slog.Logger) error {
-			d, err := installOTelDiagnostics(log)
+		c.BeforeTelemetry = func(l *slog.Logger) error {
+			d, err := installOTelDiagnostics(l)
 			if err != nil {
 				return err
 			}
 			diag = d
 			return nil
+		}
+	}
+	if s := opts.R1Log; s != nil && s.Output == "file" && opts.Logger == nil {
+		// The file output lives under the state directory (05-logging §4
+		// step 1): resolved here, not in Describe, which does no I/O.
+		if c.StateDir, err = ResolveStateDir(opts); err != nil {
+			return nil, err
 		}
 	}
 	k, err := kernel.New(ctx, c)
@@ -119,6 +128,12 @@ func (a *App) Routes() iter.Seq[httpapi.RouteInfo] { return a.k.Routes() }
 // (05-metrics §6, §13 item 2); coretest.MetricsProvider returns it to series
 // contract tests. Modules never see it: they get a Scope.
 func (a *App) Metrics() *metrics.Provider { return a.k.Provider() }
+
+// Logging is the App's log pipeline, valid after New: the composition root
+// registers Logging.Tap consumers on it (ABO's activity feed). nil when
+// Options.Logger replaced the pipeline. The App owns it and closes it last in
+// shutdown (05-logging §4 step 4): a caller never calls Close.
+func (a *App) Logging() *log.Logging { return a.k.Logging() }
 
 // Modules reports each module's resolved state (enabled, disabled, reason),
 // in ID order.
@@ -321,6 +336,12 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 	}
 	if opts.Logger == nil {
 		c.LogOutput = opts.LogOutput
+		if opts.R1Log != nil {
+			s := *opts.R1Log
+			s.Levels = maps.Clone(s.Levels)
+			s.RedactKeys = slices.Clone(s.RedactKeys)
+			c.Log = &s
+		}
 	}
 	if f := opts.R1Listen; f != nil {
 		c.Listen = func(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (kernel.Server, error) {
