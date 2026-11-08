@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_followups_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: de17f8c2-593a-4eea-9ce9-4dac637b04e8
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 // The embedding section reads the census emb:v: family; it must not walk the
@@ -65,7 +66,7 @@ func (s *countingStore) CountPrefix(string) (int64, error) { s.calls++; return 9
 
 // A cancelled request must not start the full-walk fallback count.
 func TestHandleCacheStats_FallbackCountSkippedOnCancelledContext(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	metrics.RecordCacheSet("metadata_fetch")
 	cs := &countingStore{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,7 +76,7 @@ func TestHandleCacheStats_FallbackCountSkippedOnCancelledContext(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/cache/stats", nil).WithContext(ctx)
-	NewCacheHandler(nil, cs).HandleCacheStats(c)
+	NewCacheHandler(nil, cs, reg).HandleCacheStats(c)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Zero(t, cs.calls)
 }
@@ -91,10 +92,10 @@ func (*censusMetaStub) DBCensus(context.Context, database.CensusOptions) (*datab
 
 // The census path reports its error bound beside the size.
 func TestHandleCacheStats_CensusSizeCarriesErrorBound(t *testing.T) {
-	metrics.Register()
+	reg := metricstest.Registry(t)
 	metrics.RecordCacheSet("metadata_fetch")
 	stub := &censusMetaStub{}
-	stat := metadataFetchStat(t, NewCacheHandler(nil, stub))
+	stat := metadataFetchStat(t, NewCacheHandler(nil, stub, reg))
 	require.Equal(t, true, stat["size_estimated"])
 	require.EqualValues(t, 5, stat["size"])
 	require.EqualValues(t, 17, stat["size_error_bound_keys"])

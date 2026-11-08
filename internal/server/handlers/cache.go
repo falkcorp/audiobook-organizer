@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-10-18
+// last-edited: 2026-11-07
 
 package handlers
 
@@ -84,19 +84,28 @@ type CacheMetadataStore interface {
 type CacheHandler struct {
 	metricsStore  CacheMetricsStore
 	metadataStore CacheMetadataStore
-	pcache        pcacheCounter // ?deep=true provider_answer expired count
+	gatherer      prometheus.Gatherer // the registry the cache families are on
+	pcache        pcacheCounter       // ?deep=true provider_answer expired count
 }
 
 // NewCacheHandler creates a new CacheHandler.
 // metadataStore may be nil if DB-backed cache size patching is not needed.
-func NewCacheHandler(metricsStore CacheMetricsStore, metadataStore CacheMetadataStore) *CacheHandler {
-	return &CacheHandler{metricsStore: metricsStore, metadataStore: metadataStore}
+// gatherer is the registry internal/metrics' cache families are registered
+// on: in production the App's Provider registry, the one /metrics serves
+// (R1-15); nothing registers on Prometheus' default registry any more. A nil
+// gatherer makes HandleCacheStats answer 500.
+func NewCacheHandler(metricsStore CacheMetricsStore, metadataStore CacheMetadataStore, gatherer prometheus.Gatherer) *CacheHandler {
+	return &CacheHandler{metricsStore: metricsStore, metadataStore: metadataStore, gatherer: gatherer}
 }
 
-// HandleCacheStats returns aggregated cache metrics from Prometheus default registry.
+// HandleCacheStats returns aggregated cache metrics from the served registry.
 // GET /api/v1/cache/stats (requires PermLibraryView — SEC-7)
 func (h *CacheHandler) HandleCacheStats(c *gin.Context) {
-	metrics, err := prometheus.DefaultGatherer.Gather()
+	if h.gatherer == nil {
+		httputil.RespondWithInternalError(c, "failed to gather metrics")
+		return
+	}
+	metrics, err := h.gatherer.Gather()
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to gather metrics")
 		return

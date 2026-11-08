@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-04
+// last-edited: 2026-11-07
 
 package metrics
 
@@ -12,22 +12,39 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+// TestRegister: Register puts every family on the registry it is given (the
+// App's in production), never the default one; a second call on the same
+// registry is an error naming the clash, not a panic, so the composition
+// root fails boot on it; a fresh registry takes the same collectors again.
 func TestRegister(t *testing.T) {
-	// Register should be idempotent - calling it multiple times shouldn't panic
-	Register()
-	Register()
-	Register()
-
-	// If we reach here without panicking, the test passes
-	t.Log("Register called multiple times successfully")
+	reg := prometheus.NewRegistry()
+	if err := Register(reg); err != nil {
+		t.Fatalf("Register on a fresh registry: %v", err)
+	}
+	if err := Register(reg); err == nil {
+		t.Fatal("a second Register on the same registry succeeded; want the already-registered error")
+	}
+	if err := Register(prometheus.NewRegistry()); err != nil {
+		t.Fatalf("Register on a second fresh registry: %v", err)
+	}
+	if err := Register(nil); err == nil {
+		t.Fatal("Register(nil) succeeded")
+	}
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mfs) == 0 {
+		t.Fatal("the registry Register filled gathers nothing")
+	}
 }
 
 func TestIncOperationStarted(t *testing.T) {
-	Register()
 
 	// Test incrementing different operation types
 	operations := []string{"scan", "organize", "metadata_fetch"}
@@ -40,7 +57,6 @@ func TestIncOperationStarted(t *testing.T) {
 }
 
 func TestIncOperationCompleted(t *testing.T) {
-	Register()
 
 	operations := []string{"scan", "organize", "metadata_fetch"}
 
@@ -51,7 +67,6 @@ func TestIncOperationCompleted(t *testing.T) {
 }
 
 func TestIncOperationFailed(t *testing.T) {
-	Register()
 
 	operations := []string{"scan", "organize", "metadata_fetch"}
 
@@ -62,7 +77,6 @@ func TestIncOperationFailed(t *testing.T) {
 }
 
 func TestIncOperationCanceled(t *testing.T) {
-	Register()
 
 	operations := []string{"scan", "organize", "metadata_fetch"}
 
@@ -73,7 +87,6 @@ func TestIncOperationCanceled(t *testing.T) {
 }
 
 func TestObserveOperationDuration(t *testing.T) {
-	Register()
 
 	tests := []struct {
 		name     string
@@ -106,7 +119,6 @@ func TestObserveOperationDuration(t *testing.T) {
 }
 
 func TestSetBooks(t *testing.T) {
-	Register()
 
 	testValues := []int{0, 1, 100, 1000, 10000}
 
@@ -121,7 +133,6 @@ func TestSetBooks(t *testing.T) {
 // panic" — SetBooks's own sibling tests only log, which would let a
 // mis-wired Set (e.g. onto the wrong var) pass silently.
 func TestSetSearchIndexDocs(t *testing.T) {
-	Register()
 
 	testValues := []uint64{0, 1, 100, 67824}
 
@@ -134,18 +145,21 @@ func TestSetSearchIndexDocs(t *testing.T) {
 }
 
 // TestSearchIndexDocsGauge_AppearsInScrape asserts the metric name a
-// Prometheus scrape actually sees, via the real promhttp.Handler() (the
-// same handler /metrics is wired to in internal/server), not just the
-// in-process gauge value. Registration living in the var block is not
-// enough on its own — MustRegister must actually be called with this gauge
-// in its argument list for the name to reach a scrape.
+// Prometheus scrape actually sees, via a promhttp handler over the registry
+// Register filled (the App's registry, which /metrics serves in
+// internal/server), not just the in-process gauge value. Registration living
+// in the var block is not enough on its own: Register must actually list
+// this gauge for the name to reach a scrape.
 func TestSearchIndexDocsGauge_AppearsInScrape(t *testing.T) {
-	Register()
+	reg := prometheus.NewRegistry()
+	if err := Register(reg); err != nil {
+		t.Fatal(err)
+	}
 	SetSearchIndexDocs(12345)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
-	promhttp.Handler().ServeHTTP(rec, req)
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "audiobook_organizer_search_index_docs_total") {
@@ -154,7 +168,6 @@ func TestSearchIndexDocsGauge_AppearsInScrape(t *testing.T) {
 }
 
 func TestSetFolders(t *testing.T) {
-	Register()
 
 	testValues := []int{0, 1, 5, 10, 50}
 
@@ -165,7 +178,6 @@ func TestSetFolders(t *testing.T) {
 }
 
 func TestSetMemoryAlloc(t *testing.T) {
-	Register()
 
 	testValues := []uint64{
 		0,
@@ -181,7 +193,6 @@ func TestSetMemoryAlloc(t *testing.T) {
 }
 
 func TestSetGoroutines(t *testing.T) {
-	Register()
 
 	testValues := []int{1, 10, 100, 1000}
 
@@ -192,7 +203,6 @@ func TestSetGoroutines(t *testing.T) {
 }
 
 func TestMetricsIntegration(t *testing.T) {
-	Register()
 
 	// Simulate a complete operation lifecycle
 	opType := "test_operation"
@@ -219,7 +229,6 @@ func TestMetricsIntegration(t *testing.T) {
 }
 
 func TestMetricsWithMultipleOperationTypes(t *testing.T) {
-	Register()
 
 	// Simulate multiple concurrent operations
 	operations := []string{"scan", "organize", "metadata_fetch", "backup"}
@@ -239,7 +248,6 @@ func TestMetricsWithMultipleOperationTypes(t *testing.T) {
 }
 
 func TestOperationLifecycle_Success(t *testing.T) {
-	Register()
 
 	opType := "successful_operation"
 
@@ -253,7 +261,6 @@ func TestOperationLifecycle_Success(t *testing.T) {
 }
 
 func TestOperationLifecycle_Failure(t *testing.T) {
-	Register()
 
 	opType := "failed_operation"
 
@@ -267,7 +274,6 @@ func TestOperationLifecycle_Failure(t *testing.T) {
 }
 
 func TestOperationLifecycle_Canceled(t *testing.T) {
-	Register()
 
 	opType := "canceled_operation"
 
@@ -292,7 +298,6 @@ func b2uniqueOpLabels(t *testing.T, suffix string) (opID, opType string) {
 // SetOpProgress) set both the items-processed and items-total gauges for the
 // given op_id/op_type label pair (OPS-5 op-stall exporter, TODO #36).
 func TestSetOpProgress_SetsGauges(t *testing.T) {
-	Register()
 	opID, opType := b2uniqueOpLabels(t, "setprogress")
 	defer ClearOpProgress(opID, opType)
 
@@ -319,7 +324,6 @@ func TestSetOpProgress_SetsGauges(t *testing.T) {
 // don't accumulate as unbounded cardinality once an op completes/fails/
 // cancels (OPS-5, TODO #36).
 func TestClearOpProgress_DeletesGaugeSeries(t *testing.T) {
-	Register()
 	opID, opType := b2uniqueOpLabels(t, "clearprogress")
 
 	SetOpProgress(opID, opType, 10, 20)
@@ -351,7 +355,6 @@ func TestClearOpProgress_DeletesGaugeSeries(t *testing.T) {
 // TestSearchIndexDroppedAndBacklog pins the two TASK-130 metrics the same way
 // TestSetSearchIndexDocs does: against the prometheus values, not "did not panic".
 func TestSearchIndexDroppedAndBacklog(t *testing.T) {
-	Register()
 
 	before := testutil.ToFloat64(searchIndexDroppedTotal)
 	IncSearchIndexDropped()
@@ -371,7 +374,6 @@ func TestSearchIndexDroppedAndBacklog(t *testing.T) {
 // TestIncSearchCachePatchCapRebuild checks the helper moves the counter the
 // /metrics scrape reads.
 func TestIncSearchCachePatchCapRebuild(t *testing.T) {
-	Register()
 	before := testutil.ToFloat64(searchCachePatchCapRebuildsTotal)
 	IncSearchCachePatchCapRebuild()
 	if got := testutil.ToFloat64(searchCachePatchCapRebuildsTotal) - before; got != 1 {
@@ -382,7 +384,6 @@ func TestIncSearchCachePatchCapRebuild(t *testing.T) {
 // TestIncSearchCacheRebuild checks the helper moves the counter the /metrics
 // scrape reads.
 func TestIncSearchCacheRebuild(t *testing.T) {
-	Register()
 	before := testutil.ToFloat64(searchCacheRebuildsTotal)
 	IncSearchCacheRebuild()
 	if got := testutil.ToFloat64(searchCacheRebuildsTotal) - before; got != 1 {

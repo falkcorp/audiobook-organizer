@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.66.2
+// version: 4.66.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-07
 
@@ -43,7 +43,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -1833,7 +1832,7 @@ func (s *Server) setupRoutes() {
 		metricsAuth = servermiddleware.RequireAuth(s.storeForWiring())
 	}
 	s.router.GET("/metrics", buildTopLevelAuthChain(cfMW, metricsAuth,
-		gin.WrapH(promhttp.Handler()))...)
+		gin.WrapH(s.MetricsHandler()))...)
 
 	// Health check endpoint (both paths for compatibility). Registered here on
 	// s.router BEFORE the /api/* redirect middleware (below) so they keep

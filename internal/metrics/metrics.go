@@ -1,20 +1,19 @@
 // file: internal/metrics/metrics.go
-// version: 1.21.1
+// version: 1.22.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-10-11
+// last-edited: 2026-11-07
 
 package metrics
 
 import (
-	"sync"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	registerOnce sync.Once
-
 	operationStarted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "audiobook_organizer",
 		Name:      "operations_started_total",
@@ -296,29 +295,44 @@ var (
 	})
 )
 
-// Register initializes metrics with the global Prometheus registry (idempotent)
-func Register() {
-	registerOnce.Do(func() {
-		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, opChangeByBookIndexTrustedGauge, opsV2TimelineIndexTrustedGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
-			catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
-			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
-			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
-			organizeTargetPathCollision, aiBackendAvailable,
-			opItemsProcessed, opItemsTotal,
-			absListeningStatsReadFailures,
-			pebbleCollectorInstance)
-		prometheus.MustRegister(pipelineCollectors...)
-		// The metadata-provider caches are DB-backed and only touched when a
-		// metadata search or fetch runs, so after a restart their series did
-		// not exist until the first lookup -- indistinguishable in Grafana from
-		// "this cache has no metric". Export them at zero from startup.
-		for _, name := range []string{"metadata_fetch", "metadata_search", "provider_answer"} {
-			cacheHits.WithLabelValues(name)
-			cacheMisses.WithLabelValues(name, "not_found")
-			cacheSets.WithLabelValues(name)
+// Register registers every family of this package on reg: in production the
+// App's Provider.Registerer(), the private registry the legacy gin /metrics
+// route serves (05-metrics §6 R1 row, §13 item 2), behind core's
+// one-owner-per-family check. A family reg already holds, from this package
+// or any other owner, is an error naming it, never a panic; the caller fails
+// boot on it. It may be called once per registry: the collectors are the
+// package's values, so a second registry gets the same series.
+func Register(reg prometheus.Registerer) error {
+	if reg == nil {
+		return errors.New("metrics: Register needs a registry")
+	}
+	collectors := []prometheus.Collector{
+		operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
+		booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, opChangeByBookIndexTrustedGauge, opsV2TimelineIndexTrustedGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
+		catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
+		opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
+		cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
+		organizeTargetPathCollision, aiBackendAvailable,
+		opItemsProcessed, opItemsTotal,
+		absListeningStatsReadFailures,
+		pebbleCollectorInstance,
+	}
+	var errs []error
+	for _, c := range append(collectors, pipelineCollectors...) {
+		if err := reg.Register(c); err != nil {
+			errs = append(errs, fmt.Errorf("metrics: register %T: %w", c, err))
 		}
-	})
+	}
+	// The metadata-provider caches are DB-backed and only touched when a
+	// metadata search or fetch runs, so after a restart their series did
+	// not exist until the first lookup -- indistinguishable in Grafana from
+	// "this cache has no metric". Export them at zero from startup.
+	for _, name := range []string{"metadata_fetch", "metadata_search", "provider_answer"} {
+		cacheHits.WithLabelValues(name)
+		cacheMisses.WithLabelValues(name, "not_found")
+		cacheSets.WithLabelValues(name)
+	}
+	return errors.Join(errs...)
 }
 
 // RecordOrganizeTargetPathCollision counts one instance of generateTargetPath

@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.16.1
+// version: 2.16.2
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-30
+// last-edited: 2026-11-07
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -30,6 +30,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -44,7 +46,20 @@ func newTestServer(t testing.TB, store database.Store) *Server {
 	t.Helper()
 	s := NewServer(store)
 	t.Cleanup(s.releaseForTest)
+	attachTestMetrics(t, s)
 	return s
+}
+
+// attachTestMetrics binds a fresh registry as s's served one, as books.Attach
+// binds the App's Provider registry in production (R1-15), so /metrics, the
+// cache stats handler and the snapshotter read internal/metrics' families.
+func attachTestMetrics(t testing.TB, s *Server) *prometheus.Registry {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	if err := s.AttachMetrics(reg, reg, promhttp.HandlerFor(reg, promhttp.HandlerOpts{})); err != nil {
+		t.Fatalf("attach a test metrics registry: %v", err)
+	}
+	return reg
 }
 
 // releaseForTestBGWait bounds how long releaseForTest waits for bgWG.

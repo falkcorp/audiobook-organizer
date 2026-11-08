@@ -1,7 +1,7 @@
 // file: internal/server/pebble_metrics_sources_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4af3bbc9-4f8d-4fe4-9da3-1c7942a13084
-// last-edited: 2026-10-20
+// last-edited: 2026-11-07
 
 package server
 
@@ -17,8 +17,9 @@ import (
 // TestMetricsScrape_ExportsPebbleSeriesForMainStore scrapes /metrics through a
 // real NewServer (the production wiring path, not a hand-registered collector)
 // and asserts the pebble_* series appear for the main store. It fails if
-// metrics.Register() stops registering the collector or if NewServer stops
-// calling registerPebbleMetricsSources.
+// Server.AttachMetrics stops registering the collector (metrics.Register(reg) on
+// the App's Provider registry) or if NewServer stops calling
+// registerPebbleMetricsSources.
 func TestMetricsScrape_ExportsPebbleSeriesForMainStore(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()

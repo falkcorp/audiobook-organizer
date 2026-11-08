@@ -1,7 +1,7 @@
 // file: internal/searchcache/cache_patch_cap_metric_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0b6a2e-9d41-4c77-8e15-b2a6c9d07e43
-// last-edited: 2026-09-26
+// last-edited: 2026-11-07
 
 package searchcache
 
@@ -10,27 +10,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 
 const patchCapMetric = "audiobook_organizer_search_cache_patch_cap_rebuilds_total"
 
 const rebuildsMetric = "audiobook_organizer_search_cache_rebuilds_total"
 
-// scrapePatchCapRebuilds reads the counter through the default registry, the
-// one /metrics serves, so the test also proves the counter is registered.
+// scrapePatchCapRebuilds reads the counter through a metricstest registry, so the
+// test also proves the counter is among the families internal/metrics registers.
 func scrapePatchCapRebuilds(t *testing.T) float64 {
 	t.Helper()
 	return scrapeCounter(t, patchCapMetric)
 }
 
-// scrapeCounter reads one unlabelled counter through the default registry.
+// scrapeCounter reads one unlabelled counter through a metricstest registry.
 func scrapeCounter(t *testing.T, name string) float64 {
 	t.Helper()
-	metrics.Register()
-	fams, err := prometheus.DefaultGatherer.Gather()
+	fams, err := metricstest.Registry(t).Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +36,7 @@ func scrapeCounter(t *testing.T, name string) float64 {
 			return f.GetMetric()[0].GetCounter().GetValue()
 		}
 	}
-	t.Fatalf("%s is not registered with the default registry", name)
+	t.Fatalf("%s is not registered by internal/metrics", name)
 	return 0
 }
 

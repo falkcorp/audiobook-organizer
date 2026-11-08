@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
-// last-edited: 2026-09-02
+// last-edited: 2026-11-07
 
 package server
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -51,13 +52,20 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	}
 	t.Cleanup(func() { _ = pebble.Close() })
 
-	// "dedupplugin" + "opregistry" are Included because the dedup-score sink
-	// is installed by the PLUGIN's PostInit (internal/plugins/dedup/register.go),
-	// not by the dedup ServiceDef — it needs the ops registry to queue the
-	// dedup.rescore op. Building only the engine would test a wiring that no
-	// longer exists.
+	// "dedupplugin" is Included and "opregistry" Overridden because the
+	// dedup-score sink is installed by the PLUGIN's PostInit
+	// (internal/plugins/dedup/register.go), not by the dedup ServiceDef — it
+	// needs the ops registry to queue the dedup.rescore op. Building only the
+	// engine would test a wiring that no longer exists. The ops registry is
+	// constructed explicitly, as NewServer does (R1-15 removed its init()
+	// registration).
+	opReg, err := opsregistry.NewService(pebble, nil, opsregistry.NewEventHub())
+	if err != nil {
+		t.Fatalf("ops registry: %v", err)
+	}
 	c := serviceregistry.NewContainer().
-		Include(serviceregistry.KeyDedup, "dedupplugin", "opregistry").
+		Include(serviceregistry.KeyDedup, "dedupplugin").
+		Override("opregistry", opReg).
 		Override(serviceregistry.KeyConfig, cfg).
 		Override(serviceregistry.KeyStore, pebble).
 		Override(serviceregistry.KeyEmbeddingStore, database.NewEmbeddingStore(pebble.DB())).
