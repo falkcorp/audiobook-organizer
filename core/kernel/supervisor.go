@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -340,6 +340,7 @@ type startWindow struct {
 	active   bool
 	gen      uint64 // of the open window: a stale timer callback compares it
 	deadline time.Time
+	moved    bool // extend moved deadline later since begin; kept after close
 	timer    *time.Timer
 	expire   func()
 }
@@ -352,7 +353,7 @@ func (w *startWindow) begin(owner module.ID, d time.Duration, expire func()) (en
 	defer w.mu.Unlock()
 	w.gen++
 	gen := w.gen
-	w.owner, w.active, w.deadline, w.expire = owner, true, time.Now().Add(d), expire
+	w.owner, w.active, w.deadline, w.moved, w.expire = owner, true, time.Now().Add(d), false, expire
 	w.timer = time.AfterFunc(d, func() { w.fire(gen) })
 	return func() { w.close(gen) }
 }
@@ -396,9 +397,18 @@ func (w *startWindow) extend(owner module.ID, d time.Duration) bool {
 		return false
 	}
 	if later := time.Now().Add(d); later.After(w.deadline) {
-		w.deadline = later
+		w.deadline, w.moved = later, true
 	}
 	return true
+}
+
+// wasExtended reports whether the latest window's deadline was moved later by
+// extend. Hooks start one at a time, so after a hook's window closes it is
+// that hook's.
+func (w *startWindow) wasExtended() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.moved
 }
 
 // startCtx is the ctx a hook's Start gets: Run's ctx, cancelled by the start
@@ -437,8 +447,12 @@ func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, *lateStart, erro
 				took := time.Since(began).Round(time.Second)
 				k.log.ErrorContext(ctx, "kernel: hook start exceeded core.lifecycle.start_timeout",
 					"module", h.module, "hook", h.hook.Name, "timeout", startTimeout.String(), "took", took.String())
-				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s, as extended by ExtendStart (after %s): %w",
-					h.hook.Name, startTimeout, took, context.DeadlineExceeded)
+				extended := ""
+				if k.startWin.wasExtended() {
+					extended = ", as extended by ExtendStart"
+				}
+				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: exceeded core.lifecycle.start_timeout %s%s (after %s): %w",
+					h.hook.Name, startTimeout, extended, took, context.DeadlineExceeded)
 			case pending != nil:
 				return started, &lateStart{hook: h, result: pending}, fmt.Errorf("kernel: hook %s start: %w", h.hook.Name, sctx.Err())
 			case err != nil:

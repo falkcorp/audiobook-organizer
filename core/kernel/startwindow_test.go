@@ -1,5 +1,5 @@
 // file: core/kernel/startwindow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f332f38c-075c-4652-8581-6d592721a1fd
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -144,10 +145,20 @@ func TestExtendStart_ExtendsHookStartWindow(t *testing.T) {
 func TestExtendStart_WithoutItTheStartTimesOut(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec, deps := &recorder{}, &depsOf{}
-		alfred := startingModule("alfred", deps, func(ctx context.Context) error { return napping(ctx, 5*time.Minute) })
+		var hasDeadline bool
+		alfred := startingModule("alfred", deps, func(ctx context.Context) error {
+			_, hasDeadline = ctx.Deadline()
+			return napping(ctx, 5*time.Minute)
+		})
 		took, err := runStart(t, rec, supervised(t, rec, alfred))
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Run = %v, want DeadlineExceeded", err)
+		}
+		if hasDeadline {
+			t.Fatal("the hook's ctx has a deadline; the window cannot move one (Hook.Start documents none)")
+		}
+		if strings.Contains(err.Error(), "as extended by ExtendStart") {
+			t.Fatalf("Run = %q claims an extension no step asked for", err)
 		}
 		if took != startTimeout {
 			t.Fatalf("start failed after %s, want %s", took, startTimeout)
@@ -174,6 +185,9 @@ func TestExtendStart_HungStepStillKilledAtItsBudget(t *testing.T) {
 		}
 		if took != sdnotify.StartupStepBudget {
 			t.Fatalf("start failed after %s, want the step budget %s", took, sdnotify.StartupStepBudget)
+		}
+		if !strings.Contains(err.Error(), "as extended by ExtendStart") {
+			t.Fatalf("Run = %q, want it to say the deadline was extended", err)
 		}
 		if !errors.Is(hookErr, context.DeadlineExceeded) {
 			t.Fatalf("the hook's ctx.Err() = %v, want DeadlineExceeded, as a deadline context reports", hookErr)
@@ -251,6 +265,10 @@ func TestExtendStart_WindowIsPerHook(t *testing.T) {
 
 // ExtendStart outside any Start (from Register, or once the app is up) asks
 // the service manager and extends nothing else.
+// Before Run (during Register) a module's ExtendStart reaches the service
+// manager. Once its own Start is not running (after READY) it does not: there
+// is no start timeout left to extend, and EXTEND_TIMEOUT_USEC sent while the
+// unit is deactivating would push TimeoutStopSec out.
 func TestExtendStart_OutsideAStartIsHarmless(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec, steps, deps := &recorder{}, &stepRecorder{}, &depsOf{}
@@ -270,8 +288,38 @@ func TestExtendStart_OutsideAStartIsHarmless(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatalf("Run = %v", err)
 		}
-		if got := steps.list(); len(got) != 2 || got[0] != "register" || got[1] != "after ready" {
-			t.Fatalf("service-manager extensions = %q, want both", got)
+		if got := steps.list(); len(got) != 1 || got[0] != "register" {
+			t.Fatalf("service-manager extensions = %q, want only the Register-time one", got)
+		}
+	})
+}
+
+// A hook's Stop (the deactivating state) never asks the service manager for
+// time, even though the same module extended while it started.
+func TestExtendStart_NotSentDuringStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec, steps, deps := &recorder{}, &stepRecorder{}, &depsOf{}
+		alfred := mod("alfred", func(r *module.Registrar) error {
+			deps.put(r.Deps())
+			r.Hook(module.Hook{
+				Name:  "alfred.a",
+				Start: func(context.Context) error { r.Deps().ExtendStart("start"); return nil },
+				Stop:  func(context.Context) error { r.Deps().ExtendStart("stop"); return nil },
+			})
+			return nil
+		})
+		c := supervised(t, rec, alfred)
+		c.ExtendStart = steps.extend
+		k := mustNew(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		if got := steps.list(); len(got) != 1 || got[0] != "start" {
+			t.Fatalf("service-manager extensions = %q, want only the start-time one", got)
 		}
 	})
 }
