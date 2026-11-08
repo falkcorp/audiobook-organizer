@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/lissen_endpoints.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b7d52e0-9a41-4c68-b1f5-6e2a8c04d917
 // last-edited: 2026-11-07
 
@@ -7,7 +7,6 @@ package abs
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -27,6 +26,9 @@ import (
 // bound; this one exists because every id costs a store point-get and the whole
 // batch is hydrated into full expanded items in one response. Lissen sends the
 // ids of one search result's series books, so 200 is far above real use.
+// lissenLog routes this file through internal/logger (the log-injection barrier).
+var lissenLog = logger.New("abs")
+
 const absBatchGetMaxItems = 200
 
 // absBatchGetMaxBodyBytes caps the request body read. 200 ULID-sized ids are
@@ -90,7 +92,7 @@ func (h *Handler) LibraryStats(c *gin.Context) {
 	if err != nil {
 		// The genre half is complete and is all Lissen reads; degrade the author
 		// half to its zero value rather than failing the Genre view.
-		slog.Warn("abs: library stats: contributor index unavailable; omitting author figures", "err", err)
+		lissenLog.Warn("abs: library stats: contributor index unavailable; omitting author figures: %v", err)
 		respondJSON(c, http.StatusOK, out)
 		return
 	}
@@ -161,7 +163,7 @@ func (h *Handler) ItemsBatchGet(c *gin.Context) {
 			continue
 		}
 		if err != nil {
-			slog.Warn("abs: items batch get: could not resolve item id", "id", logger.SanitizeLogValue(id), "err", err)
+			lissenLog.Warn("abs: items batch get: could not resolve item id %s: %v", logger.SanitizeLogValue(id), err)
 			respondError(c, http.StatusInternalServerError, "could not resolve library items")
 			return
 		}
@@ -179,7 +181,7 @@ func (h *Handler) ItemsBatchGet(c *gin.Context) {
 	}
 	books, err := h.library.GetBooksByIDs(bookIDs)
 	if err != nil {
-		slog.Warn("abs: items batch get: could not load books", "count", len(bookIDs), "err", err)
+		lissenLog.Warn("abs: items batch get: could not load %d books: %v", len(bookIDs), err)
 		respondError(c, http.StatusInternalServerError, "could not load library items")
 		return
 	}
@@ -187,7 +189,7 @@ func (h *Handler) ItemsBatchGet(c *gin.Context) {
 	// /api/items/:id answers it 404 (errRedirectedSyncID), so it is skipped too.
 	views, err := h.loadItemViews(c.Request.Context(), books)
 	if err != nil {
-		slog.Warn("abs: items batch get: could not hydrate items", "count", len(books), "err", err)
+		lissenLog.Warn("abs: items batch get: could not hydrate %d items: %v", len(books), err)
 		respondError(c, http.StatusInternalServerError, "could not load library items")
 		return
 	}
