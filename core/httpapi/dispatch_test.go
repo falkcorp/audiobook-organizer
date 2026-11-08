@@ -1,5 +1,5 @@
 // file: core/httpapi/dispatch_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 10f67bda-3d92-4798-b55c-741cfba03165
 // last-edited: 2026-11-07
 
@@ -10,10 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -478,6 +480,51 @@ func TestRouter_RegistrationAfterBuildRefused(t *testing.T) {
 	}
 	if n := strings.Count(logged.String(), "registration after Router.Build ignored"); n != 4 {
 		t.Fatalf("logged %d late registrations, want 4:\n%s", n, logged.String())
+	}
+}
+
+// TestRouter_ConcurrentLateRegistration is the verification review's
+// MINOR-1: a module goroutine started in Register may call Handle while the
+// kernel runs Build. Under -race this was a data race on the built flag and
+// the route list; every call now either lands before Build or is refused.
+func TestRouter_ConcurrentLateRegistration(t *testing.T) {
+	r := NewRouter(Options{}, Deps{Log: slog.New(slog.DiscardHandler)})
+	g := r.ModuleGroup("batcave")
+	names := make([]string, 50)
+	for i := range names {
+		names[i] = fmt.Sprintf("gadget%d", i)
+	}
+	r.AllowPublic("batcave", names...)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, n := range names {
+		wg.Go(func() {
+			<-start
+			Handle(g, Route{Method: http.MethodGet, Path: fmt.Sprintf("/gadgets/n%d", i), Name: n, Perm: rbac.Public}, noop)
+			r.AllowPublic("batcave", n)
+			if err := r.Claim("batcave", fmt.Sprintf("/batcave/n%d/", i)); err != nil && !errors.Is(err, errBuilt) {
+				t.Errorf("Claim: %v", err)
+			}
+		})
+	}
+	close(start)
+	h, err := r.Build()
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// Every route Build saw is served; every other one was refused.
+	served := 0
+	for ri := range r.Routes() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, ri.Pattern, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("listed route %s = %d, want 200", ri.Pattern, rec.Code)
+		}
+		served++
+	}
+	if served > len(names) {
+		t.Fatalf("%d routes listed, want at most %d", served, len(names))
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/httpapi/openapi.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 586f0310-28e5-4cc9-9e26-2a4a520b7395
 // last-edited: 2026-11-07
 
@@ -41,7 +41,7 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 		types[name], schemas[name] = t, s
 	}
 	var ops []openapi.Operation
-	for _, e := range r.routes {
+	for _, e := range r.routeSnapshot() {
 		if e.info.Owner != owner || e.info.Kind != RouteKindNative || len(e.errs) > 0 {
 			continue
 		}
