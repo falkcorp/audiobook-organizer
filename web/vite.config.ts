@@ -1,16 +1,54 @@
 // file: web/vite.config.ts
-// version: 1.9.1
+// version: 1.10.0
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 import { defineConfig } from 'vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import babel from '@rolldown/plugin-babel';
 import path from 'path';
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { mediacoreBuildPlugin, resolveBuildId, type CleanCommit } from './build-id';
+
+// The clean-checkout branch of the UI build ID rule (07 §7.6.3): the commit's
+// short sha and unix time, or null when the tree is dirty (`git status
+// --porcelain --untracked-files=no` prints anything, so a stray untracked file
+// never changes the rule) or git or .git is absent, as in the Docker context.
+function cleanCommit(): CleanCommit | null {
+  const git = (...args: string[]) =>
+    execFileSync('git', args, {
+      cwd: import.meta.dirname,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  try {
+    if (git('status', '--porcelain', '--untracked-files=no') !== '') return null;
+    const shortSha = git('rev-parse', '--short', 'HEAD');
+    const unixTime = Number(git('log', '-1', '--format=%ct'));
+    if (!shortSha || !Number.isInteger(unixTime)) return null;
+    return { shortSha, unixTime };
+  } catch {
+    return null;
+  }
+}
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
+    // The UI build ID is evaluated once, here, by `vite build` only: a bad
+    // BUILD_ID fails the build before it bundles anything. `vite serve` keeps
+    // index.html's `dev` placeholder, which never triggers the reload rule.
+    mediacoreBuildPlugin(
+      command === 'build'
+        ? resolveBuildId({
+            env: process.env.BUILD_ID,
+            cleanCommit,
+            now: () => new Date(),
+            randomHex: (n) => randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n),
+          })
+        : null
+    ),
     react(),
     // React Compiler 1.0, via the babel path. plugin-react 6 also exposes a
     // native `compiler: true` option backed by the Rust oxc port, but that is
@@ -87,4 +125,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
