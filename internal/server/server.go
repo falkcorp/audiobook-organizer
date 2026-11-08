@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.114.7
+// version: 2.114.8
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"errors"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -666,6 +667,17 @@ func newBaseRouter() *gin.Engine {
 	router.RedirectTrailingSlash = false
 	router.RedirectFixedPath = false
 	return router
+}
+
+// ActivityLogWriter is the activity feed's line writer, which tees each line
+// to stdout and parses it into the Activity Log, or nil when the activity
+// service is off. books points the App's log output at it (R1-15) until
+// R1-18's activity tap replaces the tee.
+func (s *Server) ActivityLogWriter() io.Writer {
+	if s.activityWriter == nil {
+		return nil
+	}
+	return s.activityWriter
 }
 
 // LegacyHandler is the gin engine books mounts with Registrar.MountLegacy
