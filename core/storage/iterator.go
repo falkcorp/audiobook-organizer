@@ -323,12 +323,25 @@ func (s *Snapshot) Scan(ctx context.Context, opts ScanOptions) iter.Seq2[KV, err
 	}
 }
 
+// scanCursor is the part of *Iterator that yieldScan drives. Value returns
+// nil and records an error that Err reports when the read fails.
+type scanCursor interface {
+	First() bool
+	Last() bool
+	Next() bool
+	Prev() bool
+	Key() []byte
+	Value() []byte
+	Err() error
+	Close() error
+}
+
 // yieldScan drives a fresh iterator for a Scan, in opts' direction and up to
 // opts.Limit, then closes it. The iteration's error, or else the close's
 // (Pebble reports a failed read through Close too), is yielded once, last.
 // After the consumer stopped nothing is listening, so an error is logged
 // instead of yielded.
-func yieldScan(it *Iterator, opts ScanOptions, log *slog.Logger, yield func(KV, error) bool) {
+func yieldScan(it scanCursor, opts ScanOptions, log *slog.Logger, yield func(KV, error) bool) {
 	var ok bool
 	if opts.Reverse {
 		ok = it.Last()
@@ -337,7 +350,13 @@ func yieldScan(it *Iterator, opts ScanOptions, log *slog.Logger, yield func(KV, 
 	}
 	stopped := false
 	for n := 0; ok && (opts.Limit <= 0 || n < opts.Limit); n++ {
-		if !yield(KV{Key: it.Key(), Value: it.Value()}, nil) {
+		v := it.Value()
+		if it.Err() != nil {
+			// The value read failed: yield its error below, never this
+			// key with a nil value, which reads as an empty row.
+			break
+		}
+		if !yield(KV{Key: it.Key(), Value: v}, nil) {
 			stopped = true
 			break
 		}
