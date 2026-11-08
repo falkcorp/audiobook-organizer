@@ -37,9 +37,12 @@ type Sequence struct {
 }
 
 // seqLease is one durable lease [next, limit). The zero lease is empty.
+// limit is atomic because AdvancePast zeroes a lease that a Next may already
+// have loaded: Next checks it after taking an ID, so a stale lease yields
+// nothing.
 type seqLease struct {
 	next  atomic.Uint64
-	limit uint64
+	limit atomic.Uint64
 }
 
 func newSequence(ks Keyspace, key []byte, lease uint64) *Sequence {
@@ -58,7 +61,10 @@ func (s *Sequence) Next(ctx context.Context) (uint64, error) {
 			return 0, err
 		}
 		l := s.cur.Load()
-		if n := l.next.Add(1) - 1; n < l.limit {
+		if h := s.ks.db.hooks.seqLoaded; h != nil {
+			h()
+		}
+		if n := l.next.Add(1) - 1; n < l.limit.Load() {
 			return n, nil
 		}
 		if err := s.refill(ctx, l); err != nil {
@@ -92,6 +98,9 @@ func (s *Sequence) AdvancePast(ctx context.Context, n uint64) error {
 	}
 	// The dropped lease's unissued IDs are skipped, never reissued: the next
 	// refill starts at the stored mark, which is past both n and that lease.
+	// Its limit is zeroed first, so a Next that loaded it before the swap
+	// and takes its ID after finds it spent and refills (review NIT-2).
+	s.cur.Load().limit.Store(0)
 	s.cur.Store(&seqLease{})
 	return nil
 }
@@ -105,13 +114,14 @@ func (s *Sequence) refill(ctx context.Context, l *seqLease) error {
 	}
 	var start uint64
 	hw, err := s.commitHW(ctx, func(hw uint64) uint64 {
-		start = max(hw, l.limit, 1)
+		start = max(hw, l.limit.Load(), 1)
 		return start + s.lease
 	})
 	if err != nil {
 		return err
 	}
-	nl := &seqLease{limit: hw}
+	nl := &seqLease{}
+	nl.limit.Store(hw)
 	nl.next.Store(start)
 	s.cur.Store(nl)
 	return nil
