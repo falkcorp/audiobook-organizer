@@ -10,14 +10,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/crashmatrix"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // TestBootCrashMatrix_ABO is ABO's instance of the boot crash matrix
@@ -67,19 +70,23 @@ func TestBootCrashMatrix_ABOCoversEveryWriter(t *testing.T) {
 			observed[l] = true
 		}
 	}
-	for _, want := range []string{
-		"storage.fresh.batch", "storage.checkpoint.pebble", "storage.checkpoint.statefiles",
-		"storage.checkpoint.record", "storage.step.batch", "storage.finish.batch", "storage.checkpoint.complete",
-	} {
-		if !observed[want] {
-			t.Errorf("no ABO fixture's fault-free boot reaches %s, so the matrix never breaks it", want)
-		}
+	missing, stale := crashmatrix.Unobserved(crashmatrix.Rows(), observed, aboUnreachedLabels())
+	for _, l := range missing {
+		t.Errorf("label %s: no ABO fixture's fault-free boot reaches it, so the matrix never breaks that writer", l)
+	}
+	for _, l := range stale {
+		t.Errorf("allowlist entry %s: an ABO fixture reaches it, or no writer-table row lists it; drop it", l)
 	}
 }
 
 // aboCrashFixtures are the matrix's starting states, each a state directory
 // holding an encryption key and a store directory beside it, as an install
-// has them: fresh, a HEAD store at LegacyCap, a HEAD store at books v58.
+// has them: fresh; a HEAD store at LegacyCap and at books v58; the first of
+// those with a record-less checkpoint directory (P4a's sweep), killed before
+// its first step's batch (the next boot reuses the open checkpoint) and
+// before its checkpoint's completion (the next boot completes the stranded
+// attempt); and a HEAD store holding core keys without an install marker,
+// which every boot refuses after P2 (the failed boot's storage close).
 func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 	t.Helper()
 	mk := func(name string, write func(dbPath string)) crashmatrix.Fixture {
@@ -93,10 +100,28 @@ func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 		}
 		return f
 	}
+	atCap := func(p string) { headStoreAt(t, p, nil) }
+	garbage := mk("checkpoint-garbage", atCap)
+	cp := filepath.Join(filepath.Dir(garbage.DBDir), ".mediacore-checkpoints", "20260101T000000Z-deadbeef", "db")
+	require.NoError(t, os.MkdirAll(cp, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cp, "OPTIONS-000001"), []byte("riddler"), 0o600))
+	reused := mk("checkpoint-reused", atCap)
+	reused.Mutate = crashmatrix.KillAt(t, reused, aboStorageBuild(reused), "storage.step.batch", 0)
+	stranded := mk("attempt-stranded", atCap)
+	stranded.Mutate = crashmatrix.KillAt(t, stranded, aboStorageBuild(stranded), "storage.checkpoint.complete", 0)
+	foreign := mk("foreign-keys", func(p string) {
+		headStoreAt(t, p, nil)
+		db, err := pebble.Open(p, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
+		require.NoError(t, err)
+		require.NoError(t, db.Set([]byte("c/rogue"), []byte("x"), pebble.Sync))
+		require.NoError(t, db.Close())
+	})
+	foreign.Refusal = storage.ErrForeignKeys
 	return []crashmatrix.Fixture{
 		mk("fresh", nil),
-		mk("head-at-legacycap", func(p string) { headStoreAt(t, p, nil) }),
+		mk("head-at-legacycap", atCap),
 		mk("head-at-v58", func(p string) { headStoreAtVersion(t, p, 58, nil) }),
+		garbage, reused, stranded, foreign,
 	}
 }
 
@@ -127,3 +152,23 @@ func (booksStorage) Manifest() module.Manifest {
 }
 
 func (booksStorage) Register(*module.Registrar) error { return nil }
+
+// aboUnreachedLabels are the writer-table labels no ABO fixture reaches at
+// R1, each with the reason. Core's own matrix (core/examples/hello) breaks
+// every one of them over hello.
+func aboUnreachedLabels() map[string]string {
+	const noSwap = "ABO stages no restore or reset at R1 (R1-25 moves books' resets onto the KindReset swap and adds its fixtures)"
+	out := map[string]string{
+		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
+		"storage.levelstep.rollback": "books declares no level step at R1",
+		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
+	}
+	for _, r := range crashmatrix.Rows() {
+		for _, l := range r.Labels {
+			if strings.HasPrefix(l, "swap.") {
+				out[l] = noSwap
+			}
+		}
+	}
+	return out
+}

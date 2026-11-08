@@ -328,6 +328,41 @@ jobs:
           path: ~/.cache/audiobook-organizer-tests/r0
           key: r0-release-v0.223.0-acbe9e096b04d80bd1a49d8e0ecc1bf7dc8171e004ea26cf795513e881ba1e6d
 
+      # The archive and its checksum are the ones r0store_test.go pins
+      # (r0Tag, r0ArchiveSHA256["Linux_x86_64"]); the test checks the
+      # checksum again. If the release download fails, the R0 binary is built
+      # from the R0 tag instead (the brief allows either) and handed to the
+      # test through ABO_R0_BINARY.
+      - name: Fetch the R0 binary (release archive, else built from the tag)
+        env:
+          R0_TAG: v0.223.0
+          R0_ARCHIVE: audiobook-organizer_0.223.0_Linux_x86_64.tar.gz
+          R0_SHA256: acbe9e096b04d80bd1a49d8e0ecc1bf7dc8171e004ea26cf795513e881ba1e6d
+        run: |
+          set -euo pipefail
+          dir="${HOME}/.cache/audiobook-organizer-tests/r0/${R0_TAG}"
+          mkdir -p "$dir"
+          verified() { echo "${R0_SHA256}  ${dir}/${R0_ARCHIVE}" | sha256sum -c --status - 2>/dev/null; }
+          if ! verified; then
+            curl -fsSL --retry 6 --retry-delay 15 --retry-max-time 90 --retry-all-errors \
+              -o "${dir}/${R0_ARCHIVE}" \
+              "https://github.com/falkcorp/audiobook-organizer/releases/download/${R0_TAG}/${R0_ARCHIVE}" \
+              || rm -f "${dir}/${R0_ARCHIVE}"
+          fi
+          if verified; then
+            exit 0
+          elif [ -e "${dir}/${R0_ARCHIVE}" ]; then
+            echo "::error::the R0 archive does not match its pinned checksum"; exit 1
+          fi
+          echo "::warning::the R0 release download failed; building the R0 binary from ${R0_TAG}"
+          # Nothing to cache: an empty directory would take the key forever.
+          rm -rf "$dir"
+          git fetch --depth 1 origin "refs/tags/${R0_TAG}:refs/tags/${R0_TAG}"
+          git worktree add --detach "${RUNNER_TEMP}/r0src" "${R0_TAG}"
+          mkdir -p "${RUNNER_TEMP}/r0"
+          (cd "${RUNNER_TEMP}/r0src" && go build -o "${RUNNER_TEMP}/r0/audiobook-organizer" .)
+          echo "ABO_R0_BINARY=${RUNNER_TEMP}/r0/audiobook-organizer" >> "$GITHUB_ENV"
+
       - name: Boot crash matrix and R0 rollback (must not skip)
         run: |
           set -euo pipefail
