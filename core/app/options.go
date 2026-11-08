@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
@@ -95,6 +95,18 @@ type Options struct {
 	// makes the pipeline slog's default (R1-18 replaces that with a
 	// Logging.Tap and the file output of 05-logging §11 item 1).
 	LogOutput io.Writer
+	// ProcessDefaults says the composition root will call
+	// InstallProcessDefaults for this App (05-logging §3). New then installs
+	// the OTel SDK's logger and error handler, the value-dropping sink and
+	// the rate-limited handler InstallProcessDefaults lists, before it builds
+	// the metrics Provider: building the resource and any OTLP exporter makes
+	// the SDK read OTEL_* from the environment and report bad input, raw,
+	// through those two globals, and OTEL_EXPORTER_OTLP_HEADERS can carry a
+	// credential. New fails with ErrProcessDefaultsTaken when another App
+	// holds them and puts them back when it fails. false = the two are
+	// installed by InstallProcessDefaults, after the Provider exists (tests,
+	// and apps that never install the defaults). Describe ignores it.
+	ProcessDefaults bool
 
 	// R1Listen opens the listener of 06 §6.5.2 start step (7) in release R1,
 	// in place of httpapi.Listen: the kernel still decides when it opens
