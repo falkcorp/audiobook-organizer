@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
 // last-edited: 2026-11-07
 
@@ -9,6 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -233,24 +236,80 @@ func TestLegacyManifest_OwnerGuardsMatchRegistrations(t *testing.T) {
 	}
 }
 
-// TestOwnerGateOnlyThroughOwnerCredRoute: no file of this package calls
-// ownerGateWhenOwnerSet except ownerCredRoute, so s.ownerRoutes sees every
-// owner-gated route.
+// ownerGateViolations reports, for one parsed file of this package, every
+// use of the owner gate that bypasses ownerCredRoute's recording: any
+// reference to ownerGateWhenOwnerSet (called or not, on any receiver, method
+// values and expressions included) outside the ownerCredRoute function, and
+// any reference to RequireOwner outside owner_routes.go.
+func ownerGateViolations(fset *token.FileSet, name string, f *ast.File) []string {
+	var out []string
+	for _, decl := range f.Decls {
+		fn, _ := decl.(*ast.FuncDecl)
+		inOwnerCredRoute := fn != nil && fn.Name.Name == "ownerCredRoute" && fn.Recv != nil
+		ast.Inspect(decl, func(n ast.Node) bool {
+			// Every use is an identifier: the Sel of a selector (s.X, a method
+			// value or expression) or a bare name. A declaration's own name
+			// is not a use.
+			id, ok := n.(*ast.Ident)
+			if !ok || (fn != nil && id == fn.Name) {
+				return true
+			}
+			switch {
+			case id.Name == "ownerGateWhenOwnerSet" && !inOwnerCredRoute:
+				out = append(out, fmt.Sprintf("%s: ownerGateWhenOwnerSet outside ownerCredRoute", fset.Position(id.Pos())))
+			case id.Name == "RequireOwner" && name != "owner_routes.go":
+				out = append(out, fmt.Sprintf("%s: RequireOwner outside owner_routes.go", fset.Position(id.Pos())))
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// TestOwnerGateOnlyThroughOwnerCredRoute: no non-test file of this package
+// reaches the owner gate except through ownerCredRoute, so s.ownerRoutes
+// records every owner-gated route (review MINOR-N2: a go/ast scan, not a
+// text count).
 func TestOwnerGateOnlyThroughOwnerCredRoute(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
+	fset := token.NewFileSet()
+	scanned := 0
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(name)
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
 		require.NoError(t, err)
-		n := strings.Count(string(b), "s.ownerGateWhenOwnerSet()")
-		if name == "owner_routes.go" {
-			assert.Equal(t, 2, n, "owner_routes.go: only ownerCredRoute's two uses")
-			continue
-		}
-		assert.Zero(t, n, "%s calls ownerGateWhenOwnerSet directly; register the route with ownerCredRoute", name)
+		scanned++
+		assert.Empty(t, ownerGateViolations(fset, name, f), "register owner-gated routes with ownerCredRoute")
+	}
+	assert.Greater(t, scanned, 50, "too few files scanned; the glob is broken")
+}
+
+// TestOwnerGateViolations_CatchesBypasses proves the scan on the forms a text
+// count misses: a bound method value, another receiver, a method expression
+// and a direct RequireOwner call, each outside ownerCredRoute.
+func TestOwnerGateViolations_CatchesBypasses(t *testing.T) {
+	const src = `package server
+
+func (s *Server) wireArkham(g *gin.RouterGroup, server *Server) {
+	og := s.ownerGateWhenOwnerSet
+	g.POST("/a", og())
+	g.POST("/b", server.ownerGateWhenOwnerSet())
+	g.POST("/c", (*Server).ownerGateWhenOwnerSet(s))
+	g.POST("/d", servermiddleware.RequireOwner(nil, "", nil))
+}
+
+func (s *Server) ownerCredRoute() { _ = s.ownerGateWhenOwnerSet() }
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "wire_arkham.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	got := ownerGateViolations(fset, "wire_arkham.go", f)
+	assert.Len(t, got, 4, "%v", got)
+	for _, line := range []string{":4:", ":6:", ":7:", ":8:"} {
+		assert.True(t, slices.ContainsFunc(got, func(v string) bool { return strings.Contains(v, line) }), "no violation at line %s: %v", line, got)
 	}
 }
 
@@ -459,8 +518,8 @@ func TestLegacyMount_MuxAndGinAgreeOnEncodedSlash(t *testing.T) {
 // SPA's page (06 §6.10 TestReservedSegmentsDisjointFromNonSPA, request half).
 // Every manifest path is tried with every method gin has no route for.
 // Headers are not compared: gin's security headers and Basic gate are
-// perimeter stages 6 and 8, which R1-17 puts in front of the mux. OPTIONS is
-// the one known status difference (stage 5, also R1-17).
+// perimeter stages 5 and 8, which R1-17 puts in front of the mux. OPTIONS is
+// the one known status difference (CORS, stage 6, also R1-17).
 func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 	for _, abs := range absModes() {
 		t.Run(absName(abs), func(t *testing.T) {
@@ -489,12 +548,12 @@ func TestLegacyMount_UnmatchedMethodMatchesGin(t *testing.T) {
 					if m == http.MethodOptions {
 						// Known difference until R1-17 (review M1): gin's CORS
 						// middleware answers every OPTIONS 204 before routing;
-						// core has no CORS stage yet (05-http-api §4.2 stage 5),
+						// core has no CORS stage yet (05-http-api §4.2 stage 6),
 						// so the mount answers it as an unmatched method. R1-17
-						// puts stage 5 in front of the mux and this branch
+						// puts stage 6 in front of the mux and this branch
 						// becomes the plain comparison below.
 						assert.Equal(t, http.StatusNoContent, g.Code, "gin OPTIONS %s", p)
-						assert.NotEqual(t, http.StatusNoContent, mt.Code, "OPTIONS %s now matches gin: R1-17's stage 5 landed, drop this branch", p)
+						assert.NotEqual(t, http.StatusNoContent, mt.Code, "OPTIONS %s now matches gin: R1-17's stage 6 landed, drop this branch", p)
 						continue
 					}
 					assert.Equal(t, g.Code, mt.Code, "%s %s", m, p)
@@ -569,11 +628,12 @@ func TestLegacyMount_FallbackNeverRunsARouteHandler(t *testing.T) {
 				assert.Equal(t, g.Body.String(), mt.Body.String(), "GET %s", p)
 			}
 			if abs {
-				p := "/public/session/../track/1"
-				g, mt := probe(f.srv.router, http.MethodGet, p, ""), probe(h, http.MethodGet, p, "")
-				assert.False(t, notARouteHandler(g), "gin alone no longer routes %s; the hole this test guards is gone from the fixture", p)
-				assert.Equal(t, http.StatusNotFound, mt.Code, p)
-				assert.Equal(t, legacyNotFoundBody, mt.Body.String(), p)
+				for _, p := range []string{"/public/session/../track/1", "/public%2Fsession%2Fx%2Ftrack%2F1"} {
+					g, mt := probe(f.srv.router, http.MethodGet, p, ""), probe(h, http.MethodGet, p, "")
+					assert.False(t, notARouteHandler(g), "gin alone no longer routes %s; the hole this test guards is gone from the fixture", p)
+					assert.Equal(t, http.StatusNotFound, mt.Code, p)
+					assert.Equal(t, legacyNotFoundBody, mt.Body.String(), p)
+				}
 			}
 		})
 	}
