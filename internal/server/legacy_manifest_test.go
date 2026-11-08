@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
 // last-edited: 2026-11-08
 

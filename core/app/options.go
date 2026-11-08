@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
