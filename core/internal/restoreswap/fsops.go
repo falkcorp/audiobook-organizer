@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/fsops.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 441df42a-91a3-4c8c-ad83-3f4a17489cdf
 // last-edited: 2026-11-08
 
@@ -171,14 +171,16 @@ func renameSynced(fs vfs.FS, src, dst string) error {
 // one of them: an older binary with no P0a that created a store at an empty
 // live path, an operator's copy. They are twins only when they are two
 // links of one file: the same inode to Lstat, neither a directory, in two
-// directories (Stat of the parents, symlinks followed, differs). Two paths
+// directories (Stat of the parents, symlinks followed, differs). Lstat, not
+// Stat, of each name: a symlink at the source naming the destination file
+// would otherwise be its twin, and mv would discard the only copy. Two paths
 // to one directory entry (a symlinked ancestor, a case-insensitive
 // spelling) are the same inode as well, but one link: discarding "the
 // second name" would delete the only one. Every rename of the swap moves an
 // item to another directory, so two links in one directory are refused too.
-// A directory is never a twin: one bind-mounted into a second parent is the
-// same inode under two different parents, and RemoveAll of either name
-// empties both.
+// A directory is never a twin: one under two parents (a bind mount, or a
+// macOS firmlink such as /Users and /System/Volumes/Data/Users) is the same
+// inode with parents that differ, and RemoveAll of either name empties both.
 // ghost is ignored, so no reasoning about what "cannot" write a path ever
 // discards the only copy of an original.
 //
