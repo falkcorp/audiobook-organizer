@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -314,24 +314,15 @@ func (s *Server) ownerCredRoute() { _ = s.ownerGateWhenOwnerSet() }
 }
 
 // booksMount mounts the real engine in a core router as books' legacy mount,
-// with the claims, top segments and redirects the composition root will pass
-// (the claims are derived here from the manifest; R1-15 declares them).
+// with the claims, top segments and redirects internal/books declares
+// (LegacyPrefixes, LegacyTopSegments, LegacySPAShared, LegacyRedirects).
 func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handler) {
 	t.Helper()
 	manifest, err := f.srv.LegacyManifest()
 	require.NoError(t, err)
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
 	r.CoreGroup()
-	claims := map[string]bool{}
-	for _, lr := range manifest {
-		segs := strings.Split(strings.TrimPrefix(lr.GinPath, "/"), "/")
-		if segs[0] == "api" {
-			claims["/api/"+segs[1]+"/"] = true
-			continue
-		}
-		claims["/"+segs[0]+"/"] = true
-	}
-	for c := range claims {
+	for _, c := range LegacyPrefixes(config.AppConfig.ABSAPIEnabled) {
 		require.NoError(t, r.Claim("books", c))
 	}
 	r.AllowAuthMethods("books", absAuthMethod)
@@ -339,8 +330,8 @@ func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handle
 		Owner: "books", Handler: f.srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
 		Routes:      slices.Values(manifest),
 		Redirects:   f.srv.LegacyRedirects(),
-		TopSegments: []string{"ping", "status", "logout", "public", "socket.io", "auth", "health", "metrics"},
-		SPAShared:   []string{"login"},
+		TopSegments: LegacyTopSegments(),
+		SPAShared:   LegacySPAShared(),
 	}))
 	h, err := r.Build()
 	require.NoError(t, err)

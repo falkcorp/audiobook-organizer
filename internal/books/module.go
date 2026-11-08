@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-08
 
@@ -58,20 +58,6 @@ const absAuthMethod auth.Method = "books.abs"
 // Module did not build.
 var errNotBooks = errors.New("books: not the module books.Module returned")
 
-// topSegments are the mount's top-level server paths (03 §3.6): HEAD's
-// nonSPASegments (internal/server spa_fallback.go), the first segments whose
-// unmatched paths 404 instead of serving the SPA shell. Each is also a
-// declared legacy prefix, so an unmatched path under it gets the legacy 404
-// HEAD's NoRoute answered, whether or not the ABS surface registers routes
-// there (06 §6.5.1 P7 requires every TopSegments entry to be declared).
-func topSegments() []string {
-	return []string{"ping", "status", "logout", "public", "socket.io", "auth", "health", "metrics"}
-}
-
-// spaShared are the top-level segments the mount shares with shell pages:
-// "login" (POST /login is ABS's, GET /login the page; 05-http-api §3.5).
-func spaShared() []string { return []string{"login"} }
-
 // Module returns books for the composition root. store is the store serve's
 // pre-server steps opened (MOD3-1); R1-23 moves the open into the kernel and
 // drops the argument. Module does no work: it reads whether the ABS surface
@@ -98,7 +84,8 @@ type booksModule struct {
 }
 
 // Manifest is books' static declaration. It is pure: the legacy prefixes
-// follow from the ABS flag Module captured.
+// (server.LegacyPrefixes: every route's subtree, every top segment and
+// "login") follow from the ABS flag Module captured.
 func (m *booksModule) Manifest() module.Manifest {
 	return module.Manifest{
 		ID:             ID,
@@ -106,36 +93,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		DisplayName:    "Audiobooks",
 		MinCoreVersion: minCoreVersion,
 		DefaultEnabled: true,
-		LegacyPrefixes: legacyPrefixes(m.abs),
+		LegacyPrefixes: server.LegacyPrefixes(m.abs),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
-}
-
-// legacyPrefixes are the claims of books' gin mount (05-http-api §4.9): the
-// subtree of every legacy route's first segment ("/ping/", which also covers
-// "/ping") or, under /api, of its second ("/api/v1/"); every top segment and
-// SPA-shared segment; and "/socket.io/", where HEAD answered the Engine.IO
-// probe with its legacy 404 and no route is registered (seams.d/R1-15.md).
-func legacyPrefixes(abs bool) []string {
-	set := map[string]bool{}
-	for _, lr := range server.LegacyRoutes(abs) {
-		segs := strings.Split(strings.TrimPrefix(lr.GinPath, "/"), "/")
-		if segs[0] == "api" && len(segs) > 1 {
-			set["/api/"+segs[1]+"/"] = true
-			continue
-		}
-		set["/"+segs[0]+"/"] = true
-	}
-	for _, seg := range slices.Concat(topSegments(), spaShared()) {
-		set["/"+seg+"/"] = true
-	}
-	out := make([]string, 0, len(set))
-	for p := range set {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // reservedAPINamespaces are the second segments under /api of ABO's
@@ -201,8 +162,8 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		ServesSPA:   true,
 		Routes:      slices.Values(routes),
 		Redirects:   srv.LegacyRedirects(),
-		TopSegments: topSegments(),
-		SPAShared:   spaShared(),
+		TopSegments: server.LegacyTopSegments(),
+		SPAShared:   server.LegacySPAShared(),
 	})
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{
