@@ -74,6 +74,10 @@ const rootModule = "core"
 // this empty key, and reach taps with an empty Record.Module.
 const processModule = ""
 
+// processKey names the process default logger in Levels keys, where its empty
+// module cannot: "process.<subsystem>" (scope).
+const processKey = "process"
+
 // primarySink is the primary output's name in Counters().Dropped; Tap refuses
 // it as a tap name.
 const primarySink = "primary"
@@ -336,7 +340,15 @@ func (l *Logging) Redactor() *Redactor { return l.redactor }
 func (l *Logging) scope(module, subsystem string) *scope {
 	key := module
 	if subsystem != "" {
-		key = module + "." + subsystem
+		// The process default logger has no module, so its subsystems (a
+		// legacy *slog.Logger that adds a subsystem attribute) are keyed
+		// "process.<subsystem>": Levels["process.scanner"]. Levels["core"]
+		// does not reach them, nor does a module entry.
+		if module == processModule {
+			key = processKey + "." + subsystem
+		} else {
+			key = module + "." + subsystem
+		}
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
