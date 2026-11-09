@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.35 -->
+<!-- version: 10.78.36 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-09 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,401 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **PLATFORM-CORE-F3-GATE-STATUS** When F3 moves the Basic gate into
+      core's stage 8 and deletes the perimeter shim, check that a request the
+      gate refuses on an answer core writes itself (the `/api` redirect, a
+      legacy-shape or problem 404, a 405) is logged by stage 4 and counted by
+      stage 2 with the 401 the client got. Since R1-17 they record core's own
+      status for it (R1-17 deviation 15): the shim wraps the kernel's
+      handler, so it rewrites the status after stages 2 and 4 recorded it.
+      The byte count is core's too, although the client got none of core's
+      body: stage 2's `http.server.response.body.size` histogram and the
+      span's `http.response.body.size`, and stage 4's `bytes`.
+      Accepted until F3, because the earlier fixes cost more: a new exported
+      httpapi name for the outer writer to report the status it sent (the
+      code contract forbids it), or ABO writing core's internal `State`. Add
+      a stage 4 test for the refused case when the gate moves. The shim
+      also gives the gate's 401 back the `Vary: Origin` that stage 9 deletes
+      under gzip; once the gate is stage 8, its 401 must keep
+      `Vary: Origin` whenever stage 6 allowed the origin (the "gated, gzip"
+      cases of `TestPerimeter_ParityWithHEAD` check it).
+
+- [ ] **batchpoller is never built in production** (no `Groups` since it was added). Decide whether to enable it (F5-18 or an owner call).
+  - Evidence: `internal/server/batch_poller_register.go`'s def has never carried `Groups` (`git log -S'Groups:'` finds no commit that added them). HEAD's group-based container therefore resolved 45 names with DatabasePath set and 41 without, while an include-everything container resolves 46; the extra name is `batchpoller`. `wireServerFromContainer`'s `TryGet[*BatchPoller]` always misses, so `s.batchPoller` is nil and `registerBatchPollerHandlers` never runs.
+  - If enabled, with OpenAI parsing configured, production would start registering batch handlers HEAD never registered: `author_dedup`, `author_review`, `pipeline`, `aijobs` (with its reconciler and tracker) and `embed_async`.
+  - R1-34's `serviceDefs` (`internal/server/registry_wire.go`) filters the def out by name to keep the production set what HEAD built; enabling it means deleting that filter and the matching assertion in `TestServiceDefs_BuildsHEADSet`. 06 §6.11.2 lists this as a latent defect the explicit list fixes; the row is a refactor and did not change behaviour.
+
+- [ ] **PLATFORM-CORE-R1-19-BINARYID-CROSS-BINARY** Prove `TestBinaryIDDistinguishesBuilds`'
+      second half, "two binaries with different code have different IDs", across two
+      real executables. R1-19's `core/app/binaryid_test.go` proves `BinaryID` is
+      `buildid.Binary(opts.Version)` and changes with the version, and relies on
+      `core/buildid`'s own test that the hash is the executable file's SHA-256; a
+      unit test cannot build and run a second binary cheaply. Add the proof to the
+      image job (run `--version-json` on the amd64 and cgo builds, which differ in
+      code, and assert different `binary_id`) or a core test that `go build`s two
+      tiny programs with different `-ldflags -X`.
+
+- [ ] **PLATFORM-CORE-R1-24-BOOT-WRITERS-SWEEP-LOCK** The boot's checkpoint
+      writers (P4a's `takeCheckpoint`, its garbage sweep, P4b's
+      `completeCheckpoint`) do not take the sweep lock
+      (`.mediacore-checkpoints/.sweep.lock`) that the hourly sweeper and
+      `storage prune-checkpoints` share. A `prune-checkpoints --include-open
+      --confirm` run while another process is booting can therefore delete
+      the open checkpoint the boot just recorded, or race its
+      `.migration-checkpoint` pointer write. `PruneCheckpoints` deletes only
+      records (never garbage or scratch), so it cannot remove a copy whose
+      record does not exist yet, and the next sweep drops a dangling pointer,
+      but the boot loses its rollback.
+      The pointer race also happens on a plain `prune-checkpoints`, without
+      `--include-open`. Prune's `deleteCheckpoint` reads
+      `.migration-checkpoint`, sees it names the completed checkpoint it is
+      deleting, and then removes the file. If another process's boot writes
+      a new pointer between that read and the remove (P4a for its new open
+      checkpoint, or P4b's completion), prune removes the boot's new
+      pointer. The boot's checkpoint and record survive, but
+      `make rollback-restore` no longer finds its rollback.
+      Fix: take the lock across P4a and P4b (with a bounded wait, failing
+      the boot rather than racing). Add a test that runs prune against a boot
+      paused between the record and the pointer, and one that pauses prune
+      between its pointer read and remove while a boot writes a new pointer.
+      Found by R1-24.
+
+- [ ] **Make `library.CleanAbsolutePath` and `library.Join` sanitizers CodeQL credits, then
+      re-check the dismissed path alerts** (from the R1-15 clean-stop PR's round-7 SF2; filed there, not
+      built).
+      - **Why.** CodeQL's `go/path-injection` and `go/zipslip` do not treat either result as
+        sanitized. `CleanAbsolutePath` (`core/library/pathvalidation.go`) rejects a path when
+        `cleaned != path`, a comparison the queries do not read, and its doc comment says taint
+        tools treat its return as sanitized, which is false. `Join` and `Validate`
+        (`core/library/safepath.go`) check `cleaned != cleanRoot && !strings.HasPrefix(...)`:
+        the equal-root branch skips the prefix check, so the check does not guard the path they
+        return. The R1-15 clean-stop PR worked around both in its own two callers with restated checks:
+        `strings.HasPrefix(target, within)` in `internal/backup/backup.go`'s `extractArchive`,
+        and `strings.HasPrefix(cleanTarget, VolumeName+Separator)` in
+        `internal/server/handlers/system/handler.go`'s `RestoreBackup`.
+      - **Fix.** Put a check the queries credit on the path each helper returns. For example,
+        `Join` and `Validate` could make one prefix check of `cleaned+sep` against
+        `cleanRoot+sep`, and `CleanAbsolutePath` could add a prefix check against
+        `VolumeName(cleaned)+sep`. Run CodeQL locally (2.27.4, go-queries 1.6.14, `TaintedPath`
+        and `ZipSlip`) on the whole module before and after. Then remove those two
+        restatements and the comments that explain them.
+      - **Callers.** `CleanAbsolutePath`, 12 production calls:
+        - `internal/mediainfo/mediainfo.go`
+        - `internal/plugins/maintenance/duration_backfill_unknown_rows.go` (2)
+        - `internal/plugins/maintenance/file_provenance_export.go`
+        - `internal/plugins/maintenance/folder_books_fixer.go`
+        - `internal/server/handlers/audiobooks/handler_files.go` (2)
+        - `internal/server/handlers/filesystem.go`
+        - `internal/server/handlers/itunes.go` (2)
+        - `internal/server/handlers/system/handler.go`
+        - `internal/server/itl_paths.go`
+
+        `Join`, 16 production calls:
+        - `internal/backup/backup.go`
+        - `internal/covers/covers.go`
+        - `internal/deluge/import.go` (2)
+        - `internal/fileops/safe_operations.go` (3)
+        - `internal/fileops/service.go` (4)
+        - `internal/reconcile/reconcile.go`
+        - `internal/server/covers.go` (2)
+        - `internal/server/openlibrary_service.go` (2)
+
+        `Validate`, 1 production call: `internal/backup/backup.go`.
+      - **Dismissed alerts to re-check.** 37 of the 96 dismissed `go/path-injection` and
+        `go/zipslip` alerts are in files that call these helpers. Only the before-and-after run
+        can say which of them flow through a helper. Reopen what the change fixes, and dismiss
+        again, with the new reason, only what still fires.
+        - The dismissal names `CleanAbsolutePath`: #2151 (`mediainfo.go:111`) and #1105
+          (`filesystem.go:295`).
+        - SEC-AUDIT-12 triage:
+          - `backup.go`: #14, #17, #18, #19, #346, #347.
+          - `fileops/safe_operations.go`: #198, #199, #200, #202, #203, #205, #207, #208,
+            #209, #210, #349, #350, #542, #543.
+          - `server/openlibrary_service.go`: #669.
+        - The fileops import-path allow-list guards them:
+          - `fileops/service.go`: #620, #622, #623, #663, #664, #665.
+          - `audiobooks/handler_files.go`: #1064, #1065.
+          - `filesystem.go`: #1094.
+        - Accepted risk, the iTunes library path: `itunes.go` #1055, #1057, #1058, #1059, #1060.
+      - **Cost.** A change in the core module that changes the flow at every caller above.
+        Alerts may close as fixed or stay open and need dismissing again. Run each caller's
+        package tests, because `Join`'s equal-root case is behaviour some callers may rely on.
+
+- [ ] **R1-21 follow-up for R1-25 and F8-02: build the in-process reader check with its first caller** R1-21 dropped `kernel.ReaderCheck` (its plan's decision D9) because no opener without P0a exists yet, so the deadcode ratchet refused it as unreachable. 05-storage §5S.3.7 puts the reader check in the rollback guard script's in-flight probe and in the updater's in-process `ReaderCheck`, not in the kernel.
+  - R1-25 (the offline commands) and F8-02 (the updater) build the in-process check with whichever of them is its first caller, over `restoreswap.InFlightJournal` (the in-flight swap's id, kind and last step).
+  - Restore the cases of R1-21's deleted `TestReaderCheck`: a pending intent passes; no state directory passes; an in-flight swap refuses with `restore_inflight`, and the escape admits only a `KindCheckpoint` journal at `failed`.
+  - The kernel's own refusal in `runP0a` (`core/kernel/swap.go`: an in-flight file this boot's P0a did not take over fails the boot with `ErrSwapInFlight`) has no test. It guards against a P0a bug, and no known input reaches it, so a test needs a P0a fake or a seam that leaves an in-flight file behind.
+  - Details: `docs/agent-tasks/platform-core/seams.d/R1-21.md`, the row "The reader check (decision D9, narrowed)".
+
+- [ ] **CORE-READINESS-COREDOC-GENERATOR** SC6 reports NOT_APPLICABLE because the
+      coredoc generator does not exist yet. When it lands, point
+      `core/scripts/ci/coredoc_check.py` at its command so the nightly report
+      measures it, and check that the status turns PASS or FAIL, not N/A.
+
+- [ ] **CORE-READINESS-SC1-FIRST-CHECKPOINT** After release R2 records its
+      checkpoint, set `SC1_FIRST_CHECKPOINT` (`core/Makefile`) to it, or pass it
+      from `split-readiness.yml`. Until then SC1 reports "cannot be met yet" by
+      design: earlier checkpoints are listed but start no count (12 SC1).
+
+- [ ] **CORE-READINESS-STATICCHECK-IN-CORE-CI** `core/tools/staticcheck` is pinned
+      and compared with the root's by `check_module_skew.py`, and `make -C core
+      tools` installs it, but no core CI target runs it. Wire it into `make -C
+      core ci` (or record why core stays on golangci-lint only).
+
+- [ ] **R1-21 follow-up for R1-24: a swapped-back restore boot's checkpoints off unix** Step x leaves the restore boot's checkpoints in `.mediacore-checkpoints/` (R1-21 decision D6). On unix they never match the original store, whose DB directory identity differs. Off unix the identity reads 0/0 (see the "R1-20 follow-up: Windows DB directory identity" entry), so when the archive's epoch equals the original's, such a checkpoint matches the original store after the swap-back on its epoch alone. Until the next ready boot's `MarkServed`, a binary upgrade could take it as the rollback copy and later roll back to the archive's data.
+  - Fix: R1-24's `ReleaseCheckpointsSince` or the sweeper releases a swapped-back restore boot's checkpoints, or the Windows directory identity lands first, which closes this too.
+  - Details: `docs/agent-tasks/platform-core/seams.d/R1-21.md`, the D6/(c) row and "Seams for later rows".
+  - Only needed if Windows becomes a supported server platform.
+
+- [ ] **CORE-RESTOREJOURNAL-ZERO-COVERAGE** The first `make -C core readiness`
+      run measured 0% coverage for `storage/restorejournal` and
+      `storage/restorejournaltest`, below SC5's 60% per SDK package. Add tests,
+      or decide that the test-helper package is excluded from the SDK list in
+      `core/Makefile`'s coverage target.
+
+- [ ] **core/app: ResolveStateDir's fallback ignores `Options.R1StoragePath`** `storagePath` takes the database path from `<prefix>_CORE_STORAGE_PATH` or `Options.R1StoragePath`. `ResolveStateDir`, which it calls, falls back to "beside the database" using only the env var. So an app that names its store with `R1StoragePath`, and whose default state directory cannot be created, fails with "core.storage.path \"\" is not an absolute path to fall back beside", even though the path is known.
+  - ABO cannot hit this today: books resolves its own state directory and passes it as `Options.StateDir`, which already exists (`internal/books/options.go`).
+  - Fix: `ResolveStateDir` passes the env value, or else `opts.R1StoragePath`, as `resolveStateDir`'s `dbPath`. Test: no env, `R1StoragePath` set, default state directory not creatable; expect the fallback beside `R1StoragePath` and the WARN line.
+
+- [ ] **PLATFORM-CORE-R1-30-MEMORY-LEAK-SCAN** Give `scripts/check-memory-leaks.py` a
+      second source tree and add the `core/web` leg and path trigger to
+      `.github/workflows/memory-leak-scan.yml`. The workflow's header says the PR
+      that creates `core/web` adds it; R1-30 did not, because the script takes no
+      directory argument (it finds `web/src` by walking up) and the scanner's
+      patterns are React ones, while `@mediacore/api-client` holds no React code
+      (its one `addEventListener`, the deadline's abort forward in `client.ts`, is
+      removed in a `finally`). Do it with the first core/web package that has
+      components (ui-kit, F9-01).
+
+- [ ] **PLATFORM-CORE-R1-30-NO-RELATIVE-PACKAGES** Add `import/no-relative-packages`
+      to `core/web/eslint.config.mjs` (07 §7.3.1 names it beside
+      `no-restricted-imports`). R1-30 enforces the import boundary with
+      `no-restricted-imports` patterns only (a specifier climbing out of
+      `core/web`, `@abo/*`, ABO's `web/src`), because the rule that rejects a
+      sibling package reached by a relative path needs `eslint-plugin-import-x`,
+      which is not in 13's version table and has one package to guard until
+      `ui-kit` and `shell` arrive. Pin the plugin in 13 §13.4 and add the rule in
+      the shell-packages PR (F9-01).
+
+- [ ] **PLATFORM-CORE-R1-30-STALE-BUILD-E2E** Add the production-`dist/` e2e cell for the
+      stale-build rule (07 §7.18 `stale-build.spec.ts`, FE6-1): against a server
+      whose `X-App-Build` equals the page's meta no reload is offered, against one
+      where it differs the reload is offered, which proves the value the api-client's
+      `dist/` uses is the page's and not one baked at the library build. R1-30's
+      tests run under vitest, which resolves the built `dist/` of the api-client but
+      not a production page bundle; the cell belongs with the ABO e2e suite and the
+      PR image job.
+
+- [ ] **R1-23 follow-up: widen `TestBootCrashMatrix_ABO` to books' start hooks, the reset hook, `auth.BootWrites` and the R0 corpus** R1-23's matrix (`internal/books/crash_matrix_test.go`) breaks every writer-table label of books' storage boot from P0a up to Run's start step (0): 7 fixtures, about 1,240 boots. 05-storage §5S.10 asks for "books' full boot, books' writers included", and these are not covered yet:
+  - The writes in books' `books.repairs` start hook: the settings load's overlay `apply()`, `RunBootRepairs` (journal clock, ident-index stamp, `ReconcileOpsV3WithV2`, `ReconcileVerifiedEmails`), and the encryption key's first-boot generation. Core's writer table has no labels for module start hooks, and the kit's rows end at "Run 0".
+  - Books' reset hook, which R1-25 moves onto the `KindReset` swap.
+  - `auth.BootWrites` (R2).
+  - The R0-written fixture corpus (F2-12).
+  - Blockers: core needs writer labels for module start hooks (a kit change in `core/coretest/crashmatrix`). Books' `Register` and `NewServer` also use process globals (`config.AppConfig`, the global store, `slog`), which the kit's concurrent boots would share. Until then the matrix boots books' manifest with a no-op `Register`.
+  - When each piece lands, add its fixture and drop its entry from `aboUnreachedLabels`.
+
+- [ ] **HNSW clean-stop marker: three gaps from the R1-15 round-2 review (N1, N2, N4)**, none
+      a regression against main, none built yet (the R1-15 clean-stop PRs recorded them;
+      the reviewer rated them as nits).
+      - **N1, crash window in the re-check.** `MarkCleanStop` stores `cleanStopLive` and then
+        re-reads the verdict count; a writer adds to the count and then reads `cleanStopLive`
+        (`hnsw_clean_stop.go`, `hnsw_verdict_watch.go`). The atomics are sequentially
+        consistent, so one side always sees the other. But when the re-check is the side that
+        sees it, it drops the marker while the writer's engine write runs alongside
+        `discardCleanStop`, and a SIGKILL or power loss between the two leaves the marker on
+        disk beside rows it no longer describes. **Fix:** write the marker after the main
+        `GatedDB` is sealed against writes, which closes the window and makes the hook
+        unnecessary. Cost: `MarkCleanStop` holds `s.mu` across two fsyncs, stalling any
+        verdict write for that long, which is acceptable at stop.
+      - **N2, a marker that survives a double I/O failure at open.** The open-time take
+        (`takeCleanStopClaim`) removes the marker and fsyncs the directory, and the claim lives
+        only in memory, so a crash after it reconciles. If the removal fails twice and the
+        fallback empty write fails too, a vouching marker stays on disk (logged at ERROR),
+        and a later boot can honor it once the I/O recovers. **Fix:** record a Pebble-side
+        open epoch in the marker, so a marker from before the last open never vouches.
+      - **N4, book IDs with a colon are not counted.** `isVerdictKey` treats `book:<id>` as a
+        row only when the ID has no further colon, because the `book:<index>:...` families
+        share the prefix, and it relies on `ValidateBookID`, which only `CreateBook`
+        enforces. A legacy row whose ID contains `:` would change without counting.
+        **Fix:** count the colon IDs in production first. With none, enforce
+        `ValidateBookID` on every book-row writer so none can appear; with some, list the
+        index families explicitly and count every other `book:` key.
+
+- [ ] **HNSW recall with clustered tombstones** (R1-15 review NIT-1). `FindSimilar`
+      fetches `min(maxResults*4, 200)` nodes and drops tombstones afterwards, while a
+      reconcile keeps up to 10% of a graph as tombstones (`hnswMaxTombstoneShare`). When
+      more than `4*maxResults` tombstones sit nearer a query than its live neighbours (a
+      group of near-identical versions merged away together), the query returns fewer
+      than `maxResults` results, possibly none, although live neighbours exist. This is
+      arithmetic from the code, not a measurement. Write a recall@k test (about 200 books,
+      20 of them clustered and tombstoned, query at the cluster, compare against brute
+      force); if it fails, re-search with a larger k when survivors fall short, or count
+      tombstones toward the over-fetch.
+
+- [ ] **HNSW live mirror indexes non-primary books; hydrate and reconcile skip them** (R1-15
+      follow-up review, open question). `prepBookEmbed` embeds non-primary books on purpose
+      (calibration needs their vectors), and `EmbedBook`/`EmbedBooks` then mirror every one
+      into the graph through `mirrorBookToChromem`, with `is_primary_version=false` metadata
+      (`internal/dedup/engine.go`, the `prepBookEmbed` cache-hit path and the batched upsert).
+      `HydrateChromem` and the stale-snapshot reconcile classify the same rows with
+      `classifyBookRow`, which skips non-primary books, so the graph a process builds live is
+      not the graph a boot builds: after a reconcile those keys are tombstoned (and count
+      toward the 10% tombstone share that forces a rebuild), after a clean-stop boot they stay.
+      Queries do not see it today: the only book query (`findSimilarBooks`) filters on
+      `is_primary_version=true`. What differs is the graph's size and the reconcile's churn,
+      and any future unfiltered book query would see books that come and go with the boot path.
+      **Stopgap in place (R1-15 round-2 review, S2):** `mirrorCachedBook` marks the graph
+      diverged when a cache hit mirrors a row `classifyBookRow` would skip, so that run
+      writes no clean-stop marker and the next boot reconciles. The cache hit is the only
+      mirror with no Pebble write; the fresh-embed path writes the embedding row, which the
+      verdict watch already counts. The cost: any run that re-embeds a cached non-primary
+      book (every library-wide embed run does) loses the clean-stop fast boot. The
+      recommendation below removes both the mismatch and that cost.
+      **Recommendation:** make the mirror follow the hydrate rule: skip the graph upsert (and
+      delete a graph entry if present) when `classifyBookRow` would not index the book, while
+      still writing the Pebble embedding row. One predicate then decides graph membership for
+      all three paths. The other direction (index non-primary books everywhere and rely on the
+      metadata filter) would add roughly the 22K non-primary rows production skips today to
+      the graph's memory and search cost.
+
+- [ ] **PLATFORM-CORE-F3-BODYLIMIT** Spec a per-route body-limit override for
+      legacy routes in 05-http-api §8.2 (for example `LegacyRoute.MaxBody`), so
+      F3 can move gin's per-group body limits into core's stage 11. R1-17 left
+      the legacy mount at `MaxBody: -1` (no core cap), because stage 11's two
+      classes (JSON 1 MiB, upload 10 MiB) cannot express HEAD's limits: the
+      20 GB OpenLibrary dump import and the 8 MiB fingerprint-worker routes.
+      Until the override exists, gin's `bodyLimitMiddleware` is the only body
+      limit on legacy routes.
+
+- [ ] **Core coverage floor: let ratchet-lower.yml raise it (12 §12.3 SC5)** R1-23 enforces `core/.ci/coverage-floor.txt` (80.8; the short suite measured 81.5 % on 2026-11-08) in `make -C core coverage-floor`. No job raises the floor when coverage rises, so it can drift far below the real total, as the root's floor has (30 against 47 %).
+  - Fix: a core entry in `.github/workflows/ratchet-lower.yml` that measures core's total from `make -C core test-short`'s `coverage.out` and raises the floor file. A floor is a "higher is better" ratchet, so `run_gates.py --lower`'s lower-only `ratchet` kind does not fit as it stands. Add a raise-only kind, or a dedicated step, and keep `run_gates.py`'s "never raises a count baseline" rule for the count ratchets.
+
+- [ ] **R1-23 step 3 follow-up: split `database.Store` per 04 §4.5** Brief step 3 says "`database.Store` splits per 04 §4.5". R1-23 left it whole: its flattened width is still 445 methods (`internal/database/store_width_test.go` `storeMethodBaseline`). R1-23 did narrow two consumers (`store_consumers_test.go` ratchet 28 → 26).
+  - 04 §4.5 assigns the methods to books, the run-row store, and core's `auth`/`rbac` decode types. The split is a re-typing of every consumer that names `database.Store`. Run it as its own `/parallel-sweep` with the `store-width` and `store-references` ratchets as gates.
+  - R1-26 (the alias rename to `internal/books/store`) lists "narrowing `database.Store`" as out of scope, so no row owns this yet.
+
+- [ ] **R1-23 step 3 follow-up: move internal/database's engine files into core** Brief step 3 (04 §4.5's first row, 04 §2.2 "move") asks for a `git mv` of `pebble_store_open.go`, `store_init.go`'s `InitializeStore` part, `migrations_runner.go`, `pebble_gate.go`, `storage_format.go` and `census*.go` into `core/storage` and `core/internal/pebble`. R1-23 did not move them. At run time there is already one implementation: core's `storage.Open` is the only code that opens Pebble, and these files now build ABO's store over books' `storage.LegacyRange` (`legacyrange.go`) instead of opening the engine.
+  - Why it is not a pure rename: the files hold ABO types and code shared with the rest of `internal/database`. 19 non-test files use `GatedDB`, which is `pebble_gate.go`'s 1,285-line Pebble-shaped API, now forwarding to `LegacyRange`. 10 non-test files call the census, which runs over ABO's `KeyFamilies`. `storage_format.go` writes books' legacy projection. Moving them as they are puts ABO code into core, and a move commit that also rewrites content fails `scripts/ci/check_commits_build.py`'s similarity gate.
+  - Shape of the fix: first, commits that cut each file into an engine-generic half and an ABO half (the census engine apart from books' family table; the projection writer apart from books' stamp); then pure `git mv` commits of the generic halves; then delete whatever core's R1-20 implementation already covers. Measured sizes: `pebble_gate.go` 1,285 lines, `census_exact.go` 922, `pebble_store_open.go` 548, `census.go` 492, `census_families.go` 439, `storage_format.go` 182, `store_init.go` 98, `migrations_runner.go` 55.
+  - Do it after R1-26 renames the residue to `internal/books/store`, so the split lands on the final paths (R1-26's brief says so since R1-23's review: the rename carries these files with the residue).
+
+- [ ] **Delete `database.globalStore` (05-storage §5S.9.3 row "NewPebbleStore(path) / InitializeStore / globalStore"; 04 §4.5)** The spec says "`globalStore` deleted". No production code reads it any more: there are 7 setters (`internal/books/module.go` ×2, `internal/server/server_lifecycle.go`, `internal/database/store_init.go`, `internal/testutil/integration.go` ×2) and zero `GetGlobalStore()` readers outside tests. The tests do lean on it: 334 `GetGlobalStore()` reads and 218 `SetGlobalStore(` calls across 57 test files.
+  - Fix: have `internal/testutil`'s helpers and each composed or server test helper return the store they built, rewrite each test read to use that value, then delete the variable, its mutex, both accessors, the 7 production setters and `store_global_test.go`. This is a mechanical sweep: run it as `/parallel-sweep` by package. Shared state goes away, so `t.Parallel()` becomes possible in those tests.
+  - Not done in R1-23: it changes no production behaviour, and it touches 57 test files that R1-26's rename also touches. Run it after R1-26.
+
+- [ ] **R1-23 step 3 follow-up: move the Pebble collector into core/internal/pebble** 04's key "R1 move internal/metrics -> mediacore/internal/pebble" says `internal/metrics/pebble_collector.go` (251 lines) moves to core and keeps its metric names. R1-23 kept the file in ABO and changed its source instead: it now samples core's engine through the admin surface books gets from `Attach` (`core/storage/engine_sample.go`). `internal/books/claims_test.go` `TestPebbleMetricNamesKeptOnABOsBoot` pins all 25 `audiobook_organizer_pebble_*` names with their `store="main"` series.
+  - The move needs core to export the samples under the app's namespace. Core's metrics are `<namespace>_*`, so `audiobook_organizer_pebble_*` has to come out byte-identical, which is an R1-23 STOP condition. Then the file moves by `git mv`, and `tools/cmd/sdkguard/internal-deps.txt` loses `internal/metrics` if nothing else in the SDK closure needs it.
+  - Keep `TestPebbleMetricNamesKeptOnABOsBoot` as the gate for the move.
+
+- [ ] **F2-12: read the R0 tag from `ci/r0_release.txt` in `TestR0OpensR1Store` and its CI job** R1-23 pins R0 as `v0.223.0` in two places: `internal/books/r0store_test.go` (`r0Tag`, plus the four archives' SHA-256 values) and `.github/workflows/extraction-gates.yml`'s `boot-crash-matrix-abo` job (its cache key, download and build-from-tag fallback). When F2-12 adds `ci/r0_release.txt`, both should read the tag from it, with the checksums kept beside it, so the next R0 is one edit.
+
+- [ ] **R1-25: the standalone opener must finish or refuse an in-flight swap (P0a)** `internal/database.OpenStandalone` (behind `NewPebbleStore` and `InitializeStore`, so `diagnostics` and `cmd/pid-census`) runs `storage.Open`, `Prepare` and `Migrate` with no P0a. `storage.Open` does not check for a journaled swap in flight (`restore/<id>/inflight.json`). A standalone open of a store mid-restore or mid-reset would therefore open the half-swapped directory, and could take a checkpoint and run steps on it.
+  - Unreachable at R1-23: ABO stages no restore or reset until R1-25 moves books' resets onto the `KindReset` swap.
+  - Fix (R1-25, its brief's step 7 and `TestStandaloneOpenerHonoursInflightSwap` since R1-23's review): the standalone opener runs the same pre-boot swap the kernel's P0a runs, or it refuses with `storage.ErrSwapPending`'s message telling the operator to boot the app once. Add a test where a staged in-flight swap makes `OpenStandalone` refuse, or complete the swap, before it opens anything.
+
+- [ ] **`make rollback`'s guard reads `.storage-levels` (05-storage §5S.3.7 "The binary-swap guard"; spec test `TestRollbackGuardRefusesAfterCutover`)** `scripts/storage_format_guard.py` still compares only the legacy projection (`<db>.storage-format` against `.prev --print-storage-format`). That is correct through R1: R1-23 keeps the projection at HEAD's format 1, so a rollback to R0 passes. The spec's guard reads `.storage-levels` (falling back to `.storage-format`), asks `.prev --print-storage-levels` (falling back to `--print-storage-format` for an R0 binary), and refuses when any owner's store level is above `.prev`'s, naming `make rollback-restore`. Nothing does that before the first release that raises a level, after which a plain binary swap is no longer a safe rollback.
+  - Owner: R1-27 (its brief's step 6 and test list since R1-23's review; it already edits `make rollback` for the shared in-flight probe). R1-23 added `--print-storage-levels`, which this needs.
+
+- [ ] **SC8-WORKSPACE-LIST-GROWS** `split-readiness.yml` packs every `core/web`
+      workspace, and `web_build_against_tarballs.py` rewrites every `@mediacore/*`
+      dependency of `web/`. Only `@mediacore/api-client` exists today. When
+      `@mediacore/shell` and `@mediacore/ui-kit` land, check that SC8 packs them
+      all and still fails (not passes) when `web/` depends on a package that has
+      no tarball.
+
+- [ ] **`internal/scanner` suite hangs under `-race`** in `TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling` (`internal/scanner/chapter_grouping_test.go`), reproduced on R1-15's head (`b91bfec17`) with no R1-34 changes, so it predates the service registry work.
+  - Repro: `go test -race -count=1 -timeout 240s -v ./internal/scanner/` panics with `test timed out after 4m0s`, running tests: that one (the goroutines are stuck in `ProcessBooksParallel`, `scanner.go` around line 1463, with pebble background goroutines alive). Seen at both 240 s and the default 10 m timeout.
+  - The test alone passes: `go test -race -count=1 -run TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling ./internal/scanner/` takes about 41 s. So it is either a hang that depends on state left by earlier tests in the package, or a test slow enough under `-race` to exhaust the suite's budget. Not diagnosed.
+
+- [ ] **PLATFORM-CORE-R1-19-BANNER-INVITE-PAGE** Decide whether the invite page
+      (`/invite/:token`) needs the stale-build banner. R1-19 mounts
+      `StaleBuildBanner` once in `App`, after the invite branch's early return,
+      because that page is public and stands alone; a tab left open on it across an
+      upgrade is not offered a reload. Mount the banner above that branch if the
+      page should offer it.
+
+- [ ] **PLATFORM-CORE-R1-24-STEP-X-FAILED-DIR** 05-backup's step x is to
+      move a swapped-back checkpoint into `restore/<id>/failed/` (or mark
+      it `restore_left`) and write its `delete_after` from the swap-back
+      (05-storage §5S.3.12 "Retention", the swapped-back row). R1-21's step x
+      does not move the checkpoint yet. R1-24's sweeper already scans every
+      spelling of that directory (`restore/<id>/failed/` and
+      `restore/<id>/failed/.mediacore-checkpoints/` under the state
+      directory, and the swap's own `FailedDest` paths beside the store) and
+      starts the 7-day clock at the first sweep that finds a record there
+      without a `delete_after`.
+      Seam for step x: a checkpoint directory in `failed/` that has no
+      record, and a record whose directory is missing, are both
+      partial-checkpoint garbage. The next sweep removes them at once, not
+      after 7 days. So step x must move the record together with its
+      directory: either one rename of a parent that holds both, or two
+      journaled moves that the next boot's P0a finishes after a crash. P0a
+      runs before readiness, so it finishes before any sweep starts. A
+      step x that moves only the directory loses the copy at the first
+      sweep.
+      When step x lands, have it write the
+      `delete_after` itself and add a crash-matrix fixture for a failed
+      KindCheckpoint restore whose set-aside checkpoint the sweep deletes.
+      Found by R1-24.
+
+- [ ] **telemetrypolicy: treat `audiobook_organizer_log_` as core-owned.** R1-18 (#4485) pinned core's `log_dropped_total` and `log_redactions_total` in ABO's `series.golden` with `ourInstruments` rows for instruments core creates. core/kernel/testdata/log/series.golden already contracts them; add the prefix to `coreOwnedPrefixes` in `internal/telemetrypolicy/series_contract_test.go`, drop the duplicate golden/seeding/ourInstruments rows, and decide whether the `sink` key in `internal/telemetry/attr.go` is still needed. Also pin `log_records_total{level,module}` in core's golden with a seed that logs through the pipeline.
+
+- [ ] **PLATFORM-CORE-R1-30-WEB-API-CORE-TS** Create `web/src/api/core.ts`, ABO's one
+      pre-shell client, `createCoreClient({ buildId: readPageBuildId(), shell: false })`
+      (07 §7.5.2, 05-http-api §7 say "created in release R1"). R1-30 did not: the
+      file is outside its inventory, `core.json` has no operation yet, so nothing
+      could call the client, and an unused module is dead code the deadcode and knip
+      gates flag. Create it in the first R2 flip that switches a UI call to a
+      generated operation (07 §7.19 step 3), with `onUnauthorized` wired to the
+      auth reset of 07 §7.9.
+
+- [ ] **HNSW clean-stop marker: a boot whose P0a swaps the store must not trust the marker it
+      took** (from the R1-15 clean-stop PR's port onto R1-23; filed, not built, because nothing
+      stages a swap yet).
+      - **Why.** Since R1-23 the served boot runs core's pre-boot swap (P0a,
+        `core/kernel/swap.go`) whenever a restore or reset is staged in the state directory. The
+        swap replaces the database directory and its sidecars and leaves `hnsw/` beside it alone.
+        The served boot takes the clean-stop marker in `books.Options`
+        (`database.ClaimHNSWCleanStop`), before `app.New` runs P0a, and `Register` hands the claim
+        to the store (`AdoptHNSWCleanStopClaim`). On a boot that swaps, the claim's marker
+        describes the rows from before the swap, and the snapshot import would trust it for the
+        rows after it whenever the counts match. The marker is already gone from disk; only the
+        record the claim holds in memory is wrong.
+      - **When it matters.** Once something stages a swap: `restoreswap.Stage` has only test
+        callers today, and R1-25's reset stager is the first planned. Build this before or with
+        it.
+      - **Fix.** In `books.Options`, before the claim, treat a staged or in-flight swap as "this
+        boot swaps": `restorejournal.PendingPath(stateDir)` exists, or
+        `restorejournal.InFlightIDs(vfs.Default, stateDir)` is not empty (fail closed on a probe
+        error). Still take the marker, but void the record, the same shape as the migration void
+        (`adoptCleanStop`'s `migrated`). Check first that `internal/books` may import
+        `core/storage/restorejournal` (archtest). The other way is for the kernel to tell modules
+        what P0a did (`restoreswap.Outcome.Boot`), which needs a core API.
+      - **Standalone.** `OpenStandalone` has no P0a yet; when R1-25 adds one, its take must come
+        before the swap as well, or be voided the same way.
+      - **Test.** Stage a restore with `restorejournal.CreateIntent` into the boot's state
+        directory, write a vouching marker, boot books, and require the import to reconcile.
+
+- [ ] **A bare relative `DatabasePath` makes every default backup restore fail with a 500**
+      (R1-15 round-8 verification review, N5; filed, not fixed). Pre-existing on main, not a
+      regression from the clean-stop PRs.
+      - **What happens.** `POST /backup/restore` without a `target_path` restores into
+        `filepath.Dir(DatabasePath)` (`internal/server/handlers/system/handler.go`,
+        `RestoreBackup`). For a bare name such as `audiobooks.pebble`, or `./audiobooks.pebble`,
+        that is `.`, and `extractArchive` (`internal/backup/backup.go`) joins each entry with
+        `library.Join(".", name)`: `filepath.Join` drops the `./`, so the joined path never has
+        the prefix `./` that `Join`'s containment check wants, and every entry fails as escaping
+        the target. That error is not `ErrArchiveEntryEscapes`, so the handler answers the
+        generic 500, after the store was marked diverged. `data/audiobooks.pebble` restores
+        (200). The reviewer's probe: bare name 500, `./` 500, `data/` 200.
+      - **Fix.** Make the default target absolute where the handler derives it
+        (`filepath.Abs(filepath.Dir(DatabasePath))`), or make `DatabasePath` absolute where the
+        config loads. A custom `target_path` is already required to be absolute. Add a handler
+        test with a relative `DatabasePath` under a temporary working directory.
+      - **Cost.** One line and a test for the handler fix. Making the config path absolute
+        changes every reader of `DatabasePath`, so check the CLI commands and the R1-23 openers
+        (`storeLocation`, `OpenStandalone`) before choosing it.
 
 - [ ] **R1-32 redactor follow-ups** Gaps the independent review of #4436 left for later in `core/log/redactor.go`, each still passing through or still costing more than it should:
   - XML element values: `<password><t></password>` is not a pair, so the scan leaves `<t>`.

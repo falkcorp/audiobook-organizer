@@ -1,7 +1,0 @@
-- [ ] **R1-23 follow-up: widen `TestBootCrashMatrix_ABO` to books' start hooks, the reset hook, `auth.BootWrites` and the R0 corpus** R1-23's matrix (`internal/books/crash_matrix_test.go`) breaks every writer-table label of books' storage boot from P0a up to Run's start step (0): 7 fixtures, about 1,240 boots. 05-storage §5S.10 asks for "books' full boot, books' writers included", and these are not covered yet:
-  - The writes in books' `books.repairs` start hook: the settings load's overlay `apply()`, `RunBootRepairs` (journal clock, ident-index stamp, `ReconcileOpsV3WithV2`, `ReconcileVerifiedEmails`), and the encryption key's first-boot generation. Core's writer table has no labels for module start hooks, and the kit's rows end at "Run 0".
-  - Books' reset hook, which R1-25 moves onto the `KindReset` swap.
-  - `auth.BootWrites` (R2).
-  - The R0-written fixture corpus (F2-12).
-  - Blockers: core needs writer labels for module start hooks (a kit change in `core/coretest/crashmatrix`). Books' `Register` and `NewServer` also use process globals (`config.AppConfig`, the global store, `slog`), which the kit's concurrent boots would share. Until then the matrix boots books' manifest with a no-op `Register`.
-  - When each piece lands, add its fixture and drop its entry from `aboUnreachedLabels`.
