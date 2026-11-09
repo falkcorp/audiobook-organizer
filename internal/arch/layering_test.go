@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.6
+// version: 1.5.7
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -291,7 +291,6 @@ var layerOf = map[string]int{
 	"cmd/itl-check":                      6, // family: entry
 	"cmd/itl-diff":                       6, // family: entry
 	"cmd/mtls-bridge":                    6, // family: entry
-	"cmd/pebble-inject-skip":             6, // family: entry
 	"cmd/pid-census":                     6, // family: entry
 	"cmd/verify-suite":                   6, // family: entry
 	"internal/books":                     6, // entry: ABO's composition root, imported only by . and cmd (03 §3.5.1 item 1)
