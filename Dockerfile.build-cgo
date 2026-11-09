@@ -1,7 +1,7 @@
 # file: Dockerfile.build-cgo
-# version: 1.2.7
+# version: 1.2.8
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
 # Builds a statically-linked CGO binary with native TagLib for Linux amd64/arm64.
 # Used by CI to produce downloadable release binaries.
@@ -42,8 +42,8 @@ RUN apk add --no-cache git gcc g++ musl-dev sqlite-dev ca-certificates tzdata \
 RUN set -ex \
     && mkdir -p /tmp/taglib-build/install/lib /tmp/taglib-build/install/include \
     && cd /tmp/taglib-build \
-    && curl -sL https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz | tar xz \
-    && curl -sL https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz | tar xz \
+    && curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz | tar xz \
+    && curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://github.com/taglib/taglib/releases/download/v2.0.2/taglib-2.0.2.tar.gz | tar xz \
     && mkdir -p build && cd build \
     && cmake ../taglib-2.0.2 \
          -DCMAKE_INSTALL_PREFIX=/tmp/taglib-build/install \
