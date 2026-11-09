@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.9.1 -->
+<!-- version: 1.9.2 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -405,9 +405,12 @@ root-owned config:
 | `install-staged` | root | `binary`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`), or `stage_unit` / `stage_local_conf` as the unit / its `local.conf` drop-in after checking every directive, then `daemon-reload` |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
-`install-staged unit` and `install-staged local-conf` read the staged file
-once (no symlink, at most 256 KiB), check it, and install the bytes they
-checked. Every directive must be on the allowlist in `rollback_helper.py`
+`install-staged` opens each staged file as root, so it refuses one that is
+a symlink, has a second hard link (a link to `/etc/shadow` would open), or is
+not owned by the deploy user (`SUDO_UID`). `install-staged unit` and
+`install-staged local-conf` read the file once (at most 256 KiB), check it,
+and install the bytes they checked; a refusal names the line, never its
+text. Every directive must be on the allowlist in `rollback_helper.py`
 (`ALLOWED`): the ones the committed unit and `local.conf.example` use, with
 `User=` and `Group=` equal to the config's `service_user` and
 `service_group` (the unit must set both: a unit without `User=` runs as
@@ -416,9 +419,14 @@ root), `ExecStart=` absolute with no `+` or `!` prefix, `StandardOutput=` and
 filesystem targets. Anything else (`ExecStartPre=`, `SupplementaryGroups=`,
 `AmbientCapabilities=`, `EnvironmentFile=`, ...) is refused by name; add a
 directive to `ALLOWED` only after checking it cannot run, write or grant
-anything as root. A comment or blank line inside a continued value, and a
-backslash followed by spaces, are refused, because systemd versions read them
-differently.
+anything as root. Outside comments a line may hold only printable ASCII and
+tabs: Python takes characters such as a vertical tab, `\x1c` or U+2028 for
+whitespace or line breaks and systemd does not, so `User=audiobook` followed
+by one would pass a check and be an invalid `User=` that systemd ignores,
+running the unit as root. `ExecStart=` may not contain `;` (systemd reads it
+as a second command line). A comment or blank line inside a continued value,
+and a backslash followed by spaces, are refused, because systemd versions
+read them differently.
 
 Install them on the deploy host (as root):
 
