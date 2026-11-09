@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -458,7 +458,8 @@ where Python and systemd read a line differently. Instead:
   runtime load or run something else, in any case and any quoting: `LD_*`,
   `MALLOC_*`, `PYTHON*`, `PERL5*`, `GCONV_PATH`, `GETCONF_DIR`,
   `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `NLSPATH`, `NODE_OPTIONS`,
-  `GODEBUG`, `TZDIR`, `GLIBC_TUNABLES` and `BASH_ENV`. This is defence in
+  `GODEBUG`, `TZDIR`, `GLIBC_TUNABLES`, `BASH_ENV`, `SSL_CERT_FILE`,
+  `SSL_CERT_DIR` and `LOCPATH`. This is defence in
   depth behind the drop-in rules below; `GODEBUG` is on the list because it
   can switch off Go's TLS and x509 checks.
   Every kept line may hold only printable ASCII and tabs, and a carriage
@@ -491,7 +492,9 @@ budget.
 
 host.conf, and every other drop-in systemd applies to the unit, must run
 nothing but the service user's `ExecStart=`: no other `Exec*=` line
-(`ExecStartPre=`, `ExecStopPost=`, ...), no `+` or `!` prefix, no
+(`ExecStartPre=`, `ExecStopPost=`, ...), an `ExecStart=` command that starts
+with an absolute path after only the `@`, `-` and `:` prefixes (so no `+`,
+`!`, `|` or any other), no
 `PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
 `Group=` other than `service_user` and `service_group`. Every `Environment=`
 line `local.conf` deploys reaches whatever the unit runs, and a deploy user
@@ -510,7 +513,9 @@ anything:
   (`/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`,
   the `.control`, `.attached`, transient and generator directories) for
   `<unit>.d/`, each dash-prefix directory (`audiobook-.service.d/`) and the
-  type-wide `service.d/`. The scan is not only a fallback: systemd reports
+  type-wide `service.d/`, for the unit's name and for each alias
+  (`systemctl show -p Names`, parsed strictly, and any symlink in a unit
+  directory that points at the unit). The scan is not only a fallback: systemd reports
   only the drop-ins it loaded at its last reload, and both installs reload.
   The helper's own drop-ins (`local.conf`, `pprof.conf`, the `Type=simple`
   one) pass by construction. A masked drop-in (a symlink to `/dev/null`)
@@ -530,7 +535,12 @@ anything:
   missing `/etc` copy, since it is about to write the checked template
   there.
 
-A refusal names the file and the line, never the text. So a host without a good host.conf never gets the
+Lines are checked as systemd joins them: a line ending in an odd number of
+backslashes continues onto the next, the last backslash becoming a space,
+and comment lines inside a continuation are skipped. So `ExecStart=\`
+followed by `+/bin/x` is a `+` prefix, and a line ending in `\\` (an even
+number) does not continue. A refusal names the file and the line, never the
+text. So a host without a good host.conf never gets the
 base unit installed, and can never restart on the base unit's `ExecStart`,
 whether or not the deploy carries a `local.conf`.
 

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.10.0
+# version: 1.11.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -97,6 +97,13 @@ if "FragmentPath" in sys.argv:
         print(open({state!r} + ".fragment-show").read().strip())
     except FileNotFoundError:
         print("FragmentPath=\\nSourcePath=")
+if "Names" in sys.argv:
+    if os.path.exists({state!r} + ".show-fails"):
+        sys.exit(1)
+    try:
+        print(open({state!r} + ".names").read().strip())
+    except FileNotFoundError:
+        print("")
 if "DropInPaths" in sys.argv:
     if os.path.exists({state!r} + ".show-fails"):
         sys.exit(1)
@@ -1125,6 +1132,9 @@ class InstallStaged(unittest.TestCase):
             "TZDIR",
             "GLIBC_TUNABLES",
             "BASH_ENV",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "LOCPATH",
         )
         for key in keys:
             for form in (f"{key}=/tmp/batcave", f'"{key}=/tmp/batcave"', f"'{key}=/tmp/batcave'"):
@@ -1624,6 +1634,105 @@ class InstallStaged(unittest.TestCase):
         Path(str(h2.root / "transient-state") + ".show-fails").write_text("")
         self.lib_unit.unlink()
         self.install_refused(h2, "local-conf")
+
+    # -- logical lines, the way systemd joins them -------------------------
+
+    def rules_refuse(self, text: str) -> str:
+        h = self.host()
+        self.dropin(h, "50-scarecrow.conf", text, self.unit_dirs[0])
+        return self.install_refused(h, "local-conf")
+
+    def rules_pass(self, text: str) -> None:
+        h = self.host()
+        self.dropin(h, "50-scarecrow.conf", text, self.unit_dirs[0])
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_an_even_run_of_backslashes_does_not_continue(self):
+        """systemd continues a line only when it ends in an ODD number of
+        backslashes: `a\\\\` is a literal backslash, so the next line is a
+        directive of its own, here a root Exec line."""
+        err = self.rules_refuse("[Service]\nEnvironment=X=a\\\\\nExecStartPre=/bin/evil\n")
+        self.assertIn("line 3", err)
+
+    def test_a_continued_execstart_is_checked_joined(self):
+        """`ExecStart=\\` then `+/bin/evil` is one line to systemd, with the
+        backslash replaced by a space: a + prefix."""
+        err = self.rules_refuse("[Service]\nExecStart=\\\n+/bin/evil\n")
+        self.assertIn("line 2", err)
+
+    def test_comments_inside_a_continuation_are_skipped(self):
+        err = self.rules_refuse(
+            "[Service]\nExecStart=\\\n# a comment\n; another \\\n  !/bin/evil\n"
+        )
+        self.assertIn("line 2", err)
+
+    def test_an_odd_run_of_backslashes_continues(self):
+        """`b\\\\\\` ends in three backslashes: the next line is part of
+        the Environment= value, not a directive."""
+        self.rules_pass("[Service]\nEnvironment=A=b\\\\\\\nExecStartPre=/bin/evil\n")
+
+    def test_a_continuation_at_the_end_of_the_file_is_checked(self):
+        self.rules_refuse("[Service]\nExecStart=!/bin/evil \\")
+
+    # -- ExecStart prefixes: only @, - and : -------------------------------
+
+    def test_only_known_safe_execstart_prefixes_pass(self):
+        for value in (
+            "|/bin/evil",
+            "?/bin/evil",
+            "bin/evil",
+            "~/bin/evil",
+            "@+/bin/evil",
+            "$/bin/evil",
+        ):
+            with self.subTest(value=value):
+                self.rules_refuse(f"[Service]\nExecStart=\nExecStart={value}\n")
+        for value in (
+            "",
+            "/usr/local/bin/audiobook-organizer",
+            "-/usr/local/bin/x",
+            "@:/usr/local/bin/x name",
+            "-@:/x",
+        ):
+            with self.subTest(value=value):
+                self.rules_pass(f"[Service]\nExecStart=\nExecStart={value}\n")
+
+    # -- alias names: their drop-in directories apply too -------------------
+
+    def test_an_alias_dropin_directory_is_checked(self):
+        """systemctl show -p Names lists the unit's aliases; systemd applies
+        <alias>.d/ drop-ins as well."""
+        h = self.host()
+        Path(str(h.root / "transient-state") + ".names").write_text(
+            "audiobook-organizer.service batcave.service"
+        )
+        self.dropin(
+            h,
+            "x.conf",
+            "[Service]\nExecStartPre=+/bin/evil\n",
+            self.unit_dirs[1],
+            "batcave.service.d",
+        )
+        self.assertIn("batcave.service.d", self.install_refused(h, "local-conf"))
+        shows = [t["argv"] for t in h.tools() if "Names" in t["argv"]]
+        self.assertEqual(shows, [["show", "-p", "Names", "--value", "audiobook-organizer.service"]])
+
+    def test_an_alias_symlink_in_a_unit_directory_counts_too(self):
+        """An alias systemd has not loaded yet (a symlink beside the unit,
+        before a reload) is found by the scan."""
+        h = self.host()
+        (self.unit_dirs[1] / "wayne-manor.service").symlink_to(self.lib_unit)
+        self.dropin(h, "x.conf", "[Service]\nExecStartPre=+/bin/evil\n", d="wayne-manor.service.d")
+        self.assertIn("wayne-manor.service.d", self.install_refused(h, "local-conf"))
+
+    def test_an_unparsable_names_answer_is_refused(self):
+        for answer in ("audiobook-organizer.service ../x.service", "x.service;id", "batcave"):
+            with self.subTest(answer=answer):
+                h = self.host()
+                Path(str(h.root / "transient-state") + ".names").write_text(answer)
+                self.assertIn("Names", self.install_refused(h, "local-conf"))
 
     def test_a_good_host_conf_lets_local_conf_install(self):
         h = self.host()
