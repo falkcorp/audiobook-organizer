@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.16
+// version: 1.28.17
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -566,6 +566,11 @@ var systemLog = logger.New("handlers.system")
 // atomic pointer so a test can install it while the handler is live.
 var afterOLCloseHook atomic.Pointer[func()]
 
+// beforeRestoreExtractHook, unset outside tests, runs in RestoreBackup just
+// before the extraction's first write: after the divergence mark and the
+// first marker removal.
+var beforeRestoreExtractHook atomic.Pointer[func()]
+
 // deleteOLDataLocked closes the Open Library store and removes its data
 // directory, holding the service's Mu from the close through the RemoveAll.
 // Releasing Mu between the two let an import's EnsureStore open a new engine
@@ -1045,6 +1050,9 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 			systemLog.Error("backup restore: %v", err)
 		}
 	}()
+	if hook := beforeRestoreExtractHook.Load(); hook != nil {
+		(*hook)()
+	}
 	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
 		// A snapshot directory that stopped resolving during the
 		// extraction (B1-r6) is the same 409 as one refused above.
