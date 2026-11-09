@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deploy_rollback.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 0d519d12-853d-4902-8896-8d5744a32cbd
 # last-edited: 2026-11-09
 
@@ -80,7 +80,9 @@ class Run:
     def __init__(self, guard: ModuleType, a: argparse.Namespace):
         self.g = guard
         self.a = a
-        self.o = guard.Opts(host=a.host, db=a.db, bin=a.bin, unit=a.unit, archive=getattr(a, "archive", "") or "")
+        self.o = guard.Opts(
+            host=a.host, db=a.db, bin=a.bin, unit=a.unit, archive=getattr(a, "archive", "") or ""
+        )
         self.get = guard.SSH(self.o)
 
     def say(self, *lines: str, err: bool = False) -> None:
@@ -134,7 +136,11 @@ class Run:
         kind = "notify" if notify else "simple"
         self.say(
             f"→ Matching the service type to {self.o.bin}.prev ("
-            + ("it reports sd_notify: Type=notify" if notify else "no sd_notify: Type=simple drop-in")
+            + (
+                "it reports sd_notify: Type=notify"
+                if notify
+                else "no sd_notify: Type=simple drop-in"
+            )
             + ")..."
         )
         r = self.act(f"unit_type_{kind}")
@@ -154,7 +160,9 @@ class Run:
         return self.g.clean(r.stdout).strip(), ""
 
     def wait(self, previous: str) -> int:
-        return deploy_wait_ready.wait(self.a.url, self.a.timeout, self.o.host, self.o.unit, previous)
+        return deploy_wait_ready.wait(
+            self.a.url, self.a.timeout, self.o.host, self.o.unit, previous
+        )
 
 
 def rollback(run: Run) -> int:
@@ -213,13 +221,32 @@ def rollback(run: Run) -> int:
 
 def restore(run: Run) -> int:
     o = run.o
-    run.say(f"→ Rollback-restore of {o.db} on {o.host}{' from ' + o.archive if o.archive else ''}...")
+    run.say(
+        f"→ Rollback-restore of {o.db} on {o.host}{' from ' + o.archive if o.archive else ''}..."
+    )
     if run.preflight():
         return 1
     code, lines, restore_cmd = run.g.decide_restore(o, run.get)
     run.say(*lines, err=code != 0)
     if code:
         return 1
+    # A restore from an earlier run (lost to an ssh drop) may still be
+    # running: refuse before anything here stops or changes the service.
+    r = run.get("restore_unit")
+    earlier = run.g.clean(r.stdout).strip()
+    if r.rc != 0 or earlier not in ("inactive", "failed"):
+        if r.rc != 0 or not earlier:
+            return run.refuse(
+                f"REFUSING: cannot read {run.g.TRANSIENT_UNIT}.service's state ({run.g._cause(r)}), so whether an "
+                "earlier restore is still running is unknown. Nothing was stopped or changed."
+            )
+        return run.refuse(
+            f"REFUSING: an earlier restore is still running on the host as {run.g.TRANSIENT_UNIT}.service "
+            f"(ActiveState={earlier}): do NOT start {o.unit} until it has finished. Nothing was stopped or changed.",
+            *run.g.restore_check_lines(o),
+            f"If it succeeded, finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
+            "If it failed, run make rollback-restore again once it has ended.",
+        )
     if run.match_unit_type():
         return 1
     previous, err = run.invocation()
@@ -259,8 +286,8 @@ def restore(run: Run) -> int:
     if r.rc == 255:
         return run.refuse(
             f"ERROR: the connection to {o.host} dropped during the restore. The restore keeps running on the host "
-            f"as {run.g.TRANSIENT_UNIT}.service: do NOT start {o.unit} until it has finished "
-            f"(ssh {o.host} systemctl status {run.g.TRANSIENT_UNIT}; its output is in {o.transient_log}).",
+            f"as {run.g.TRANSIENT_UNIT}.service: do NOT start {o.unit} until it has finished.",
+            *run.g.restore_check_lines(o),
             f"If it succeeded, finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
             f"If it failed, {o.bin} is still the current binary and {unit_type_note}.",
             *run.start_current_lines(),
