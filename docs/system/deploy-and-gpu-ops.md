@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-10-12 -->
+<!-- last-edited: 2026-11-09 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -61,29 +61,40 @@ Once your real `Makefile.local`'s `deploy` target includes this same
 3. `rollback` first checks that `$(DEPLOY_BIN).prev` exists on the server
    (errors out cleanly if not — e.g. right after a fresh install with no
    prior deploy).
-4. **Storage-format guard.** `rollback` then reads the store's format from
-   `$(DEPLOY_DB).storage-format` and asks `$(DEPLOY_BIN).prev
-   --print-storage-format` which format it supports (a build older than the
-   flag counts as `1`), and runs `scripts/storage_format_guard.py`. If the
-   store is above the format `.prev` supports, it refuses, swaps nothing, and
-   prints the restore-from-checkpoint steps (see
-   [`runbooks.md`](runbooks.md#storage-format-restore)). If the sidecar is
-   missing or unreadable it also refuses, and the refusal quotes the stderr of
-   the ssh command that tried to read it (for example `sudo: a password is
-   required`). `ROLLBACK_IGNORE_FORMAT=1 make rollback` overrides only that
-   case, after you have checked the store is at format 1, and even then the
-   guard asks the *current* binary for its format (`$(DEPLOY_BIN)
-   --print-storage-format`) and refuses if it is above `.prev`'s, or if it
-   gives no answer at all (a crash, an ssh failure). Only a printed format, or
-   the old-build "unknown flag: --print-storage-format" error, counts. Nothing
-   overrides a format change.
+4. **Store guard** (`scripts/storage_format_guard.py rollback`; 05-storage
+   §5S.3.7). Before anything is swapped:
+   - **In-flight probe.** It runs `sudo -n /usr/bin/find
+     $(DEPLOY_STATE_DIR) -maxdepth 3 -path
+     '$(DEPLOY_STATE_DIR)/restore/*/inflight.json' -print`. Any output means
+     a restore or reset swap is in flight: it refuses, and nothing overrides
+     that. Boot the current build once to finish it. A staged intent that has
+     not started (`restore/pending.json`) passes, because the older build
+     rejects it at its own start. A failed probe (sudo asking for a password,
+     a wrong `DEPLOY_STATE_DIR`) refuses and names the command.
+     `make rollback-restore` runs the same probe.
+   - **Levels.** It reads the store's levels from
+     `$(DEPLOY_DB).storage-levels` and asks `$(DEPLOY_BIN).prev
+     --print-storage-levels` which levels it serves (one JSON object). A
+     `.prev` older than that flag (R0) is asked `--print-storage-format`
+     instead: format 1, or no such flag either, means every owner at level 0.
+     Any other answer refuses. If any owner's store level is above what
+     `.prev` serves, a binary swap cannot go back, and it refuses, naming
+     `make rollback-restore` (below).
+   - **A store no core build has opened** has no `.storage-levels`. Only then
+     does the guard read HEAD's `$(DEPLOY_DB).storage-format`, as before.
+     `ROLLBACK_IGNORE_FORMAT=1 make rollback` covers only an unreadable
+     `.storage-format`, after you have checked the store is at format 1, and
+     even then it asks the *current* binary for its format and refuses if
+     that is above `.prev`'s or gives no answer. It never covers levels or the
+     probe.
 5. It asks `.prev` for `--print-capabilities` and, when `.prev` predates
    readiness notification, installs a `Type=simple` drop-in so systemd does
    not kill it at the start timeout (see
    [Rollback-safe unit type](#rollback-safe-unit-type)).
    Only then does it copy the *currently installed* (bad) binary to
    `$(DEPLOY_BIN).rolled-back` for forensics, restore `.prev` back to
-   `$(DEPLOY_BIN)`, and restart `audiobook-organizer.service`. It then
+   `$(DEPLOY_BIN)`, and restart `$(DEPLOY_UNIT)`. If the restart fails, the
+   recipe goes on to the wait, which reads the unit and names the cause. It
    waits for `/health` to report `"ready":true` (see
    [Readiness](#readiness-what-deploy-and-rollback-wait-for)). A `.prev`
    older than readiness reporting answers without a `ready` field, so the
@@ -112,15 +123,37 @@ The server reports readiness in two places:
   start, so a long migration run is not killed at `TimeoutStartSec`, while a
   single step that hangs still is. Nothing extends the timeout on a timer.
 
-`make deploy`, `make deploy-debug` and `make rollback` run
-`scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300` after the restart.
-`DEPLOY_URL` defaults, when unset, to `API_URL` with a trailing `/api/v1`
-removed, or else to `https://<DEPLOY_HOST without user@>:8484`. The
-script polls `$(DEPLOY_URL)/health` every 5 s, for up to 300 s, until the body
-contains `"ready":true`, and prints the elapsed seconds. No answer, or
-`"ready":false`, keeps it polling. A 200 body with no `ready` field fails at
-once, because that binary predates readiness reporting. `deploy` runs its
-version check only after the wait succeeds.
+`make deploy`, `make deploy-debug`, `make rollback` and `make
+rollback-restore` run `scripts/deploy-wait-ready.sh $(DEPLOY_URL)
+$(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)` after the restart
+(`DEPLOY_READY_TIMEOUT` defaults to 300, `DEPLOY_UNIT` to
+`audiobook-organizer.service`). `DEPLOY_URL` defaults, when unset, to
+`API_URL` with a trailing `/api/v1` removed, or else to `https://<DEPLOY_HOST
+without user@>:8484`. Every 5 s the script:
+
+- reads the unit over ssh: `systemctl show -p
+  ActiveState,SubState,NRestarts,ExecMainStatus $(DEPLOY_UNIT)` (no sudo).
+  - `activating` is progress. A first boot that migrates the store stays
+    activating while its steps extend the start timeout, so the
+    `DEPLOY_READY_TIMEOUT` seconds count from when the unit leaves
+    `activating`.
+  - `failed` or `inactive`, or `NRestarts` rising (a crash and an automatic
+    restart), fails at once. A rise with exit status 75 is the restart the
+    service asks for after staging a restore, so the wait goes on.
+  - Exit status 78 is a refusal, not a crash: the binary will not open this
+    store, and its last log line is `install <release> first`. The script
+    says "install the release the log names first" and exits 78. The
+    committed unit does not restart a 78 (`RestartPreventExitStatus=78`).
+- once the unit is `active`, polls `$(DEPLOY_URL)/health` until the body says
+  `"ready":true`, and prints the elapsed seconds. No answer, or
+  `"ready":false`, keeps it polling. A 200 body with no `ready` field fails at
+  once (exit 2), because that binary predates readiness reporting.
+
+Without an ssh host (Docker, launchd: `deploy-wait-ready.sh URL TIMEOUT`) only
+`/health` can be read, so the wait lasts at least `DEPLOY_READY_URL_TIMEOUT`
+seconds (default 1800). Exit status: 0 ready, 1 not ready, 2 a bad answer,
+78 the binary refused the store. `deploy` runs its version check only after
+the wait succeeds.
 
 #### Rollback-safe unit type
 
@@ -161,7 +194,7 @@ uploads to:
 
 ```make
 	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
 ```
 
 The first line also clears the `Type=simple` drop-in that a `make rollback`
@@ -192,27 +225,100 @@ To undo by hand, put `Type=simple` back (and drop the two added lines), then
 run `daemon-reload` and restart. `make rollback` does not need this: it
 installs the `Type=simple` drop-in itself when `.prev` is older.
 
+### `make rollback-restore`: when a binary swap is refused
+
+After a release that raised a store level (R2), `make rollback` refuses: the
+store is in a shape `.prev` cannot read. The rollback is then an offline
+restore plus the previous binary (05-storage §5S.3.12, 09 §9.2.1):
+
+```bash
+make rollback-restore                                      # the latest pre-upgrade checkpoint
+make rollback-restore ROLLBACK_ARCHIVE=/path/on/host/x.tar.gz   # an archive, once the checkpoint is gone
+```
+
+It uses `DEPLOY_HOST`, `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_URL` as `rollback`
+does, plus `DEPLOY_STATE_DIR` (default `/var/lib/audiobook-organizer`),
+`DEPLOY_SERVICE_USER` (default `audiobook`), `DEPLOY_CHECKPOINT_DIR` (set it
+to `core.storage.checkpoint_dir` if you set that; empty means the store's
+parent) and `DEPLOY_OFFLINE_ENV` (the environment the restore runs with,
+default `HOME` and `ABK_STATE_DIR` set to the state directory, as in the
+committed unit). In order:
+
+1. `RELEASE=<tag>` refuses: fetching a named release is F8's `updater
+   fetch-release`, which this build does not have. Install that release's
+   binary as `$(DEPLOY_BIN).prev` by hand instead.
+2. **Read-only checks while the service still runs**, so a refusal leaves it
+   running:
+   - the in-flight probe (the same one `make rollback` runs, no override);
+   - the source's levels: the latest checkpoint's record (`from_vector`,
+     named by `$(DEPLOY_DB).migration-checkpoint`), or with
+     `ROLLBACK_ARCHIVE` the levels of the archived store itself. For an
+     archive, the current binary copies it into
+     `<checkpoint dir>/.mediacore-checkpoints/scratch/rollback-restore-levels`
+     with `storage restore-offline --into`, which writes the copy's own
+     `.storage-levels`. The recipe reads that file and deletes the copy,
+     which holds the store's secrets, whatever the outcome.
+   - `.prev --print-storage-levels` must **equal** the source's levels. A
+     `.prev` that serves less would refuse the restored store, and one that
+     serves more would migrate it again. On a mismatch it refuses and names
+     the release to install as `.prev`: the checkpoint's `from_release`, or
+     for an archive the release you ran when it was taken (HEAD's archives
+     record no version).
+   - It prints the source's time and warns that everything written since is
+     lost, **including every credential change**: a key revoked, a user
+     disabled or a password changed since then is live again. Repeat those
+     revocations once the rollback is up.
+3. It stops the unit and checks that it **stays stopped** (`inactive` or
+   `failed`), then runs the in-flight probe again.
+4. The **current** binary runs `storage restore-offline --checkpoint <name>
+   --accept-loss` (or `--archive <file> --accept-loss`) as
+   `DEPLOY_SERVICE_USER`, never as root, so every file keeps the service's
+   ownership. The command takes the store's swap lock itself and refuses while
+   a service is running or starting. The recipe does not retry: it stops,
+   reports that the unit is stopped and the binary unchanged, and you find
+   whatever started the unit. Afterwards it checks again that the unit stayed
+   stopped.
+5. It matches the unit type to `.prev`, keeps the current binary as
+   `$(DEPLOY_BIN).rolled-back`, installs `.prev`, starts the unit and waits
+   as above.
+
+The unit is not masked during the restore. `systemctl mask` refuses a unit
+whose file is installed in `/etc/systemd/system`. The restore's swap lock is
+what excludes a concurrent start, and the two "still stopped" checks report
+one that happened anyway. `Restart=on-failure` does not restart a unit that
+`systemctl stop` stopped.
+
+A checkpoint restore boot whose migration failed (journal `failed`) leaves
+`inflight.json` behind, and both recipes refuse. The way out is by hand, with
+the service stopped: run the **previous** binary's `storage restore-offline
+--checkpoint <name>`, which is the one command admitted while
+`inflight.json` exists, then start the service (09 §9.2.1).
+
 ### sudoers for `make rollback` (owner action)
 
-`make rollback` runs every privileged step over a plain `ssh HOST 'cmd'`,
-which has no tty, so `sudo` cannot prompt for a password. The sidecar and the
-checkpoint record are read with `sudo -n cat` (fail at once instead of
-hanging), and the store's parent directory (`.appdata` on prod) is not
-readable without sudo. Without passwordless rules for exactly these commands,
-every rollback refuses with "cannot read the store's storage format", and the
-swap itself would fail too. `scripts/deploy-match-unit-type.sh` (run by
+`make rollback` and `make rollback-restore` run every privileged step over a
+plain `ssh HOST 'cmd'`, which has no tty, so `sudo` cannot prompt for a
+password. Every read uses `sudo -n` (fail at once instead of hanging), because
+the store's parent directory and the state directory are not readable without
+sudo. Without passwordless rules for exactly these commands, every rollback
+refuses and names the command it could not run, and the swap itself would fail
+too. `scripts/deploy-match-unit-type.sh` (run by
 `rollback` and by the template's `deploy`) adds four more commands: the
 `mkdir`, `tee` and `rm` of the `Type=simple` drop-in, and
 `systemctl daemon-reload`.
 
 Add a drop-in with `sudo visudo -f /etc/sudoers.d/audiobook-organizer-rollback`
-on the deploy host. Replace `deploy` with the ssh user, and the two paths with
-the real `DEPLOY_DB` and `DEPLOY_BIN` values (sudoers needs literal paths, so
-no variables):
+on the deploy host. Replace `deploy` with the ssh user, `audiobook` with
+`DEPLOY_SERVICE_USER`, and the paths with the real `DEPLOY_DB`, `DEPLOY_BIN`,
+`DEPLOY_STATE_DIR` and checkpoint directory values (sudoers needs literal
+paths, so no variables). The first block is `make rollback`'s; the second
+adds what `make rollback-restore` needs:
 
 ```
 deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
+    /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
     /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
+    /usr/bin/find /var/lib/audiobook-organizer -maxdepth 3 -path /var/lib/audiobook-organizer/restore/*/inflight.json -print, \
     /usr/bin/cp /usr/local/bin/audiobook-organizer /usr/local/bin/audiobook-organizer.rolled-back, \
     /usr/bin/cp /usr/local/bin/audiobook-organizer.prev /usr/local/bin/audiobook-organizer, \
     /usr/bin/systemctl restart audiobook-organizer.service, \
@@ -220,11 +326,28 @@ deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-form
     /usr/bin/tee /etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf, \
     /usr/bin/rm -f /etc/systemd/system/audiobook-organizer.service.d/zz-rollback-type-simple.conf, \
     /usr/bin/systemctl daemon-reload
+
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service, \
+    /usr/bin/systemctl start audiobook-organizer.service
+deploy ALL=(audiobook) NOPASSWD: /usr/bin/cat /path/to/.mediacore-checkpoints/*.json, \
+    /usr/bin/cat /path/to/.mediacore-checkpoints/scratch/rollback-restore-levels.storage-levels, \
+    /usr/bin/rm -rf /path/to/.mediacore-checkpoints/scratch/rollback-restore-levels /path/to/.mediacore-checkpoints/scratch/rollback-restore-levels.state /path/to/.mediacore-checkpoints/scratch/rollback-restore-levels.storage-levels /path/to/.mediacore-checkpoints/scratch/rollback-restore-levels.storage-format, \
+    /usr/bin/env HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer /usr/local/bin/audiobook-organizer storage restore-offline --db /path/to/audiobooks.pebble *
 ```
 
-Check it with `ssh HOST 'sudo -n cat /path/to/audiobooks.pebble.storage-format'`.
-It should print one integer and not ask for a password. Use `command -v cat cp
-systemctl` on the host if those binaries live somewhere other than `/usr/bin`.
+The `find` line names the probe exactly as the recipes run it; sudo compares
+the arguments after the shell removed the quotes around the `-path` pattern,
+so the line has none. The checkpoint record's name changes with every
+upgrade, so its line ends in a wildcard; it runs as the service user, which
+can already read those files. The `restore-offline` line ends in a wildcard
+for the source (`--checkpoint <name> --accept-loss`, `--archive <file>
+--accept-loss`, or `--archive <file> --into <scratch copy>`). It too runs as
+the service user, never as root.
+
+Check it with `ssh HOST 'sudo -n cat /path/to/audiobooks.pebble.storage-levels'`.
+It should print `<owner> <level>` lines and not ask for a password. Use
+`command -v cat cp find env rm systemctl` on the host if those binaries live
+somewhere other than `/usr/bin`.
 
 Note this only preserves **one** prior version — a second consecutive `make
 deploy` overwrites `.prev` with the (now second-to-last) binary. If you need
