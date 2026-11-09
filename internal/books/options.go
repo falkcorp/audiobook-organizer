@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-09
 
@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -32,6 +33,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // ABO's identity on core (03 §3.6, 05-metrics §2): the app ID, the metric
@@ -130,11 +132,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	if warn != "" {
 		fmt.Fprintln(os.Stderr, "Warning: "+warn)
 	}
-	// Last, once nothing above can refuse: the HNSW clean-stop marker beside
-	// the store, before app.New opens, prepares and migrates it, so a crash
-	// in a migration cannot leave the marker vouching (R1-15 follow-up
-	// review, MINOR-1). Register hands it to the store it builds.
-	m.cleanStop = database.ClaimHNSWCleanStop(dbPath)
+	// Before app.New runs P0a: whether it may swap the store, which voids
+	// the HNSW clean-stop marker Register takes (swapVoidReason).
+	m.swapVoid = swapVoidReason(m.stateDir)
 	return app.Options{
 		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,
@@ -228,6 +228,34 @@ func OfflineOptions() (app.Options, error) {
 		// prune-checkpoints logs each deletion beside its stdout report.
 		Logger: logger.FromContext(context.Background()).With("subsystem", "offline"),
 	}, nil
+}
+
+// swapVoidReason is why a boot must not trust the HNSW clean-stop marker
+// because of the swap slot under stateDir, "" when it may. A staged or
+// in-flight swap is applied by this boot's pre-boot swap (P0a, inside
+// app.New), which replaces the store and leaves hnsw/ beside it alone, so a
+// marker on disk describes the rows from before the swap. Every stager
+// discards the marker before it writes the intent (OfflineOptions'
+// R1BeforeSwap, the live restore's BeforeStage); this covers a marker
+// written after that, by a build from before the swap slot run between the
+// stage and this boot, say. A slot that cannot be read voids too (fail
+// closed).
+//
+// Read in Options because P0a empties the slot whatever it does, and core
+// tells modules nothing of what P0a did. A swap staged after this read and
+// before P0a takes the swap lock exclusively is covered by its stager's own
+// discard: the stager holds the lock exclusively (offline) or marks the
+// running store diverged (live), so nothing writes a marker between its
+// discard and this boot's P0a.
+func swapVoidReason(stateDir string) string {
+	st, err := restorejournal.ReadSlot(vfs.Default, stateDir)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("the swap slot under %s could not be read, so this boot's pre-boot swap may replace the store: %v", stateDir, err)
+	case st.Busy():
+		return fmt.Sprintf("this boot's pre-boot swap may replace the store (%v)", st.Err())
+	}
+	return ""
 }
 
 // newSteps is the startup runner when serve hands none.

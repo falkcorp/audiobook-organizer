@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-09
 
@@ -87,13 +87,13 @@ type booksModule struct {
 	// them on the same goroutine.
 	steps    *startup.Steps
 	stateDir string
-	// cleanStop is the HNSW clean-stop marker Options took before app.New
-	// (database.ClaimHNSWCleanStop), and migrated is set when one of books'
-	// migration steps runs inside New (the observer the manifest passes
-	// database.BooksSpec);
-	// Register hands both to the store it builds.
-	cleanStop *database.HNSWCleanStopClaim
-	migrated  atomic.Bool
+	// swapVoid is why this boot must not trust the HNSW clean-stop marker
+	// because of the swap slot, "" when it may (swapVoidReason, read by
+	// Options before app.New runs P0a), and migrated is set by the first of
+	// books' migration steps inside New (beforeMigration). Register takes
+	// the marker for the store it builds and voids it for either.
+	swapVoid string
+	migrated atomic.Bool
 	// dbPath is core.storage.path and version serve's Options.Version,
 	// both set by Options: Attach builds the restore stager from them.
 	dbPath, version string
@@ -134,9 +134,9 @@ func (m *booksModule) Manifest() module.Manifest {
 		// Books' claims on HEAD's key families, its legacy migrations and
 		// its versioned ones, and the projection HEAD's guard reads
 		// (05-storage §5S.3.4, §5S.9.3; internal/database booksspec.go).
-		// Each step marks this boot migrated, which voids the HNSW
-		// clean-stop marker Options took (AdoptHNSWCleanStopClaim).
-		Storage: database.BooksSpec(func() { m.migrated.Store(true) }),
+		// The first step discards the HNSW clean-stop marker and marks this
+		// boot migrated (beforeMigration).
+		Storage: database.BooksSpec(m.beforeMigration),
 		// HEAD's factory-reset file effects (the Open Library dumps and,
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).
@@ -144,6 +144,35 @@ func (m *booksModule) Manifest() module.Manifest {
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
+}
+
+// beforeMigration is the observer the manifest passes database.BooksSpec:
+// it runs before each of books' migration steps inside app.New. The first
+// marks this boot migrated and discards the HNSW clean-stop marker beside
+// the store durably, before the step writes the rows the snapshot projects
+// through a step store no verdict watch counts, so a step that crashes
+// cannot leave the marker vouching (R1-15 follow-up review, MINOR-1).
+// Register takes what is left. A marker that may still vouch fails the
+// step, and with it the boot. Without Options (dbPath "") there is no
+// marker to discard.
+func (m *booksModule) beforeMigration() error {
+	if m.migrated.Swap(true) || m.dbPath == "" {
+		return nil
+	}
+	return database.DiscardHNSWCleanStop(m.dbPath)
+}
+
+// cleanStopVoid is why Register's HNSW clean-stop claim must not vouch for
+// this boot, "" when it may: the pre-boot swap may have replaced the store
+// (swapVoid), or a books migration step wrote it (migrated).
+func (m *booksModule) cleanStopVoid() string {
+	switch {
+	case m.swapVoid != "":
+		return m.swapVoid
+	case m.migrated.Load():
+		return database.HNSWCleanStopVoidMigrated
+	}
+	return ""
 }
 
 // errABSFlagDrift is Register's refusal when the stored settings turn the ABS
@@ -207,9 +236,18 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}
-	// The marker Options took, before anything writes through the store:
-	// the server's snapshot import asks the store for it.
-	store.AdoptHNSWCleanStopClaim(m.cleanStop, m.migrated.Load())
+	// The HNSW clean-stop marker beside the store, before anything writes
+	// through it; the server's snapshot import asks the store for it. Here,
+	// not in Options: the kernel has opened the store and holds its lock, so
+	// no other process writes the rows or the marker between this take and
+	// this run's own writes (R1-15 round-9 review); a take before the open
+	// could miss the marker the store's last holder wrote as it let go, and
+	// leave it vouching on disk through this whole run. Prepare wrote only
+	// core's own keys; a books step that ran discarded the marker before it
+	// wrote (beforeMigration).
+	if m.dbPath != "" {
+		store.ClaimHNSWCleanStop(m.dbPath, m.cleanStopVoid())
+	}
 	// Stored before any step can fail, so Release closes it when New then
 	// refuses.
 	m.store.Store(store)

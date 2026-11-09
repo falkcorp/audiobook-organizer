@@ -1,5 +1,5 @@
 // file: internal/database/readonly_close_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d7c4e19-6a2b-4f83-9e51-b8a3c62f1d47
 // last-edited: 2026-11-09
 
@@ -43,7 +43,7 @@ func TestReadOnlyBooksStoreClosesClean(t *testing.T) {
 	opened, err := storage.Open(ctx, storage.OpenOptions{
 		Path: dir, ReadOnly: true, MustExist: true, Build: build,
 		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true,
-			Spec: BooksSpec(func() { t.Error("a read-only open ran a books migration step") })}},
+			Spec: BooksSpec(func() error { t.Error("a read-only open ran a books migration step"); return nil })}},
 	})
 	if err != nil {
 		t.Fatal(err)

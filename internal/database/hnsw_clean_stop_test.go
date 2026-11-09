@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-09
 
@@ -679,21 +679,20 @@ func TestOpenStandalone_TakesTheMarkerBeforePrepare(t *testing.T) {
 	}
 }
 
-// TestClaimHNSWCleanStop is the served app's take, before app.New, and the
-// hand-over to the store Register builds: the marker leaves the disk at the
-// take, the store's import gets it for the snapshot directory however the
-// database path was spelled, a migration in between voids it, and with
-// claims off nothing is taken.
+// TestClaimHNSWCleanStop is the served app's take, in books' Register: the
+// marker leaves the disk at the take, the store's import gets it for the
+// snapshot directory however the database path was spelled, a void reason
+// (a migration, a swap) still takes it off the disk but leaves the import
+// nothing that vouches, and with claims off nothing is taken.
 func TestClaimHNSWCleanStop(t *testing.T) {
-	adopted := func(t *testing.T, c *HNSWCleanStopClaim, migrated bool) *GatedDB {
+	store := func(t *testing.T) *PebbleStore {
 		t.Helper()
 		ps, err := NewPebbleStoreInMemory("served")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = ps.Close() })
-		ps.AdoptHNSWCleanStopClaim(c, migrated)
-		return ps.DB()
+		return ps
 	}
 
 	// The opener resolves the database path; the server derives the import's
@@ -710,43 +709,47 @@ func TestClaimHNSWCleanStop(t *testing.T) {
 			t.Chdir(wd)
 			in := func(p string) string { return strings.ReplaceAll(p, "{wd}", wd) }
 			writeMarker(t, filepath.Join(wd, "hnsw"))
-			c := ClaimHNSWCleanStop(in(tc.claim))
-			if c == nil {
-				t.Fatal("no claim")
-			}
+			ps := store(t)
+			ps.ClaimHNSWCleanStop(in(tc.claim), "")
 			if markerExists(t, filepath.Join(wd, "hnsw")) {
 				t.Fatal("the take left the marker on disk")
 			}
-			rec, ok := adopted(t, c, false).popCleanStop(in(tc.pop))
+			rec, ok := ps.DB().popCleanStop(in(tc.pop))
 			if !ok || rec == nil || rec.Model != "bge-m3" {
 				t.Errorf("the import got %+v, %v; want the marker the take found", rec, ok)
 			}
 		})
 	}
 
-	t.Run("a migration after the take", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
-		writeMarker(t, HNSWSnapshotDir(dbPath))
-		rec, ok := adopted(t, ClaimHNSWCleanStop(dbPath), true).popCleanStop(HNSWSnapshotDir(dbPath))
-		if !ok || rec != nil {
-			t.Errorf("after a migration the import got %+v, %v; want a claim that does not vouch", rec, ok)
-		}
-	})
+	for _, void := range []string{HNSWCleanStopVoidMigrated, "the pre-boot swap replaced the store"} {
+		t.Run("voided: "+void, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+			dir := HNSWSnapshotDir(dbPath)
+			writeMarker(t, dir)
+			ps := store(t)
+			ps.ClaimHNSWCleanStop(dbPath, void)
+			if markerExists(t, dir) {
+				t.Error("a voided take left the marker on disk")
+			}
+			rec, ok := ps.DB().popCleanStop(dir)
+			if !ok || rec != nil {
+				t.Errorf("after a void the import got %+v, %v; want a claim that does not vouch", rec, ok)
+			}
+		})
+	}
 
 	t.Run("claims turned off", func(t *testing.T) {
 		t.Cleanup(DisableHNSWCleanStopClaim())
 		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
 		dir := HNSWSnapshotDir(dbPath)
 		writeMarker(t, dir)
-		c := ClaimHNSWCleanStop(dbPath)
-		if c != nil {
-			t.Error("a take with claims off returned a claim")
-		}
+		ps := store(t)
+		ps.ClaimHNSWCleanStop(dbPath, "")
 		if !markerExists(t, dir) {
 			t.Error("a take with claims off removed the marker")
 		}
-		if _, ok := adopted(t, c, false).popCleanStop(dir); ok {
-			t.Error("adopting no claim left the store holding one")
+		if _, ok := ps.DB().popCleanStop(dir); ok {
+			t.Error("a take with claims off left the store holding a claim")
 		}
 	})
 }

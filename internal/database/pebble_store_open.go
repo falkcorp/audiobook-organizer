@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -209,7 +209,7 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 		Build:      build,
 		StateFiles: o.StateFiles,
 		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true,
-			Spec: BooksSpec(func() { migrated.Store(true) })}},
+			Spec: BooksSpec(func() error { migrated.Store(true); return nil })}},
 		Logger: logger.FromContext(ctx).With("subsystem", "storage"),
 	})
 	if err != nil {
@@ -239,7 +239,11 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 	if err != nil {
 		return nil, errors.Join(err, guarded())
 	}
-	store.db.adoptCleanStop(claim, migrated.Load())
+	var void string
+	if migrated.Load() {
+		void = HNSWCleanStopVoidMigrated
+	}
+	store.db.adoptCleanStop(claim, void)
 	store.db.setStorageAdmin(db.Admin())
 	if err := store.runOpenRepairs(); err != nil {
 		return nil, errors.Join(err, store.Close())
