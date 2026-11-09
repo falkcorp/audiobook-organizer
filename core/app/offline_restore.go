@@ -1,5 +1,5 @@
 // file: core/app/offline_restore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 10f91970-5117-4c65-b504-d2c27759490c
 // last-edited: 2026-11-09
 
@@ -23,12 +23,12 @@ starting, or another process holds the store, and while a restore or reset
 is in flight (boot the current build once to finish it), except a failed
 checkpoint restore, which the previous binary's --checkpoint restore
 finishes. While it runs in place, the service refuses to start (the swap
-lock, swap.lock in the state directory). In place it runs only as the user
-that owns the state directory, the user the service runs as (for example
-sudo -u <that user> ...): files another user left there, root above all,
-are files the service could not read. --into only copies and never touches
-the live store, so it takes no lock and runs while the service runs, as any
-user.
+lock, swap.lock in the state directory). It runs only as the user that
+owns the state directory, the user the service runs as (for example
+sudo -u <that user> ...), in place or with --into: files another user left
+in the state or checkpoint directory, root above all, are files the service
+could not read or sweep. --into only copies and never touches the live
+store, so it takes no lock and runs while the service runs.
 
   --checkpoint <name>  the checkpoint of the store's latest upgrade attempt
   --archive <file>     an archive (this app's backup format)

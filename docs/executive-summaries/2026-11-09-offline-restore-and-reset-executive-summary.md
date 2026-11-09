@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-09-offline-restore-and-reset-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 3022eed6-957a-4770-8cdf-e17ed51d8848 -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -69,14 +69,15 @@ and the previous database is kept to go back to.
   state directory), because such a user could block restores or the server
   itself. The standard install's folder is fine. The refusal names the
   folder; `chmod g-w,o-w <folder>` fixes it.
-- `storage restore-offline` in place, `storage reset` and any command-line
-  tool that changes the database run only as the user the server runs as,
-  the owner of its data folder. Run as root, they would leave files behind
-  that only root can read, and the server would then fail to start. They now
-  refuse before changing anything and print the command to use instead,
-  `sudo -u <that user> audiobook-organizer ...`. Restoring into an empty
-  folder with `--into`, and tools that only read the database, run as any
-  user.
+- `storage restore-offline` (in place, or into an empty folder with
+  `--into`), `storage reset` and any command-line tool that changes the
+  database run only as the user the server runs as, the owner of its data
+  folder. Run as root, they would leave files behind that only root can
+  read: the server would then fail to start, or, after an `--into` copy,
+  quietly stop clearing out old upgrade safety copies. They now refuse
+  before changing anything and print the command to use instead,
+  `sudo -u <that user> audiobook-organizer ...`. Tools that only read the
+  database run as any user.
 - The review asked for a stricter rule, a data folder only its owner can
   even read. The standard install creates the folder readable by everyone,
   and nothing tightens it, so that rule would stop the server from starting

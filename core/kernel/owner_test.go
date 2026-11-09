@@ -1,5 +1,5 @@
 // file: core/kernel/owner_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 63dcc686-2f07-4d9b-bca2-c14f469f79c9
 // last-edited: 2026-11-09
 
@@ -50,15 +50,15 @@ func treeState(t *testing.T, root string) map[string]string {
 }
 
 // TestOfflineWritesRefuseANonOwner (R1-25 review B-1): storage
-// restore-offline in place (--archive and --checkpoint), storage reset and
-// a read-write offline open refuse a process that is not the state
-// directory's owner (root, as euid 0, or a stranger), with
+// restore-offline in place and --into (--archive and --checkpoint each),
+// storage reset and a read-write offline open refuse a process that is not
+// the state directory's owner (root, as euid 0, or a stranger), with
 // ErrNotStateDirOwner naming the sudo -u fix, before they build a kernel,
 // take a lock or read the slot: the refusal is the owner's even while a
 // service holds the swap lock (a check after the lock would answer
-// ErrServiceRunning), and the state directory and the store are as they
-// were, to the modification time. A read-only open and an --into copy still
-// run as either.
+// ErrServiceRunning; --into, which takes no swap lock, would succeed), and
+// the state directory, the store and the checkpoint directory are as they
+// were, to the modification time. A read-only open still runs as either.
 func TestOfflineWritesRefuseANonOwner(t *testing.T) {
 	h := newSwapHost(t)
 	h.completedUpgrade()
@@ -75,6 +75,9 @@ func TestOfflineWritesRefuseANonOwner(t *testing.T) {
 	}
 	archive := filepath.Join(t.TempDir(), "joker.tar.gz")
 	tree := filepath.Dir(h.state)
+	into := func(who string) string {
+		return filepath.Join(filepath.Dir(h.db), ".mediacore-checkpoints", "scratch", "copy-"+strings.ReplaceAll(who, " ", "-"))
+	}
 
 	for _, who := range []struct {
 		name string
@@ -92,6 +95,16 @@ func TestOfflineWritesRefuseANonOwner(t *testing.T) {
 			}},
 			{"restore-offline --checkpoint in place", func() error {
 				_, err := RestoreOffline(ctx, config(), RestoreOfflineRequest{Checkpoint: h.pointer(), AcceptLoss: true})
+				return err
+			}},
+			// --into takes no swap lock, so without the check it would
+			// succeed beside the lock held below, and leave its copy.
+			{"restore-offline --archive --into", func() error {
+				_, err := RestoreOffline(ctx, config(), RestoreOfflineRequest{Archive: archive, Into: into(who.name)})
+				return err
+			}},
+			{"restore-offline --checkpoint --into", func() error {
+				_, err := RestoreOffline(ctx, config(), RestoreOfflineRequest{Checkpoint: h.pointer(), Into: into(who.name)})
 				return err
 			}},
 			{"storage reset", func() error {
@@ -133,17 +146,13 @@ func TestOfflineWritesRefuseANonOwner(t *testing.T) {
 				h.assertNothingStaged()
 			})
 		}
-		t.Run(who.name+"/read-only open and --into still run", func(t *testing.T) {
+		t.Run(who.name+"/a read-only open still runs", func(t *testing.T) {
 			o, err := OpenOffline(ctx, config(), true)
 			if err != nil {
 				t.Fatalf("a read-only open as %s = %v, want it to run", who.name, err)
 			}
 			if err := o.Close(); err != nil {
 				t.Fatal(err)
-			}
-			into := filepath.Join(filepath.Dir(h.db), ".mediacore-checkpoints", "scratch", "copy-"+strings.ReplaceAll(who.name, " ", "-"))
-			if _, err := RestoreOffline(ctx, config(), RestoreOfflineRequest{Archive: archive, Into: into}); err != nil {
-				t.Fatalf("--into as %s = %v, want the copy", who.name, err)
 			}
 			h.assertNothingStaged()
 		})
