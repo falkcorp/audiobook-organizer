@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.36 -->
+<!-- version: 10.78.37 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -316,7 +316,7 @@ into one of the curated sections below, is a normal direct edit.
   - Unreachable at R1-23: ABO stages no restore or reset until R1-25 moves books' resets onto the `KindReset` swap.
   - Fix (R1-25, its brief's step 7 and `TestStandaloneOpenerHonoursInflightSwap` since R1-23's review): the standalone opener runs the same pre-boot swap the kernel's P0a runs, or it refuses with `storage.ErrSwapPending`'s message telling the operator to boot the app once. Add a test where a staged in-flight swap makes `OpenStandalone` refuse, or complete the swap, before it opens anything.
 
-- [ ] **`make rollback`'s guard reads `.storage-levels` (05-storage §5S.3.7 "The binary-swap guard"; spec test `TestRollbackGuardRefusesAfterCutover`)** `scripts/storage_format_guard.py` still compares only the legacy projection (`<db>.storage-format` against `.prev --print-storage-format`). That is correct through R1: R1-23 keeps the projection at HEAD's format 1, so a rollback to R0 passes. The spec's guard reads `.storage-levels` (falling back to `.storage-format`), asks `.prev --print-storage-levels` (falling back to `--print-storage-format` for an R0 binary), and refuses when any owner's store level is above `.prev`'s, naming `make rollback-restore`. Nothing does that before the first release that raises a level, after which a plain binary swap is no longer a safe rollback.
+- [x] **`make rollback`'s guard reads `.storage-levels` (05-storage §5S.3.7 "The binary-swap guard"; spec test `TestRollbackGuardRefusesAfterCutover`)** — ✅ DONE 2026-11-09 by R1-27: `scripts/storage_format_guard.py` reads `.storage-levels` (falling back to `.storage-format`), asks `.prev --print-storage-levels` (falling back to `--print-storage-format`), and refuses naming `make rollback-restore`; `TestRollbackGuardRefusesAfterCutover` is in `scripts/tests/test_make_rollback.py`. `scripts/storage_format_guard.py` still compares only the legacy projection (`<db>.storage-format` against `.prev --print-storage-format`). That is correct through R1: R1-23 keeps the projection at HEAD's format 1, so a rollback to R0 passes. The spec's guard reads `.storage-levels` (falling back to `.storage-format`), asks `.prev --print-storage-levels` (falling back to `--print-storage-format` for an R0 binary), and refuses when any owner's store level is above `.prev`'s, naming `make rollback-restore`. Nothing does that before the first release that raises a level, after which a plain binary swap is no longer a safe rollback.
   - Owner: R1-27 (its brief's step 6 and test list since R1-23's review; it already edits `make rollback` for the shared in-flight probe). R1-23 added `--print-storage-levels`, which this needs.
 
 - [ ] **SC8-WORKSPACE-LIST-GROWS** `split-readiness.yml` packs every `core/web`
