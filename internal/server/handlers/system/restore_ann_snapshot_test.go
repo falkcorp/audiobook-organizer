@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -801,6 +801,57 @@ func TestRestoreBackup_RemovesTheRestoredMarkerBeforeTheFirstWrite(t *testing.T)
 	require.True(t, got.reached, "the restore never reached the extraction")
 	require.False(t, got.written, "the hook ran after the extraction's first write")
 	assert.False(t, got.present, "the marker beside the custom target's database was still there when the extraction began")
+	assert.False(t, markerPresent(t, restoredDir), "no marker may vouch for the restored database's snapshot")
+}
+
+// TestRestoreBackup_TriesEveryDirectoryBeforeTheFirstWrite: the removal
+// before the extraction goes on to the next snapshot directory after one
+// fails. Here the live directory's marker does not parse, which is an error
+// but not one that stops the restore (the marker vouched for nothing and is
+// gone), and the restored directory, which comes second, holds a marker
+// that does vouch. Stopping at the first error would leave that marker
+// there for the whole extraction; only the backstop after it would remove
+// it, so the test looks at the moment before the first write.
+func TestRestoreBackup_TriesEveryDirectoryBeforeTheFirstWrite(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "audiobooks.pebble")
+	require.NoError(t, os.MkdirAll(dbPath, 0o755))
+	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = filepath.Join(root, "backups")
+	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+
+	liveDir := database.HNSWSnapshotDir(dbPath)
+	require.NoError(t, os.MkdirAll(liveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(liveDir, "hnsw.clean-stop"), []byte("the penguin's umbrella"), 0o644))
+	target := filepath.Join(root, "gotham")
+	restoredDir := filepath.Join(target, "hnsw")
+	plantMarker(t, restoredDir)
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "cataclysm.tar"), []tarEntry{
+		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+	})
+
+	type sighting struct{ reached, present, written bool }
+	var got sighting
+	t.Cleanup(system.SetBeforeRestoreExtractHook(func() {
+		_, err := os.Stat(filepath.Join(target, "audiobooks.pebble", "MANIFEST-000001"))
+		got = sighting{reached: true, present: markerPresent(t, restoredDir), written: err == nil}
+	}))
+
+	h, _ := newTestHandler(t)
+	h.WithANNSnapshotDivergence(func(string) {})
+	body, err := json.Marshal(map[string]any{"backup_filename": "cataclysm.tar", "target_path": target})
+	require.NoError(t, err)
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.True(t, got.reached, "the restore never reached the extraction")
+	require.False(t, got.written, "the hook ran after the extraction's first write")
+	assert.False(t, got.present, "the restored directory's marker was still there when the extraction began: the removal stopped at the live directory's error")
+	assert.False(t, markerPresent(t, liveDir), "the live marker that did not parse was not removed")
 	assert.False(t, markerPresent(t, restoredDir), "no marker may vouch for the restored database's snapshot")
 }
 
