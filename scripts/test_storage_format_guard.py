@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 2.2.0
+# version: 2.3.0
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
 # last-edited: 2026-11-09
 
@@ -15,7 +15,9 @@ scripts/tests/test_make_rollback.py. Run with:
 
 import importlib.util
 import json
+import subprocess
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parent / "storage_format_guard.py"
@@ -407,11 +409,28 @@ class Arguments(unittest.TestCase):
             ("archive", "x\n"),
             ("user", "root"),
             ("unit", "x.service; id"),
+            ("unit", "batman:robin.service"),
             ("host", "-oProxyCommand=id"),
         ):
             with self.subTest(field=field, bad=bad):
                 self.assertNotEqual(guard._validate(opts(**{field: bad})), "")
         self.assertEqual(guard._validate(opts(archive="batcave-20261101.tar.gz")), "")
+
+    def test_ssh_keeps_the_connection_alive(self):
+        """ServerAliveInterval: a restore or wait that prints nothing for
+        minutes must not be dropped by a NAT or firewall idle timeout."""
+        pairs = list(zip(guard.SSH_OPTS[::2], guard.SSH_OPTS[1::2]))
+        self.assertIn(("-o", "ServerAliveInterval=15"), pairs)
+        self.assertIn(("-o", "ServerAliveCountMax=4"), pairs)
+        seen = []
+
+        def fake_run(argv, **kw):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with unittest.mock.patch.object(guard.subprocess, "run", fake_run):
+            guard.run_remote("wayne-manor.invalid", "true", timeout=5)
+        self.assertEqual(seen[0][: 1 + len(guard.SSH_OPTS)], ["ssh", *guard.SSH_OPTS])
 
     def test_sudoers_cli(self):
         import contextlib
