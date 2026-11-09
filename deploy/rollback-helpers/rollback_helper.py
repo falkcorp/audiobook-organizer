@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -119,6 +119,9 @@ TOOLS = {
     "python3": "/usr/bin/python3",
 }
 TRANSIENT_UNIT = "audiobook-organizer-rollback-restore"
+# The last line _report writes into the restore log; scripts/
+# storage_format_guard.py carries the same string for the recovery text.
+RESTORE_DONE = "rollback helper: restore-offline finished: "
 INTO_NAME = "rollback-restore-levels"
 DROPIN = "zz-rollback-type-simple.conf"
 DROPIN_TEXT = "[Service]\nType=simple\n"
@@ -296,16 +299,79 @@ def op_record(args: list[str]) -> int:
     return 0
 
 
-def _transient(cfg: dict[str, str], cmd: list[str]) -> int:
-    """Run cmd as the service user in the transient unit, relaying its log."""
-    os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
+def _transient_state() -> str:
+    p = subprocess.run(  # noqa: S603 (fixed argv)
+        [TOOLS["systemctl"], "show", "-p", "ActiveState", "--value", f"{TRANSIENT_UNIT}.service"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def _deploy_gid() -> int:
+    """The primary group of the user who ran sudo (SUDO_GID), or this
+    process's group when run without sudo."""
+    v = os.environ.get("SUDO_GID", "")
+    return int(v) if v.isdigit() else os.getgid()
+
+
+def _open_log(gid: int) -> int:
+    """The restore log, opened for append (never truncated: a second run
+    must not wipe the output of one still running or just lost to ssh).
+    RUN_DIR and the log stay root-owned, because systemd opens `append:` as
+    root and a file the deploy user owned could be swapped for a symlink;
+    they are group-readable by the deploy user's group so the recovery steps
+    need no sudo."""
+    os.makedirs(RUN_DIR, mode=0o750, exist_ok=True)
+    d = os.open(RUN_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fchown(d, -1, gid)
+        os.fchmod(d, 0o750)
+    finally:
+        os.close(d)
     log = f"{RUN_DIR}/restore.log"
-    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    os.close(fd)
+    try:
+        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o640)
+    except OSError as e:
+        raise RefusedError(f"cannot open {log} ({e.strerror}); nothing was run") from e
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        os.close(fd)
+        raise RefusedError(f"{log} is not a plain file; nothing was run")
+    os.fchown(fd, -1, gid)
+    os.fchmod(fd, 0o640)
+    return fd
+
+
+def _transient(cfg: dict[str, str], cmd: list[str]) -> int:
+    """Run cmd as the service user in the transient unit, relaying its log.
+
+    One restore at a time: a unit still running (or in a state that cannot be
+    read) refuses before the log is opened. The unit runs cmd under _report,
+    which appends `RESTORE_DONE exit N` to the log when cmd ends, so the
+    result is on the host even if this connection (and this process with
+    it) is gone. The unit is not --collect'ed: a failed one keeps its Result
+    for `systemctl status` until the next run resets it."""
+    state = _transient_state()
+    if state not in ("inactive", "failed"):
+        raise RefusedError(
+            f"{TRANSIENT_UNIT}.service is {state or 'in a state that cannot be read'}: a restore may still be "
+            f"running (systemctl status {TRANSIENT_UNIT}). Nothing was started and its log is untouched."
+        )
+    if state == "failed":
+        subprocess.run([TOOLS["systemctl"], "reset-failed", TRANSIENT_UNIT], check=False)  # noqa: S603
+    fd = _open_log(_deploy_gid())
+    log = f"{RUN_DIR}/restore.log"
+    try:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        os.write(fd, f"=== {TRANSIENT_UNIT} started {stamp} ===\n".encode())
+        pos = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
     argv = [
         TOOLS["systemd-run"],
         "--wait",
-        "--collect",
         "--quiet",
         f"--unit={TRANSIENT_UNIT}",
         "--service-type=exec",
@@ -314,14 +380,14 @@ def _transient(cfg: dict[str, str], cmd: list[str]) -> int:
         f"--property=StandardError=append:{log}",
     ]
     argv += [f"--setenv={tok}" for tok in cfg.get("offline_env", "").split()]
-    argv += ["--", *cmd]
+    argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), "_report", "--", *cmd]
     print(
         f"rollback helper: running as {cfg['service_user']} in {TRANSIENT_UNIT}.service; if this connection drops "
-        f"it keeps running: `systemctl status {TRANSIENT_UNIT}`, output in {log}.",
+        f"it keeps running: `systemctl status {TRANSIENT_UNIT}`, output in {log}, whose last line reads "
+        f"`{RESTORE_DONE}exit N` once it has ended.",
         file=sys.stderr,
     )
     proc = subprocess.Popen(argv)  # noqa: S603 (fixed argv built above)
-    pos = 0
     while True:
         done = proc.poll() is not None
         with open(log, "rb") as f:
@@ -334,6 +400,23 @@ def _transient(cfg: dict[str, str], cmd: list[str]) -> int:
         if done:
             return proc.returncode
         time.sleep(0.2)
+
+
+def op_report(args: list[str]) -> int:
+    """Run in the transient unit as the service user (never through sudo):
+    run the command after `--`, then print RESTORE_DONE and its exit status
+    or signal as the log's last line, and exit with that status."""
+    if len(args) < 2 or args[0] != "--":
+        raise RefusedError("usage: _report -- COMMAND...", 2)
+    try:
+        rc = subprocess.run(args[1:], check=False).returncode  # noqa: S603 (the unit's own argv)
+    except OSError as e:
+        print(f"rollback helper: cannot run {args[1]}: {e.strerror}", file=sys.stderr, flush=True)
+        print(f"{RESTORE_DONE}exit 127 (could not start)", flush=True)
+        return 127
+    word = f"exit {rc}" if rc >= 0 else f"signal {-rc}"
+    print(f"{RESTORE_DONE}{word}", flush=True)
+    return rc if rc >= 0 else 128 - rc
 
 
 def op_restore(args: list[str]) -> int:
@@ -790,6 +873,7 @@ OPS = {
     "install": op_install,
     "pprof": op_pprof,
     "_into-worker": op_into_worker,
+    "_report": op_report,
 }
 
 
