@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -398,6 +398,26 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 	})
 }
 
+// TestExtractArchive_SkipsTheTargetItself: an entry that names the target
+// itself is skipped, as "/" always was, so the extraction counts the entries
+// the scan counts (PreparedRestore.Root, ErrArchiveEmpty).
+func TestExtractArchive_SkipsTheTargetItself(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "death-in-the-family.tar")
+	writePlainTar(t, archive, [][2]string{
+		{".", "a file in place of the target"},
+		{"./audiobooks.pebble/MANIFEST-000001", "batcave"},
+	})
+	target := filepath.Join(dir, "gotham")
+	mustMkdir(t, target)
+	if err := extractArchive(archive, target, nil); err != nil {
+		t.Fatalf("extractArchive = %v; want the entry naming the target skipped", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "audiobooks.pebble", "MANIFEST-000001")); err != nil {
+		t.Fatalf("the database entry was not extracted: %v", err)
+	}
+}
+
 func TestPathsOverlap(t *testing.T) {
 	base := t.TempDir()
 	snap := filepath.Join(base, "gotham", "hnsw")
@@ -460,28 +480,21 @@ func TestPrepareRestoreIn_RefusesAnEmptyArchive(t *testing.T) {
 			})
 		}
 	}
-	// The extraction skips an entry whose name is empty once its leading
-	// slashes go, so an archive of only such entries restores nothing too.
-	t.Run("only a name the extraction skips", func(t *testing.T) {
-		dir := t.TempDir()
-		f, err := os.Create(filepath.Join(dir, "the-long-halloween.tar"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tw := tar.NewWriter(f)
-		if err := tw.WriteHeader(&tar.Header{Name: "/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
-			t.Fatal(err)
-		}
-		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
-			t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
-		}
-	})
+	// The extraction skips an entry that names the target itself ("/",
+	// "./", or anything else that cleans to "."), so an archive of only such
+	// entries restores nothing too.
+	for name, entries := range map[string][][2]string{
+		"slash":     {{"/", ""}},
+		"dot slash": {{"./", ""}, {"/", ""}, {"robin/../", ""}},
+	} {
+		t.Run("only names the extraction skips/"+name, func(t *testing.T) {
+			dir := t.TempDir()
+			writePlainTar(t, filepath.Join(dir, "the-long-halloween.tar"), entries)
+			if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
+				t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
+			}
+		})
+	}
 	// A 0-byte file sniffs as an uncompressed tar with no entries.
 	t.Run("zero bytes", func(t *testing.T) {
 		dir := t.TempDir()
@@ -505,6 +518,17 @@ func TestPrepareRestoreIn_RecordsTheArchiveRoot(t *testing.T) {
 		},
 		"audiobooks.pebble": {{"./audiobooks.pebble/OPTIONS-000002", "alfred"}},
 		"database":          {{"/database/MANIFEST-000001", "batcave"}},
+		// tar -C <dir> -cf <archive> . writes the target itself first, as
+		// "./"; that entry is not the root.
+		"oracle.pebble": {
+			{"./", ""},
+			{"./oracle.pebble/", ""},
+			{"./oracle.pebble/MANIFEST-000001", "batcave"},
+		},
+		"robin.pebble": {
+			{"nightwing.pebble/../", ""},
+			{"robin.pebble/MANIFEST-000001", "batcave"},
+		},
 	}
 	for want, entries := range cases {
 		t.Run(want, func(t *testing.T) {
