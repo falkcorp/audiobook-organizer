@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-08
 
@@ -152,13 +152,13 @@ type checkpointRecord struct {
 	ReadyAt     *time.Time        `json:"ready_at,omitempty"`
 	CompletedAt *time.Time        `json:"completed_at,omitempty"`
 	DeleteAfter *time.Time        `json:"delete_after,omitempty"`
-	Status      string            `json:"status"` // open, served, completed, restore_left
+	Status      string            `json:"status"` // open, served, completed, restore_left, consumed
 }
 
 // pending reports a record whose attempt is unfinished: open or served, not
 // completed, released or left by a failed restore.
 func (r checkpointRecord) pending() bool {
-	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left"
+	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left" && r.Status != statusConsumed
 }
 
 // open reports a pending record no boot has served past: the one kind a
