@@ -1,7 +1,7 @@
 // file: internal/scanner/raced_row_primary_handoff_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 00e57d28-b1fc-410b-8ab8-557e1e5fe233
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -47,8 +47,11 @@ func (s *racedRowStore) Unwrap() database.Store { return innerStore(s.scannerSto
 // (installRacedRow over seedHashDupRace's hashDupRaceStore), whose inner layer
 // implements only scannerStore and so is not a database.Store; returning nil
 // there would stop database.AsCapability's walk one layer short of the Pebble
-// store. Skipping that layer loses nothing: a scanner test decorator
-// implements no capability of its own.
+// store. Skipping that layer loses nothing, because none of the decorators
+// that use innerStore implements a capability. A decorator that does (such as
+// scopeCountingStore, which opens the retired-hash scope itself) must not be
+// skipped this way: AsCapability relies on the outermost layer that
+// implements a capability winning.
 func innerStore(s scannerStore) database.Store {
 	if st, ok := s.(database.Store); ok {
 		return st
