@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.13
+// version: 1.28.14
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -990,18 +990,23 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// B1-r3). After the mark, such a stop refuses the marker, and a marker an
 	// earlier stop wrote is removed by the mark itself.
 	h.markANNSnapshotDiverged()
-	// The on-disk markers are removed after the extraction, deferred so that
-	// runs whether it finished, failed partway or panicked. The checks keep
-	// archive entries out of both snapshot directories: PrepareRestoreIn
-	// refuses an entry named into the snapshot directory or climbing out of
-	// the target; Extract compares every directory on the way to each
-	// destination with them by identity, so symlinks and case-insensitive
-	// spellings count, and does not write a file through a symlink (R1-15
-	// round-5 verification review, B1-r5); and a target that overlaps the
-	// live one, compared the same way, was refused above. The removal takes
-	// a marker that was there before the restore, beside a custom target's
-	// database, and is the backstop should an entry still reach one.
+	// The on-disk markers are removed before the extraction's first write,
+	// like the mark: a marker already beside a custom target's database
+	// (the mark covers only the live store) would otherwise outlive a crash
+	// or exit during the extraction and vouch for a snapshot the
+	// half-restored database does not match (R1-15 round-5 verification
+	// review, the B1r-5 order). The checks keep archive entries out of both
+	// snapshot directories: PrepareRestoreIn refuses an entry named into the
+	// snapshot directory or climbing out of the target; Extract compares
+	// every directory on the way to each destination with them by identity,
+	// so symlinks and case-insensitive spellings count, and does not write a
+	// file through a symlink (B1-r5); and a target that overlaps the live
+	// one, compared the same way, was refused above. The removal runs again
+	// after the extraction, deferred so that it runs whether the extraction
+	// finished, failed partway or panicked, as the backstop should an entry
+	// still reach one.
 	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
+	h.removeANNCleanStopMarkers(snapshotDirs)
 	defer h.removeANNCleanStopMarkers(snapshotDirs)
 	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
 		httputil.InternalError(c, "failed to restore backup", err)
