@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-11-09-r1-core-runtime-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: ce0c598d-0803-4350-976d-12990013b6bc -->
 <!-- last-edited: 2026-11-09 -->
 
 # R1: the app now runs on a new foundation, and your library is untouched
 
 **Date:** 9 November 2026
-**Pull request:** PR_PLACEHOLDER (this summary); the work it describes is listed under "Tracked work" below.
+**Pull request:** #4529 (this summary); the work it describes is listed under "Tracked work" below.
 **Plan:** [`docs/plans/platform-core/`](../plans/platform-core/implementation-plan.md)
 
 ## Executive Summary
