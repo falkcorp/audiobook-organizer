@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.7.3
+# version: 1.7.4
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -16,8 +16,8 @@
 #                  "-" and the bot reports the test's "NOTE ... lower" line in its PR body.
 #   check          pass/fail, no baseline.
 # job: where CI executes the gate (scripts/tests/test_run_gates.py verifies it):
-#   own-job   a ci.yml or extraction-gates.yml job runs the command (directly or
-#             through a make target);
+#   own-job   a ci.yml, extraction-gates.yml or unit-lifecycle.yml job runs the
+#             command (directly or through a make target);
 #   go-suite  a Go test in the sharded short-race suite runs it (the test exists
 #             and does not skip under -short).
 #   core-job  .github/workflows/core-ci.yml runs it: core's own gates, and the
@@ -84,3 +84,4 @@ core-pprof	make -C core pprof-check	-	check	-	core-job
 core-mocks	make -C core mocks-check	-	check	-	core-job
 core-coverage-floor	make -C core coverage-floor	-	check	-	core-job
 embed-context	python3 scripts/ci/check_embed_context.py	-	check	-	own-job
+unit-lifecycle	python3 -m unittest -v scripts/tests/test_unit_lifecycle.py	-	check	-	own-job
