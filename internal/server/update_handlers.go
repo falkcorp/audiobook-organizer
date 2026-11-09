@@ -1,7 +1,7 @@
 // file: internal/server/update_handlers.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package server
 
@@ -140,6 +140,7 @@ func isApplyRefusal(err error) bool {
 	for _, refusal := range []error{
 		updater.ErrNoUpdate, updater.ErrInvalidVersion, updater.ErrLocalBuildNeedsVersion,
 		updater.ErrNotNewer, updater.ErrUnversioned, updater.ErrReleaseNotFound,
+		updater.ErrSwapBusy,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -161,6 +162,8 @@ func respondApplyRefusal(c *gin.Context, err error) {
 		httputil.RespondWithConflict(c, updater.ErrNotNewer.Error())
 	case errors.Is(err, updater.ErrUnversioned):
 		httputil.RespondWithConflict(c, updater.ErrUnversioned.Error())
+	case errors.Is(err, updater.ErrSwapBusy):
+		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, updater.ErrReleaseNotFound):
 		httputil.RespondWithError(c, http.StatusNotFound, err.Error(), "NOT_FOUND")
 	default:
