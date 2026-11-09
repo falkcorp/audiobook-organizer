@@ -1,5 +1,5 @@
 # file: scripts/tests/test_deploy_wait_ready.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: f22657cf-f7bf-4b6c-a942-2799f4bd4890
 # last-edited: 2026-11-09
 
@@ -35,6 +35,10 @@ SHOW = r"^systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus audiob
 
 READY = (200, '{"status":"ok","ready":true}')
 WARMING = (200, '{"status":"ok","ready":false}')
+# What the real server answers: every API route wraps its body in {"data": ...}
+# (httputil.RespondWithOK), /health included.
+READY_ENVELOPED = (200, '{"data":{"status":"ok","ready":true,"memdb_ready":true,"degraded":[]}}')
+WARMING_ENVELOPED = (200, '{"data":{"status":"ok","ready":false,"memdb_ready":false,"degraded":[]}}')
 
 
 class WaitReadyTest(unittest.TestCase):
@@ -158,6 +162,22 @@ class WaitReadyTest(unittest.TestCase):
     def test_answer_without_ready_field_fails_with_2(self) -> None:
         proc, _, _ = self.run_wait(
             [fake_ssh.show("active")], [(200, '{"status":"ok"}')], timeout="30"
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("no ready field", proc.stderr)
+
+    def test_ready_is_read_inside_the_data_envelope(self) -> None:
+        """The real /health answers {"data": {"ready": ...}}: warming keeps
+        polling and ready passes, instead of exit 2 on a missing field."""
+        proc, calls, _ = self.run_wait(
+            [fake_ssh.show("active")], [WARMING_ENVELOPED, WARMING_ENVELOPED, READY_ENVELOPED]
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertGreaterEqual(self.server.requests, 3)
+
+    def test_envelope_without_a_ready_field_fails_with_2(self) -> None:
+        proc, _, _ = self.run_wait(
+            [fake_ssh.show("active")], [(200, '{"data":{"status":"ok"}}')], timeout="30"
         )
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("no ready field", proc.stderr)

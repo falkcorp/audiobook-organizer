@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deploy_wait_ready.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 8cc44fdd-c37e-4cc9-b12b-e209be212cee
 # last-edited: 2026-11-09
 
@@ -39,7 +39,9 @@ migrates the store); set that variable to change it.
 
 A /health answer that is not 200, or no answer, keeps polling; a 200 whose
 body has no "ready" field fails at once with exit 2 (that binary predates
-readiness reporting). DEPLOY_WAIT_INTERVAL sets the poll interval in seconds
+readiness reporting). The server wraps its answer as {"data": {...}} (the
+envelope every API route uses), so "ready" is read from the top level and,
+when it is not there, from "data". DEPLOY_WAIT_INTERVAL sets the poll interval in seconds
 (default 5).
 
 Exit status: 0 ready; 1 not ready (TIMEOUT passed, or the unit failed or
@@ -131,6 +133,8 @@ def read_health(url: str) -> tuple[str, str]:
         doc = json.loads(body)
     except ValueError:
         doc = None
+    if isinstance(doc, dict) and "ready" not in doc and isinstance(doc.get("data"), dict):
+        doc = doc["data"]  # the API envelope: {"data": {"ready": true, ...}}
     if not isinstance(doc, dict) or "ready" not in doc:
         return "bad", body.strip()[:200]
     return ("ready" if doc["ready"] is True else "waiting"), "ready=" + json.dumps(doc["ready"])
