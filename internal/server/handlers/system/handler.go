@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.11
+// version: 1.28.12
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -899,9 +899,12 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		// A target that is the live HNSW snapshot directory, lies above it
 		// or lies inside it lets an ordinary entry name land in it (R1-15
 		// round-4 verification review, SHOULD-FIX 1). Refused here, before
-		// anything is prepared or marked. The default target lies above it
-		// too, and is how a restore goes over the live database: there,
-		// PrepareRestoreIn and Extract keep entries out of the directory.
+		// anything is prepared or marked. PathsOverlap compares directories
+		// by identity, so a symlink to it or a case-insensitive spelling
+		// (HNSW, hnſw) counts (round-5 verification review, S1-r5). The
+		// default target lies above it too, and is how a restore goes over
+		// the live database: there, PrepareRestoreIn and Extract keep
+		// entries out of the directory.
 		if dbPath := config.AppConfig.DatabasePath; dbPath != "" && backup.PathsOverlap(cleanTarget, database.HNSWSnapshotDir(dbPath)) {
 			httputil.RespondWithBadRequest(c, "restore target overlaps the HNSW snapshot directory; omit target_path to restore over the live database")
 			return
@@ -966,13 +969,16 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// earlier stop wrote is removed by the mark itself.
 	h.markANNSnapshotDiverged()
 	// The on-disk markers are removed after the extraction, deferred so that
-	// runs whether it finished, failed partway or panicked. No archive entry
-	// can put one there: PrepareRestoreIn refuses an entry named into the
-	// snapshot directory or climbing out of the target, Extract refuses one
-	// that would land in either snapshot directory with symlinks resolved,
-	// and a target that overlaps the live one was refused above. The removal
-	// takes a marker that was there before the restore, beside a custom
-	// target's database.
+	// runs whether it finished, failed partway or panicked. The checks keep
+	// archive entries out of both snapshot directories: PrepareRestoreIn
+	// refuses an entry named into the snapshot directory or climbing out of
+	// the target; Extract compares every directory on the way to each
+	// destination with them by identity, so symlinks and case-insensitive
+	// spellings count, and does not write a file through a symlink (R1-15
+	// round-5 verification review, B1-r5); and a target that overlaps the
+	// live one, compared the same way, was refused above. The removal takes
+	// a marker that was there before the restore, beside a custom target's
+	// database, and is the backstop should an entry still reach one.
 	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
 	defer h.removeANNCleanStopMarkers(snapshotDirs)
 	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
