@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -258,8 +258,8 @@ restart` no longer waits for the server's `READY=1`.
 `Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`. It is part of
 the helper bundle: the owner installs it root-owned into the helpers'
 directory with the rest of the bundle ("Rollback helpers" below), and every
-`deploy` runs `install-staged unit`, which copies that root-owned file into
-`/etc/systemd/system` unchanged. A change to the committed unit reaches the
+`deploy` runs `install-staged unit`, which checks `host.conf` (below) and
+then copies that root-owned file into `/etc/systemd/system` unchanged. A change to the committed unit reaches the
 host when the owner reinstalls the bundle, never through a deploy upload.
 To install it by hand:
 
@@ -434,7 +434,8 @@ against an allowlist of directives, and every check of that kind leaves a gap
 where Python and systemd read a line differently. Instead:
 
 - **`install-staged unit`** copies `audiobook-organizer.service` from the
-  helpers' own directory. It refuses unless that file is root-owned, not
+  helpers' own directory, once host.conf passes its check ("host.conf" below;
+  `install-staged local-conf` runs the same check). It refuses unless that file is root-owned, not
   writable by group or others, not a symlink, at most 256 KiB, and its
   `[Service]` section's `User=` and `Group=` equal the config's
   `service_user` and `service_group` and its `ExecStart=` runs the config's
@@ -481,18 +482,22 @@ no `PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
 `Group=` other than `service_user` and `service_group`. Every `Environment=`
 line `local.conf` deploys reaches whatever the unit runs, and a deploy user
 setting `LD_PRELOAD=` is harmless only while that is the service user's own
-binary, which the deploy user already controls. `install-staged local-conf`
-checks this, and refuses unless host.conf exists as a regular file (not a
+binary, which the deploy user already controls. `install-staged unit` and
+`install-staged local-conf` run one shared check of this before they copy
+anything, and refuse unless host.conf exists as a regular file (not a
 symlink), owned by root and not writable by group or others. A refusal names
-the line, never its text.
+the line, never its text. So a host without a good host.conf never gets the
+base unit installed, and can never restart on the base unit's `ExecStart`,
+whether or not the deploy carries a `local.conf`.
 
 Do this before the first deploy with these helpers. Until then
-`install-staged local-conf` refuses (host.conf is missing, or `local.conf`
-still holds the settings that belong in it), and the deploy stops before it
-touches the binary. By then `deploy` has already reinstalled the unit from
-the helper bundle and run `daemon-reload`; the service has not been
-restarted and keeps running, and the previous `local.conf` is still in place,
-so a later restart still uses its settings.
+`install-staged unit`, the first install step, refuses, and the deploy stops
+with nothing changed. If host.conf is good but `local.conf` still holds the
+settings that belong in host.conf, `install-staged local-conf` refuses
+instead. By then `deploy` has already reinstalled the unit from the helper
+bundle and run `daemon-reload`, but the binary is untouched and the service
+has not been restarted: it keeps running, and the previous `local.conf` is
+still in place, so a later restart still uses its settings.
 
 Install them on the deploy host (as root):
 
