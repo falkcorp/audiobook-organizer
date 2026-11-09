@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -10,12 +10,27 @@ import (
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
 
 // newServer is already defined in root.go as a package-level var pointing
 // to server.NewServer; we use it here to share the test override.
+
+// initializeChildStore and closeChildStore are how the op-runner child opens
+// and closes the live store. The child is not an offline CLI subcommand: the
+// serving parent re-execs it while the store is open under the parent's
+// process, so it keeps the standalone opener (app.OpenOffline refuses a
+// store a running service holds). It passes the state directory so the
+// opener reads the swap slot first, and refuses while a swap is staged or in
+// flight (R1-25; TestCLISubcommandsUseOfflineOpen,
+// TestRunOperationRunner_StagedSwapRefusesTheOpen). Vars so a test can stub
+// them.
+var (
+	initializeChildStore = database.InitializeStoreWith
+	closeChildStore      = database.CloseStore
+)
 
 // init registers the parent-side environment provider for
 // registry.runSubprocess. When the parent re-execs the binary as a child,
@@ -68,9 +83,10 @@ func RunOperationRunner() {
 	})
 
 	snap := config.Snapshot()
-	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath)
+	store, err := initializeChildStore(snap.DatabaseType, snap.DatabasePath,
+		database.StandaloneOptions{StateDir: config.SecureStateDir()})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "child mode: initializeStore: %v\n", err)
+		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
 		os.Exit(2)
 	}
 	// Load persisted config so plugin registration sees the same AppConfig as
@@ -86,7 +102,7 @@ func RunOperationRunner() {
 	// install) is not an error: LoadConfigFromDatabase returns nil for it.
 	if err := loadConfigFromDB(store); err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: failed to load config from database: %v\n", err)
-		if cerr := closeStore(); cerr != nil {
+		if cerr := closeChildStore(); cerr != nil {
 			fmt.Fprintf(os.Stderr, "child mode: close store: %v\n", cerr)
 		}
 		os.Exit(2)

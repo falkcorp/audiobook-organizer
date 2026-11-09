@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-11-08
 
 //go:build bench
 
@@ -103,14 +103,12 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 		authorData, err = fetchAuthorsFromServer(benchServerURL)
 	} else {
 		slog.Info("Fetching authors from local database")
-		store, initErr := initializeStore(
-			config.AppConfig.DatabaseType,
-			config.AppConfig.DatabasePath,
-		)
+		// Read-only: the bench only extracts author data.
+		store, closeCLIStore, initErr := openCLIStore(commandContext(cmd), true)
 		if initErr != nil {
 			return fmt.Errorf("failed to initialize database: %w", initErr)
 		}
-		defer closeStore()
+		defer closeCLIStore()
 		authorData, err = extractAuthorData(store)
 	}
 	if err != nil {
