@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.1.5
+// version: 1.2.0
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-09
 
@@ -75,6 +75,17 @@ type OpenOptions struct {
 	ExtendStart     func(step string)
 	Clock           func() time.Time // nil = time.Now
 	FS              FS               // the filesystem the store opens on; zero = the OS's (tests: MemFS)
+
+	// ReadOnly opens Pebble ReadOnly (§5S.3.10's OpenReadOnly): no WAL
+	// flush, no ratchet, no OPTIONS-<n>, and every handle refuses writes
+	// with ErrReadOnly. Pebble still takes the directory's LOCK, so a store
+	// a running service holds is refused. Only the offline open
+	// (Opened.Offline) and the offline reset's plan read set it.
+	ReadOnly bool
+	// MustExist refuses a directory that holds no store instead of creating
+	// one: an offline open never makes a fresh store (§5S.4 "Offline open"
+	// rule 2), and a read-only open cannot.
+	MustExist bool
 
 	// fs is FS's filesystem, else the OS's (defaults).
 	fs vfs.FS
@@ -302,11 +313,12 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	opts.ExtendStart("storage.open")
 	eng, err := ipebble.Open(opts.Path, ipebble.Options{
 		FS: opts.fs, CacheBytes: opts.CacheBytes, MemtableBytes: opts.MemtableBytes, Logger: opts.Logger,
+		ReadOnly: opts.ReadOnly, ErrorIfNotExists: opts.MustExist || opts.ReadOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: %w", err)
 	}
-	db := newDB(eng, opts, owners, claims, false)
+	db := newDB(eng, opts, owners, claims, opts.ReadOnly)
 	st := &bootState{opts: opts}
 	db.boot = st
 	if err := db.readBoot(ctx, refs); err != nil {
@@ -335,6 +347,88 @@ func (o *Opened) Fresh() bool { return o.db.boot.fresh }
 
 // Levels is the committed level stamp of every owner the store holds.
 func (o *Opened) Levels() Levels { return maps0(o.db.boot.stamps) }
+
+// InstallID is the live store's install marker, or for a marker-less store
+// the ID step 5 chose for the marker this boot would write; "" for an empty
+// store opened read-only. A reset intent records it (set_aside_started's
+// Record.InstallID, DATA9-15).
+func (o *Opened) InstallID() string {
+	if o.db.boot.fresh && o.db.readOnly {
+		return ""
+	}
+	return o.db.boot.installID
+}
+
+// ErrOfflinePendingSteps: an offline open found a store that only serve may
+// open, because P4 would write to it (§5S.4 "Offline open" rule 2,
+// DATA7-11): a runnable migration step, an empty store (its fresh install
+// and Seed steps), and, for a read-write open, the boot writes a restore
+// point must cover (the install marker of a marker-less store, the Pebble
+// format ratchet, a stranded upgrade attempt). Compared with errors.Is; the
+// error is an *OfflinePendingError naming what is pending.
+var ErrOfflinePendingSteps = errors.New("storage: the store has pending boot steps that only serve runs; start serve once first")
+
+// OfflinePendingError is ErrOfflinePendingSteps with what is pending: the
+// runnable steps in DAG order, or the boot write a read-write offline open
+// refuses to make.
+type OfflinePendingError struct {
+	Steps  []StepRef // the runnable migration steps, in DAG order
+	Reason string    // the pending boot write when Steps is empty
+}
+
+func (e *OfflinePendingError) Error() string {
+	if len(e.Steps) == 0 {
+		return fmt.Sprintf("%v (%s)", ErrOfflinePendingSteps, e.Reason)
+	}
+	names := make([]string, len(e.Steps))
+	for i, r := range e.Steps {
+		names[i] = r.String()
+	}
+	return fmt.Sprintf("%v: %d migration step(s) pending: %s", ErrOfflinePendingSteps, len(e.Steps), strings.Join(names, ", "))
+}
+
+// Is matches ErrOfflinePendingSteps.
+func (e *OfflinePendingError) Is(target error) bool { return target == ErrOfflinePendingSteps }
+
+// Offline is §5S.4 "Offline open" rules 1, 2 and 5 over a store Open read
+// (06 §6.4.6; R7-4, DATA7-11): it returns the DB with nothing written, so
+// a CLI session reads and writes through the handles a serve boot issues,
+// and never migrates. It refuses, with *OfflinePendingError (errors.Is
+// ErrOfflinePendingSteps): an empty store (serve's fresh install); a
+// runnable migration step, naming each; and, for a read-write open, a
+// marker-less store (the checkpoint and marker serve writes first), a
+// stranded upgrade attempt (completed by serve's P4a) and a store whose
+// Pebble format serve would ratchet. A read-only open (OpenOptions.ReadOnly)
+// passes those three: it writes nothing a restore point must cover. After
+// Offline, Prepare and Migrate refuse; MarkServed refuses too, because an
+// offline session never serves.
+func (o *Opened) Offline() (*DB, error) {
+	db := o.db
+	st := db.boot
+	if st.prepared {
+		return nil, errors.New("storage: Offline after Prepare")
+	}
+	refuse := func(reason string) (*DB, error) { return nil, &OfflinePendingError{Reason: reason} }
+	switch {
+	case st.fresh:
+		return refuse("the store is empty: its fresh install and seed steps are serve's")
+	case len(st.plan) > 0:
+		steps := make([]StepRef, len(st.plan))
+		for i, n := range st.plan {
+			steps[i] = n.ref
+		}
+		return nil, &OfflinePendingError{Steps: steps}
+	case db.readOnly:
+	case !st.marker:
+		return refuse("the store has no install marker: serve takes its checkpoint and writes the marker first")
+	case st.attempt != "":
+		return refuse(fmt.Sprintf("upgrade attempt %s was left uncompleted by a killed boot: serve completes it", st.attempt))
+	case db.eng.NeedsRatchet():
+		return refuse("the store's Pebble format is below this build's: serve ratchets it behind a checkpoint")
+	}
+	st.prepared, st.migrated = true, true
+	return db, nil
+}
 
 // storageKS is storage's own keyspace c/storage/.
 func (db *DB) storageKS() Keyspace {
@@ -921,7 +1015,10 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 	db := o.db
 	st := db.boot
 	if st.prepared {
-		return nil, errors.New("storage: Prepare called twice")
+		return nil, errors.New("storage: Prepare called twice, or after Offline")
+	}
+	if db.readOnly {
+		return nil, fmt.Errorf("storage: Prepare on a read-only open: %w", ErrReadOnly)
 	}
 	st.prepared = true
 	// A stranded attempt is completed before the checkpoint decision, so a
