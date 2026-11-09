@@ -1,5 +1,5 @@
 // file: internal/versions/unit_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
 // last-edited: 2026-11-09
 
@@ -50,7 +50,7 @@ func TestCreateIngestVersion_StoreErrorOnCreate(t *testing.T) {
 	// First version — no unfinished swap and no active version exists.
 	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
-	mockStore.EXPECT().CreateBookVersion(mock.AnythingOfType("*database.BookVersion")).Return(nil, errors.New("db write failed"))
+	mockStore.EXPECT().CreateBookVersion(mock.AnythingOfType("*store.BookVersion")).Return(nil, errors.New("db write failed"))
 
 	_, _, err := CreateIngestVersion(mockStore, IngestVersionParams{
 		BookID:   "book-1",

@@ -1,5 +1,5 @@
 // file: cmd/cli_store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c0b5a54-1d2f-4a49-9a8e-7e6a3f1b2c40
 // last-edited: 2026-11-09
 
@@ -296,16 +296,16 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 		}
 		// file|declaration|selector -> why it may open the store itself.
 		allow := map[string]string{
-			"child_mode.go|initializeChildStore|database.InitializeStoreWith": "the op-runner child is not an offline subcommand: " +
+			"child_mode.go|initializeChildStore|store.InitializeStoreWith": "the op-runner child is not an offline subcommand: " +
 				"the serving parent re-execs it over the live store, which app.OpenOffline refuses; it keeps the standalone " +
 				"opener and passes StateDir so the opener reads the swap slot first",
 			"diagnostics.go|runRawPebbleQuery|pebble.Open": "diagnostics query --raw inspects a store the guard refuses, by design; " +
 				"it probes the swap slot first (refuseBusySwapSlot) and opens read-only, so it adds nothing to the store directory",
-			"diagnostics.go|runReservedPrefs|database.ListReservedPreferences": "reserved-prefs is a recovery tool that bypasses the guard by design; " +
+			"diagnostics.go|runReservedPrefs|store.ListReservedPreferences": "reserved-prefs is a recovery tool that bypasses the guard by design; " +
 				"it probes the swap slot first, in every mode (refuseBusySwapSlot); the listing opens read-only",
-			"diagnostics.go|repairReservedPreference|database.RepairReservedPreference": "the same recovery tool's --set and --delete, which run only as the state directory's owner " +
+			"diagnostics.go|repairReservedPreference|store.RepairReservedPreference": "the same recovery tool's --set and --delete, which run only as the state directory's owner " +
 				"(storage.RefuseNotStateDirOwner); a var only so a test can fail it after a commit",
-			"pid-census/main.go|main|database.NewPebbleStore": "pid-census opens a COPY of the store, never the live one",
+			"pid-census/main.go|main|store.NewPebbleStore": "pid-census opens a COPY of the store, never the live one",
 		}
 
 		used := map[string]bool{}

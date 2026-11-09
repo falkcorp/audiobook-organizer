@@ -1,5 +1,5 @@
 // file: internal/organizer/unit_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-11-09
 
@@ -807,7 +807,7 @@ func TestMoveBookFile_Success(t *testing.T) {
 	// must carry the new FilePath on the hydrated row.
 	mockStore.On("GetBookByID", "book-1").
 		Return(&database.Book{ID: "book-1", Title: "Kept Title"}, nil)
-	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).
+	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*store.Book")).
 		Run(func(args mock.Arguments) {
 			book := args.Get(1).(*database.Book)
 			if book.FilePath != dst {
@@ -838,7 +838,7 @@ func TestMoveBookFile_DBUpdateFails_Rollback(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-1").
 		Return(&database.Book{ID: "book-1"}, nil)
-	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).Return(nil, fmt.Errorf("db error"))
+	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*store.Book")).Return(nil, fmt.Errorf("db error"))
 
 	err := MoveBookFile(mockStore, "book-1", src, dst, nil)
 	if err == nil {
@@ -857,7 +857,7 @@ func TestMoveBookFile_WithExtraUpdates(t *testing.T) {
 	os.WriteFile(src, []byte("content"), 0644)
 
 	mockStore := newMockStore(t)
-	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).
+	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*store.Book")).
 		Run(func(args mock.Arguments) {
 			book := args.Get(1).(*database.Book)
 			if book.FilePath != dst {
