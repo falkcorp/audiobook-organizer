@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package kernel
 
@@ -50,6 +50,9 @@ var ErrCheckpointRestoreFailedHere = restoreswap.ErrCheckpointRestoreFailedHere 
 type kernelSwap struct {
 	s   *restoreswap.Swapper
 	out restoreswap.Outcome
+	// hookOwed: a ResetFactory swap whose app declares a reset hook reached
+	// P4b, so hook_done is the hook's (Run step (2), reset.go), not P4b's.
+	hookOwed bool
 }
 
 // swapWanted gates P0a: a state directory, and not Describe, which performs
@@ -146,12 +149,23 @@ func (p refuseProbe) Writable(dir string) error           { return p.refuse(dir)
 // itself leaves the untouched store to boot, degraded. Then the reader check
 // of 05-storage §5S.3.7 for the kernel's own open (decision D9): the store
 // opens with an in-flight file only for the journal P0a just took over.
+//
+// First P0a takes the swap lock exclusively (lockSwapForP0a), and turns it
+// shared once the swap step is done; the kernel holds it until it closes
+// (R1-25 review B1 and B3). So a boot is refused before it reads the slot
+// while any other process holds the lock (storage restore-offline, storage
+// reset, another service or any other opener), no two P0a runs overlap,
+// and neither offline swap starts while this process may use the store.
 func (k *Kernel) runP0a(ctx context.Context) error {
 	if k.cfg.StoragePath == "" {
 		// A swap applies to a store (R1-21 review m10): run with none, a
 		// staged restore would start and wait at swapped, in flight, on
 		// every boot. Refused before the state directory is read.
 		return errors.New("kernel: Config.StateDir is set without Config.StoragePath; the pre-boot swap (P0a) needs the store it swaps")
+	}
+	lock, err := k.lockSwapForP0a(ctx)
+	if err != nil {
+		return err
 	}
 	fs := bootseam.FS(ctx)
 	build, err := k.binaryID(ctx)
@@ -181,6 +195,14 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	case ok && (out.Boot == restoreswap.BootPlain || out.ID != id):
 		return fmt.Errorf("%w: restore/%s/inflight.json, which this boot's P0a did not take over", ErrSwapInFlight, id)
+	}
+	// P0a is done; from here this boot holds the lock shared, as every
+	// opener does. Another serve boot's P0a and every offline swap stay
+	// refused while it runs, the rest of a swap it started (P2 to P4b)
+	// included. A failed downgrade may hold nothing, so the boot stops here,
+	// as a crash would: the journal is as far as this P0a wrote it.
+	if err := lock.Downgrade(); err != nil {
+		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}
 	return nil
 }
@@ -227,9 +249,12 @@ func (k *Kernel) swapPhase(ctx context.Context, phase string, fn func() error) f
 //   - reset, after P4a's fresh install: applied (R1 has no keyring, so at
 //     the point secrets.Open would rewrite its header, the start of P4b);
 //   - reset, after P4b (P4d step 1, after the migration list; R1 has no
-//     P4c or P4d phase and no reset hook): the delete entries removed, then
-//     hook_done and the in-flight file deleted (COR8-4). A boot that
-//     resumes a journal at applied does only this step.
+//     P4c or P4d phase): a ResetStore swap, or any reset of an app with no
+//     reset hook, has the delete entries removed, then hook_done and the
+//     in-flight file deleted (COR8-4); a ResetFactory swap of an app with a
+//     reset hook leaves hook_done to the hook, which runs at Run step (2)
+//     (runResetHook). A boot that resumes a journal at applied does only
+//     this step.
 //
 // A journal write that fails halts boot; the next boot resumes the journal.
 func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
@@ -243,6 +268,10 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
 		err = s.ResetApplied(ctx, out.ID)
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
+		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
+			k.swap.hookOwed = true
+			break
+		}
 		err = s.ResetDone(ctx, out.ID)
 	}
 	if err != nil {

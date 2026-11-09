@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/delete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7feb16-7fa9-4e12-811f-691eb15b5b55
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package restorejournal
 
@@ -58,6 +58,9 @@ func TestKeptPaths(t *testing.T) {
 		"/batcave/db/.mediacore-restore/r-older/previous/main.pebble",
 		"/media/arkham/.mediacore-restore", "/media/arkham/.mediacore-restore/z-reset/previous/oldb",
 		db, filepath.Join(db, "MANIFEST-000001"), db + LevelsSuffix, db + CheckpointSuffix, db + ".storage-format",
+		// The swap lock (R1-25 review B1): removing it would let a later
+		// offline swap and a boot each take a lock the other never sees.
+		filepath.Join(state, "swap.lock"),
 	} {
 		if !Kept(state, in, []string{".storage-format"}, p) {
 			t.Errorf("Kept(%s) = false, want kept", p)
