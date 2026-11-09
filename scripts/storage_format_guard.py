@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.0.0
+# version: 2.1.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
 # last-edited: 2026-11-09
 
@@ -10,57 +10,56 @@
 rollback-restore`, 09 §9.2.1 "Rollback"; R1-27. The name is kept from HEAD's
 storage-format guard, which this replaces.
 
-Three subcommands, each reading the deploy host over `ssh` (BatchMode, so a
-password prompt fails at once) and deciding before anything is changed:
+This module decides; scripts/deploy_rollback.py runs the recipes and loads
+it from ROLLBACK_GUARD (so the recipe tests can run a mutated copy). Every
+remote command either recipe runs is in `commands()`, and `sudoers()`
+renders the deploy user's sudoers drop-in from the same table, so the two
+cannot drift (scripts/tests/test_make_rollback.py checks every sudo command
+the recipes run against it, and the doc's block against its output).
 
-  rollback  `make rollback`'s check before it swaps `<bin>.prev` in. It
-            refuses while a swap is in flight, and when any owner's store
-            level is above what `.prev` serves, naming `make
-            rollback-restore`: a binary swap cannot go back past a level step.
-  inflight  the in-flight probe alone (`make rollback-restore` runs it again
-            after it stops the service).
-  stopped   refuse unless the unit reads inactive or failed: `make
-            rollback-restore` holds the service down by checking, after the
-            stop and again after the restore, that nothing started it (the
-            unit cannot be masked while its file is in /etc/systemd/system;
-            the restore's own swap lock is the exclusion).
-  restore   `make rollback-restore`'s check before it stops the service: the
-            in-flight probe, then the source's levels (the checkpoint record's
-            `from_vector`, or with --archive the levels of the archived store,
-            read from a scratch copy the current binary extracts) must EQUAL
-            `.prev --print-storage-levels`, else it refuses naming the release
-            to install. On success it prints, on stdout and alone, the remote
-            command that restores the source; everything else goes to stderr.
+Privileged steps go through the root-owned helpers in HELPER_DIR
+(deploy/rollback-helpers/), each granted with no argument list and each
+validating its own arguments; plain `sudo -n` lines remain only for
+commands with fixed arguments (the sidecar reads, systemctl stop, start and
+restart of the one unit). The helpers take their paths from the host's
+HOST_CONFIG, which the recipes read first (it is world-readable and holds no
+secret) and compare with DEPLOY_BIN, DEPLOY_DB and DEPLOY_UNIT.
 
-What is read, and from where:
+The decisions:
 
-- the in-flight probe, one literal command shared by both recipes:
-  `sudo -n /usr/bin/find <state_dir> -maxdepth 3 -path
-  '<state_dir>/restore/*/inflight.json' -print`. Any output is a swap in
-  flight: refuse, no override ("boot the current build once to finish it").
-  A pending intent (`restore/pending.json`) does not match and passes: the
-  older build rejects it at its own boot. A non-zero exit, or stderr starting
-  with `sudo:`, refuses naming the sudoers line.
-- the store's levels from `<db>.storage-levels` (lines `<owner> <level>`),
-  read with `sudo -n cat`. Only when that file does not exist (a store no
-  core build has opened) the guard falls back to HEAD's projection sidecar
-  `<db>.storage-format` and its old rules, ROLLBACK_IGNORE_FORMAT=1 included
-  (it covers only an unreadable projection sidecar, never levels, never the
-  probe).
-- what `.prev` serves from `<bin>.prev --print-storage-levels`, which prints
-  one JSON object, owner to level. An R0 binary rejects the flag ("unknown
-  flag: --print-storage-levels"); the guard then asks
-  `--print-storage-format`, and format 1, or a build so old it rejects that
-  flag too, serves every owner at level 0. Any other answer (a crash, an ssh
-  failure, nothing) is not guessed: it refuses.
-- an owner absent from a vector is at level 0 (05-storage §5S.3.7: absent
-  stamp = 0).
-- the checkpoint: `<db>.migration-checkpoint` (JSON, `name` names the latest
-  attempt's checkpoint) and the record
-  `<checkpoint_dir>/.mediacore-checkpoints/<name>.json`, read as the service
-  user (the record is the service user's, mode 0600).
+- `check_inflight`: the in-flight probe (the inflight-probe helper runs
+  `find <state_dir> -maxdepth 3 -path '<state_dir>/restore/*/inflight.json'
+  -print`). Any output is a swap in flight: refuse, no override ("boot the
+  current build once to finish it"). A pending intent
+  (`restore/pending.json`) does not match and passes: the older build
+  rejects it at its own boot. A non-zero exit, or stderr starting with
+  `sudo:`, refuses.
+- `decide_rollback`: the store's levels from `<db>.storage-levels` (lines
+  `<owner> <level>`), against what `.prev` serves (`--print-storage-levels`,
+  one JSON object; an R0 binary rejects the flag and is asked
+  `--print-storage-format`: format 1, or no such flag either, serves every
+  owner at 0; any other answer is not guessed and refuses). An owner absent
+  from a vector is at level 0. Refuses when any store level is above
+  `.prev`'s, naming `make rollback-restore`. Only a store no core build has
+  opened (no `.storage-levels` AND no `<db>.migration-checkpoint`) falls
+  back to HEAD's projection sidecar `<db>.storage-format` and its old rules,
+  ROLLBACK_IGNORE_FORMAT=1 included (it covers only an unreadable projection
+  sidecar, never levels, never the probe).
+- `decide_restore`: the probe, then the source: the latest checkpoint
+  (`<db>.migration-checkpoint` names it; the checkpoint-record helper prints
+  its record, which must be restorable as core's Checkpoint.Restorable()
+  says and carry `from_vector.levels`), or with ROLLBACK_ARCHIVE an archive
+  in the helpers' archive_dir, whose levels the restore-offline helper reads
+  from a scratch copy (`into-check`). The source's levels must EQUAL
+  `.prev --print-storage-levels`, else it refuses naming the release to
+  install.
+- `check_stopped`: the unit must read inactive or failed; an unreadable unit
+  is a state unknown, and refuses too.
 
-Exit 0: proceed. Exit 1: refuse; nothing was changed. Exit 2: bad arguments.
+Text from the host is printed with its control characters removed.
+
+Exit status of the CLI: 0 printed; 2 bad arguments. The one subcommand,
+`sudoers`, prints the drop-in for the given values.
 
 Standard library only. Tests: scripts/test_storage_format_guard.py (the
 decisions) and scripts/tests/test_make_rollback.py (the recipes over a fake
@@ -73,22 +72,45 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Callable
 
-DOCS = "docs/system/deploy-and-gpu-ops.md (Rollback flow, sudoers)"
+DOCS = "docs/system/deploy-and-gpu-ops.md (Rollback helpers, sudoers)"
+HELPER_DIR = "/usr/local/libexec/audiobook-organizer/rollback"
+HOST_CONFIG = "/etc/audiobook-organizer/rollback.conf"
+TRANSIENT_UNIT = "audiobook-organizer-rollback-restore"
+SSH_OPTS = [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=4",
+]
 # Host paths go into shell commands and sudoers lines unquoted: allow only
 # characters that need no quoting.
 _SAFE_PATH = re.compile(r"^/[A-Za-z0-9._/@+-]+$")
-_SAFE_ENV = re.compile(r"^[A-Z_][A-Z0-9_]*=[A-Za-z0-9._/@+:-]*$")
 _SAFE_USER = re.compile(r"^[a-z_][a-z0-9_-]*$")
-# 05-storage §5S.3.12 "Where": the checkpoint name grammar.
-_CHECKPOINT_NAME = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
+# 05-storage §5S.3.12 "Where": the checkpoint name grammar (fullmatch: `$`
+# would let a trailing newline through).
+_CHECKPOINT_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
+_ARCHIVE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,199}")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# core/storage/checkpoints.go Restorable(): the statuses whose copy is still
+# the store the record describes.
+_RESTORABLE = ("open", "served", "completed")
 _OLD_LEVELS_FLAG = re.compile(r"unknown flag: --print-storage-levels(\s|$)")
 _OLD_FORMAT_FLAG = re.compile(r"unknown flag: --print-storage-format(\s|$)")
-INTO_NAME = "rollback-restore-levels"
+
+
+def clean(text: str) -> str:
+    """Host text with control characters removed (newlines and tabs kept)."""
+    return _CONTROL.sub("", text or "")
 
 
 @dataclass
@@ -116,12 +138,14 @@ class Opts:
     host: str
     db: str
     bin: str
-    state_dir: str
     unit: str = "audiobook-organizer.service"
+    # From the host's HOST_CONFIG (load_host_config):
+    state_dir: str = ""
     user: str = "audiobook"
     checkpoint_dir: str = ""
+    archive_dir: str = ""
+    # ROLLBACK_ARCHIVE: an archive's file name inside archive_dir.
     archive: str = ""
-    offline_env: str = ""
 
     @property
     def cp_area(self) -> str:
@@ -130,39 +154,143 @@ class Opts:
         ) + "/.mediacore-checkpoints"
 
     @property
-    def into(self) -> str:
-        return f"{self.cp_area}/scratch/{INTO_NAME}"
-
-    def offline(self, args: str) -> str:
-        env = f" {self.offline_env}" if self.offline_env else ""
-        return f"sudo -n -u {self.user} /usr/bin/env{env} {self.bin} storage restore-offline --db {self.db} {args}"
+    def transient_log(self) -> str:
+        return "/run/audiobook-organizer-rollback/restore.log"
 
 
-def commands(o: Opts, record_name: str = "") -> dict[str, str]:
-    """Every remote command the guard runs, by key."""
-    sd = o.state_dir.rstrip("/")
-    into = o.into
+def commands(o: Opts, name: str = "") -> dict[str, str]:
+    """Every remote command the rollback recipes run, by key. `name` is the
+    checkpoint name for the record and restore keys."""
+    h = HELPER_DIR
     return {
-        "probe": f"sudo -n /usr/bin/find {sd} -maxdepth 3 -path '{sd}/restore/*/inflight.json' -print",
-        "levels": f"sudo -n cat {o.db}.storage-levels",
-        "format": f"sudo -n cat {o.db}.storage-format",
+        "host_config": f"cat {HOST_CONFIG}",
+        "prev_exists": f"test -f {o.bin}.prev",
+        "probe": f"sudo -n {h}/inflight-probe",
+        "levels": f"sudo -n /usr/bin/cat {o.db}.storage-levels",
+        "format": f"sudo -n /usr/bin/cat {o.db}.storage-format",
+        "pointer": f"sudo -n /usr/bin/cat {o.db}.migration-checkpoint",
         "prev_levels": f"{o.bin}.prev --print-storage-levels",
         "prev_format": f"{o.bin}.prev --print-storage-format",
+        "prev_caps": f"{o.bin}.prev --print-capabilities",
         "current_format": f"{o.bin} --print-storage-format",
-        "pointer": f"sudo -n cat {o.db}.migration-checkpoint",
-        "record": f"sudo -n -u {o.user} cat {o.cp_area}/{record_name}.json",
-        "into_clean": f"sudo -n -u {o.user} rm -rf {into} {into}.state {into}.storage-levels {into}.storage-format",
-        "into": o.offline(f"--archive {o.archive} --into {into}"),
-        "into_levels": f"sudo -n -u {o.user} cat {into}.storage-levels",
+        "record": f"sudo -n -u {o.user} {h}/checkpoint-record {name}",
+        "into": f"sudo -n {h}/restore-offline into-check {o.archive}",
+        "restore_checkpoint": f"sudo -n {h}/restore-offline checkpoint {name}",
+        "restore_archive": f"sudo -n {h}/restore-offline archive {o.archive}",
         "unit": f"systemctl show -p ActiveState,SubState {o.unit}",
+        "invocation": f"systemctl show -p InvocationID --value {o.unit}",
+        "stop": f"sudo -n /usr/bin/systemctl stop {o.unit}",
+        "start": f"sudo -n /usr/bin/systemctl start {o.unit}",
+        "restart": f"sudo -n /usr/bin/systemctl restart {o.unit}",
+        "unit_type_simple": f"sudo -n {h}/unit-type simple",
+        "unit_type_notify": f"sudo -n {h}/unit-type notify",
+        "swap": f"sudo -n {h}/swap-prev",
     }
 
 
+def sudoers(o: Opts, deploy_user: str) -> str:
+    """The deploy user's sudoers drop-in, rendered from commands(): one line
+    per command with fixed arguments (sudo matches them exactly), each helper
+    that takes arguments granted bare (in sudoers that admits any arguments:
+    the helper validates them), each helper that takes none granted with ""
+    (none admitted). No `*` anywhere: in sudoers a `*` in arguments also
+    matches spaces and `/`, which made the old find line a root shell."""
+    c = commands(o, "NAME")
+    root: list[str] = []
+    as_user: list[str] = []
+    for key in (
+        "levels",
+        "format",
+        "pointer",
+        "stop",
+        "start",
+        "restart",
+        "probe",
+        "swap",
+        "restore_checkpoint",
+        "unit_type_simple",
+        "record",
+    ):
+        argv = shlex.split(c[key])
+        user = "root"
+        argv = argv[2:]  # sudo -n
+        if argv[0] == "-u":
+            user, argv = argv[1], argv[2:]
+        if argv[0].startswith(HELPER_DIR + "/"):
+            spec = (
+                argv[0]
+                if key in ("restore_checkpoint", "unit_type_simple", "record")
+                else f'{argv[0]} ""'
+            )
+        else:
+            spec = " ".join(argv)
+        (root if user == "root" else as_user).append(spec)
+
+    def block(runas: str, specs: list[str]) -> str:
+        return f"{deploy_user} ALL=({runas}) NOPASSWD: " + ", \\\n    ".join(specs)
+
+    return block("root", root) + "\n" + block(o.user, as_user) + "\n"
+
+
+def parse_host_config(text: str) -> tuple[dict[str, str] | None, str]:
+    """Parse HOST_CONFIG's `key = value` lines (deploy/rollback-helpers)."""
+    cfg: dict[str, str] = {}
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep:
+            return None, f"line {n} is not `key = value`"
+        cfg[key.strip()] = value.strip()
+    for key in ("bin", "db", "state_dir", "unit", "service_user", "archive_dir"):
+        if not cfg.get(key):
+            return None, f"{key} is not set"
+    return cfg, ""
+
+
+def load_host_config(o: Opts, get: Getter) -> list[str]:
+    """Read HOST_CONFIG, fill o's host-side values, and return refusal lines
+    when it is missing or names another binary, store or unit."""
+    r = get("host_config")
+    if r.rc != 0:
+        return [
+            f"REFUSING: cannot read the rollback helpers' config {HOST_CONFIG} on {o.host} ({_cause(r)}). "
+            "Nothing was changed.",
+            f"Install the rollback helpers and their config first ({DOCS}).",
+        ]
+    cfg, err = parse_host_config(clean(r.stdout))
+    if cfg is None:
+        return [f"REFUSING: {HOST_CONFIG} on {o.host} does not parse ({err}). Nothing was changed."]
+    differ = [
+        f"{label}={mine} but {HOST_CONFIG} has {key} = {cfg[key]}"
+        for label, mine, key in (
+            ("DEPLOY_BIN", o.bin, "bin"),
+            ("DEPLOY_DB", o.db, "db"),
+            ("DEPLOY_UNIT", o.unit, "unit"),
+        )
+        if mine != cfg[key]
+    ]
+    if differ:
+        return [
+            "REFUSING: the rollback helpers act on the paths in their config, and they differ from this make "
+            f"run's: {'; '.join(differ)}. Nothing was changed.",
+            "Fix whichever one is wrong, so the guard checks the store and binary the helpers change.",
+        ]
+    o.state_dir, o.user = cfg["state_dir"], cfg["service_user"]
+    o.checkpoint_dir, o.archive_dir = cfg.get("checkpoint_dir", ""), cfg["archive_dir"]
+    bad = _validate(o)
+    if bad:
+        return [f"REFUSING: {HOST_CONFIG}: {bad}. Nothing was changed."]
+    return []
+
+
 def _cause(r: Result) -> str:
-    lines = [ln.strip() for ln in r.stderr.splitlines() if ln.strip()]
+    lines = [ln.strip() for ln in clean(r.stderr).splitlines() if ln.strip()]
     parts = [f"exit {r.rc}"]
-    if r.stdout.strip():
-        parts.append(f"stdout {r.stdout.strip()[:200]!r}")
+    out = clean(r.stdout).strip()
+    if out:
+        parts.append(f"stdout {out[:200]!r}")
     if lines:
         parts.append("stderr: " + " | ".join(lines[-3:]))
     return "; ".join(parts)
@@ -230,10 +358,10 @@ def check_inflight(o: Opts, get: Getter) -> list[str]:
         return [
             f"REFUSING: the in-flight probe failed ({_cause(r)}), so it cannot tell whether a restore or reset "
             "swap is in flight. Nothing was changed.",
-            f"It runs `{cmd}` on {o.host}; add that exact line to the deploy user's sudoers drop-in "
-            f"({DOCS}), and check that {o.state_dir} is the service's state directory (DEPLOY_STATE_DIR).",
+            f"It runs `{cmd}` on {o.host}: install the rollback helpers and their sudoers line ({DOCS}), and "
+            f"check that state_dir in {HOST_CONFIG} ({o.state_dir}) is the service's state directory.",
         ]
-    found = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    found = [ln.strip() for ln in clean(r.stdout).splitlines() if ln.strip()]
     if found:
         return [
             f"REFUSING: a restore or reset swap is in flight ({', '.join(found)}). Nothing was changed, and "
@@ -243,24 +371,29 @@ def check_inflight(o: Opts, get: Getter) -> list[str]:
     return []
 
 
+def unit_state(o: Opts, get: Getter) -> tuple[str | None, str]:
+    """(ActiveState, a description) or (None, why it could not be read)."""
+    r = get("unit")
+    props = dict(ln.partition("=")[::2] for ln in clean(r.stdout).splitlines() if "=" in ln)
+    state = props.get("ActiveState", "").strip()
+    if r.rc != 0 or not state:
+        return None, _cause(r)
+    return state, f"ActiveState={state} SubState={props.get('SubState', '').strip()}"
+
+
 def check_stopped(o: Opts, get: Getter) -> list[str]:
     """Return refusal lines unless the unit reads inactive or failed (the
     rollback-restore hold: after the stop, and again after the restore)."""
-    r = get("unit")
-    props = dict(ln.partition("=")[::2] for ln in r.stdout.splitlines() if "=" in ln)
-    state = props.get("ActiveState", "").strip()
-    if r.rc == 0 and state in ("inactive", "failed"):
+    state, seen = unit_state(o, get)
+    if state in ("inactive", "failed"):
         return []
-    seen = (
-        f"ActiveState={state} SubState={props.get('SubState', '').strip()}"
-        if r.rc == 0
-        else _cause(r)
-    )
+    if state is None:
+        return [
+            f"REFUSING: cannot read {o.unit}'s state ({seen}), so whether it stayed stopped is unknown; "
+            "the recipe stopped here."
+        ]
     return [
-        f"REFUSING: {o.unit} did not stay stopped ({seen}). Something started it during the rollback; "
-        "the recipe stopped here and swapped no binary.",
-        f"Find what started it (systemctl status {o.unit}), stop it, read any restore output above, and run "
-        "make rollback-restore again.",
+        f"REFUSING: {o.unit} did not stay stopped ({seen}): something started it; the recipe stopped here."
     ]
 
 
@@ -365,6 +498,16 @@ def decide_rollback(o: Opts, get: Getter, ignore: bool) -> tuple[int, list[str]]
     r = get("levels")
     sidecar = f"{o.db}.storage-levels"
     if r.missing:
+        pointer = get("pointer")
+        if not pointer.missing:
+            return 1, [
+                f"REFUSING: {sidecar} does not exist, but the store has a checkpoint pointer "
+                f"({o.db}.migration-checkpoint{': ' + _cause(pointer) if pointer.rc else ''}), so a core build "
+                "opened and upgraded it: the levels file is missing, not a store from before core. Nothing was "
+                "swapped, and the projection rule does not apply.",
+                "Find out what removed the levels file before rolling back; `make rollback-restore` restores the "
+                "pre-upgrade checkpoint if the store must go back.",
+            ]
         return _legacy(o, get, prev, ignore)
     if r.rc != 0 or r.sudo_refused:
         return 1, [
@@ -395,7 +538,7 @@ class Source:
     describe: str
     release: str
     taken_at: str
-    args: str
+    restore_cmd: str
 
 
 def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
@@ -405,98 +548,94 @@ def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
         return None, [
             f"REFUSING: no checkpoint is recorded beside the store ({pointer_path} does not exist; a checkpoint "
             "is deleted 7 days after it stops being needed). Nothing was changed.",
-            "Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<archive file on the host>.",
+            f"Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<file name in {o.archive_dir}>.",
         ]
     if r.rc != 0 or r.sudo_refused:
         return None, [
             f"REFUSING: cannot read {pointer_path} ({_cause(r)}). Nothing was changed.",
-            f"If the cause is sudo asking for a password, add `cat {pointer_path}` to the sudoers lines in {DOCS}.",
+            f"If the cause is sudo asking for a password, add `/usr/bin/cat {pointer_path}` from {DOCS}.",
         ]
     try:
         pointer = json.loads(r.stdout)
         name = pointer["name"]
     except (ValueError, TypeError, KeyError):
         return None, [
-            f"REFUSING: {pointer_path} is not a checkpoint pointer ({r.stdout.strip()[:200]!r}); a store last "
-            "opened by a pre-core build records no checkpoint. Nothing was changed.",
-            "Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<archive file on the host>.",
+            f"REFUSING: {pointer_path} is not a checkpoint pointer ({clean(r.stdout).strip()[:200]!r}); a store "
+            "last opened by a pre-core build records no checkpoint. Nothing was changed.",
+            f"Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<file name in {o.archive_dir}>.",
         ]
-    if not isinstance(name, str) or not _CHECKPOINT_NAME.match(name):
+    if not isinstance(name, str) or not _CHECKPOINT_NAME.fullmatch(name):
         return None, [
-            f"REFUSING: {pointer_path} names {name!r}, not a checkpoint name. Nothing was changed."
+            f"REFUSING: {pointer_path} names {clean(repr(name))[:200]}, not a checkpoint name. Nothing was changed."
         ]
     rec_path = f"{o.cp_area}/{name}.json"
     rr = get("record:" + name)
     if rr.rc != 0 or rr.sudo_refused:
         return None, [
             f"REFUSING: cannot read the checkpoint record {rec_path} ({_cause(rr)}). Nothing was changed.",
-            f"If the checkpoint directory is not the store's parent, set DEPLOY_CHECKPOINT_DIR to "
-            f"core.storage.checkpoint_dir; if sudo asked for a password, add the record line in {DOCS}.",
+            f"If the checkpoint directory is not the store's parent, set checkpoint_dir in {HOST_CONFIG} to "
+            f"core.storage.checkpoint_dir; if sudo asked for a password, add the checkpoint-record line ({DOCS}).",
         ]
     try:
         rec = json.loads(rr.stdout)
-        levels = parse_vector(json.dumps(rec["from_vector"].get("levels") or {}))
-    except (ValueError, TypeError, KeyError, AttributeError):
-        levels = None
-        rec = {}
+    except ValueError:
+        rec = None
+    fv = rec.get("from_vector") if isinstance(rec, dict) else None
+    raw_levels = fv.get("levels") if isinstance(fv, dict) else None
+    levels = parse_vector(json.dumps(raw_levels)) if isinstance(raw_levels, dict) else None
     if levels is None:
         return None, [
-            f"REFUSING: {rec_path} holds no readable from_vector levels. Nothing was changed."
+            f"REFUSING: {rec_path} holds no readable from_vector levels (core always writes them), so which "
+            "levels the checkpoint is at is unknown. Nothing was changed."
         ]
     status = rec.get("status", "")
-    if status in ("consumed", "restore_left"):
+    released = status in ("open", "served") and rec.get("delete_after") is not None
+    if status not in _RESTORABLE or released:
+        why = f"{status} and released (delete_after is set)" if released else repr(status)
         return None, [
-            f"REFUSING: checkpoint {name} is {status}: its copy is not the store the record describes. "
-            "Nothing was changed.",
-            "Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<archive file on the host>.",
+            f"REFUSING: checkpoint {name} is {why}: its copy is not the store the record describes, and "
+            "storage restore-offline would refuse it (core's Checkpoint.Restorable). Nothing was changed.",
+            f"Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<file name in {o.archive_dir}>.",
         ]
-    release = rec.get("from_release") or ""
+    release = clean(str(rec.get("from_release") or ""))
     return Source(
         levels=levels,
         describe=f"checkpoint {name} (from_vector in {rec_path})",
         release=f"release {release} (the checkpoint's from_release)"
         if release
         else "the release you upgraded from (the checkpoint records no from_release)",
-        taken_at=str(rec.get("taken_at") or "unknown"),
-        args=f"--checkpoint {name}",
+        taken_at=clean(str(rec.get("taken_at") or "unknown")),
+        restore_cmd=commands(o, name)["restore_checkpoint"],
     ), []
 
 
 def _archive_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
-    clean = get("into_clean")
-    if clean.rc != 0:
-        return None, [
-            f"REFUSING: cannot clear the scratch copy {o.into} ({_cause(clean)}). Nothing was changed.",
-            f"Add the scratch `rm` line to the sudoers drop-in ({DOCS}).",
-        ]
+    path = f"{o.archive_dir}/{o.archive}"
     x = get("into")
-    if x.rc != 0:
+    out = clean(x.stdout)
+    if x.rc != 0 or "LEVELS-BEGIN\n" not in out or "\nLEVELS-END" not in out:
         return None, [
-            f"REFUSING: the current binary could not copy {o.archive} into the scratch area to read its levels "
+            f"REFUSING: could not read the levels of the archived store {path} from a scratch copy "
             f"({_cause(x)}). Nothing was changed.",
-            f"Check that the archive exists and is readable by {o.user}, and the sudoers line in {DOCS}.",
+            f"Check that the archive exists and is readable by {o.user}, and that the helpers are installed ({DOCS}).",
         ]
-    r = get("into_levels")
-    if r.rc != 0:
-        return None, [
-            f"REFUSING: cannot read the archived store's levels from {o.into}.storage-levels ({_cause(r)})."
-        ]
-    levels, err = parse_sidecar(r.stdout)
+    text = out.split("LEVELS-BEGIN\n", 1)[1].split("\nLEVELS-END", 1)[0]
+    levels, err = parse_sidecar(text)
     if levels is None:
         return None, [
-            f"REFUSING: {o.into}.storage-levels does not parse ({err}). Nothing was changed."
+            f"REFUSING: the archived store's .storage-levels does not parse ({err}). Nothing was changed."
         ]
     return Source(
         levels=levels,
-        describe=f"archive {o.archive} (levels read from its own store)",
+        describe=f"archive {path} (levels read from its own store)",
         release="the release that was running when the archive was taken (this archive records no version)",
         taken_at="the archive's date",
-        args=f"--archive {o.archive}",
+        restore_cmd=commands(o)["restore_archive"],
     ), []
 
 
 def decide_restore(o: Opts, get: Getter) -> tuple[int, list[str], str]:
-    """Return (exit, stderr lines, the remote restore command or "")."""
+    """Return (exit, lines, the remote restore command or "")."""
     refusal = check_inflight(o, get)
     if refusal:
         return 1, refusal, ""
@@ -525,7 +664,6 @@ def decide_restore(o: Opts, get: Getter) -> tuple[int, list[str], str]:
             ],
             "",
         )
-    cmd = o.offline(f"{src.args} --accept-loss")
     return (
         0,
         [
@@ -536,12 +674,12 @@ def decide_restore(o: Opts, get: Getter) -> tuple[int, list[str], str]:
             "password changed after that point is live again on the older release: repeat those revocations by "
             "hand once the rollback is up.",
         ],
-        cmd,
+        src.restore_cmd,
     )
 
 
 class SSH:
-    """Runs the guard's commands on the host, each once, and caches them."""
+    """Runs the guard's reads on the host, each once, and caches them."""
 
     def __init__(self, o: Opts):
         self.o = o
@@ -551,99 +689,66 @@ class SSH:
         if key not in self.cache:
             name = key.split(":", 1)[1] if key.startswith("record:") else ""
             cmd = commands(self.o, name)["record" if name else key]
-            try:
-                p = subprocess.run(
-                    ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.o.host, cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    check=False,
-                )
-                self.cache[key] = Result(p.stdout, p.stderr, p.returncode)
-            except subprocess.TimeoutExpired:
-                self.cache[key] = Result("", "ssh timed out", 255)
+            # into-check extracts a whole archive; everything else is a read.
+            self.cache[key] = run_remote(self.o.host, cmd, timeout=None if key == "into" else 120)
         return self.cache[key]
 
 
+def run_remote(host: str, cmd: str, timeout: float | None = 120, stream: bool = False) -> Result:
+    """Run cmd on host over ssh. stream: pass its output through as it comes
+    (a long restore) instead of capturing it."""
+    argv = ["ssh", *SSH_OPTS, host, cmd]
+    try:
+        if stream:
+            p = subprocess.run(argv, timeout=timeout, check=False)
+            return Result("", "", p.returncode)
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        return Result(p.stdout, p.stderr, p.returncode)
+    except subprocess.TimeoutExpired:
+        return Result("", f"ssh did not finish within {timeout}s", 255)
+
+
 def _validate(o: Opts) -> str:
-    for label, p in (("--db", o.db), ("--bin", o.bin), ("--state-dir", o.state_dir)):
-        if not _SAFE_PATH.match(p):
+    for label, p in (
+        ("bin", o.bin),
+        ("db", o.db),
+        ("state_dir", o.state_dir),
+        ("archive_dir", o.archive_dir),
+    ):
+        if p and (not _SAFE_PATH.match(p) or ".." in p.split("/")):
             return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"
-    for label, p in (("--checkpoint-dir", o.checkpoint_dir), ("--archive", o.archive)):
-        if p and not _SAFE_PATH.match(p):
-            return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"
-    if not _SAFE_USER.match(o.user):
-        return f"--service-user {o.user!r} is not a user name"
-    if not re.match(r"^[A-Za-z0-9@._:-]+$", o.unit):
-        return f"--unit {o.unit!r} is not a unit name"
-    for tok in o.offline_env.split():
-        if not _SAFE_ENV.match(tok):
-            return f"--offline-env token {tok!r} is not NAME=value"
-    if not o.host or o.host.startswith("-"):
-        return "--host is required"
+    if o.checkpoint_dir and not _SAFE_PATH.match(o.checkpoint_dir):
+        return f"checkpoint_dir {o.checkpoint_dir!r} must be an absolute path of letters, digits and ._/@+-"
+    if o.archive and (not _ARCHIVE_NAME.fullmatch(o.archive) or ".." in o.archive):
+        return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
+    if not _SAFE_USER.match(o.user) or o.user == "root":
+        return f"service_user {o.user!r} is not the service's user"
+    if not re.fullmatch(r"[A-Za-z0-9@._:-]+\.service", o.unit):
+        return f"unit {o.unit!r} is not a .service unit name"
+    if not o.host or o.host.startswith("-") or not re.fullmatch(r"[A-Za-z0-9@._:-]+", o.host):
+        return f"host {o.host!r} is not a host name"
     return ""
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="mode", required=True)
-    for mode in ("rollback", "inflight", "restore", "stopped"):
-        p = sub.add_parser(mode)
-        p.add_argument("--host", required=True)
-        p.add_argument("--state-dir", required=True)
-        p.add_argument("--unit", default="audiobook-organizer.service")
-        probe_only = mode in ("inflight", "stopped")
-        p.add_argument("--db", default="/unused" if probe_only else None, required=not probe_only)
-        p.add_argument("--bin", default="/unused" if probe_only else None, required=not probe_only)
-        if mode == "restore":
-            p.add_argument("--service-user", default="audiobook")
-            p.add_argument("--checkpoint-dir", default="")
-            p.add_argument("--archive", default="")
-            p.add_argument("--offline-env", default="")
+    p = sub.add_parser("sudoers", help="print the deploy user's sudoers drop-in")
+    p.add_argument("--deploy-user", required=True)
+    p.add_argument("--db", required=True)
+    p.add_argument("--bin", default="/usr/local/bin/audiobook-organizer")
+    p.add_argument("--unit", default="audiobook-organizer.service")
+    p.add_argument("--service-user", default="audiobook")
     a = parser.parse_args(argv)
-    o = Opts(
-        host=a.host.strip(),
-        db=a.db.strip(),
-        bin=a.bin.strip(),
-        state_dir=a.state_dir.strip(),
-        unit=a.unit.strip(),
+    o = Opts(host="localhost", db=a.db, bin=a.bin, unit=a.unit, user=a.service_user)
+    bad = _validate(o) or (
+        "" if _SAFE_USER.match(a.deploy_user) else f"--deploy-user {a.deploy_user!r}"
     )
-    if a.mode == "restore":
-        o.user, o.checkpoint_dir = a.service_user.strip(), a.checkpoint_dir.strip()
-        o.archive, o.offline_env = a.archive.strip(), a.offline_env.strip()
-    bad = _validate(o)
     if bad:
         print(f"storage_format_guard: {bad}", file=sys.stderr)
         return 2
-    get = SSH(o)
-    if a.mode in ("inflight", "stopped"):
-        lines = (check_inflight if a.mode == "inflight" else check_stopped)(o, get)
-        for line in lines:
-            print(line, file=sys.stderr)
-        return 1 if lines else 0
-    if a.mode == "rollback":
-        ignore = os.environ.get("ROLLBACK_IGNORE_FORMAT", "").strip() == "1"
-        code, lines = decide_rollback(o, get, ignore)
-        for line in lines:
-            print(line, file=sys.stdout if code == 0 else sys.stderr)
-        return code
-    try:
-        code, lines, cmd = decide_restore(o, get)
-    finally:
-        if o.archive and "into" in get.cache:
-            # The scratch copy holds the store's secrets: never leave it.
-            done = SSH(o)("into_clean")
-            if done.rc != 0:
-                print(
-                    f"WARNING: could not delete the scratch copy {o.into} ({_cause(done)}); the checkpoint "
-                    "sweeper deletes it 7 days after its last change.",
-                    file=sys.stderr,
-                )
-    for line in lines:
-        print(line, file=sys.stderr)
-    if code == 0:
-        print(cmd)
-    return code
+    sys.stdout.write(sudoers(o, a.deploy_user))
+    return 0
 
 
 if __name__ == "__main__":
