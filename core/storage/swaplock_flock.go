@@ -1,5 +1,5 @@
 // file: core/storage/swaplock_flock.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ef78ecfd-f631-4f1b-8683-69001adbe6db
 // last-edited: 2026-11-09
 
@@ -26,7 +26,7 @@ const swapLockMode = 0o600
 // ok is false on any other filesystem (the crash kit's MemFS), where no
 // other user can reach the files, and where files have no owner. The
 // offline commands that write the store or the state directory run only as
-// this uid (kernel.ErrNotStateDirOwner, R1-25 review B-1).
+// this uid (ErrNotStateDirOwner, R1-25 review B-1).
 func StateDirOwner(fs vfs.FS, stateDir string) (uid uint32, ok bool, err error) {
 	if vfs.Root(fs) != vfs.Default {
 		return 0, false, nil

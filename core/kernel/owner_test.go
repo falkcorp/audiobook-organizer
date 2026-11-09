@@ -1,5 +1,5 @@
 // file: core/kernel/owner_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 63dcc686-2f07-4d9b-bca2-c14f469f79c9
 // last-edited: 2026-11-09
 
@@ -53,7 +53,7 @@ func treeState(t *testing.T, root string) map[string]string {
 // restore-offline in place and --into (--archive and --checkpoint each),
 // storage reset and a read-write offline open refuse a process that is not
 // the state directory's owner (root, as euid 0, or a stranger), with
-// ErrNotStateDirOwner naming the sudo -u fix, before they build a kernel,
+// storage.ErrNotStateDirOwner naming the sudo -u fix, before they build a kernel,
 // take a lock or read the slot: the refusal is the owner's even while a
 // service holds the swap lock (a check after the lock would answer
 // ErrServiceRunning; --into, which takes no swap lock, would succeed), and
@@ -129,8 +129,8 @@ func TestOfflineWritesRefuseANonOwner(t *testing.T) {
 				if cerr := service.Close(); cerr != nil {
 					t.Fatal(cerr)
 				}
-				if !errors.Is(err, ErrNotStateDirOwner) || !strings.Contains(err.Error(), "sudo -u ") {
-					t.Fatalf("%s as %s = %v, want ErrNotStateDirOwner naming sudo -u", tc.name, who.name, err)
+				if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "sudo -u ") {
+					t.Fatalf("%s as %s = %v, want storage.ErrNotStateDirOwner naming sudo -u", tc.name, who.name, err)
 				}
 				after := treeState(t, tree)
 				for p, was := range before {
