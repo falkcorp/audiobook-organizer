@@ -1,7 +1,7 @@
 // file: internal/scheduler/candidate_fetch_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a7011f9-8a3c-46d3-841a-382e3e576d43
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -27,7 +27,7 @@ func candidateFetchTaskFixture(t *testing.T, active ...database.OperationV2Row) 
 	t.Helper()
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row

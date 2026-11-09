@@ -1,7 +1,7 @@
 // file: internal/database/book_change_log.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 1bbf59f8-a14b-4a96-8905-d33cf3329cf4
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package database
 
@@ -32,8 +32,7 @@ type idChange struct {
 // ids written since, rather than every row. The bump and its record happen
 // under one mutex, so a reader holding the mutex sees a record for every
 // generation up to the current value; a generation bumped without one (a bare
-// Generation.Bump, or bumpAll) shows up as a gap and the reader is told to
-// rebuild.
+// Generation.Bump) shows up as a gap and the reader is told to rebuild.
 //
 // Two instances live on PebbleStore: bookChanges over the library generation
 // (one record per book write) and cacheChanges over the metadata-cache
@@ -56,18 +55,6 @@ func (l *idChangeLog) bump(g *cache.Generation, id string) {
 		l.entries = append(make([]idChange, 0, idChangeLogCap), l.entries[drop:]...)
 	}
 	l.entries = append(l.entries, idChange{gen: n, id: id})
-}
-
-// bumpAll advances g for a write that touched every id (Reset's wipe). No
-// record can name them, so the log forgets what it held and sets its floor to
-// the new generation: since(from) is ok only for from == the new generation,
-// and every reader behind it rebuilds.
-func (l *idChangeLog) bumpAll(g *cache.Generation) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := g.Bump()
-	l.entries = l.entries[:0]
-	l.floor = n
 }
 
 // since returns the ids written after generation from (each once, in write

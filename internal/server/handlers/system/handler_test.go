@@ -1,12 +1,12 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
 // backup not-found / validation, blocked-hash add/remove validation,
-// user-preference get/set/delete, factory-reset confirm guard, SSE nil-hub) are
+// user-preference get/set/delete, SSE nil-hub) are
 // covered. The store is exercised through the generated systemmocks
 // (MockSystemStore satisfies the narrow SystemStore); the system service /
 // config-update service / plugin health checker / event hub / operation-logs
@@ -79,9 +79,7 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 		d.plugins,
 		func() system.EventStreamer { return d.hub },
 		d.opLogs,
-		nil, // olService (concrete *metafetch.OpenLibraryService) — nil-checked
 		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
-		func() {},
 		func() string { return "test-version" },
 		func(g []dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup { return g },
 		nil, // getDegraded: no startup runner
@@ -105,9 +103,7 @@ func newTestHandlerWithOpLogs(t *testing.T, opLogs system.OperationLogsProvider)
 		d.sysSvc, d.cfgUpd, d.plugins,
 		func() system.EventStreamer { return d.hub },
 		opLogs,
-		nil,
 		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
-		func() {},
 		func() string { return "test-version" },
 		func(g []dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup { return g },
 		nil,
@@ -360,72 +356,6 @@ func TestGetSystemActivityLog_OK(t *testing.T) {
 	assert.Equal(t, float64(1), resp["data"].(map[string]any)["count"])
 }
 
-// --- ResetSystem ---
-
-func TestResetSystem_OK(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.store.EXPECT().Reset().Return(nil)
-	d.store.EXPECT().InvalidateLibraryStats().Return()
-
-	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"RESET"}`), func(r *gin.Engine) {
-		r.POST("/system/reset", h.ResetSystem)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestResetSystem_DBError(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.store.EXPECT().Reset().Return(errors.New("reset failed"))
-
-	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"RESET"}`), func(r *gin.Engine) {
-		r.POST("/system/reset", h.ResetSystem)
-	})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-// TestResetSystem_RequiresConfirm is a regression guard: ResetSystem wipes the
-// whole database, so a bare POST (or a wrong token) must be rejected with 400
-// before store.Reset() is ever called — matching FactoryReset. Without the
-// confirm gate this returned 200 and wiped the DB. The mock store asserts no
-// Reset() call (unexpected calls fail the test).
-func TestResetSystem_RequiresConfirm(t *testing.T) {
-	h, _ := newTestHandler(t)
-	w := run(http.MethodPost, "/system/reset", "/system/reset", []byte(`{"confirm":"nope"}`), func(r *gin.Engine) {
-		r.POST("/system/reset", h.ResetSystem)
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// --- FactoryReset ---
-
-func TestFactoryReset_RequiresConfirm(t *testing.T) {
-	h, _ := newTestHandler(t)
-	w := run(http.MethodPost, "/system/factory-reset", "/system/factory-reset", []byte(`{"confirm":"nope"}`), func(r *gin.Engine) {
-		r.POST("/system/factory-reset", h.FactoryReset)
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestFactoryReset_OK(t *testing.T) {
-	h, d := newTestHandler(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "" // skip the library-folder clear branch
-	defer func() { config.AppConfig.RootDir = prev }()
-
-	d.store.EXPECT().Reset().Return(nil)
-	d.store.EXPECT().InvalidateLibraryStats().Return()
-	// olService is nil (skips OL branch). config.SaveConfigToDatabase writes via
-	// the SettingsStore subset of our store — allow any setting writes.
-	d.store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	d.store.EXPECT().GetSetting(mock.Anything).Return(nil, nil).Maybe()
-	d.store.EXPECT().DeleteSetting(mock.Anything).Return(nil).Maybe()
-
-	w := run(http.MethodPost, "/system/factory-reset", "/system/factory-reset", []byte(`{"confirm":"RESET"}`), func(r *gin.Engine) {
-		r.POST("/system/factory-reset", h.FactoryReset)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
 // --- GetConfig ---
 
 func TestGetConfig_OK(t *testing.T) {
@@ -559,7 +489,7 @@ func TestHandleEvents_NilHub503(t *testing.T) {
 		func() system.SystemStore { return store },
 		nil, nil, nil,
 		nil, // nil getHub provider -> resolveHub() returns nil -> 503
-		nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 	)
 	w := run(http.MethodGet, "/api/events", "/api/events", nil, func(r *gin.Engine) {
 		r.GET("/api/events", h.HandleEvents)

@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
-// last-edited: 2026-10-07
+// last-edited: 2026-11-08
 
 // Router-level coverage for the owner gate on the iTunes library (2026-10-07):
 // every route that removes, overwrites or repoints iTunes tracks, or turns off
@@ -162,9 +162,9 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 	}
 }
 
-// Backup restore (and system/factory reset, behind the same gate) can bring
-// owner_email back to unset, after which the first Access user could claim
-// ownership; while an owner is set only the owner reaches them.
+// Backup restore can bring owner_email back to unset, after which the first
+// Access user could claim ownership; while an owner is set only the owner
+// reaches it.
 func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 	f := setupOwnerRouteServer(t)
 	body := `{"backup_filename":"no-such-backup.tar.gz"}`
@@ -174,14 +174,10 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 	} {
 		w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, hdr)
 		assert.True(t, ownerRefused(w), "%s got %d: %s", caller, w.Code, w.Body.String())
-		w = f.requestBody(http.MethodPost, "/api/v1/system/reset", `{"confirm":"RESET"}`, hdr)
-		assert.True(t, ownerRefused(w), "%s reset got %d: %s", caller, w.Code, w.Body.String())
-		w = f.requestBody(http.MethodPost, "/api/v1/system/factory-reset", `{"confirm":"RESET"}`, hdr)
-		assert.True(t, ownerRefused(w), "%s factory reset got %d: %s", caller, w.Code, w.Body.String())
 	}
 	// The callers the owner proof must never accept. Ported from the removed
 	// owner-route table (the iTunes write routes it covered are gone; restore
-	// and reset still go through the same RequireOwner gate). A 401, or the
+	// still goes through the RequireOwner gate). A 401, or the
 	// credential guard's 403 for an API key, stops the caller before the owner
 	// gate, which is also a refusal: what matters is that no handler runs.
 	for caller, hdr := range map[string]map[string]string{

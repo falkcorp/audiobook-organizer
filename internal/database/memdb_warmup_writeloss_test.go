@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_writeloss_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5e1c9f27-3a64-4b18-9d02-c7f5a8e3b410
-// last-edited: 2026-10-03
+// last-edited: 2026-11-08
 
 package database
 
@@ -391,35 +391,6 @@ func TestWarmupWriteLoss_BufferOverflowDegradesLoudly(t *testing.T) {
 	// otherwise satisfy a bare "level=ERROR" check.
 	if !strings.Contains(logs, "level=ERROR msg=\"memdb warmup: pending write buffer overflowed") {
 		t.Errorf("buffer overflow must be logged at ERROR level.\nlogs:\n%s", logs)
-	}
-}
-
-// TestWarmupWriteLoss_ResetDuringWarmupIsNotUndone covers the mirror of the
-// main bug on the Reset path: a warmup that started before Reset wiped the
-// keyspace holds a snapshot full of rows that no longer exist, and publishing
-// it afterwards resurrects every one of them in memdb.
-func TestWarmupWriteLoss_ResetDuringWarmupIsNotUndone(t *testing.T) {
-	dir := t.TempDir()
-	seedBooksStore(t, dir, 2000)
-
-	store, err := NewPebbleStore(dir)
-	if err != nil {
-		t.Fatalf("NewPebbleStore: %v", err)
-	}
-	defer store.Close()
-
-	// Reset while warmup is still scanning the pre-wipe data.
-	if err := store.Reset(); err != nil {
-		t.Fatalf("Reset: %v", err)
-	}
-	store.WaitForWarmup()
-
-	ids, err := store.ListBookIDs()
-	if err != nil {
-		t.Fatalf("ListBookIDs: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Errorf("Reset was undone by the in-flight warmup: %d books resurrected in memdb after the keyspace was wiped", len(ids))
 	}
 }
 

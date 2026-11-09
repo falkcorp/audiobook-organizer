@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.8.3 -->
+<!-- version: 1.8.4 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-11-07 -->
+<!-- last-edited: 2026-11-08 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -305,7 +305,6 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | GET | `/system/storage` | `getSystemStorage` |
 | GET | `/system/logs` | `getSystemLogs` |
 | GET | `/system/announcements` | `getAnnouncements` |
-| POST | `/system/factory-reset` | `factoryReset` |
 | GET | `/health` | `healthCheck` |
 | GET | `/version` | `getAppVersion` |
 

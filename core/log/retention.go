@@ -1,7 +1,7 @@
 // file: core/log/retention.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 74f43bde-ff40-4eae-88dc-907de43dfe92
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package log
 
@@ -30,8 +30,7 @@ const LogRetentionKeepForever = -1
 // the off-switch is now -1 (LogRetentionKeepForever) and 0 means the default.
 //
 // Consumers call this rather than reading the field, so a 0 that reaches the
-// live config by any path (a PUT, ResetToDefaults, a test) still purges at the
-// default window.
+// live config by any path (a PUT, a test) still purges at the default window.
 func ResolveLogRetentionDays(v int) int {
 	switch {
 	case v < 0:

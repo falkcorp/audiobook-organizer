@@ -1,7 +1,7 @@
 // file: internal/config/enabled_sort_indexes_default_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4c1e8a7d-2b95-4f63-9d0a-6e3b7f58c1a2
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // enabled_sort_indexes was reported as null by GET /api/v1/config on prod, so
 // the shipped default never reached cmd/root.go's SetEnabledSortIndexes,
@@ -278,10 +278,10 @@ func TestResetToDefaultsKeepsBootOnlySortIndexes(t *testing.T) {
 		c.EnableAuth = false
 	})
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	if got := Snapshot().EnabledSortIndexes; !slices.Equal(got, wantDefaultSortIndexes) {
-		t.Fatalf("EnabledSortIndexes after ResetToDefaults = %#v, want the built set %v", got, wantDefaultSortIndexes)
+		t.Fatalf("EnabledSortIndexes after ResetToDefaultsForTest = %#v, want the built set %v", got, wantDefaultSortIndexes)
 	}
 	ms, _ := ladderTestStore(t)
 	status, resp := NewUpdateService(ms).UpdateConfig(context.Background(), map[string]any{

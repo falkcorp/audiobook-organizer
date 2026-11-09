@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
 // last-edited: 2026-11-08
 
@@ -790,9 +790,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/v1/signals/coverage", pAtom("settings.manage"), fRated},
 		{http.MethodGet, "/api/v1/system/activity-log", pAtom("settings.manage"), fRated},
 		{http.MethodGet, "/api/v1/system/announcements", pAtom("settings.manage"), fRated},
-		{http.MethodPost, "/api/v1/system/factory-reset", pNeed("core:admin"), fRated | fInteractive | fOwner},
 		{http.MethodGet, "/api/v1/system/logs", pAtom("settings.manage"), fRated},
-		{http.MethodPost, "/api/v1/system/reset", pNeed("core:admin"), fRated | fInteractive | fOwner},
 		{http.MethodGet, "/api/v1/system/status", pAtom("settings.manage"), fRated},
 		{http.MethodGet, "/api/v1/system/storage", pAtom("settings.manage"), fRated},
 		{http.MethodGet, "/api/v1/tags", pAtom("library.view"), fRated},
