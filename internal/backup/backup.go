@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.18
+// version: 1.23.0
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-09
 
@@ -389,7 +389,8 @@ func CreateBackup(databasePath, databaseType string, config BackupConfig) (*Back
 	}
 
 	// Persist the checksum in a sidecar file next to the archive so a later
-	// PrepareRestoreIn(verify=true) has something durable to compare against.
+	// verified restore (StageRestore with Verify, ExtractStore) has something
+	// durable to compare against.
 	// Without this, BackupInfo.Checksum only ever existed in memory for the
 	// duration of this call -- see TASK-306. A failed sidecar write is treated
 	// as a failed backup (not a warning): a backup nobody can verify defeats
@@ -627,8 +628,8 @@ func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
 	sweep(backupDir, "pebble-checkpoint-")
 }
 
-// ErrVerificationUnsupported is returned by PrepareRestoreIn when the caller
-// requests checksum verification (verify=true) but the backup has no checksum
+// ErrVerificationUnsupported is returned by StageRestore when the caller
+// requests checksum verification (Verify) but the backup has no checksum
 // sidecar to verify against -- almost always because it was created before
 // this feature existed (see writeChecksumSidecar / checksumSidecarPath).
 // There is no durable reference value to compare a re-computed checksum
@@ -636,33 +637,30 @@ func sweepStaleCheckpoints(stagingRoot, backupDir string, now time.Time) {
 // would be a no-op wearing the name.
 var ErrVerificationUnsupported = errors.New("no stored checksum for this backup")
 
-// ErrChecksumMismatch is returned by PrepareRestoreIn when verify=true and the
+// ErrChecksumMismatch is returned by ExtractStore and StageRestore when the
 // backup archive's current SHA-256 does not match the checksum recorded in
 // its sidecar at creation time -- i.e. the archive has been corrupted,
 // truncated, or tampered with since it was created.
 var ErrChecksumMismatch = errors.New("backup archive does not match its recorded checksum")
 
-// ErrBackupNotFound is returned by PrepareRestoreIn when backupDir holds no
-// file of the requested name. The error also matches os.ErrNotExist.
-var ErrBackupNotFound = errors.New("backup not found")
-
-// ErrArchiveCarriesHNSWSnapshot is returned by PrepareRestoreIn, and by
-// Extract, for an archive with an entry in the HNSW snapshot directory.
+// ErrArchiveCarriesHNSWSnapshot is returned by ExtractStore, from its scan
+// before anything is written (scanArchive), and by extractArchive, for an
+// archive with an entry in an HNSW snapshot directory: a path component
+// named for it at any depth, or a destination in one of the snapshot
+// directories extractArchive is given.
 //
 // A backup holds one root, the database directory (addToArchive), and the
 // snapshot directory sits beside the database, not in it, so no backup this
-// program wrote has such an entry. Extracting one would write the running
-// server's graph snapshot or its clean-stop marker from a file that has no
-// reason to match the restored database; a marker written that way and left
-// by a crash before the restore handler removes it would let the next boot
-// skip the reconcile against a database the graph never saw (R1-15 round 4).
+// program wrote has such an entry. Extracting one would write a graph
+// snapshot or a clean-stop marker from a file that has no reason to match
+// the restored database, which a boot could then trust (R1-15 round 4).
 // Refused rather than skipped: the archive is crafted or foreign, and the
 // restore says so instead of restoring the rest of it.
 var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in the HNSW snapshot directory")
 
-// ErrArchiveEntryEscapes is returned by PrepareRestoreIn, and by Extract, for
-// an archive with an entry whose cleaned name climbs out of the restore
-// target ("..", "../x", "x/../../y"). No backup this program wrote has one
+// ErrArchiveEntryEscapes is returned by ExtractStore, from its scan, and by
+// extractArchive, for an archive with an entry whose cleaned name climbs out
+// of the restore target ("..", "../x", "x/../../y"). No backup this program wrote has one
 // (addToArchive names every entry under the database directory). Such a name
 // is refused even when joining it to the target lands back inside: whether
 // it does depends on the target's own name, so "x/../../<base>/hnsw/..."
@@ -670,24 +668,22 @@ var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in t
 // name looks like it leaves (R1-15 round 4, B1-r4).
 var ErrArchiveEntryEscapes = errors.New("backup archive has an entry that climbs out of the restore target")
 
-// ErrArchiveEmpty is returned by PrepareRestoreIn, and by Extract, for an
-// archive with no entries to restore: an empty or truncated file. It is
-// refused in the prepare step, so the restore handler does not mark the HNSW
-// snapshot diverged for a restore that cannot write anything (R1-15 round-4
-// verification review, SHOULD-FIX 2).
+// ErrArchiveEmpty is returned by ExtractStore, from its scan before anything
+// is written, and by extractArchive, for an archive with no entries to
+// restore: an empty or truncated file (R1-15 round-4 verification review,
+// SHOULD-FIX 2).
 var ErrArchiveEmpty = errors.New("backup archive has no entries")
 
-// ErrRestoreThroughSymlink is returned by Extract for an entry whose
+// ErrRestoreThroughSymlink is returned by extractArchive for an entry whose
 // destination is a symlink: the extraction does not write a file through
 // one. A symlink's target is resolved by the kernel from the link's physical
 // parent, which a path string cannot settle (R1-15 round-5 verification
 // review, B1-r5), and a dangling one would be created by the write.
 var ErrRestoreThroughSymlink = errors.New("backup restore does not write a file through a symlink")
 
-// ErrUnresolvableSymlink is returned by Extract, CheckSnapshotDirs and
-// CheckPathsApart for a directory the restore must compare with another
-// when its path, or one of its ancestors, is a symlink that does not
-// resolve: dangling, looping, or one the process may not follow. Such a
+// ErrUnresolvableSymlink is returned by extractArchive for a directory it
+// must compare with a snapshot directory, or for a snapshot directory, when
+// its path, or one of its ancestors, is a symlink that does not resolve: dangling, looping, or one the process may not follow. Such a
 // directory has no identity to compare, and a dangling symlink at a snapshot
 // directory's path is the more dangerous for it: an entry can create the
 // symlink's target, which is the snapshot directory from then on (R1-15
@@ -695,14 +691,10 @@ var ErrRestoreThroughSymlink = errors.New("backup restore does not write a file 
 // compared, so nothing is written.
 var ErrUnresolvableSymlink = errors.New("a symlink on the restore's path does not resolve, so where it leads cannot be compared")
 
-// ErrPathsOverlap is returned by CheckPathsApart for two directories one of
-// which is, or lies under, the other.
-var ErrPathsOverlap = errors.New("the directories overlap")
-
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
-// TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
-// handler's tests builds its entry from that function, so the two cannot
+// TestExtractStore_RefusesAnEntryNamedForTheSnapshotDirectory in
+// internal/database builds its entry from that function, so the two cannot
 // drift apart unnoticed).
 const hnswSnapshotDirName = "hnsw"
 
@@ -786,54 +778,22 @@ func writeChecksumSidecar(backupPath, checksum string) error {
 	return nil
 }
 
-// sidecarDigest returns the digest recorded in sidecarPath for the archive
-// named name.
-//
-// sidecarPath must already be resolved from a directory listing (see
-// PrepareRestoreIn) rather than built by joining a caller-supplied filename
-// onto a directory: CodeQL's go/path-injection query does not credit
-// library.SanitizeFilename, library.SecureJoin, filepath.Base, or a
-// prefix check as barriers in this repo (measured against PR #3183) -- the
-// only thing it credits is the dataflow never reaching a tainted string in
-// the first place, i.e. resolving the caller's string against
-// os.ReadDir(backupDir) and using the returned os.DirEntry.Name() instead.
-//
-// Returns ErrVerificationUnsupported if sidecarPath cannot be read (normally
-// unreachable here since PrepareRestoreIn only calls this once it has already
-// found a matching directory entry, but kept as a defensive fallback for a
-// delete-after-list race), or a plain error for a sidecar that is empty or
-// malformed or cannot be read for another reason.
-func sidecarDigest(sidecarPath, name string) (string, error) {
-	raw, err := os.ReadFile(sidecarPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
-				ErrVerificationUnsupported, name)
-		}
-		return "", fmt.Errorf("failed to read checksum sidecar for %s: %w", name, err)
-	}
-	fields := strings.Fields(string(raw))
-	if len(fields) == 0 {
-		return "", fmt.Errorf("checksum sidecar for %s is empty or malformed", name)
-	}
-	return fields[0], nil
-}
-
 // scanArchive reads the archive at archivePath once, first byte to last, and
 // returns its SHA-256 with what the entries scan found: nil, an entryRefusal
-// error, or an error for an archive it could not read
-// to the end of its entries (a truncated or corrupt one). The digest is ""
-// only when the file itself could not be read; after a scan error it still
+// error, ErrArchiveEmpty, or an error for an archive it could not read to
+// the end of its entries (a truncated or corrupt one). The digest is "" only
+// when the file itself could not be read; after a scan error it still
 // covers every byte, so a caller verifying the archive can let a checksum
-// mismatch win over what the scan found.
+// mismatch win over what the scan found. ExtractStore runs it before it
+// writes anything.
 //
 // One read serves both because a restore runs on archives of many gigabytes:
 // verifying and scanning separately would read the whole archive twice
 // before the extraction reads it a third time.
-func scanArchive(archivePath string) (sum, root string, err error) {
+func scanArchive(archivePath string) (sum string, err error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to open backup file: %w", err)
+		return "", fmt.Errorf("failed to open backup file: %w", err)
 	}
 	// A failed close counts as a failed read: no digest, so a verifying
 	// caller refuses rather than trust it. A scan error already returned
@@ -846,58 +806,52 @@ func scanArchive(archivePath string) (sum, root string, err error) {
 
 	codec, err := SniffCodec(f)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	hash := sha256.New()
 	src := io.TeeReader(f, hash)
-	root, scanErr := scanEntries(codec, src, filepath.Base(archivePath))
+	scanErr := scanEntries(codec, src, filepath.Base(archivePath))
 	// Hash what the decompressor did not read: the end of the stream, or
 	// everything after a scan error. scanEntries has closed the decompressor
 	// by now, and zstd's Close waits for the goroutine that reads its input
 	// (Decoder.Close waits on streamWg), so this is the only reader left on
 	// src and the hash takes the file's bytes in order, each once.
 	if _, err := io.Copy(io.Discard, src); err != nil {
-		return "", "", fmt.Errorf("failed to read backup file: %w", err)
+		return "", fmt.Errorf("failed to read backup file: %w", err)
 	}
-	return hex.EncodeToString(hash.Sum(nil)), root, scanErr
+	return hex.EncodeToString(hash.Sum(nil)), scanErr
 }
 
 // scanEntries reads every tar header in the archive stream r, written by
 // codec, and refuses an entry entryRefusal refuses, and an archive with no
-// entry the extraction would count (ErrArchiveEmpty). It returns the first
-// path component of the first entry it counts: the archive's root, the
-// database directory's name when the backup was taken. name is the
+// entry the extraction would count (ErrArchiveEmpty). name is the
 // archive's, for the error. It closes the decompressor before it returns
 // (scanArchive depends on that).
-func scanEntries(codec Codec, r io.Reader, name string) (string, error) {
+func scanEntries(codec Codec, r io.Reader, name string) error {
 	compReader, err := codec.NewReader(r)
 	if err != nil {
-		return "", fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
+		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
 	}
 	defer compReader.Close()
 	tarReader := tar.NewReader(compReader)
 	entries := 0
-	root := ""
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
 			if entries == 0 {
-				return "", emptyArchiveError(name)
+				return emptyArchiveError(name)
 			}
-			return root, nil
+			return nil
 		}
 		if err != nil {
-			return "", fmt.Errorf("failed to read tar header: %w", err)
+			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 		if err := entryRefusal(header.Name); err != nil {
-			return "", err
+			return err
 		}
 		// The extraction skips an entry that names the target itself, and
-		// counts every other one; the first of those gives the root.
-		if clean, ok := entryPath(header.Name); ok {
-			if entries == 0 {
-				root, _, _ = strings.Cut(clean, "/")
-			}
+		// counts every other one.
+		if _, ok := entryPath(header.Name); ok {
 			entries++
 		}
 	}
@@ -907,135 +861,6 @@ func scanEntries(codec Codec, r io.Reader, name string) (string, error) {
 func emptyArchiveError(name string) error {
 	return fmt.Errorf("%w: backup %s contained no entries: it is empty or truncated, "+
 		"and nothing was restored", ErrArchiveEmpty, name)
-}
-
-// PreparedRestore is a backup found and, when asked, verified, ready to
-// extract into a target (PrepareRestoreIn, then Extract).
-type PreparedRestore struct {
-	archivePath string
-	root        string
-}
-
-// Root is the archive's root: the first path component of its first entry
-// that is not the target itself (entryPath skips "/" and "./"), never "." or
-// "..". For a backup this program wrote it is the database directory's name
-// when the backup was taken (addToArchive). A restore into a target writes
-// that database at target/Root().
-func (r *PreparedRestore) Root() string {
-	return r.root
-}
-
-// PrepareRestoreIn finds the backup named filename in backupDir and reads it
-// once (scanArchive): it refuses an archive with an entry in the HNSW
-// snapshot directory or one it cannot read to the end of its entries, and,
-// with verify, checks the same read against the checksum sidecar. It takes no
-// target and writes nothing, so every error it returns (ErrBackupNotFound,
-// ErrVerificationUnsupported, ErrChecksumMismatch,
-// ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes, ErrArchiveEmpty, an
-// unreadable backup directory or archive)
-// leaves the target as it was. Extract is the step that writes, and the
-// restore handler marks the HNSW snapshot diverged between the two (R1-15
-// round-3 review, B1-r3).
-//
-// filename is used only as a LOOKUP KEY against a directory listing, never
-// joined directly into a filesystem path: every path this function touches
-// (the archive, its checksum sidecar) is built from the *os.DirEntry the
-// os.ReadDir call itself returned, which is what breaks CodeQL's
-// go/path-injection dataflow (see sidecarDigest's doc comment for why
-// sanitizing filename instead is not sufficient in this repo). A filename
-// containing a path separator or ".." can never match a directory entry's
-// Name() (ReadDir never returns entries with those in the name), so such
-// input naturally falls through to the not-found error below rather than
-// needing separate rejection.
-func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore, error) {
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read backup directory: %w", err)
-	}
-
-	var archiveEntry, sidecarEntry os.DirEntry
-	sidecarName := filename + ".sha256"
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		switch e.Name() {
-		case filename:
-			archiveEntry = e
-		case sidecarName:
-			sidecarEntry = e
-		}
-	}
-	if archiveEntry == nil {
-		return nil, fmt.Errorf("%w: %q in %s: %w", ErrBackupNotFound, filename, backupDir, os.ErrNotExist)
-	}
-	name := archiveEntry.Name()
-	archivePath := filepath.Join(backupDir, name)
-
-	// Fail closed before touching anything on disk: see
-	// ErrVerificationUnsupported / ErrChecksumMismatch. The sidecar is read
-	// first, so a missing or malformed one costs no read of the archive.
-	var recorded string
-	if verify {
-		if sidecarEntry == nil {
-			return nil, fmt.Errorf("%w: %s: this backup predates checksum sidecars; restore with verification disabled or re-create the backup",
-				ErrVerificationUnsupported, filename)
-		}
-		if recorded, err = sidecarDigest(filepath.Join(backupDir, sidecarEntry.Name()), name); err != nil {
-			return nil, err
-		}
-	}
-
-	computed, root, scanErr := scanArchive(archivePath)
-	if verify {
-		if computed == "" {
-			return nil, fmt.Errorf("failed to compute checksum for %s: %w", name, scanErr)
-		}
-		// A mismatch wins over what the scan found: an archive that is not
-		// the one written is reported as that, whatever it now contains.
-		if !strings.EqualFold(recorded, computed) {
-			return nil, fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, name, recorded, computed)
-		}
-	}
-	if scanErr != nil {
-		return nil, scanErr
-	}
-	// The root is the first component of an entry name the scan cleaned and
-	// cleared (entryPath, entryRefusal), so it is a single local name, never
-	// "", "." or "..". Checked anyway with filepath.IsLocal before it leaves
-	// here: a caller joins it to a target (the restore handler, for the
-	// restored database's snapshot directory), and CodeQL's go/zipslip and
-	// go/path-injection credit this check where they cannot follow the
-	// scan's (R1-15 round-6 verification review, SF2).
-	if !filepath.IsLocal(root) {
-		return nil, fmt.Errorf("%w: the archive's root %q is not a local name", ErrArchiveEntryEscapes, root)
-	}
-
-	return &PreparedRestore{archivePath: archivePath, root: root}, nil
-}
-
-// Extract extracts the prepared backup into targetPath. It can fail after
-// writing some files, so a caller that reacts to a restore's writes treats
-// any call as a restore, whatever it returns.
-//
-// snapshotDirs are the HNSW snapshot directories no entry may be written
-// into: the restore handler passes the live database's and the restored
-// one's. Entry names alone cannot keep an entry out of them (a symlink
-// already in the target, or a target above one), so before it creates
-// anything for an entry Extract compares every directory on the physical
-// path to its destination, symlinks resolved, with them by identity
-// (landsIn) and refuses one inside any of them
-// (ErrArchiveCarriesHNSWSnapshot), and refuses every entry while one of them,
-// or a directory on the entry's own path, cannot be compared because a
-// symlink there does not resolve (ErrUnresolvableSymlink, R1-15 round-6
-// verification review, B1-r6; round 8, B1-r8). It
-// does not write a file through a symlink (ErrRestoreThroughSymlink), nor
-// into a file already at an entry's destination: each entry is written to a
-// new file and renamed into place (writeEntry), so a hard link there to a
-// snapshot's file leaves that file as it was (SF1).
-// nil checks names and symlinks only.
-func (r *PreparedRestore) Extract(targetPath string, snapshotDirs []string) error {
-	return extractArchive(r.archivePath, targetPath, snapshotDirs)
 }
 
 // keepOutDir is a directory a restore must not write into, held by identity
@@ -1103,17 +928,6 @@ func statKeepOuts(dirs []string) ([]keepOutDir, error) {
 		keep = append(keep, k)
 	}
 	return keep, nil
-}
-
-// CheckSnapshotDirs returns ErrUnresolvableSymlink for the first of dirs, the
-// HNSW snapshot directories a restore keeps entries out of, that cannot be
-// compared with an entry's destination (statKeepOut), and nil when each can.
-// A directory not made yet can. The restore handler calls it before it marks
-// the HNSW store diverged or writes anything, so such a restore is refused
-// whole; Extract makes the same check for each entry.
-func CheckSnapshotDirs(dirs []string) error {
-	_, err := statKeepOuts(dirs)
-	return err
 }
 
 // holds reports whether the existing directory fi, reached on a walk whose
@@ -1231,43 +1045,26 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 	}
 }
 
-// CheckPathsApart returns ErrPathsOverlap when a and b are the same
-// directory or one lies under the other, compared by identity along each
-// one's physical path (landsIn, both ways), so symlinks, a symlink to a
-// directory under the other included (R1-15 round-8 verification review,
-// B1-r8), and case-insensitive spellings count, and ErrUnresolvableSymlink
-// when either cannot be compared (statKeepOut, landsIn). The restore handler
-// refuses a target_path that is not apart from the live HNSW snapshot
-// directory this way.
-func CheckPathsApart(a, b string) error {
-	ka, err := statKeepOut(a)
-	if err != nil {
-		return err
-	}
-	kb, err := statKeepOut(b)
-	if err != nil {
-		return err
-	}
-	for _, pair := range []struct {
-		p string
-		k keepOutDir
-	}{{a, kb}, {b, ka}} {
-		_, ok, err := landsIn(pair.p, []keepOutDir{pair.k})
-		if err != nil {
-			return err
-		}
-		if ok {
-			return fmt.Errorf("%w: %s and %s", ErrPathsOverlap, a, b)
-		}
-	}
-	return nil
-}
-
-// extractArchive opens archivePath and extracts it into targetPath. It is
-// PreparedRestore.Extract's body, kept apart from PrepareRestoreIn so the
-// directory-listing/verification logic above (which must run first and can
-// return before any file is opened) stays separate from the extraction
-// mechanics below.
+// extractArchive opens archivePath and extracts it into targetPath, every
+// entry confined to it (library.Join, then checkWithin). ExtractStore runs
+// it into a new, private directory once its scan (scanArchive) passed; the
+// round-trip tests run it directly. It can fail after writing some files.
+//
+// snapshotDirs are HNSW snapshot directories no entry may be written into
+// (nil: none; ExtractStore's directory is new and private, so none can be
+// under it). Entry names alone cannot keep an entry out of them (a symlink
+// already in the target, or a target above one), so before it creates
+// anything for an entry it compares every directory on the physical path
+// to its destination, symlinks resolved, with them by identity (landsIn)
+// and refuses one inside any of them (ErrArchiveCarriesHNSWSnapshot), and
+// refuses every entry while one of them, or a directory on the entry's own
+// path, cannot be compared because a symlink there does not resolve
+// (ErrUnresolvableSymlink, R1-15 round-6 verification review, B1-r6; round
+// 8, B1-r8). It does not write a file through a symlink
+// (ErrRestoreThroughSymlink), nor into a file already at an entry's
+// destination: each entry is written to a new file and renamed into place
+// (writeEntry), so a hard link there leaves the file it names as it was
+// (SF1).
 func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
 	// Open backup file
 	backupFile, err := os.Open(archivePath)
@@ -1323,7 +1120,7 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		if !ok {
 			continue
 		}
-		// PrepareRestoreIn refused an archive with such an entry before
+		// ExtractStore's scan refused an archive with such an entry before
 		// anything was written; this catches one that changed between the
 		// two reads, and the entry is never written either way.
 		if err := entryRefusal(header.Name); err != nil {
@@ -1666,9 +1463,11 @@ func listBackups(backupDir string, withChecksums bool) ([]BackupInfo, error) {
 // its checksum sidecar if one exists.
 //
 // filename is used only as a LOOKUP KEY against a directory listing, never
-// joined directly into a filesystem path -- see PrepareRestoreIn's doc comment
-// for why (CodeQL go/path-injection: sanitizing filename is not a credited
-// barrier in this repo, only resolving it against os.ReadDir's results is).
+// joined directly into a filesystem path, as StageRestore's lookupArchive
+// does (CodeQL go/path-injection: sanitizing filename is not a credited
+// barrier in this repo -- library.SanitizeFilename, library.SecureJoin,
+// filepath.Base and prefix checks were measured against PR #3183 -- only
+// resolving it against os.ReadDir's results is).
 func DeleteBackupIn(backupDir, filename string) error {
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {

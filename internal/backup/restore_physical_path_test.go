@@ -1,5 +1,5 @@
 // file: internal/backup/restore_physical_path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1836ed6a-6e53-4474-bdb6-bfc2a75fc46f
 // last-edited: 2026-11-09
 
@@ -19,10 +19,11 @@ import (
 // strictly under a snapshot directory is followed by the kernel, but the
 // walk never reached the snapshot directory itself: it stated the symlink,
 // which has the subdirectory's identity, then the entry's own name, which
-// did not exist yet, and let the entry through. CheckPathsApart had the
-// same blind spot. Both now walk the physical path: the deepest prefix that
-// exists, resolved with filepath.EvalSymlinks, with the names not made yet
-// appended.
+// did not exist yet, and let the entry through. It now walks the physical
+// path: the deepest prefix that exists, resolved with filepath.EvalSymlinks,
+// with the names not made yet appended. (CheckPathsApart, the restore
+// handler's target check, had the same blind spot and the same fix; it went
+// with the in-place restore in R1-25.)
 
 // TestExtractArchive_RefusesASymlinkIntoASnapshotSubdirectory is the
 // reviewer's probe and its variants: a symlink in the database directory
@@ -132,38 +133,6 @@ func TestExtractArchive_FollowsASymlinkElsewhere(t *testing.T) {
 		if got, err := os.ReadFile(p); err != nil || string(got) != want {
 			t.Errorf("%s reads %q (%v); want %q", p, got, err, want)
 		}
-	}
-}
-
-// TestCheckPathsApart_ThroughASymlinkIntoTheOther: a directory that is a
-// symlink to a directory under the other overlaps it, whichever of the two
-// is the symlink and in whichever order they are passed. The reviewer's
-// shape is the live snapshot directory as a symlink into the target.
-func TestCheckPathsApart_ThroughASymlinkIntoTheOther(t *testing.T) {
-	base := t.TempDir()
-	target := filepath.Join(base, "gotham")
-	mustMkdir(t, filepath.Join(target, "batcave"), filepath.Join(base, "data"))
-	snapIntoTarget := filepath.Join(base, "data", "hnsw")
-	mustSymlink(t, filepath.Join(target, "batcave"), snapIntoTarget)
-
-	realSnap := filepath.Join(base, "wayne-manor", "hnsw")
-	mustMkdir(t, filepath.Join(realSnap, "robin"))
-	targetIntoSnap := filepath.Join(base, "alfred")
-	mustSymlink(t, filepath.Join(realSnap, "robin"), targetIntoSnap)
-
-	for _, pair := range [][2]string{
-		{target, snapIntoTarget},
-		{snapIntoTarget, target},
-		{targetIntoSnap, realSnap},
-		{realSnap, targetIntoSnap},
-		{filepath.Join(targetIntoSnap, "not-made-yet"), realSnap},
-	} {
-		if err := CheckPathsApart(pair[0], pair[1]); !errors.Is(err, ErrPathsOverlap) {
-			t.Errorf("CheckPathsApart(%q, %q) = %v; want ErrPathsOverlap", pair[0], pair[1], err)
-		}
-	}
-	if err := CheckPathsApart(filepath.Join(base, "arkham"), snapIntoTarget); err != nil {
-		t.Errorf("CheckPathsApart of an unrelated directory = %v; want nil", err)
 	}
 }
 

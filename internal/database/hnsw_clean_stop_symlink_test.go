@@ -1,12 +1,13 @@
 // file: internal/database/hnsw_clean_stop_symlink_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0fb79c76-6605-4679-9533-bd55a17f694d
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -161,43 +162,37 @@ func TestWriteFileSynced_RefusesASymlink(t *testing.T) {
 }
 
 // TestHNSWCleanStop_ARestoreCannotFillAMarkerSymlink is the reviewer's
-// probe, through the real restore steps: the handler's removal before the
-// first write (TakeHNSWCleanStop), then the extraction of an archive whose
-// ordinary entry is the dangling link's target. A crash right after the
-// extraction skips the handler's backstop removal, so the next boot's take
-// is what decides; it must find nothing that vouches.
+// probe, through the staged restore's steps (R1-25): the stager's discard
+// before it stages (DiscardHNSWCleanStop), then the swap putting the
+// restored store's files in place, here ExtractStore into the database
+// directory, whose ordinary entry is the dangling link's target. The boot
+// after the swap takes the marker; it must find nothing that vouches,
+// whether or not the discard ran first.
 func TestHNSWCleanStop_ARestoreCannotFillAMarkerSymlink(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		removalFirst   bool
+		discardFirst   bool
 		wantLinkBefore bool
 	}{
-		{"with the handler's removal before the extraction", true, false},
+		{"with the stager's discard before the swap", true, false},
 		{"without it: the boot's read refuses the link", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := t.TempDir()
 			dir, target := linkedMarker(t, base, "OPTIONS-000099")
-			backups := t.TempDir()
-			writeRestoreTar(t, filepath.Join(backups, "joker.tar"), [][2]string{
+			archive := filepath.Join(t.TempDir(), "joker.tar")
+			writeRestoreTar(t, archive, [][2]string{
 				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
 				{"audiobooks.pebble/OPTIONS-000099", vouchingBody},
 			})
-			prepared, err := backup.PrepareRestoreIn(backups, "joker.tar", false)
-			if err != nil {
-				t.Fatalf("PrepareRestoreIn = %v", err)
-			}
-			if err := backup.CheckSnapshotDirs([]string{dir}); err != nil {
-				t.Fatalf("CheckSnapshotDirs = %v", err)
-			}
-			if tc.removalFirst {
-				if _, err := TakeHNSWCleanStop(dir); errors.Is(err, ErrCleanStopNotDiscarded) {
-					t.Fatalf("TakeHNSWCleanStop = %v", err)
+			if tc.discardFirst {
+				if err := DiscardHNSWCleanStop(filepath.Join(base, "audiobooks.pebble")); err != nil {
+					t.Fatalf("DiscardHNSWCleanStop = %v", err)
 				}
 				nameGone(t, cleanStopPath(dir))
 			}
-			if err := prepared.Extract(base, []string{dir}); err != nil {
-				t.Fatalf("Extract = %v", err)
+			if _, err := backup.ExtractStore(context.Background(), archive, filepath.Dir(target)); err != nil {
+				t.Fatalf("ExtractStore = %v", err)
 			}
 			if got, err := os.ReadFile(target); err != nil || string(got) != vouchingBody {
 				t.Fatalf("the entry reads %q (%v); want it written", got, err)
@@ -211,6 +206,27 @@ func TestHNSWCleanStop_ARestoreCannotFillAMarkerSymlink(t *testing.T) {
 			}
 			nameGone(t, cleanStopPath(dir))
 		})
+	}
+}
+
+// TestExtractStore_RefusesAnEntryNamedForTheSnapshotDirectory: the archive
+// extractor refuses an entry with a path component named for the HNSW
+// snapshot directory, which no backup holds (backup's hnswSnapshotDirName,
+// a copy of HNSWSnapshotDir's name: the entry is built from this function,
+// so the two cannot drift apart unnoticed).
+func TestExtractStore_RefusesAnEntryNamedForTheSnapshotDirectory(t *testing.T) {
+	snap := filepath.Base(HNSWSnapshotDir(filepath.Join("gotham", "audiobooks.pebble")))
+	archive := filepath.Join(t.TempDir(), "the-court-of-owls.tar")
+	writeRestoreTar(t, archive, [][2]string{
+		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+		{"audiobooks.pebble/" + snap + "/" + hnswCleanStopFile, vouchingBody},
+	})
+	store := filepath.Join(t.TempDir(), "staging", "db")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backup.ExtractStore(context.Background(), archive, store); !errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot) {
+		t.Fatalf("ExtractStore = %v; want backup.ErrArchiveCarriesHNSWSnapshot", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.11
+// version: 4.67.12
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -305,6 +305,23 @@ func (s *Server) SetPostureTokens(f func() []systemhandlers.PostureToken) {
 func (s *Server) currentPostureTokens() []systemhandlers.PostureToken {
 	if f := s.postureTokens.Load(); f != nil && *f != nil {
 		return (*f)()
+	}
+	return nil
+}
+
+// SetRestoreStager installs POST /backup/restore's stager (05-backup
+// §5B.3.4; R1-25): internal/books hands it one over the App's state
+// directory, store path and restart request once New has returned. Until
+// then the route answers 503 and nothing is staged.
+func (s *Server) SetRestoreStager(st systemhandlers.RestoreStager) {
+	s.restoreStager.Store(&st)
+}
+
+// currentRestoreStager is the system handler's lazy provider: the stager
+// SetRestoreStager installed, nil before.
+func (s *Server) currentRestoreStager() systemhandlers.RestoreStager {
+	if st := s.restoreStager.Load(); st != nil {
+		return *st
 	}
 	return nil
 }
@@ -1684,10 +1701,11 @@ func (s *Server) markHNSWCleanStop(abandoned []string) {
 
 // markHNSWSnapshotDiverged marks the HNSW vector store diverged
 // (database.SnapshotDivergence), so this run's stop writes no clean-stop
-// marker. The system handler calls it after a backup restore, whose
-// extraction writes Pebble files behind the GatedDB the store counts writes
-// through (R1-15 round-2 review, B1). Resolved at call time: the container
-// is the one the server holds when the restore runs.
+// marker. The system handler's restore stager calls it once a staged
+// restore passed its checks, before the intent: the next boot swaps in
+// Pebble files behind the GatedDB the store counts writes through (R1-15
+// round-2 review, B1; R1-25 for the staged restore). Resolved at call time:
+// the container is the one the server holds when the restore is staged.
 func (s *Server) markHNSWSnapshotDiverged(reason string) {
 	if s.container == nil {
 		return

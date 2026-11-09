@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_depth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f51b34fb-19af-4389-b4f1-eacff2ea0e54
 // last-edited: 2026-11-09
 
@@ -46,16 +46,16 @@ func TestEntryRefusal_RefusesAnHNSWComponentAtAnyDepth(t *testing.T) {
 	}
 }
 
-// TestPrepareRestoreIn_RefusesANestedRootsSnapshotEntry: the reviewer's
-// archive is refused when it is prepared, before anything is written. The
+// TestExtractStore_RefusesANestedRootsSnapshotEntry: the reviewer's archive
+// is refused by ExtractStore's scan, before anything is written. The
 // extraction refuses each entry with the same check (entryRefusal).
-func TestPrepareRestoreIn_RefusesANestedRootsSnapshotEntry(t *testing.T) {
-	dir := t.TempDir()
-	writePlainTar(t, filepath.Join(dir, "hush.tar"), [][2]string{
+func TestExtractStore_RefusesANestedRootsSnapshotEntry(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "hush.tar")
+	writePlainTar(t, archive, [][2]string{
 		{"a/b/CURRENT", "MANIFEST-000001\n"},
 		{"a/hnsw/hnsw.clean-stop", `{"version":1,"model":"bge-m3"}`},
 	})
-	if _, err := PrepareRestoreIn(dir, "hush.tar", false); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
-		t.Errorf("PrepareRestoreIn = %v; want ErrArchiveCarriesHNSWSnapshot", err)
+	if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
+		t.Errorf("ExtractStore = %v; want ErrArchiveCarriesHNSWSnapshot", err)
 	}
 }
