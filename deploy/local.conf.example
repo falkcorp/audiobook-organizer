@@ -1,5 +1,5 @@
 # file: deploy/local.conf.example
-# version: 1.6.0
+# version: 1.7.0
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
 # last-edited: 2026-11-09
 #
@@ -28,8 +28,8 @@
 # --- host.conf, NOT this file -------------------------------------------
 # /etc/systemd/system/audiobook-organizer.service.d/host.conf, written once
 # by the owner as root (sudo tee / sudoedit), then
-# `sudo systemctl daemon-reload`. `install-staged local-conf` refuses to
-# deploy without it, and refuses a host.conf that runs anything but the
+# `sudo systemctl daemon-reload`. `install-staged unit` and `local-conf`
+# refuse to deploy without it, and refuse a host.conf that runs anything but the
 # service user's ExecStart (no other Exec*= line, no + or ! prefix, no
 # PermissionsStartOnly=, AmbientCapabilities= or other User=/Group=):
 #
