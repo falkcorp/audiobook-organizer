@@ -312,7 +312,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **F2-12: read the R0 tag from `ci/r0_release.txt` in `TestR0OpensR1Store` and its CI job** R1-23 pins R0 as `v0.223.0` in two places: `internal/books/r0store_test.go` (`r0Tag`, plus the four archives' SHA-256 values) and `.github/workflows/extraction-gates.yml`'s `boot-crash-matrix-abo` job (its cache key, download and build-from-tag fallback). When F2-12 adds `ci/r0_release.txt`, both should read the tag from it, with the checksums kept beside it, so the next R0 is one edit.
 
-- [ ] **R1-25: the standalone opener must finish or refuse an in-flight swap (P0a)** `internal/database.OpenStandalone` (behind `NewPebbleStore` and `InitializeStore`, so `diagnostics` and `cmd/pid-census`) runs `storage.Open`, `Prepare` and `Migrate` with no P0a. `storage.Open` does not check for a journaled swap in flight (`restore/<id>/inflight.json`). A standalone open of a store mid-restore or mid-reset would therefore open the half-swapped directory, and could take a checkpoint and run steps on it.
+- [x] **R1-25: the standalone opener must finish or refuse an in-flight swap (P0a)** (done by R1-25, #4522: the opener refuses and names the fix, `TestStandaloneOpenerHonoursInflightSwap`) `internal/database.OpenStandalone` (behind `NewPebbleStore` and `InitializeStore`, so `diagnostics` and `cmd/pid-census`) runs `storage.Open`, `Prepare` and `Migrate` with no P0a. `storage.Open` does not check for a journaled swap in flight (`restore/<id>/inflight.json`). A standalone open of a store mid-restore or mid-reset would therefore open the half-swapped directory, and could take a checkpoint and run steps on it.
   - Unreachable at R1-23: ABO stages no restore or reset until R1-25 moves books' resets onto the `KindReset` swap.
   - Fix (R1-25, its brief's step 7 and `TestStandaloneOpenerHonoursInflightSwap` since R1-23's review): the standalone opener runs the same pre-boot swap the kernel's P0a runs, or it refuses with `storage.ErrSwapPending`'s message telling the operator to boot the app once. Add a test where a staged in-flight swap makes `OpenStandalone` refuse, or complete the swap, before it opens anything.
 
@@ -372,8 +372,8 @@ into one of the curated sections below, is a normal direct edit.
       generated operation (07 §7.19 step 3), with `onUnauthorized` wired to the
       auth reset of 07 §7.9.
 
-- [ ] **HNSW clean-stop marker: a boot whose P0a swaps the store must not trust the marker it
-      took** (from the R1-15 clean-stop PR's port onto R1-23; filed, not built, because nothing
+- [x] **HNSW clean-stop marker: a boot whose P0a swaps the store must not trust the marker it
+      took** (done by R1-25, #4522: `TestSwapBootVoidsTheCleanStopClaim`) (from the R1-15 clean-stop PR's port onto R1-23; filed, not built, because nothing
       stages a swap yet).
       - **Why.** Since R1-23 the served boot runs core's pre-boot swap (P0a,
         `core/kernel/swap.go`) whenever a restore or reset is staged in the state directory. The
