@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.239.0
+// version: 1.239.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -3077,9 +3077,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		return nil, err
 	}
 
-	// Update main key
+	// Update main key. A book-row write counts as a verdict write for the
+	// HNSW clean-stop marker only when it changes what the reconcile reads
+	// from the row (hnsw_verdict_watch.go): most updates leave the primary
+	// flag and the series fields alone.
 	key := []byte(fmt.Sprintf("book:%s", id))
-	if err := batch.Set(key, data, nil); err != nil {
+	if err := batch.setJudged(key, data, annVerdictInputsChanged(oldBook, book)); err != nil {
 		batch.Close()
 		return nil, err
 	}

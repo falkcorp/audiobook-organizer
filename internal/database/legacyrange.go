@@ -1,7 +1,7 @@
 // file: internal/database/legacyrange.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4c7e1a92-6b3d-4f05-9e28-d1a5b7c3f604
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -326,10 +326,14 @@ func (l *legacyIter) Close() error {
 	return legacyErr(err)
 }
 
-// batchOp is one operation a recording batch holds.
+// batchOp is one operation a recording batch holds. verdict is whether it is
+// a write the HNSW verdict watch counts: for a Set, the caller's judgement
+// (GatedBatch.setJudged), which Apply replays it with; a Delete or DeleteRange
+// is judged by its keys, and Apply's replay judges it again the same way.
 type batchOp struct {
 	kind       uint8 // opSet, opDelete, opDeleteRange
 	key, value []byte
+	verdict    bool
 }
 
 const (

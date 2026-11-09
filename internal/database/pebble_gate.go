@@ -1,7 +1,7 @@
 // file: internal/database/pebble_gate.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -337,6 +337,9 @@ type GatedDB struct {
 	db   *pebble.DB
 	lr   *legacyBackend
 	gate *dbGate
+	// verdict counts the writes to the keys the HNSW reconcile's verdict
+	// reads (hnsw_verdict_watch.go), on either backend.
+	verdict verdictWatch
 }
 
 // NewGatedDB wraps an engine the caller opened, for a caller that keeps the
@@ -461,6 +464,9 @@ func (d *GatedDB) Set(key, value []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if isVerdictKey(key) {
+		d.verdict.note()
+	}
 	if d.lr != nil {
 		return d.lr.write(opts, func(b *storage.Batch) error { return b.Set(key, value) })
 	}
@@ -473,6 +479,9 @@ func (d *GatedDB) Delete(key []byte, opts *pebble.WriteOptions) error {
 		return err
 	}
 	defer d.gate.release()
+	if isVerdictKey(key) {
+		d.verdict.note()
+	}
 	if d.lr != nil {
 		return d.lr.write(opts, func(b *storage.Batch) error { return b.Delete(key) })
 	}
@@ -486,6 +495,9 @@ func (d *GatedDB) DeleteRange(start, end []byte, opts *pebble.WriteOptions) erro
 		return err
 	}
 	defer d.gate.release()
+	if rangeTouchesVerdictKeys(start, end) {
+		d.verdict.note()
+	}
 	if d.lr != nil {
 		return d.lr.write(opts, func(b *storage.Batch) error { return stageClaimedDeleteRange(b, start, end) })
 	}
@@ -815,23 +827,25 @@ func (d *GatedDB) NewSnapshot() *GatedSnapshot {
 // does.
 func (d *GatedDB) NewBatch(opts ...pebble.BatchOption) *GatedBatch {
 	if d.lr != nil {
-		return newCoreBatch(d.lr, d.lr.r.NewBatch(), false, d.gate)
+		return d.newCoreBatch(d.lr.r.NewBatch(), false)
 	}
-	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate}
+	return &GatedBatch{b: d.db.NewBatch(opts...), gate: d.gate, watch: &d.verdict}
 }
 
 // NewIndexedBatch returns a batch that can also be read. Building it holds no
 // lease; Commit and Get do.
 func (d *GatedDB) NewIndexedBatch() *GatedBatch {
 	if d.lr != nil {
-		return newCoreBatch(d.lr, d.lr.r.NewIndexedBatch(), true, d.gate)
+		return d.newCoreBatch(d.lr.r.NewIndexedBatch(), true)
 	}
-	return &GatedBatch{b: d.db.NewIndexedBatch(), indexed: true, gate: d.gate}
+	return &GatedBatch{b: d.db.NewIndexedBatch(), indexed: true, gate: d.gate, watch: &d.verdict}
 }
 
 // newRecordingBatch returns a batch that only records its writes, for
 // staging that is replayed into other batches with Apply. It touches no
-// engine, so it needs no lease and works the same on both backends.
+// engine, so it needs no lease and works the same on both backends. It has no
+// verdict watch because it never commits: each write it records carries its
+// verdict judgement, and Apply stages it into the batch that does.
 func (d *GatedDB) newRecordingBatch() *GatedBatch {
 	return &GatedBatch{rec: &[]batchOp{}, gate: d.gate}
 }
@@ -1096,6 +1110,12 @@ type GatedBatch struct {
 	commits *atomic.Uint64 // the core backend's commit count (legacyBackend.commits)
 	indexed bool
 	gate    *dbGate
+	// watch is the database's verdict watch, and verdict records that the
+	// batch staged a verdict write; Commit notes it before the write reaches
+	// the engine (hnsw_verdict_watch.go). Every batch that can commit, raw or
+	// core, has the watch; a recording batch has none and never commits.
+	watch   *verdictWatch
+	verdict bool
 }
 
 // traceBatchWrites (tests only; a count, so parallel tests can each hold it)
@@ -1106,9 +1126,9 @@ type GatedBatch struct {
 // key that was never there) need to see them.
 var traceBatchWrites atomic.Int32
 
-// newCoreBatch wraps a core batch, traced when traceBatchWrites is set.
-func newCoreBatch(l *legacyBackend, lb *storage.Batch, indexed bool, gate *dbGate) *GatedBatch {
-	b := &GatedBatch{lb: lb, indexed: indexed, gate: gate, commits: &l.commits}
+// newCoreBatch wraps a core batch of d's, traced when traceBatchWrites is set.
+func (d *GatedDB) newCoreBatch(lb *storage.Batch, indexed bool) *GatedBatch {
+	b := &GatedBatch{lb: lb, indexed: indexed, gate: d.gate, commits: &d.lr.commits, watch: &d.verdict}
 	if traceBatchWrites.Load() > 0 {
 		b.trace = &[]batchOp{}
 	}
@@ -1118,7 +1138,8 @@ func newCoreBatch(l *legacyBackend, lb *storage.Batch, indexed bool, gate *dbGat
 // errRecordingBatch is returned by an engine call on a recording batch.
 var errRecordingBatch = errors.New("pebble store: a recording batch only replays into another batch")
 
-// Commit applies the batch to the engine.
+// Commit applies the batch to the engine. A batch that staged a verdict write
+// is noted before it commits, on either backend.
 func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
 	if b.rec != nil {
 		return errRecordingBatch
@@ -1127,6 +1148,9 @@ func (b *GatedBatch) Commit(o *pebble.WriteOptions) error {
 		return err
 	}
 	defer b.gate.release()
+	if b.verdict && b.watch != nil {
+		b.watch.note()
+	}
 	if b.lb != nil {
 		n := b.lb.Count()
 		if err := b.lb.Commit(context.Background(), durability(o)); err != nil {
@@ -1166,8 +1190,10 @@ func (b *GatedBatch) Get(key []byte) ([]byte, io.Closer, error) {
 }
 
 // Apply appends a recording batch's writes to b (process memory only, no
-// lease). Only a batch from newRecordingBatch can be applied: a core batch
-// cannot be copied into another.
+// lease), each Set with the verdict judgement it was recorded with, so a
+// verdict write staged through a recording batch is noted when b commits.
+// Only a batch from newRecordingBatch can be applied: a core batch cannot be
+// copied into another.
 func (b *GatedBatch) Apply(other *GatedBatch, _ *pebble.WriteOptions) error {
 	if other.rec == nil {
 		return errors.New("pebble store: Apply takes a recording batch (GatedDB.newRecordingBatch)")
@@ -1176,7 +1202,7 @@ func (b *GatedBatch) Apply(other *GatedBatch, _ *pebble.WriteOptions) error {
 		var err error
 		switch op.kind {
 		case batchOpSet:
-			err = b.Set(op.key, op.value, nil)
+			err = b.set(op.key, op.value, nil, op.verdict)
 		case batchOpDelete:
 			err = b.Delete(op.key, nil)
 		case batchOpDeleteRange:
@@ -1190,9 +1216,11 @@ func (b *GatedBatch) Apply(other *GatedBatch, _ *pebble.WriteOptions) error {
 }
 
 // record appends one write to a recording batch, copying its bytes (pebble
-// batches copy too, so callers may reuse their buffers).
-func (b *GatedBatch) record(kind uint8, key, value []byte) {
+// batches copy too, so callers may reuse their buffers), with whether it is a
+// verdict write for Apply to carry over.
+func (b *GatedBatch) record(kind uint8, key, value []byte, verdict bool) {
 	appendOp(b.rec, kind, key, value)
+	(*b.rec)[len(*b.rec)-1].verdict = verdict
 }
 
 // staged notes a write a core batch accepted, when it is traced.
@@ -1209,36 +1237,62 @@ func appendOp(ops *[]batchOp, kind uint8, key, value []byte) {
 
 // Set, Delete, DeleteRange, Close, Len, Count, Empty and Indexed are process
 // memory. On the core backend Set, Delete and DeleteRange are checked against
-// books' claims as they are staged.
+// books' claims as they are staged. The three writes record a verdict write
+// (isVerdictKey) for Commit to note, on every shape.
 
 func (b *GatedBatch) Set(key, value []byte, opts *pebble.WriteOptions) error {
-	switch {
-	case b.rec != nil:
-		b.record(batchOpSet, key, value)
+	return b.set(key, value, opts, isVerdictKey(key))
+}
+
+// setJudged stages a Set of a verdict key whose caller has decided whether it
+// changes anything the reconcile reads, instead of counting it as one by its
+// key (hnsw_verdict_watch.go). Only a caller that compared what the row held
+// with what it writes may pass false.
+func (b *GatedBatch) setJudged(key, value []byte, changesVerdict bool) error {
+	return b.set(key, value, nil, changesVerdict)
+}
+
+// set stages key=value on any shape; verdict says whether it is a verdict
+// write. A recording batch keeps the judgement with the write for Apply.
+func (b *GatedBatch) set(key, value []byte, opts *pebble.WriteOptions, verdict bool) error {
+	if b.rec != nil {
+		b.record(batchOpSet, key, value, verdict)
 		return nil
-	case b.lb != nil:
+	}
+	if verdict {
+		b.verdict = true
+	}
+	if b.lb != nil {
 		return b.staged(b.lb.Set(key, value), batchOpSet, key, value)
 	}
 	return b.b.Set(key, value, opts)
 }
 
 func (b *GatedBatch) Delete(key []byte, opts *pebble.WriteOptions) error {
-	switch {
-	case b.rec != nil:
-		b.record(batchOpDelete, key, nil)
+	verdict := isVerdictKey(key)
+	if b.rec != nil {
+		b.record(batchOpDelete, key, nil, verdict)
 		return nil
-	case b.lb != nil:
+	}
+	if verdict {
+		b.verdict = true
+	}
+	if b.lb != nil {
 		return b.staged(b.lb.Delete(key), batchOpDelete, key, nil)
 	}
 	return b.b.Delete(key, opts)
 }
 
 func (b *GatedBatch) DeleteRange(start, end []byte, opts *pebble.WriteOptions) error {
-	switch {
-	case b.rec != nil:
-		b.record(batchOpDeleteRange, start, end)
+	verdict := rangeTouchesVerdictKeys(start, end)
+	if b.rec != nil {
+		b.record(batchOpDeleteRange, start, end, verdict)
 		return nil
-	case b.lb != nil:
+	}
+	if verdict {
+		b.verdict = true
+	}
+	if b.lb != nil {
 		return b.staged(stageClaimedDeleteRange(b.lb, start, end), batchOpDeleteRange, start, end)
 	}
 	return b.b.DeleteRange(start, end, opts)
