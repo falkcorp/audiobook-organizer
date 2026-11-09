@@ -1,7 +1,7 @@
 // file: internal/database/storage_format_repair.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c23ebb3-ad3d-4ea8-ae2e-8b1876ac7ef8
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -81,12 +81,13 @@ var closeRepairDB = func(db *pebble.DB) error { return db.Close() }
 
 // ListReservedPreferences returns every reserved row in the store at dbPath,
 // plus the sidecar's raw content (sidecarPresent false when the file is absent).
+// It opens the store read-only and writes nothing.
 func ListReservedPreferences(dbPath string) (rows []ReservedPreferenceRow, sidecar string, sidecarPresent bool, err error) {
 	return listReservedPreferences(dbPath, vfs.Default)
 }
 
 func listReservedPreferences(dbPath string, fs vfs.FS) (rows []ReservedPreferenceRow, sidecar string, sidecarPresent bool, err error) {
-	db, err := openRawForRepair(dbPath, fs)
+	db, err := openRawForRepair(dbPath, fs, true)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -156,7 +157,7 @@ func repairReservedPreference(dbPath string, fs vfs.FS, key string, setVersion i
 			"Use --set storage_format=N with the store's real format instead", buildStorageFormat, legacyStorageFormat)
 	}
 
-	db, err := openRawForRepair(dbPath, fs)
+	db, err := openRawForRepair(dbPath, fs, false)
 	if err != nil {
 		return change, err
 	}
@@ -289,7 +290,15 @@ func repairPreferenceID(db *pebble.DB, batch *pebble.Batch, before rawValue, cha
 // first: pebble creates the directory and its LOCK file before it honours
 // ErrorIfNotExists, so a typo'd path would otherwise leave an empty store
 // directory behind.
-func openRawForRepair(dbPath string, fs vfs.FS) (*pebble.DB, error) {
+//
+// readOnly is for a listing (R1-25 follow-up N-3): a read-write open writes a
+// new WAL, manifest and OPTIONS file, which, run as root, the service could
+// not replace; read-only it adds nothing to the store directory, so the
+// owner rule does not apply to a listing. Like every Pebble open, read-only
+// included, it still opens the store's existing LOCK file for writing, so
+// in practice it runs as the owner or root. A repair opens read-write, and
+// cmd runs it only as the state directory's owner.
+func openRawForRepair(dbPath string, fs vfs.FS, readOnly bool) (*pebble.DB, error) {
 	info, err := fs.Stat(dbPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("no store at %s (check --db / DATABASE_PATH)", dbPath)
@@ -300,7 +309,7 @@ func openRawForRepair(dbPath string, fs vfs.FS) (*pebble.DB, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%s is not a Pebble store directory", dbPath)
 	}
-	db, err := pebble.Open(dbPath, &pebble.Options{FS: fs, ErrorIfNotExists: true})
+	db, err := pebble.Open(dbPath, &pebble.Options{FS: fs, ErrorIfNotExists: true, ReadOnly: readOnly})
 	if err != nil {
 		if strings.Contains(err.Error(), "lock") || strings.Contains(err.Error(), "resource temporarily unavailable") {
 			return nil, fmt.Errorf("open %s: %w (is the audiobook-organizer service still running? stop it first)", dbPath, err)
