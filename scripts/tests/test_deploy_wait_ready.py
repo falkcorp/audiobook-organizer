@@ -1,5 +1,5 @@
 # file: scripts/tests/test_deploy_wait_ready.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: f22657cf-f7bf-4b6c-a942-2799f4bd4890
 # last-edited: 2026-11-09
 
@@ -270,11 +270,15 @@ class WaitReadyTest(unittest.TestCase):
         self.assertIn("not restarted", proc.stderr)
 
     def test_ssh_keeps_the_connection_alive(self) -> None:
+        # A name of its own, registered before exec_module (the importlib
+        # recipe; Python 3.12 needs the module in sys.modules while it loads),
+        # so it never replaces a deploy_wait_ready that deploy_rollback imported.
         spec = importlib.util.spec_from_file_location(
-            "deploy_wait_ready", REPO_ROOT / "scripts" / "deploy_wait_ready.py"
+            "deploy_wait_ready_under_test", REPO_ROOT / "scripts" / "deploy_wait_ready.py"
         )
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
         pairs = list(zip(mod.SSH_OPTS[::2], mod.SSH_OPTS[1::2]))
         self.assertIn(("-o", "ServerAliveInterval=15"), pairs)

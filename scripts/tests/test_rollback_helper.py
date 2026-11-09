@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.12.0
+# version: 1.12.1
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -119,6 +119,10 @@ def load():
     spec = importlib.util.spec_from_file_location("rollback_helper", HELPER)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    # Registered before exec_module (the importlib recipe): dataclasses and
+    # typing resolve a class's module through sys.modules, and Python 3.12
+    # fails when it is absent. Each load replaces the entry with a fresh copy.
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -363,7 +367,8 @@ class Probe(unittest.TestCase):
 _RUN_MODULE = """
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("rollback_helper", sys.argv[1])
-mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+mod = importlib.util.module_from_spec(spec); sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
 mod.CONFIG = sys.argv[2]; mod.TOOLS = json.loads(sys.argv[3])
 sys.exit(mod.main(sys.argv[4:]))
 """
