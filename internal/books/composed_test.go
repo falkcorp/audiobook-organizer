@@ -1,7 +1,7 @@
 // file: internal/books/composed_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -114,7 +114,7 @@ func checkClaimViolations(t *testing.T, a *app.App, c *composed) {
 	counts, keys := adm.ClaimViolations(), adm.ClaimViolationKeys()
 	var lines []string
 	for v, n := range counts {
-		lines = append(lines, fmt.Sprintf("%s %s %s x%d: %s", v.Owner, v.Op, v.Mode, n, strings.Join(keys[v], " ")))
+		lines = append(lines, fmt.Sprintf("%s %s %s x%d: %s", v.Owner, v.Op, v.Mode, n, strings.Join(keys[v], "; ")))
 	}
 	slices.Sort(lines)
 	if len(lines) > 0 {

@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-09
 
@@ -769,7 +769,7 @@ func (db *DB) foreignKeys() error {
 		}
 	}
 	if len(sample) > 0 {
-		return &ForeignKeysError{Sample: sample}
+		return &ForeignKeysError{Sample: numberShared(sample)}
 	}
 	return nil
 }
@@ -796,8 +796,9 @@ func (db *DB) logUnclaimedKeys() error {
 
 // unclaimedKeys counts the keys in the gaps between the claim index's
 // intervals, outside c/ and m/, and returns at most limit of them as keyRef
-// names them (length and hash only: an unclaimed key has no claim to name,
-// and none of its bytes is shown; R1-23 review SF1).
+// describes them, numbered where two share a description (an unclaimed key
+// has no claim to name, so that is its length alone; none of its bytes is
+// shown, R1-23 review SF1).
 func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
 	release, err := db.lease()
 	if err != nil {
@@ -841,7 +842,7 @@ func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
 			return 0, nil, fmt.Errorf("storage: iterator: %w", err)
 		}
 	}
-	return n, sample, nil
+	return n, numberShared(sample), nil
 }
 
 // readEpoch reads the store generation and the directory identity: a record

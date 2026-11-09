@@ -1,7 +1,7 @@
 // file: internal/books/r0store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d8a1f36-2c7e-4b94-a0d3-6e9b4c1f7a28
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -257,11 +257,13 @@ func TestR0OpensR1Store(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(*dv.Value), &version))
 	assert.Greater(t, version.Version, r0LastMigration, "R1's db_version is not past R0's last migration: R0's tolerance of a newer store is not exercised")
 	assert.Equal(t, r1[dbVersionKey], after[dbVersionKey], "R0's open changed db_version")
-	r1Records := map[string]bool{}
-	for _, k := range keysWithPrefix(r1, "preference:migration_") {
-		r1Records[k] = true
-	}
+	// Every applied-migration record after R0's open is one R1 left, with
+	// R1's value: R0 neither wrote a new one nor rewrote one (the loop over
+	// r1 above already proved none was lost).
 	for _, k := range keysWithPrefix(after, "preference:migration_") {
-		assert.True(t, r1Records[k], "R0's open wrote migration record %q", k)
+		v, ok := r1[k]
+		if assert.True(t, ok, "R0's open wrote migration record %q", k) {
+			assert.Equal(t, v, after[k], "R0's open rewrote migration record %q", k)
+		}
 	}
 }

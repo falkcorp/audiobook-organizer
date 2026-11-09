@@ -28,16 +28,15 @@
   (`audiobook_organizer_storage_claim_violations_total`) and logging them (the
   1st, 2nd, 4th, 8th... time for each kind, so the log does not flood). Shadow
   mode does not widen listings: a family that is not registered stays
-  invisible to every scan either way. These logs and the refusal errors name a
-  key by the registered family that holds it, its length and a short hash
-  (`key under claim "sess:" (21 bytes, sha256:1a2b3c4d)`), or, for a key in no
-  registered family, by its length and hash alone. No part of the key itself
-  is shown, so a session token or other secret held in a key never reaches a
-  log.
+  invisible to every scan either way. These logs and the refusal errors
+  describe a key by the registered family that holds it and its length
+  (`key under claim "sess:" len=21`), or, for a key in no registered family,
+  by its length alone. Neither the key nor a hash of it is shown, so a session
+  token or other secret held in a key never reaches a log.
 - The first start of this release on an existing database counts the keys that
   belong to no registered family and logs how many there are with a few
-  examples, each named by its length and hash. It leaves them in place and
-  does not refuse to start.
+  examples, each described by its length. It leaves them in place and does
+  not refuse to start.
 - If startup cannot save a settings upgrade (the settings blob's new layout,
   the maintenance-window marker, or a reset of an unreadable secret), the server
   logs the error, reports `settings_writes` in `/health`'s degraded list, and
