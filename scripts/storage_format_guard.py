@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.4.0
+# version: 2.5.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
 # last-edited: 2026-11-09
 
@@ -780,7 +780,7 @@ def _validate(o: Opts) -> str:
         return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
     if not _SAFE_USER.match(o.user) or o.user == "root":
         return f"service_user {o.user!r} is not the service's user"
-    if not re.fullmatch(r"[A-Za-z0-9@._:-]+\.service", o.unit):
+    if not re.fullmatch(r"[A-Za-z0-9@._-]+\.service", o.unit):
         return f"unit {o.unit!r} is not a .service unit name"
     if not o.host or o.host.startswith("-") or not re.fullmatch(r"[A-Za-z0-9@._:-]+", o.host):
         return f"host {o.host!r} is not a host name"
