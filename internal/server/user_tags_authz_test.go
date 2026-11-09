@@ -1,7 +1,7 @@
 // file: internal/server/user_tags_authz_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7a4e9b3c-2f1d-4a6e-9c8b-5d3f0e1a2b4c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Regression coverage for the book user-tags write routes' authorization
 // guard (fixed in this change). setupUserTagRoutes previously registered
@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )

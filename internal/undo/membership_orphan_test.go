@@ -1,7 +1,7 @@
 // file: internal/undo/membership_orphan_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e4b27c1-5a38-4d60-b1f7-a83c0d6e2f54
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // orphanFixture is the reviewer's scenario: l0 = [a B c X]. op1 retires B into

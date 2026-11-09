@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_cache_readthrough_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7de1cf53-bf29-420d-bfad-f87e0fe4db96
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8c3f1b52-6a04-4de7-9b18-2f7a05c9d6e1
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

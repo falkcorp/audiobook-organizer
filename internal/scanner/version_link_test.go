@@ -1,7 +1,7 @@
 // file: internal/scanner/version_link_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8adc2c96-c929-436d-8dae-1fb17ee04210
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // vlStore is a minimal store for the version-link path: it holds rows by ID

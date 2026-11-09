@@ -1,7 +1,7 @@
 // file: internal/undo/author_rename.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2c8a14-7b39-4f60-9d1a-8c3e6f0b2d75
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeAuthorRename: an author row renamed in place (author-conjunction-

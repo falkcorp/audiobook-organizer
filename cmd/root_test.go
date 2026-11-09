@@ -1,7 +1,7 @@
 // file: cmd/root_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7eae8d0c-7fda-4f45-8f73-5d1e0c7c9f1a
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/spf13/viper"

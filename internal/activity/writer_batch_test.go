@@ -1,12 +1,12 @@
 // file: internal/activity/writer_batch_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2c7e5f10-9a63-4d84-8b21-4e0d7c395a6f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Package activity — regression suite for the batched write path in
 // Writer.writeBatch.
 //
-// WHY these tests are here and not only in internal/database: the store gained
+// WHY these tests are here and not only in internal/books/store: the store gained
 // RecordBatch, but the defect was in the CALLER. writeBatch received a slice
 // and then called store.Record once per entry, and Record commits with
 // pebble.Sync — so the batching layer amortized rows and not fsyncs, and a
@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

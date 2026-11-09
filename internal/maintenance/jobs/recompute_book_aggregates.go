@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -25,7 +25,7 @@
 //   Both operator-facing messages advertised an escape hatch that did not exist,
 //   which meant one clean non-dry run disabled this job PERMANENTLY. That matters
 //   beyond the job itself: notifyBookFileChange
-//   (internal/database/pebble_store_book_aggregates.go) swallows recompute errors
+//   (internal/books/store/pebble_store_book_aggregates.go) swallows recompute errors
 //   partly because "the backfill job acts as a safety net for any misses", and an
 //   unrunnable job is not a safety net.
 
@@ -38,7 +38,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )

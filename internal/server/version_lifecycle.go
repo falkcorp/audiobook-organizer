@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

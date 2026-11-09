@@ -1,7 +1,7 @@
 // file: internal/wirecontract/contract_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8e3a6b14-0c5d-4f72-9a81-d2b7e4c6f039
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Package wirecontract pins the JSON the generated TypeScript types describe
 // (07-F1). For each type tygo generates (tygo.yaml) it marshals a fully
@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

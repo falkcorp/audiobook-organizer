@@ -1,7 +1,7 @@
 // file: internal/server/quarantine_handlers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b2e5c14-9a30-4d68-bf27-c05e83a4d916
-// last-edited: 2026-09-09
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_orphans_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f6b1d8e-2a47-4c95-8e0b-7d4a9c2e51f6
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

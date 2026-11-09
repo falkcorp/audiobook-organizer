@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.37.0
+# version: 3.37.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-09
 
@@ -771,7 +771,7 @@ jobs:
 
       # Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3),
       # built from tools/mockery/go.mod like `make mockery-install`. The committed mocks (including
-      # the merged internal/database/mocks/mock_store.go) were generated
+      # the merged internal/books/store/mocks/mock_store.go) were generated
       # with mockery v3, which supports package-based config and merging
       # multiple interfaces into one output file — mockery v2.53.6 does NOT
       # support merging into a shared filename (each interface's generation
@@ -803,8 +803,8 @@ jobs:
       - name: Check go generate mocks (database)
         run: |
           set -e
-          go generate ./internal/database/...
-          CHANGED=$(git status --porcelain --untracked-files=all -- internal/database/mocks/)
+          go generate ./internal/books/store/...
+          CHANGED=$(git status --porcelain --untracked-files=all -- internal/books/store/mocks/)
           if [ -n "$CHANGED" ]; then
             echo "❌ MockStore is stale. Run 'make mocks' and commit."
             echo "$CHANGED"

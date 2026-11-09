@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/conformance_mutation_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9a4f2c63-1e8b-4d57-b0a9-5c3e7f1d2b86
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

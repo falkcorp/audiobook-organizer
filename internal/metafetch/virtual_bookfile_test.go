@@ -1,7 +1,7 @@
 // file: internal/metafetch/virtual_bookfile_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f1e9c72-8b4d-4a6e-9d05-7c2b1a8e4f60
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A row-less single-file book's virtual entry must carry the book row's size:

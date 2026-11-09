@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version_lock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d8c2b47-9a1e-4f36-8b70-e4a2c9f1d053
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

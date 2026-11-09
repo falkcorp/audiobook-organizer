@@ -1,7 +1,7 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

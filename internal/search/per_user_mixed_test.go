@@ -1,7 +1,7 @@
 // file: internal/search/per_user_mixed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f2a6d1c-5e47-4b93-b0a8-1c7d3e9f4a56
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package search
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mixedLibrary indexes a small Batman library and returns it with one viewer's rows.

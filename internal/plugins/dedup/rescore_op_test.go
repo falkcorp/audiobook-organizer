@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6b3d90e7-4c21-4a58-8f07-1d92e5cb37a0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

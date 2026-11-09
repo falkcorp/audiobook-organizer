@@ -1,7 +1,7 @@
 // file: internal/merge/service_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9b3d7e21-4a6c-4f08-8e15-7c2a9d4b6e30
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

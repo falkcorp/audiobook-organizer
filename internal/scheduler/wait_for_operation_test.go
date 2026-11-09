@@ -1,7 +1,7 @@
 // file: internal/scheduler/wait_for_operation_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8c2e4f61-9a37-4b0d-85e2-1f6a3d7c9b40
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

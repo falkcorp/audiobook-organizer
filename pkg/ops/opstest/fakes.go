@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/fakes.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2a9c71-4d08-4f3b-8a6e-1b9d7c3f2a54
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

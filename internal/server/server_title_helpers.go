@@ -1,7 +1,7 @@
 // file: internal/server/server_title_helpers.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b4b0048c-d778-43c9-871e-21f9a9b6705d
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func computeSeriesPrunePreview(store seriesPruneReader) (*seriesPrunePreviewResult, error) {

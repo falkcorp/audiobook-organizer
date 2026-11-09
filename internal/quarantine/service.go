@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package quarantine
 
@@ -20,8 +20,8 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"

@@ -1,7 +1,7 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The 14-day trash window counts from when a version entered the trash

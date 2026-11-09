@@ -1,7 +1,7 @@
 // file: internal/server/collection_peruser_purge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c2a9e54-1b38-4d60-8f17-a5e3b9d0c682
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

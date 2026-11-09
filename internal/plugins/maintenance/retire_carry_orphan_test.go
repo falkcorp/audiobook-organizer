@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_orphan_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a1e8c34-7d92-4f06-b3a8-0e6d29c4f175
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

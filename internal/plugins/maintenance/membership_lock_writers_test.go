@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/membership_lock_writers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b9e1c73-8d2a-4f60-a5e1-3c7f9b2d0e84
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

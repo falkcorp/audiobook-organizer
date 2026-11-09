@@ -1,15 +1,15 @@
 // file: internal/itunes/service/series_position_writeback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2c8b71-6e34-4a05-8f19-3b7e0c5d24a8
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package itunesservice
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

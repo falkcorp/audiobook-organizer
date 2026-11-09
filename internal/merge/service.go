@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.64.4
+// version: 1.64.5
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -1260,7 +1260,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	//	                     memdb_schema.go  effectiveBoolFieldIndex{Default: true}
 	//	nil == NOT primary:  reconcile/elect_primaries.go:150 and :207
 	//	                     pebble_store.go  sortVersions
-	//	                     dbtest/invariants.go
+	//	                     storetest/invariants.go
 	//
 	// This write is correct under BOTH readings -- it is the repair if nil
 	// counts as primary, and a harmless no-op if it does not -- which is

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/rows_authz_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b7e2d94-c1a8-4f63-9e0b-3d6a8f1c4e27
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

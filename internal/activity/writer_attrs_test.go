@@ -1,7 +1,7 @@
 // file: internal/activity/writer_attrs_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b7d4e91-6c05-4a83-91ff-0d5e7a3c8b46
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package activity
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The activity log showed rows that had lost the only information that made

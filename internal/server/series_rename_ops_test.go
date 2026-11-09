@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"

@@ -1,7 +1,7 @@
 // file: internal/identification/advance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e90a505f-13b3-43db-9f19-8cb48e771f05
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package identification
 
@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestAdvance_NoRegistryImport: the body must be what the v3 Batch takes,

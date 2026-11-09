@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

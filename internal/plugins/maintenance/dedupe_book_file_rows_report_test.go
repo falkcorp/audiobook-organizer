@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_report_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5e3b8c71-2d94-4f0a-a6c7-91b4e2d0f358
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const dupeReportHeader = "book_id\ttitle\trows\tdistinct\tdup_rows\thas_fingerprint_on_dupe"

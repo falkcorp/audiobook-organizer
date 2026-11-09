@@ -1,7 +1,7 @@
 // file: internal/quarantine/durability_unknown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7712d917-9c89-4f3d-bcd6-1cdf4b04ca33
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package quarantine
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // durUnknownUpdateStore applies UpdateBookFile for real, then reports that

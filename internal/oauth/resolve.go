@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package oauth
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

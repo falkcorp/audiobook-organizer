@@ -1,7 +1,7 @@
 # file: .interface-width-baseline
-# version: 1.8.0
+# version: 1.8.1
 # guid: 2b8e4f16-9d07-4c3a-b512-6a94ef7d0c38
-# last-edited: 2026-10-09
+# last-edited: 2026-11-09
 #
 # The number of `interfacebloat` findings tolerated in the tree. This is a
 # ONE-WAY RATCHET: CI fails if the count goes UP. If it goes DOWN, CI passes
@@ -105,7 +105,7 @@
 # (.golangci.yml), and two declarations are over it today, each carrying an
 # explained //nolint:interfacebloat:
 #
-#   BookReader  (internal/database/iface_book.go:161)      -- 10 entries
+#   BookReader  (internal/books/store/iface_book.go:161)      -- 10 entries
 #   ServerDeps  (internal/plugins/maintenance/deps.go:217) -- 14 entries
 #
 # Both are transitional compositions whose own comments say they are deleted as

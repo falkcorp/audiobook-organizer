@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

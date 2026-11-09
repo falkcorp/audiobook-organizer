@@ -1,7 +1,7 @@
 // file: internal/metafetch/reliability_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b8c1d2e-3f5a-4c6b-8d7e-9a0b1c2d3e4f
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 //
 // Regression tests for the metadata-reliability fixes:
 //   - Bug 3: BuildSourceChain memoizes the chain so the per-source circuit
@@ -21,8 +21,8 @@ import (
 
 	"golang.org/x/time/rate"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

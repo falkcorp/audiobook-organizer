@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_decisions_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b3c85e17-9d42-4a60-8f1e-27d6a0c49b58
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

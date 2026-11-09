@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_beats_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9d3f6b21-7a4e-4c58-b1d0-2e8f5c7a3b96
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

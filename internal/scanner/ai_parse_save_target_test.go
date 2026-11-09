@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_save_target_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: ade87d70-9dc4-4aee-9538-449a631e678d
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

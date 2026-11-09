@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

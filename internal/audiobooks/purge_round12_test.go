@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_round12_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8e2c17-94a3-4d60-b1f8-3a07d6e9c254
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

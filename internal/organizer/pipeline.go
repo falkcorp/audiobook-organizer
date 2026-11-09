@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_concurrency_test.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 4b1c7e92-6d05-4a38-9f71-2c8ab6d34e50
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

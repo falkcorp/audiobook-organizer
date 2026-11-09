@@ -1,7 +1,7 @@
 // file: internal/metabatch/import_roots.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c8e51a2-7d94-4b0f-a6e3-91f2c4d7b805
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 //
 // The import-root set the search-title resolver consults (titleJudge.isRootDir):
 // a folder that is a registered import path is never listed for sibling rows,
@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

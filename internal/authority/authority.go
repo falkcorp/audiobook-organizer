@@ -1,7 +1,7 @@
 // file: internal/authority/authority.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5baf3d40-9887-4365-8743-452d7a73c619
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 // Package authority keeps the authority lists: a rebuildable reference index
 // of known people (authors, narrators, cast members) and publishers, with
@@ -49,7 +49,7 @@
 //
 // Package layout. This package is the LEAF read side (keys, model, the
 // Lookup interface, Snapshot, Index, overrides) and imports nothing heavier
-// than internal/database and internal/personname, so authorcredit, the
+// than internal/books/store and internal/personname, so authorcredit, the
 // importer, metafetch, applygate and the maintenance fixers can all depend
 // on it without a cycle (TestLeafImports enforces this). Building the index
 // (seed, provider decode, cast rules, plan/apply) lives in
@@ -63,7 +63,7 @@ import (
 )
 
 // Key prefixes. Every one starts with "ref_" so none can nest under (or
-// contain) another registered family; see internal/database/keyfamilies.go.
+// contain) another registered family; see internal/books/store/keyfamilies.go.
 const (
 	PersonPrefix    = "ref_person:"
 	PublisherPrefix = "ref_pub:"

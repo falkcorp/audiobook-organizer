@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_lease_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0cc1976b-de55-4933-9769-7d7d9ae3ff38
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

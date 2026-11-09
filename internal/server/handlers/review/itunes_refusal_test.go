@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/itunes_refusal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9b4d2e61-7c3a-4f85-b0e9-1d6a8c5f2e34
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"

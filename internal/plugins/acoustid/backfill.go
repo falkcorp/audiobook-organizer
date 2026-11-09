@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.6.3
+// version: 2.6.4
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

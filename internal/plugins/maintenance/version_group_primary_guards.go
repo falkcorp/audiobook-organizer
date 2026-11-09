@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/version_group_primary_guards.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package maintenance
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

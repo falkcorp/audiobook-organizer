@@ -1,7 +1,7 @@
 // file: internal/server/metadata_history_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

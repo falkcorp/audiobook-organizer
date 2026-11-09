@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

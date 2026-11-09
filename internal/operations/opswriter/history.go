@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

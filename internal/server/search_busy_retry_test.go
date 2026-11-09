@@ -1,7 +1,7 @@
 // file: internal/server/search_busy_retry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 13af3e69-f0fb-4d12-aaec-7d9d1f01dbf0
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"

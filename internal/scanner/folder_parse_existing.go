@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_parse_existing.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: cc77dad2-5d35-4407-8724-35eb66226c45
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 //
 // Keeps the folder parse from rewriting existing books on a rescan.
 
@@ -11,7 +11,7 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

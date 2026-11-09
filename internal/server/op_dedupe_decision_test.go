@@ -1,7 +1,7 @@
 // file: internal/server/op_dedupe_decision_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: bdbf6e2b-8b2f-472e-a712-ac607e5b2f16
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // ENQ-DEDUP-1 per-def table test.
 //
@@ -24,9 +24,9 @@ package server
 import (
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 )

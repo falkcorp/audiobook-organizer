@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_internal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b3d5e17-4a92-4c06-9f38-1d7b2e5a09c4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // In-package tests for resolveBookIDsMatching. The HTTP-level tests in
 // search_test.go cannot reach its empty-needle guard, because the handler
@@ -14,7 +14,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // countingStore implements just enough of DedupStore to observe whether the

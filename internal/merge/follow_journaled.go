@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )

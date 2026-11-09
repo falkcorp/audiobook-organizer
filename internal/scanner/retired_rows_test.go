@@ -1,7 +1,7 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // retiredScanFixture is a pebble-backed scanner with a live holder book and a

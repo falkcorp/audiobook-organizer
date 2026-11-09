@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_force_rescan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2b4a17-6c3d-4f9a-b105-7d2e4f8c6a03
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 // Tests for ForceRescanAudiobook, the only per-book forced re-read that is
 // precise.
@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestForceRescanAudiobook_FlagsTheBook(t *testing.T) {

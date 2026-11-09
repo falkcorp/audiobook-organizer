@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_rerank.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f8c8e21e-cb61-4f38-900e-80bbda768cca
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

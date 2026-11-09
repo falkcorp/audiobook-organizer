@@ -7,7 +7,7 @@ package metadatamocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -997,7 +997,7 @@ func (_c *MockMetadataFetchService_RenamePreflight_Call) RunAndReturn(run func(i
 }
 
 // RunApplyPipelineRenameOnly provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(ctx context.Context, id string, book *database.Book) error {
+func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(ctx context.Context, id string, book *store.Book) error {
 	ret := _mock.Called(ctx, id, book)
 
 	if len(ret) == 0 {
@@ -1005,7 +1005,7 @@ func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(ctx context.Co
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *database.Book) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *store.Book) error); ok {
 		r0 = returnFunc(ctx, id, book)
 	} else {
 		r0 = ret.Error(0)
@@ -1021,12 +1021,12 @@ type MockMetadataFetchService_RunApplyPipelineRenameOnly_Call struct {
 // RunApplyPipelineRenameOnly is a helper method to define mock.On call
 //   - ctx context.Context
 //   - id string
-//   - book *database.Book
+//   - book *store.Book
 func (_e *MockMetadataFetchService_Expecter) RunApplyPipelineRenameOnly(ctx any, id any, book any) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	return &MockMetadataFetchService_RunApplyPipelineRenameOnly_Call{Call: _e.mock.On("RunApplyPipelineRenameOnly", ctx, id, book)}
 }
 
-func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func(ctx context.Context, id string, book *database.Book)) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func(ctx context.Context, id string, book *store.Book)) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1036,9 +1036,9 @@ func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 *database.Book
+		var arg2 *store.Book
 		if args[2] != nil {
-			arg2 = args[2].(*database.Book)
+			arg2 = args[2].(*store.Book)
 		}
 		run(
 			arg0,
@@ -1054,7 +1054,7 @@ func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Return(err e
 	return _c
 }
 
-func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) RunAndReturn(run func(ctx context.Context, id string, book *database.Book) error) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) RunAndReturn(run func(ctx context.Context, id string, book *store.Book) error) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	_c.Call.Return(run)
 	return _c
 }

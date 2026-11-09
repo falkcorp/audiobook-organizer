@@ -1,7 +1,7 @@
 // file: internal/server/search_rename_fanout_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8603d299-d62c-4c75-ac8c-71c03c01de5c
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 

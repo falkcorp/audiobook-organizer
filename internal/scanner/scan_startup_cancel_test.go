@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_startup_cancel_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2b8e6c14-5d97-4f30-9a1e-c7f04d82b6a3
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // slowWorksStore is a scanner store whose works load is slow, the shape of the

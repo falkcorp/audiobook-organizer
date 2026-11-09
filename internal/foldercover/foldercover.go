@@ -1,7 +1,7 @@
 // file: internal/foldercover/foldercover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0d2e61-7c3a-4f8e-9a14-2d6c8b3e1f70
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 // Package foldercover decides whether a book should take its cover from an
 // image in its own folder, and applies that decision.
@@ -40,7 +40,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

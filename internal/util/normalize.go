@@ -1,7 +1,7 @@
 // file: internal/util/normalize.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a3f7e2d1-9b4c-4e8a-b6f0-2c5d7a1e3f9b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package util provides shared string normalization helpers.
 package util
@@ -37,7 +37,7 @@ func NormalizeAuthor(s string) string {
 // 2026-09-12: trim and lowercase, with internal whitespace left as it was.
 //
 // It exists ONLY so index entries written under the old key stay reachable
-// (read-compat in internal/database/pebble_store_name_index.go). Do not use it
+// (read-compat in internal/books/store/pebble_store_name_index.go). Do not use it
 // for anything new. It goes away with the re-key of the legacy index entries,
 // which is deliberately deferred until maintenance.author-whitespace-collision-report
 // has been reviewed.
@@ -78,7 +78,7 @@ func CollapseSpaces(s string) string {
 // The output holds letters and digits only, so it never contains ':' or any
 // other separator, and is empty for a name with no letter or digit.
 //
-// It lives here, in the leaf package, so internal/database can key an index by
+// It lives here, in the leaf package, so internal/books/store can key an index by
 // it without importing internal/authorjunk (a domain-layer package).
 // authorjunk.FoldKey delegates to this function.
 func FoldKey(name string) string {

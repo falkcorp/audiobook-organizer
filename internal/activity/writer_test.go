@@ -1,7 +1,7 @@
 // file: internal/activity/writer_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: f7e8d9c0-b1a2-4e3f-9c8d-7b6a5e4f3d2c
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package activity
 
@@ -16,7 +16,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestParseLogLine(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

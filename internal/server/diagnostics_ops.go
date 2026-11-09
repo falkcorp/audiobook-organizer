@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

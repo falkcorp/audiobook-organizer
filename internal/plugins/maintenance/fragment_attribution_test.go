@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_attribution_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 02ce91e2-c227-4b3c-b13d-45a89faf23c9
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

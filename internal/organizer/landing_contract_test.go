@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The Landing contract (2026-09-02): rows follow what LANDED, rollback removes

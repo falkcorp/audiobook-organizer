@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_file_decision_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7d3e58-9c14-4a62-b5f1-8e2a6d4c1f97
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // B-2. The file is decided BEFORE the row is deleted. A stat that fails for a

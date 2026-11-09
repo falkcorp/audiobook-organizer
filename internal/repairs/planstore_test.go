@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -19,7 +19,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // countingRows wraps a plan row store and records every read, so a test can

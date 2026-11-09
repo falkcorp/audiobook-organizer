@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,
@@ -27,8 +27,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_retired_holder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b8d4f60-7c13-4a95-b0e8-5d1f93a7c246
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // trashedHolder creates a live book in a version group, retires one row into it

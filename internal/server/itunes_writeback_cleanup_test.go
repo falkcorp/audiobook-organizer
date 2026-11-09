@@ -1,7 +1,7 @@
 // file: internal/server/itunes_writeback_cleanup_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c7579b1-af5d-495e-93cf-b375de7d2837
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

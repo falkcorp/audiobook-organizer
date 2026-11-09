@@ -1,7 +1,7 @@
 // file: internal/server/search_durability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b9e2d70-1c58-4f3a-a6d4-7e0b3c9f5a12
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

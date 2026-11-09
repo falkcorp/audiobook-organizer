@@ -1,7 +1,7 @@
 // file: internal/books/deferred_settings.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c2e9f47-1b8d-4a35-9e60-3d7f2a5c8b14
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // deferredSettings is the settings store HEAD's settings load runs over in

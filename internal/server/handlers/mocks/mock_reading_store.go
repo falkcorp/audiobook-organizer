@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockReadingStore) EXPECT() *MockReadingStore_Expecter {
 }
 
 // GetBookFiles provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+func (_mock *MockReadingStore) GetBookFiles(bookID string) ([]store.BookFile, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookFiles")
 	}
 
-	var r0 []database.BookFile
+	var r0 []store.BookFile
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.BookFile, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.BookFile); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]store.BookFile)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -97,34 +97,34 @@ func (_c *MockReadingStore_GetBookFiles_Call) Run(run func(bookID string)) *Mock
 	return _c
 }
 
-func (_c *MockReadingStore_GetBookFiles_Call) Return(bookFiles []database.BookFile, err error) *MockReadingStore_GetBookFiles_Call {
+func (_c *MockReadingStore_GetBookFiles_Call) Return(bookFiles []store.BookFile, err error) *MockReadingStore_GetBookFiles_Call {
 	_c.Call.Return(bookFiles, err)
 	return _c
 }
 
-func (_c *MockReadingStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]database.BookFile, error)) *MockReadingStore_GetBookFiles_Call {
+func (_c *MockReadingStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]store.BookFile, error)) *MockReadingStore_GetBookFiles_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserBookState provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) GetUserBookState(userID string, bookID string) (*database.UserBookState, error) {
+func (_mock *MockReadingStore) GetUserBookState(userID string, bookID string) (*store.UserBookState, error) {
 	ret := _mock.Called(userID, bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserBookState")
 	}
 
-	var r0 *database.UserBookState
+	var r0 *store.UserBookState
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.UserBookState, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*store.UserBookState, error)); ok {
 		return returnFunc(userID, bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) *database.UserBookState); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) *store.UserBookState); ok {
 		r0 = returnFunc(userID, bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserBookState)
+			r0 = ret.Get(0).(*store.UserBookState)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
@@ -165,34 +165,34 @@ func (_c *MockReadingStore_GetUserBookState_Call) Run(run func(userID string, bo
 	return _c
 }
 
-func (_c *MockReadingStore_GetUserBookState_Call) Return(userBookState *database.UserBookState, err error) *MockReadingStore_GetUserBookState_Call {
+func (_c *MockReadingStore_GetUserBookState_Call) Return(userBookState *store.UserBookState, err error) *MockReadingStore_GetUserBookState_Call {
 	_c.Call.Return(userBookState, err)
 	return _c
 }
 
-func (_c *MockReadingStore_GetUserBookState_Call) RunAndReturn(run func(userID string, bookID string) (*database.UserBookState, error)) *MockReadingStore_GetUserBookState_Call {
+func (_c *MockReadingStore_GetUserBookState_Call) RunAndReturn(run func(userID string, bookID string) (*store.UserBookState, error)) *MockReadingStore_GetUserBookState_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserPosition provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) GetUserPosition(userID string, bookID string) (*database.UserPosition, error) {
+func (_mock *MockReadingStore) GetUserPosition(userID string, bookID string) (*store.UserPosition, error) {
 	ret := _mock.Called(userID, bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserPosition")
 	}
 
-	var r0 *database.UserPosition
+	var r0 *store.UserPosition
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.UserPosition, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*store.UserPosition, error)); ok {
 		return returnFunc(userID, bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) *database.UserPosition); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) *store.UserPosition); ok {
 		r0 = returnFunc(userID, bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserPosition)
+			r0 = ret.Get(0).(*store.UserPosition)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
@@ -233,34 +233,34 @@ func (_c *MockReadingStore_GetUserPosition_Call) Run(run func(userID string, boo
 	return _c
 }
 
-func (_c *MockReadingStore_GetUserPosition_Call) Return(userPosition *database.UserPosition, err error) *MockReadingStore_GetUserPosition_Call {
+func (_c *MockReadingStore_GetUserPosition_Call) Return(userPosition *store.UserPosition, err error) *MockReadingStore_GetUserPosition_Call {
 	_c.Call.Return(userPosition, err)
 	return _c
 }
 
-func (_c *MockReadingStore_GetUserPosition_Call) RunAndReturn(run func(userID string, bookID string) (*database.UserPosition, error)) *MockReadingStore_GetUserPosition_Call {
+func (_c *MockReadingStore_GetUserPosition_Call) RunAndReturn(run func(userID string, bookID string) (*store.UserPosition, error)) *MockReadingStore_GetUserPosition_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListUserBookStatesByStatus provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) ListUserBookStatesByStatus(userID string, status string, limit int, offset int) ([]database.UserBookState, error) {
+func (_mock *MockReadingStore) ListUserBookStatesByStatus(userID string, status string, limit int, offset int) ([]store.UserBookState, error) {
 	ret := _mock.Called(userID, status, limit, offset)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListUserBookStatesByStatus")
 	}
 
-	var r0 []database.UserBookState
+	var r0 []store.UserBookState
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) ([]database.UserBookState, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) ([]store.UserBookState, error)); ok {
 		return returnFunc(userID, status, limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) []database.UserBookState); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) []store.UserBookState); ok {
 		r0 = returnFunc(userID, status, limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.UserBookState)
+			r0 = ret.Get(0).([]store.UserBookState)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string, int, int) error); ok {
@@ -313,34 +313,34 @@ func (_c *MockReadingStore_ListUserBookStatesByStatus_Call) Run(run func(userID 
 	return _c
 }
 
-func (_c *MockReadingStore_ListUserBookStatesByStatus_Call) Return(userBookStates []database.UserBookState, err error) *MockReadingStore_ListUserBookStatesByStatus_Call {
+func (_c *MockReadingStore_ListUserBookStatesByStatus_Call) Return(userBookStates []store.UserBookState, err error) *MockReadingStore_ListUserBookStatesByStatus_Call {
 	_c.Call.Return(userBookStates, err)
 	return _c
 }
 
-func (_c *MockReadingStore_ListUserBookStatesByStatus_Call) RunAndReturn(run func(userID string, status string, limit int, offset int) ([]database.UserBookState, error)) *MockReadingStore_ListUserBookStatesByStatus_Call {
+func (_c *MockReadingStore_ListUserBookStatesByStatus_Call) RunAndReturn(run func(userID string, status string, limit int, offset int) ([]store.UserBookState, error)) *MockReadingStore_ListUserBookStatesByStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListUserPositionsForBook provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) ListUserPositionsForBook(userID string, bookID string) ([]database.UserPosition, error) {
+func (_mock *MockReadingStore) ListUserPositionsForBook(userID string, bookID string) ([]store.UserPosition, error) {
 	ret := _mock.Called(userID, bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListUserPositionsForBook")
 	}
 
-	var r0 []database.UserPosition
+	var r0 []store.UserPosition
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) ([]database.UserPosition, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) ([]store.UserPosition, error)); ok {
 		return returnFunc(userID, bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) []database.UserPosition); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) []store.UserPosition); ok {
 		r0 = returnFunc(userID, bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.UserPosition)
+			r0 = ret.Get(0).([]store.UserPosition)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
@@ -381,18 +381,18 @@ func (_c *MockReadingStore_ListUserPositionsForBook_Call) Run(run func(userID st
 	return _c
 }
 
-func (_c *MockReadingStore_ListUserPositionsForBook_Call) Return(userPositions []database.UserPosition, err error) *MockReadingStore_ListUserPositionsForBook_Call {
+func (_c *MockReadingStore_ListUserPositionsForBook_Call) Return(userPositions []store.UserPosition, err error) *MockReadingStore_ListUserPositionsForBook_Call {
 	_c.Call.Return(userPositions, err)
 	return _c
 }
 
-func (_c *MockReadingStore_ListUserPositionsForBook_Call) RunAndReturn(run func(userID string, bookID string) ([]database.UserPosition, error)) *MockReadingStore_ListUserPositionsForBook_Call {
+func (_c *MockReadingStore_ListUserPositionsForBook_Call) RunAndReturn(run func(userID string, bookID string) ([]store.UserPosition, error)) *MockReadingStore_ListUserPositionsForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // SetUserBookState provides a mock function for the type MockReadingStore
-func (_mock *MockReadingStore) SetUserBookState(state *database.UserBookState) error {
+func (_mock *MockReadingStore) SetUserBookState(state *store.UserBookState) error {
 	ret := _mock.Called(state)
 
 	if len(ret) == 0 {
@@ -400,7 +400,7 @@ func (_mock *MockReadingStore) SetUserBookState(state *database.UserBookState) e
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(*database.UserBookState) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.UserBookState) error); ok {
 		r0 = returnFunc(state)
 	} else {
 		r0 = ret.Error(0)
@@ -414,16 +414,16 @@ type MockReadingStore_SetUserBookState_Call struct {
 }
 
 // SetUserBookState is a helper method to define mock.On call
-//   - state *database.UserBookState
+//   - state *store.UserBookState
 func (_e *MockReadingStore_Expecter) SetUserBookState(state any) *MockReadingStore_SetUserBookState_Call {
 	return &MockReadingStore_SetUserBookState_Call{Call: _e.mock.On("SetUserBookState", state)}
 }
 
-func (_c *MockReadingStore_SetUserBookState_Call) Run(run func(state *database.UserBookState)) *MockReadingStore_SetUserBookState_Call {
+func (_c *MockReadingStore_SetUserBookState_Call) Run(run func(state *store.UserBookState)) *MockReadingStore_SetUserBookState_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.UserBookState
+		var arg0 *store.UserBookState
 		if args[0] != nil {
-			arg0 = args[0].(*database.UserBookState)
+			arg0 = args[0].(*store.UserBookState)
 		}
 		run(
 			arg0,
@@ -437,7 +437,7 @@ func (_c *MockReadingStore_SetUserBookState_Call) Return(err error) *MockReading
 	return _c
 }
 
-func (_c *MockReadingStore_SetUserBookState_Call) RunAndReturn(run func(state *database.UserBookState) error) *MockReadingStore_SetUserBookState_Call {
+func (_c *MockReadingStore_SetUserBookState_Call) RunAndReturn(run func(state *store.UserBookState) error) *MockReadingStore_SetUserBookState_Call {
 	_c.Call.Return(run)
 	return _c
 }

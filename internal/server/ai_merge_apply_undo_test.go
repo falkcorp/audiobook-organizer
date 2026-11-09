@@ -1,7 +1,7 @@
 // file: internal/server/ai_merge_apply_undo_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9c4a7e21-3b58-4f06-8d1e-6a2f0b7c5e93
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

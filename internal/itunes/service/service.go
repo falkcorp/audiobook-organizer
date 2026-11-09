@@ -1,7 +1,7 @@
 // file: internal/itunes/service/service.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 81ccaec6-42b0-4828-83c8-7a96680112d9
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"

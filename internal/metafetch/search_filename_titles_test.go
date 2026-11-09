@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_filename_titles_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c97eea70-d007-4405-bff2-d7f992c312a3
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

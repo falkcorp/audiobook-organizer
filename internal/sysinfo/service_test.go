@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: g7h8i9j0-k1l2-m3n4-o5p6-q7r8s9t0u1v2
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package sysinfo
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestSystemService_CollectSystemStatus_Success(t *testing.T) {

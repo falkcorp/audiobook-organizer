@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -32,7 +32,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -66,7 +66,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

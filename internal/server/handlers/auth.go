@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 3.3.0
+// version: 3.3.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"

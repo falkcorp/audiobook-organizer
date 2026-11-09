@@ -1,7 +1,7 @@
 // file: internal/server/itunes_integration_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e5f6a7b8-c9d0-1234-efab-567890123cde
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_replay_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9e3a6d12-7c48-4b05-a1f9-2d8e5b70c364
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

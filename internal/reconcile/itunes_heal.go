@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -22,8 +22,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

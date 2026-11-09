@@ -1,7 +1,7 @@
 // file: internal/dedup/eligibility_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 )
 

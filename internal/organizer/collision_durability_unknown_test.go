@@ -1,7 +1,7 @@
 // file: internal/organizer/collision_durability_unknown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b26f1a67-9376-4be9-b012-28b6d7b9e636
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // collisionDurUnknownStore restores the row (records it) and reports that

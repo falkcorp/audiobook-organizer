@@ -1,7 +1,7 @@
 // file: internal/undo/user_content_follow_test.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 6a1d9e43-2c7b-4f80-b5a3-d9e4f1c70a28
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func ucF(v float64) *float64 { return &v }

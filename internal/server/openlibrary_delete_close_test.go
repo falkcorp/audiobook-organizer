@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_delete_close_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c7f4d52-3a8e-4b19-b6d1-7e92a5c3f860
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/gin-gonic/gin"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )

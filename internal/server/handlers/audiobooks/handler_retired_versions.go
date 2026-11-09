@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_retired_versions.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6818f543-1756-455b-9346-0581d8885fb8
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Retired-versions endpoints for the book detail page: the read that feeds the
 // "Retired versions" panel, and the per-version restore, which answers 501 until
@@ -17,7 +17,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )

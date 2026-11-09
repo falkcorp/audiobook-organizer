@@ -1,7 +1,7 @@
 // file: internal/writeback/outbox.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c3d4e2f-6a7b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-18
+// last-edited: 2026-11-09
 //
 // Durable outbox for the ITL write-back queue (backlog 4.3).
 //
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // outboxStore is what this package actually calls, measured by emptying the

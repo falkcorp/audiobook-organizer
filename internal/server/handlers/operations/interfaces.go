@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
@@ -21,7 +21,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )

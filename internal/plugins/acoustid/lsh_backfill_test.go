@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

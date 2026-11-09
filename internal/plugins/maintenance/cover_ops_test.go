@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1c8f4a27-9e3b-4d60-b5a2-7d0e6f3c9b18
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func coverTestPNG(t *testing.T, path string, w, h int) {

@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.4.2
+// version: 2.4.3
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )

@@ -1,14 +1,14 @@
 // file: internal/operations/registry/queued_summary.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b1e9a24-73cf-4d08-9e6a-1c4f2d80b7a3
-// last-edited: 2026-09-09
+// last-edited: 2026-11-09
 
 package registry
 
 import (
 	"encoding/json"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // queuedSummary runs a def's SummarizeQueued hook and reports whether it said

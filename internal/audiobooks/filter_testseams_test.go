@@ -1,11 +1,11 @@
 // file: internal/audiobooks/filter_testseams_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e5ce678f-b1bc-41aa-af30-9e83e2c1b296
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package audiobooks
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // Single-row filter entry points for tests. Production evaluates filters
 // through compileFieldFilters / matchesCompiledFilters (list paths) and

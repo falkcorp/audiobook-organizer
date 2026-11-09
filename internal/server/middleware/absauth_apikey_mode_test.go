@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_mode_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7f92c8-6d41-4b05-8e27-9c14b0fa5e63
-// last-edited: 2026-08-03
+// last-edited: 2026-11-09
 
 // These are the API-key tests that reference symbols INTRODUCED by this change
 // (ABSModeAPIKey, ResolveAPIKey). They live in their own file so that
@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

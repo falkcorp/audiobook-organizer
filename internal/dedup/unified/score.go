@@ -1,7 +1,7 @@
 // file: internal/dedup/unified/score.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: e12361d1-96ea-4301-919d-3fdb51e12f8f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Package unified provides the scoring core for the unified deduplication
 // pipeline (SPEC 1, fable5). It is intentionally pure: no I/O, no storage
@@ -138,7 +138,7 @@ type Signal = models.Signal
 // pair. It is stored as DedupCandidate.ScoreBreakdown (JSON).
 //
 // Moved to internal/models/dedup_score.go (TASK-03, SDKGUARD-VIOLATION #1795)
-// so internal/database can reference it without pulling in this whole
+// so internal/books/store can reference it without pulling in this whole
 // package (and, transitively, pkg/plugin/sdk with it); aliased here so all
 // existing unified.UnifiedDedupScore call sites keep compiling.
 type UnifiedDedupScore = models.UnifiedDedupScore

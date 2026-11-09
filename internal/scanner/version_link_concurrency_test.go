@@ -1,7 +1,7 @@
 // file: internal/scanner/version_link_concurrency_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c1d7a84-0f2b-49e6-9a31-7d6c4b8e2f05
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // vlConcStore is the concurrent twin of vlStore: it serves the sibling lookup

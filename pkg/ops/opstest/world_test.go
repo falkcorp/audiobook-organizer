@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/world_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b7e1c93-6a28-4d50-9f3e-c1a85d02e7b4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

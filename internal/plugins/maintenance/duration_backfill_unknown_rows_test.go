@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"

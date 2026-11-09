@@ -1,7 +1,7 @@
 // file: internal/merge/combine_retired_shell_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8b0c63-1e27-4a95-b3f8-6c19e7a02d54
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A combine's undo restores every absorbed book whole. One that the retired-

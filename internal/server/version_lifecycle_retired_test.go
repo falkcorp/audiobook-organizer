@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_retired_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6d2a9c41-3b7e-4f08-a5d1-7e9b04c8f326
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

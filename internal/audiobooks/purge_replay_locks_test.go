@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_replay_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6371d518-2425-4a76-af03-de3aeb5ea7d3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

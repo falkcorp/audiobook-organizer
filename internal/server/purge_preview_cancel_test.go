@@ -1,7 +1,7 @@
 // file: internal/server/purge_preview_cancel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b815dc28-323d-4d1c-9334-dc7047bce5da
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // libraryDeleteSession is exactPermGoneSession for library.delete that also

@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.33.2
+// version: 1.33.3
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,8 +17,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
@@ -150,7 +150,7 @@ func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
 //
 //   - `system` — needs appVersion + calculateLibrarySizes from this pkg.
 //   - `embeddingstore`, `chromemstore`, `aijobsstore` — live in
-//     internal/database which can't import internal/config (cycle).
+//     internal/books/store which can't import internal/config (cycle).
 //   - `dedup` (the engine) — needs *config.Config to read thresholds;
 //     internal/dedup doesn't already import internal/config, so defining it
 //     here avoids forcing a new dependency on that pkg.
@@ -175,7 +175,7 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 			Build: func(c *serviceregistry.Container) (any, error) {
 				store := serviceregistry.Get[any](c, serviceregistry.KeyStore)
 				// FromStore, not AsPebbleStore + DB(): the unwrap lives in
-				// internal/database so this package does not name *PebbleStore.
+				// internal/books/store so this package does not name *PebbleStore.
 				if es := database.NewEmbeddingStoreFromStore(store); es != nil {
 					return es, nil
 				}

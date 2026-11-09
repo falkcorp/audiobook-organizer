@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal_reset_op.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 23baacd9-d09b-44cf-a9e7-791961ada5b1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // metadata.batch-apply-refusals-reset forgets the structural refusals that
 // metadata.batch-apply-cached remembers (batch_apply_refusal.go), so the next
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

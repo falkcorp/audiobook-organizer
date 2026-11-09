@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_runtime_gate_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b0c1e7e-39f4-4d0e-9a53-6c1d2f8a4b17
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

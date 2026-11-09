@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_lost_update_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6f1c2a84-9d3e-4b7a-a5c1-2e8f0d4b9c71
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )

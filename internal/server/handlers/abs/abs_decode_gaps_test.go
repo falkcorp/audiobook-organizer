@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_decode_gaps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 64e1fdcd-d115-4551-b3b3-d5fac8064f13
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 //
 // ── AudioBooth decode gaps and unordered sorts ──────────────────────────────
 //
@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // decodeGapsRaw issues a GET and returns the raw body.

@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_owner_rejected_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d28175fe-48ab-4f9e-8b21-994d29ad0bd0
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

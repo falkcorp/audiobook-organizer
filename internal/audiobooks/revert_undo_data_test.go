@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_undo_data_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 9a4c2e71-5d3b-4f80-b1e6-7c0d8f2a5b39
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/require"
 )

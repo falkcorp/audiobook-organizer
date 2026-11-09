@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

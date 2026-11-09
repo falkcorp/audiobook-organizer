@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package abs
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"

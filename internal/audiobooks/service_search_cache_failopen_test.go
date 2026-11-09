@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache_failopen_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: aaa9761e-be02-4d73-b401-4c5ce57dd330
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,8 +10,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

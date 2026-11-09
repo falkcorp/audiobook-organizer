@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_version_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e9a2d71-4c06-4f83-b1d8-0a7c3e6f9b24
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

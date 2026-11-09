@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,23 +48,23 @@ func (_m *MockAudiobookUpdater) EXPECT() *MockAudiobookUpdater_Expecter {
 }
 
 // UpdateAudiobook provides a mock function for the type MockAudiobookUpdater
-func (_mock *MockAudiobookUpdater) UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*database.Book, error) {
+func (_mock *MockAudiobookUpdater) UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*store.Book, error) {
 	ret := _mock.Called(ctx, id, payload)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateAudiobook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*store.Book, error)); ok {
 		return returnFunc(ctx, id, payload)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) *store.Book); ok {
 		r0 = returnFunc(ctx, id, payload)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, map[string]any) error); ok {
@@ -111,12 +111,12 @@ func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Run(run func(ctx context.Co
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Return(book *database.Book, err error) *MockAudiobookUpdater_UpdateAudiobook_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Return(book *store.Book, err error) *MockAudiobookUpdater_UpdateAudiobook_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*database.Book, error)) *MockAudiobookUpdater_UpdateAudiobook_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*store.Book, error)) *MockAudiobookUpdater_UpdateAudiobook_Call {
 	_c.Call.Return(run)
 	return _c
 }

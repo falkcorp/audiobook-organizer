@@ -1,7 +1,7 @@
 // file: internal/server/metadata_integration_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345ef0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"slices"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"

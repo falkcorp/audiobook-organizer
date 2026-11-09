@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c1e4a77-5b2d-4f83-9a10-2e7c6b8d4f01
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Package server tests for TASK-05 (INIT-3-T3): the bulk metadata fetch outer
 // loop now runs on a bounded errgroup pool with a per-provider semaphore. These
@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

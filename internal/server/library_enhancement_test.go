@@ -1,7 +1,7 @@
 // file: internal/server/library_enhancement_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0336376b-882f-41df-b8ab-7e27526cdb1d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

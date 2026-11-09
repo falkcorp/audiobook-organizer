@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8e2a71-6c4d-4b19-a5e0-9d7b1c2f4e86
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // GET /library/metadata-results built its list from a map, so every request

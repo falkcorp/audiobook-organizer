@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_window_containment_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f3c6a20-5d1e-4b97-a2c4-0e9b7d1f5a63
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

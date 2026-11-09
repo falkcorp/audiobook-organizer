@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.6
+// version: 1.13.7
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -34,8 +34,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

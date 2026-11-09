@@ -1,5 +1,5 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
 // last-edited: 2026-11-09
 
@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 

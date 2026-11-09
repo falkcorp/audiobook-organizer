@@ -1,7 +1,7 @@
 // file: internal/operations/registry/activity_mirror_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 76ecb51d-8b9c-49ca-b780-26e0b247b4cc
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package registry
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // gatedRecorder blocks every Record until release is closed, standing in for

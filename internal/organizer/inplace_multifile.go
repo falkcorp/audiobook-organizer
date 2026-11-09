@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 3f0f7d52-6a2e-4b8e-9d3c-1b7e5a0c9e41
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

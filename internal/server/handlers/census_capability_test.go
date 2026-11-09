@@ -1,7 +1,7 @@
 // file: internal/server/handlers/census_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5045b811-3a0d-452b-8b80-2012988f7682
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // censusCapableStore carries the capability; censusDecorator embeds the

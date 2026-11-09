@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Owner rule (standing): Doctor Who / Big Finish / Torchwood are applied by

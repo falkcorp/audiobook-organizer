@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_series_position_sort_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b1e9c3a-7d42-4f8e-a0c6-3e9d18b27f45
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 // Regression tests for the series_position sort key (TODO: "No sort key for
 // position within a series").
@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

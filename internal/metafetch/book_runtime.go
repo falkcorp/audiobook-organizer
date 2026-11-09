@@ -1,14 +1,14 @@
 // file: internal/metafetch/book_runtime.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: ebab5e13-aa16-4d7d-84e0-773a72bc717e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

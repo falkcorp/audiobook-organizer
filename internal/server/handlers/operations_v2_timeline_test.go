@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_timeline_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7f3c1a94-2e6b-4d58-9a71-c0d4e8b52f36
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 // Behaviour tests for GET /api/v1/operations/timeline's def_id and limit
 // parameters, and for the scope fields the response reports about itself.
@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

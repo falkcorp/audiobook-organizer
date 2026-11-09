@@ -1,0 +1,1118 @@
+// file: internal/books/store/pebble_store_ops_v2_test.go
+// version: 1.14.1
+// guid: d7e8f9a0-b1c2-4d3e-5f6a-7b8c9d0e1f2a
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+// TestManualRetry_DroppedRowRequeuesWithBaselineMoved pins the two store writes
+// the operator's same-row Retry makes, against the real Pebble store:
+//
+//   - MarkOperationV2ManualRetry bumps manual_retry_count and moves the
+//     restart-strike baseline to the current resume_count WITHOUT incrementing
+//     resume_count (which keeps counting automatic restarts only).
+//   - ResetOperationV2ForResume accepts an interrupted_dropped row — the one
+//     status the boot resume sweep never re-queues — and puts it back in the
+//     queue index, so ListQueuedOperationsV2 (the dispatcher's only source)
+//     returns it, with CompletedAt and the drop message cleared.
+func TestManualRetry_DroppedRowRequeuesWithBaselineMoved(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-dropped-1", "queued")))
+	for range 3 {
+		require.NoError(t, s.IncrementResumeCountV2("op-dropped-1"))
+	}
+	droppedAt := time.Now().UTC()
+	msg := "force-dropped: infinite restart without progress"
+	require.NoError(t, s.UpdateOperationV2Status("op-dropped-1", "interrupted_dropped", nil, &droppedAt, &msg))
+
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	for _, r := range queued {
+		require.NotEqual(t, "op-dropped-1", r.ID, "a dropped row must not be in the queue before the retry")
+	}
+
+	require.NoError(t, s.MarkOperationV2ManualRetry("op-dropped-1"))
+	require.NoError(t, s.ResetOperationV2ForResume("op-dropped-1"))
+
+	got, err := s.GetOperationV2("op-dropped-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "queued", got.Status)
+	require.Nil(t, got.CompletedAt)
+	require.Nil(t, got.ErrorMessage)
+	require.Equal(t, 3, got.ResumeCount, "a manual retry must not count as an automatic restart")
+	require.Equal(t, 1, got.ManualRetryCount)
+	require.Equal(t, 3, got.ResumeCountAtManualRetry, "baseline must move to the resume_count at the retry")
+
+	queued, err = s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	found := 0
+	for _, r := range queued {
+		if r.ID == "op-dropped-1" {
+			found++
+		}
+	}
+	require.Equal(t, 1, found, "the retried row must be queued exactly once (QueuedAt untouched, one index entry)")
+
+	require.Error(t, s.MarkOperationV2ManualRetry("op-missing"), "a missing row is an error, not a silent no-op")
+}
+
+// buildTestOpRow constructs a minimal OperationV2Row with the given id and status.
+// All other fields are set to non-zero defaults so InsertOperationV2 succeeds.
+func buildTestOpRow(id, status string) OperationV2Row {
+	return OperationV2Row{
+		ID:       id,
+		DefID:    "test-def",
+		Plugin:   "test-plugin",
+		Status:   status,
+		Priority: 5,
+		QueuedAt: time.Now().UTC(),
+	}
+}
+
+// TestOpCompletionAndDepRev_RoundTrip verifies the dep_rev bump, completion
+// record, and staleness semantics added in Task 2.
+func TestOpCompletionAndDepRev_RoundTrip(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	sub := OpSubject{Type: "book", ID: "b1"}
+
+	// dep_rev starts at 0; bump → 1.
+	got, err := s.GetDepRev(sub)
+	require.NoError(t, err)
+	if got != 0 {
+		t.Fatalf("expected dep_rev=0 initially, got %d", got)
+	}
+
+	newRev, err := s.BumpDepRev(sub)
+	require.NoError(t, err)
+	if newRev != 1 {
+		t.Fatalf("expected bump result=1, got %d", newRev)
+	}
+
+	got, err = s.GetDepRev(sub)
+	require.NoError(t, err)
+	if got != 1 {
+		t.Fatalf("expected dep_rev=1 after bump, got %d", got)
+	}
+
+	// Record a book-level completion at rev 1.
+	err = s.RecordOpCompletion(sub, "acoustid.fingerprint-extract", "", 1)
+	require.NoError(t, err)
+
+	// GetOpCompletion should return (rev=1, ok=true).
+	rev, ok, err := s.GetOpCompletion(sub, "acoustid.fingerprint-extract")
+	require.NoError(t, err)
+	if !ok {
+		t.Fatal("expected ok=true after recording completion")
+	}
+	if rev != 1 {
+		t.Fatalf("expected completion rev=1, got %d", rev)
+	}
+
+	// Bump again → current rev becomes 2; the completion at rev 1 is now stale.
+	// The evaluator (Task 3) handles staleness; here we just assert stored values.
+	_, err = s.BumpDepRev(sub)
+	require.NoError(t, err)
+
+	cur, err := s.GetDepRev(sub)
+	require.NoError(t, err)
+	if cur != 2 {
+		t.Fatalf("expected dep_rev=2 after second bump, got %d", cur)
+	}
+
+	// Completion record itself is unchanged (still rev 1).
+	rev, ok, err = s.GetOpCompletion(sub, "acoustid.fingerprint-extract")
+	require.NoError(t, err)
+	if !ok {
+		t.Fatal("expected ok=true — completion record survives dep_rev bump")
+	}
+	if rev != 1 {
+		t.Fatalf("expected stored rev still=1 (staleness is evaluator concern), got %d", rev)
+	}
+}
+
+// TestFileCompletions_RoundTrip verifies per-file completion storage and listing.
+func TestFileCompletions_RoundTrip(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	sub := OpSubject{Type: "book", ID: "b2"}
+
+	// Bump dep_rev once so we can record completions at rev 1.
+	_, err := s.BumpDepRev(sub)
+	require.NoError(t, err)
+
+	// Record file-level completions for two files.
+	err = s.RecordOpCompletion(sub, "fp.extract", "file1", 1)
+	require.NoError(t, err)
+	err = s.RecordOpCompletion(sub, "fp.extract", "file2", 1)
+	require.NoError(t, err)
+
+	// ListFileCompletions should return both.
+	filemap, err := s.ListFileCompletions(sub, "fp.extract")
+	require.NoError(t, err)
+	require.Len(t, filemap, 2)
+	require.Equal(t, uint64(1), filemap["file1"])
+	require.Equal(t, uint64(1), filemap["file2"])
+}
+
+// TestWaitingDepsOps_RoundTrip verifies that ListWaitingDepsOps returns ops
+// whose status is "waiting_deps".
+func TestWaitingDepsOps_RoundTrip(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	// Insert a "waiting_deps" row with the new subject/requirements fields.
+	row := buildTestOpRow("op-wd-1", "waiting_deps")
+	row.SubjectType = "book"
+	row.SubjectID = "b3"
+	row.Requirements = `[{"kind":"op_completed","op_type":"fp.extract"}]`
+	row.ReqSnapshotRev = 1
+	err := s.InsertOperationV2(row)
+	require.NoError(t, err)
+
+	// Insert a "queued" row — should NOT appear.
+	err = s.InsertOperationV2(buildTestOpRow("op-q-1", "queued"))
+	require.NoError(t, err)
+
+	// Insert a "completed" row — should NOT appear.
+	err = s.InsertOperationV2(buildTestOpRow("op-done-1", "completed"))
+	require.NoError(t, err)
+
+	waiting, err := s.ListWaitingDepsOps()
+	require.NoError(t, err)
+	require.Len(t, waiting, 1)
+	require.Equal(t, "op-wd-1", waiting[0].ID)
+	require.Equal(t, "waiting_deps", waiting[0].Status)
+	require.Equal(t, "book", waiting[0].SubjectType)
+	require.Equal(t, "b3", waiting[0].SubjectID)
+	require.Equal(t, uint64(1), waiting[0].ReqSnapshotRev)
+}
+
+// TestOperationV2Row_SubjectFields_RoundTrip ensures the new fields survive a
+// write-read cycle on the existing InsertOperationV2 / GetOperationV2 path.
+func TestOperationV2Row_SubjectFields_RoundTrip(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	row := buildTestOpRow("op-subj-1", "queued")
+	row.SubjectType = "book"
+	row.SubjectID = "b4"
+	row.Requirements = `[{"kind":"op_completed","op_type":"scan"}]`
+	row.ReqSnapshotRev = 7
+
+	err := s.InsertOperationV2(row)
+	require.NoError(t, err)
+
+	got, err := s.GetOperationV2("op-subj-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "book", got.SubjectType)
+	require.Equal(t, "b4", got.SubjectID)
+	require.Equal(t, row.Requirements, got.Requirements)
+	require.Equal(t, uint64(7), got.ReqSnapshotRev)
+}
+
+// TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow pins the rule that a
+// still-running operation is never filtered out by the time window.
+//
+// The timeline endpoint defaults to since=15m and filtered purely on QueuedAt, so
+// an operation simply had to RUN longer than the window to vanish from its own
+// timeline. Measured against production 2026-08-16: a library.scan that had been
+// running for 1h50m returned {"operations":[]} while it was actively logging once
+// a second. The one operation a user most needs to see — the long one still going —
+// was the one guaranteed to be hidden, and an empty list is indistinguishable from
+// "nothing is running."
+//
+// The window bounds HISTORY. Anything unfinished is current by definition, so
+// membership keys on CompletedAt rather than on a list of status strings, which
+// would drift the first time a new status is added.
+func TestListOperationsV2Since_KeepsLiveOpsOutsideTheWindow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	now := time.Now().UTC()
+	old := now.Add(-2 * time.Hour)
+	done := now.Add(-90 * time.Minute)
+
+	// Running for two hours, never finished — the production case.
+	live := buildTestOpRow("op-live", "running")
+	live.QueuedAt = old
+	live.StartedAt = &old
+	require.NoError(t, s.InsertOperationV2(live))
+
+	// Finished two hours ago. Genuinely history; the window must still exclude it,
+	// otherwise this test would pass with the filter removed entirely.
+	fin := buildTestOpRow("op-finished", "completed")
+	fin.QueuedAt = old
+	fin.StartedAt = &old
+	fin.CompletedAt = &done
+	require.NoError(t, s.InsertOperationV2(fin))
+
+	rows, err := s.ListOperationsV2Since(now.Add(-15*time.Minute), 200)
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, r := range rows {
+		ids[r.ID] = true
+	}
+	require.True(t, ids["op-live"],
+		"a still-running operation must appear regardless of how long it has been "+
+			"running; filtering it out is what made the live scan invisible")
+	require.False(t, ids["op-finished"],
+		"a finished operation outside the window is history and must stay filtered — "+
+			"without this the test would also pass if the window were simply deleted")
+}
+
+// TestListOperationsV2Since_IncludesLongOpsThatFinishedInsideTheWindow is the
+// other half of the rule above, which was left unfixed for three weeks.
+//
+// The live-op fix rescued rows with CompletedAt == nil. Rows that had FINISHED
+// were still admitted on QueuedAt, so "what completed in the last 24 hours"
+// silently answered "what was QUEUED in the last 24 hours" — and the longer an
+// operation ran, the more likely it was to be excluded from its own history.
+// A backfill queued 30h ago that finished 20 minutes ago is the last 20 minutes
+// of history by any reading, and it was invisible at every window under 30h.
+//
+// This is the same class of defect as the live-op case: an operation punished in
+// the timeline for having taken a long time.
+func TestListOperationsV2Since_IncludesLongOpsThatFinishedInsideTheWindow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	now := time.Now().UTC()
+	since := now.Add(-24 * time.Hour)
+
+	// Queued well OUTSIDE the window, finished well INSIDE it.
+	queued := now.Add(-30 * time.Hour)
+	finished := now.Add(-20 * time.Minute)
+	longOp := buildTestOpRow("op-long-finished-recently", "completed")
+	longOp.QueuedAt = queued
+	longOp.StartedAt = &queued
+	longOp.CompletedAt = &finished
+	require.NoError(t, s.InsertOperationV2(longOp))
+
+	// Queued AND finished outside the window — genuinely older history. Keeping
+	// this here is what stops the test from passing if the window were deleted.
+	older := now.Add(-40 * time.Hour)
+	olderDone := now.Add(-38 * time.Hour)
+	ancient := buildTestOpRow("op-ancient", "completed")
+	ancient.QueuedAt = older
+	ancient.StartedAt = &older
+	ancient.CompletedAt = &olderDone
+	require.NoError(t, s.InsertOperationV2(ancient))
+
+	rows, err := s.ListOperationsV2Since(since, 200)
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, r := range rows {
+		ids[r.ID] = true
+	}
+	require.True(t, ids["op-long-finished-recently"],
+		"an operation that COMPLETED inside the window is history from inside the "+
+			"window, however long before it was queued — testing QueuedAt instead "+
+			"hides exactly the long-running operations most worth seeing")
+	require.False(t, ids["op-ancient"],
+		"an operation that both started and finished before the window is still out")
+}
+
+// TestUpdateOpProgressV2_AdvancesHighWaterProgress pins that high_water_progress
+// tracks reported PROGRESS, not merely the last Checkpoint call.
+//
+// registry.checkInfiniteRestart force-drops an op at resume_count>=3 whose
+// high_water_progress is still 0, on the reasoning that it has accomplished
+// nothing across three restarts. Until 2026-08-23 the only writer of that column
+// was UpdateOpCheckpointV2, so it stayed permanently 0 for every op that reports
+// progress without checkpointing -- which is every maintenance job, because
+// maintenance.ProgressReporter declares only SetTotal/Increment/Log and has no
+// Checkpoint method to call. Those ops were force-dropped no matter how many
+// thousands of items they had genuinely completed.
+func TestUpdateOpProgressV2_AdvancesHighWaterProgress(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-hwm-1", "running")))
+
+	row, err := s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 0, row.HighWaterProgress, "fresh row should start at 0")
+
+	require.NoError(t, s.UpdateOpProgressV2("op-hwm-1", 42, 100, "working"))
+	row, err = s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 42, row.HighWaterProgress,
+		"progress must advance the high-water mark; checkInfiniteRestart reads this "+
+			"to decide whether a resumed op has done any work at all")
+
+	// A HIGH-WATER mark, not a mirror of current progress. A resumed run restarts
+	// its counter from zero, and that must not erase the evidence of prior work --
+	// which is exactly the state checkInfiniteRestart force-drops on.
+	require.NoError(t, s.UpdateOpProgressV2("op-hwm-1", 5, 100, "resumed from the top"))
+	row, err = s.GetOperationV2("op-hwm-1")
+	require.NoError(t, err)
+	require.Equal(t, 42, row.HighWaterProgress,
+		"high-water mark must not regress when a resumed run reports a lower current")
+	require.Equal(t, 5, row.ProgressCurrent, "current progress should still track the live value")
+}
+
+// TestSetOpQueuedProgressV2_LeavesLivenessAndWatermarkAlone pins the two
+// omissions that are the entire reason this method exists beside
+// UpdateOpProgressV2 above. Both are invisible in the returned row's progress
+// columns, which is why they get their own test.
+//
+// last_progress_at: the watchdog reads it as liveness of the CURRENT attempt
+// and cancels a run whose stamp is older than the def's ProgressTimeout. A
+// queued row's summary is stale by construction — metadata.batch-apply-cached
+// can sit for hours behind its own ConcurrencyKey — so a stamp written here
+// would follow the row into its run and get a perfectly healthy op killed as
+// "stuck" on the first watchdog tick.
+//
+// high_water_progress: MAX-only (see UpdateOpCheckpointV2), so a value written
+// before any work happened can never be walked back, and checkInfiniteRestart
+// reads it as proof that a resumed op has accomplished something.
+func TestSetOpQueuedProgressV2_LeavesLivenessAndWatermarkAlone(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-queued-size-1", "queued")))
+
+	written, err := s.SetOpQueuedProgressV2("op-queued-size-1", 12, 40, "40 books to apply")
+	require.NoError(t, err)
+	require.True(t, written, "a queued row must accept its size summary")
+
+	row, err := s.GetOperationV2("op-queued-size-1")
+	require.NoError(t, err)
+	require.Equal(t, 12, row.ProgressCurrent)
+	require.Equal(t, 40, row.ProgressTotal)
+	require.Equal(t, "40 books to apply", row.ProgressMessage)
+	require.Nil(t, row.LastProgressAt,
+		"a queue-time summary must not stamp liveness; the watchdog would read it as "+
+			"the running attempt's last sign of life and cancel the op")
+	require.Equal(t, 0, row.HighWaterProgress,
+		"nothing has been accomplished at queue time, and the watermark only ever rises")
+}
+
+// A running op owns its progress columns. Without the queued-only guard, a
+// resume or merge racing a dispatch would overwrite a live run's real numbers
+// with a queue-time estimate — and the caller would never know, because the
+// write itself succeeds.
+func TestSetOpQueuedProgressV2_RefusesARowThatHasStarted(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-queued-size-2", "running")))
+	require.NoError(t, s.UpdateOpProgressV2("op-queued-size-2", 7, 9, "real progress"))
+
+	written, err := s.SetOpQueuedProgressV2("op-queued-size-2", 0, 500, "500 books to apply")
+	require.NoError(t, err)
+	require.False(t, written, "a running row must be refused, and the refusal reported")
+
+	row, err := s.GetOperationV2("op-queued-size-2")
+	require.NoError(t, err)
+	require.Equal(t, 7, row.ProgressCurrent, "the running op's real progress must survive")
+	require.Equal(t, 9, row.ProgressTotal)
+	require.Equal(t, "real progress", row.ProgressMessage)
+}
+
+// TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility pins B1:
+// a ResumeRestart op reuses its row, and on interrupt the row got a CompletedAt
+// stamped. UpdateOperationV2Status cannot un-set CompletedAt (nil = leave
+// unchanged), so a resumed op stayed excluded from the Active-Operations
+// timeline (ListOperationsV2Since admits a row only if CompletedAt == nil OR its
+// QueuedAt is inside the window). ResetOperationV2ForResume clears CompletedAt so
+// the running resumed op is visible again — without touching QueuedAt.
+func TestResetOperationV2ForResume_ClearsCompletedAtAndRestoresVisibility(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	// A row queued 30m ago (older than the 15m window) and interrupted 20m ago.
+	oldQueued := time.Now().UTC().Add(-30 * time.Minute)
+	row := OperationV2Row{
+		ID:       "op-resume-1",
+		DefID:    "library.scan",
+		Plugin:   "library",
+		Status:   "queued",
+		Priority: 5,
+		QueuedAt: oldQueued,
+	}
+	require.NoError(t, s.InsertOperationV2(row))
+
+	// Stamp it interrupted_quiesced with a CompletedAt + error, as the worker does.
+	interruptedAt := time.Now().UTC().Add(-20 * time.Minute)
+	interruptMsg := "quiesced: scan stand-down"
+	require.NoError(t, s.UpdateOperationV2Status("op-resume-1", "interrupted_quiesced", nil, &interruptedAt, &interruptMsg))
+
+	since := time.Now().UTC().Add(-15 * time.Minute)
+
+	// Excluded before reset: CompletedAt set AND QueuedAt older than the window.
+	before, err := s.ListOperationsV2Since(since, 100)
+	require.NoError(t, err)
+	for _, r := range before {
+		if r.ID == "op-resume-1" {
+			t.Fatalf("row should be excluded from the timeline before reset")
+		}
+	}
+
+	// Reset for resume.
+	require.NoError(t, s.ResetOperationV2ForResume("op-resume-1"))
+
+	got, err := s.GetOperationV2("op-resume-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "queued", got.Status)
+	require.Nil(t, got.CompletedAt, "CompletedAt must be cleared to nil")
+	require.Nil(t, got.ErrorMessage, "stale interrupt error must be cleared")
+	require.True(t, got.QueuedAt.Equal(oldQueued), "QueuedAt must be left untouched")
+
+	// Included after reset: CompletedAt == nil satisfies the filter.
+	after, err := s.ListOperationsV2Since(since, 100)
+	require.NoError(t, err)
+	found := false
+	for _, r := range after {
+		if r.ID == "op-resume-1" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "reset-for-resume row must appear in the timeline")
+}
+
+// TestUpdateOperationV2StatusIf_FromQueuedStampsCompletedAtOnTerminalStatus pins the
+// invariant that CompletedAt is set whenever a row leaves the live states.
+//
+// CompletedAt is the canonical liveness signal for this store: both
+// ListOperationsV2Since and the timeline handler decide "still in flight" on
+// CompletedAt == nil, never on a status list. A terminal status written with no
+// stamp therefore produced a row that was dead to the worker and alive to every
+// reader — a canceled maintenance.transcribe-book-intros op sat in the UI's
+// Active Operations panel for 73 days that way, and no user action could clear
+// it, because "Clear Stale" filters on queued/running/pending and it was none
+// of those.
+func TestUpdateOperationV2StatusIf_FromQueuedStampsCompletedAtOnTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	t.Run("canceling a queued op stamps CompletedAt", func(t *testing.T) {
+		row := buildTestOpRow("op-cancel", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cancel", "queued", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-cancel")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, "canceled", got.Status)
+		require.NotNil(t, got.CompletedAt,
+			"a terminal status with no CompletedAt reads as in-flight forever")
+	})
+
+	t.Run("an unrecognized status is NOT stamped", func(t *testing.T) {
+		// This subtest asserted the opposite until 2026-09-07, when the
+		// condition was the complement of the live states ("anything that is not
+		// running or queued is terminal"). That is wrong in the dangerous
+		// direction: "interrupted_quiesced" is resumable and "waiting_deps" is
+		// waiting on the dependency scheduler, and the complement called both
+		// terminal. A stamped live row reads as finished work that never ran.
+		//
+		// So the predicate is now an allowlist and an unknown status is treated
+		// as live. Adding a real terminal state means adding it to
+		// isTerminalV2Status; the cost of forgetting is a row that lingers
+		// visibly, not work silently discarded.
+		row := buildTestOpRow("op-future", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-future", "queued", "invented_by_a_future_feature", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated, "the status write itself still happens")
+
+		got, err := s.GetOperationV2("op-future")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Nil(t, got.CompletedAt,
+			"an unrecognized status must be treated as live, not stamped")
+	})
+
+	t.Run("resumable and waiting statuses are NOT stamped", func(t *testing.T) {
+		// The two concrete statuses the old complement predicate got wrong.
+		// isResumableV2Status lists interrupted_quiesced as resumable, and
+		// ListWaitingDepsOps hands waiting_deps rows to the dependency scheduler.
+		for _, status := range []string{"interrupted_quiesced", "waiting_deps"} {
+			id := "op-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+
+			updated, err := s.UpdateOperationV2StatusIf(id, "queued", status, nil, nil, nil)
+			require.NoError(t, err)
+			require.True(t, updated)
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt,
+				"%s is live; stamping it hides an op the resume/deps machinery still owns", status)
+		}
+	})
+
+	t.Run("promoting to running leaves CompletedAt nil", func(t *testing.T) {
+		// "running" is live. Stamping it would mark a working op complete.
+		row := buildTestOpRow("op-run", "queued")
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-run", "queued", "running", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-run")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Nil(t, got.CompletedAt)
+	})
+
+	t.Run("an existing stamp is never overwritten", func(t *testing.T) {
+		// ResetOperationV2ForResume clears CompletedAt on the way back to
+		// queued, so a queued row normally has none. If one does survive, it is
+		// the earlier, truer completion time and must win.
+		earlier := time.Now().UTC().Add(-72 * time.Hour)
+		row := buildTestOpRow("op-stamped", "queued")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-stamped", "queued", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+}
+
+// TestRepairOpsV2MissingCompletedAt covers the repair behind the v2 half of
+// POST /operations/clear-stale.
+//
+// The rows it targets are the ones the pre-2026-09-07
+// SetOperationV2StatusIfQueued produced: a terminal status with completed_at
+// null, which is dead to the worker and in-flight to every reader. The dangerous
+// mistake would be stamping a row that is still LIVE, so most of these subtests
+// assert what the repair must NOT touch.
+func TestRepairOpsV2MissingCompletedAt(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	// insert writes a row with CompletedAt forced to nil, bypassing the status
+	// setters so the test can construct the corrupt shape directly. It writes the
+	// raw opv2:op: key rather than calling InsertOperationV2, because since
+	// 2026-09-12 InsertOperationV2 stamps a terminal row itself -- the corrupt
+	// shape is no longer constructible through any store writer, which is the
+	// point, and is why the fixture has to forge it.
+	insert := func(t *testing.T, id, status string) {
+		t.Helper()
+		row := buildTestOpRow(id, status)
+		row.CompletedAt = nil
+		writeRawOpRowForTest(t, s, row)
+	}
+
+	t.Run("stamps terminal rows and leaves live rows alone", func(t *testing.T) {
+		// Terminal: every status in isTerminalV2Status.
+		terminal := []string{"completed", "failed", "canceled", "interrupted_dropped"}
+		for _, st := range terminal {
+			insert(t, "term-"+st, st)
+		}
+		// Live: the scheduler, the deps waiter, and the startup resume sweep each
+		// still own one of these. Stamping any of them hides real work.
+		live := []string{"queued", "running", "waiting_deps", "interrupted_quiesced", "interrupted_ask"}
+		for _, st := range live {
+			insert(t, "live-"+st, st)
+		}
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Equal(t, len(terminal), n,
+			"the count must come from rows actually written, not candidates seen")
+
+		for _, st := range terminal {
+			got, err := s.GetOperationV2("term-" + st)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.NotNil(t, got.CompletedAt, "%s is terminal and must be stamped", st)
+		}
+		for _, st := range live {
+			got, err := s.GetOperationV2("live-" + st)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt, "%s is live and must not be stamped", st)
+		}
+	})
+
+	t.Run("is idempotent and reports zero on a clean store", func(t *testing.T) {
+		// Everything repairable was repaired by the subtest above, so a second
+		// pass must find nothing. A non-zero result here would mean the repair
+		// is re-stamping rows it already fixed.
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Zero(t, n)
+	})
+
+	t.Run("never overwrites an existing stamp", func(t *testing.T) {
+		earlier := time.Now().UTC().Add(-73 * 24 * time.Hour)
+		row := buildTestOpRow("term-already-stamped", "canceled")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Zero(t, n, "an already-stamped row is not a candidate")
+
+		got, err := s.GetOperationV2("term-already-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second,
+			"the original completion time is the truer one and must win")
+	})
+
+	t.Run("has no age cutoff", func(t *testing.T) {
+		// The row this repair was written for had been stuck for 73 days. Any
+		// "recent N" window -- GetRecentOperations(500), the timeline's default
+		// range -- would miss it, which is why the scan is unbounded.
+		old := time.Now().UTC().Add(-200 * 24 * time.Hour)
+		row := buildTestOpRow("term-ancient", "canceled")
+		row.CompletedAt = nil
+		row.QueuedAt = old
+		writeRawOpRowForTest(t, s, row)
+
+		n, err := s.RepairOpsV2MissingCompletedAt()
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+
+		got, err := s.GetOperationV2("term-ancient")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.NotNil(t, got.CompletedAt)
+	})
+}
+
+// writeRawOpRowForTest writes an operation row straight to its opv2:op: key,
+// bypassing every store writer. It exists to forge the corrupt shape (terminal
+// status, null completed_at) that the writers now refuse to produce, so the
+// repair that cleans up rows written before the fix can still be tested.
+func writeRawOpRowForTest(t *testing.T, s OpsV2Store, row OperationV2Row) {
+	t.Helper()
+	p, ok := s.(*PebbleStore)
+	require.True(t, ok, "writeRawOpRowForTest needs the real PebbleStore")
+	require.NoError(t, p.pebbleSetJSON(opv2OpKey(row.ID), &row))
+}
+
+// opsV2TerminalStatusesForTest is every status isTerminalV2Status accepts. It is
+// spelled out rather than derived so that adding a terminal status without
+// covering it here is a visible decision, not an automatic pass.
+var opsV2TerminalStatusesForTest = []string{"completed", "failed", "canceled", "interrupted_dropped"}
+
+// opsV2LiveStatusesForTest are statuses a row can hold while something still
+// owns it: the dispatcher (queued, running), the deps scheduler (waiting_deps),
+// the startup resume sweep (interrupted_quiesced, interrupted_restart), or a
+// user decision (interrupted_ask). Plus one invented status, because
+// isTerminalV2Status is an allowlist and an unknown status must read as live.
+var opsV2LiveStatusesForTest = []string{
+	"queued", "running", "waiting_deps", "interrupted_quiesced",
+	"interrupted_ask", "interrupted_restart", "invented_by_a_future_feature",
+}
+
+// TestUpdateOperationV2Status_StampsCompletedAtOnEveryTerminalStatus pins the
+// store-level invariant: a row written with a terminal status always carries a
+// completed_at, whether or not the caller supplied one.
+//
+// Before 2026-09-12 UpdateOperationV2Status copied completedAt through only when
+// non-nil, so the invariant held only because every caller happened to pass
+// &now on a terminal write. SetOperationV2StatusIfQueued was the one writer that
+// did not, and it produced the canceled transcribe-book-intros row that sat in
+// Active Operations for 73 days. This makes the store the choke point so a new
+// caller cannot reintroduce that shape by forgetting an argument.
+func TestUpdateOperationV2Status_StampsCompletedAtOnEveryTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	for _, status := range opsV2TerminalStatusesForTest {
+		t.Run(status+" with no caller stamp is stamped by the store", func(t *testing.T) {
+			id := "op-upd-term-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+			started := time.Now().UTC()
+			require.NoError(t, s.UpdateOperationV2Status(id, "running", &started, nil, nil))
+
+			msg := "terminal write with a nil completedAt"
+			before := time.Now().UTC()
+			require.NoError(t, s.UpdateOperationV2Status(id, status, nil, nil, &msg))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Equal(t, status, got.Status)
+			require.NotNil(t, got.CompletedAt,
+				"%s is terminal; a null completed_at reads as in-flight forever", status)
+			require.False(t, got.CompletedAt.Before(before.Add(-time.Second)),
+				"the store stamp must be the time of the terminal write")
+		})
+	}
+
+	t.Run("a caller-supplied stamp is kept as given", func(t *testing.T) {
+		id := "op-upd-caller-stamp"
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+		supplied := time.Now().UTC().Add(-5 * time.Minute)
+		require.NoError(t, s.UpdateOperationV2Status(id, "completed", nil, &supplied, nil))
+
+		got, err := s.GetOperationV2(id)
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, supplied, *got.CompletedAt, time.Millisecond)
+	})
+
+	t.Run("an existing stamp is not overwritten by a nil-stamp terminal write", func(t *testing.T) {
+		// interrupted_quiesced is stamped at its write site; a later drop of the
+		// same row must keep that earlier, truer time.
+		id := "op-upd-keep-stamp"
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+		earlier := time.Now().UTC().Add(-48 * time.Hour)
+		require.NoError(t, s.UpdateOperationV2Status(id, "interrupted_quiesced", nil, &earlier, nil))
+		require.NoError(t, s.UpdateOperationV2Status(id, "interrupted_dropped", nil, nil, nil))
+
+		got, err := s.GetOperationV2(id)
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+
+	for _, status := range opsV2LiveStatusesForTest {
+		t.Run(status+" with no caller stamp is NOT stamped", func(t *testing.T) {
+			id := "op-upd-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, "queued")))
+			require.NoError(t, s.UpdateOperationV2Status(id, status, nil, nil, nil))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt,
+				"%s is live; stamping it hides an op something still owns", status)
+		})
+	}
+}
+
+// TestInsertOperationV2_StampsCompletedAtOnTerminalStatus covers the other door
+// into the opv2:op: keyspace. No production caller inserts a terminal row today
+// (they insert queued, waiting_deps or running), but InsertOperationV2 accepted
+// one with a null completed_at and wrote it verbatim -- the same dead-to-the-
+// worker, alive-to-every-reader shape, reachable by the next caller that
+// records an already-finished op.
+func TestInsertOperationV2_StampsCompletedAtOnTerminalStatus(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	for _, status := range opsV2TerminalStatusesForTest {
+		t.Run(status+" is stamped on insert", func(t *testing.T) {
+			id := "op-ins-term-" + status
+			row := buildTestOpRow(id, status)
+			row.CompletedAt = nil
+			require.NoError(t, s.InsertOperationV2(row))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.NotNil(t, got.CompletedAt, "%s inserted with no completed_at", status)
+		})
+	}
+
+	t.Run("a supplied stamp is kept", func(t *testing.T) {
+		earlier := time.Now().UTC().Add(-24 * time.Hour)
+		row := buildTestOpRow("op-ins-stamped", "failed")
+		row.CompletedAt = &earlier
+		require.NoError(t, s.InsertOperationV2(row))
+
+		got, err := s.GetOperationV2("op-ins-stamped")
+		require.NoError(t, err)
+		require.NotNil(t, got.CompletedAt)
+		require.WithinDuration(t, earlier, *got.CompletedAt, time.Second)
+	})
+
+	for _, status := range opsV2LiveStatusesForTest {
+		t.Run(status+" is NOT stamped on insert", func(t *testing.T) {
+			id := "op-ins-live-" + status
+			require.NoError(t, s.InsertOperationV2(buildTestOpRow(id, status)))
+
+			got, err := s.GetOperationV2(id)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Nil(t, got.CompletedAt, "%s is live and must not be stamped", status)
+		})
+	}
+}
+
+// TestDeleteOperationV2_RemovesRowIndexesStateAndLogs pins the storage half
+// of the Activity page's Discard button. The victim is deleted while still
+// QUEUED — with the allow-list widened to permit it — so both index entries
+// are present at delete time and the assertions on the queue and active
+// listings are real: UpdateOperationV2Status would already have removed both
+// on a terminal transition and made those checks vacuous. Nothing keyed by the
+// op id survives (row, queue and active index, checkpoint state, log lines)
+// while a neighbouring op is untouched; a second delete is a no-op.
+func TestDeleteOperationV2_RemovesRowIndexesStateAndLogs(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	victim := buildTestOpRow("op-discard", "queued")
+	keeper := buildTestOpRow("op-keeper", "queued")
+	require.NoError(t, s.InsertOperationV2(victim))
+	require.NoError(t, s.InsertOperationV2(keeper))
+	now := time.Now().UTC()
+	require.NoError(t, s.UpsertOpStateV2(OpStateV2Row{OperationID: victim.ID, StateBlob: []byte(`{"i":3}`), WrittenAt: now}))
+	require.NoError(t, s.AppendOpLogsV2([]OpLogV2Row{
+		{OperationID: victim.ID, Level: "info", Message: "one", Attrs: "{}", CreatedAt: now},
+		{OperationID: victim.ID, Level: "info", Message: "two", Attrs: "{}", CreatedAt: now.Add(time.Millisecond)},
+		{OperationID: keeper.ID, Level: "info", Message: "keep", Attrs: "{}", CreatedAt: now},
+	}))
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 2, "fixture: both rows must be in the queue index before the delete")
+
+	status, deleted, err := s.DeleteOperationV2(victim.ID, []string{"queued"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, "queued", status)
+
+	row, err := s.GetOperationV2(victim.ID)
+	require.NoError(t, err)
+	require.Nil(t, row, "row survived DeleteOperationV2")
+	state, err := s.GetOpStateV2(victim.ID)
+	require.NoError(t, err)
+	require.Nil(t, state, "checkpoint state survived DeleteOperationV2")
+	logs, err := s.GetOpLogsV2(victim.ID, 10)
+	require.NoError(t, err)
+	require.Empty(t, logs, "log lines survived DeleteOperationV2")
+
+	queued, err = s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 1, "queue index still lists the deleted op (queue key derivation is wrong)")
+	require.Equal(t, keeper.ID, queued[0].ID)
+	active, err := s.ListActiveOperationsV2()
+	require.NoError(t, err)
+	for _, a := range active {
+		require.NotEqual(t, victim.ID, a.ID, "active index still lists the deleted op")
+	}
+	kept, err := s.GetOperationV2(keeper.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "neighbouring op was deleted")
+	keptLogs, err := s.GetOpLogsV2(keeper.ID, 10)
+	require.NoError(t, err)
+	require.Len(t, keptLogs, 1, "neighbouring op's logs were deleted")
+
+	status, deleted, err = s.DeleteOperationV2(victim.ID, []string{"queued"})
+	require.NoError(t, err, "second delete must be a no-op")
+	require.False(t, deleted)
+	require.Equal(t, "", status)
+	status, deleted, err = s.DeleteOperationV2("never-existed", []string{"queued"})
+	require.NoError(t, err)
+	require.False(t, deleted)
+	require.Equal(t, "", status)
+}
+
+// A status outside the allow-list is reported back and nothing is deleted —
+// the compare half of compare-and-delete.
+func TestDeleteOperationV2_RefusesStatusOutsideAllowList(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	row := buildTestOpRow("op-live", "queued")
+	require.NoError(t, s.InsertOperationV2(row))
+
+	status, deleted, err := s.DeleteOperationV2(row.ID, []string{"completed", "interrupted_dropped"})
+	require.NoError(t, err)
+	require.False(t, deleted)
+	require.Equal(t, "queued", status)
+
+	still, err := s.GetOperationV2(row.ID)
+	require.NoError(t, err)
+	require.NotNil(t, still, "refused delete removed the row")
+	queued, err := s.ListQueuedOperationsV2()
+	require.NoError(t, err)
+	require.Len(t, queued, 1, "refused delete removed the queue index entry")
+}
+
+// A row whose JSON no longer decodes is exactly what Discard exists to remove:
+// it is deleted regardless of the allow-list and reported as "undecodable".
+func TestDeleteOperationV2_RemovesUndecodableRow(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	p := store.(*PebbleStore)
+	s := store.(OpsV2Store)
+
+	require.NoError(t, p.db.Set(opv2OpKey("op-corrupt"), []byte("{not json"), nil))
+	require.NoError(t, s.AppendOpLogsV2([]OpLogV2Row{
+		{OperationID: "op-corrupt", Level: "info", Message: "x", Attrs: "{}", CreatedAt: time.Now().UTC()},
+	}))
+
+	status, deleted, err := s.DeleteOperationV2("op-corrupt", []string{"completed"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, "undecodable", status)
+
+	_, closer, gerr := p.db.Get(opv2OpKey("op-corrupt"))
+	if gerr == nil {
+		_ = closer.Close()
+		t.Fatal("corrupt row key survived DeleteOperationV2")
+	}
+	logs, err := s.GetOpLogsV2("op-corrupt", 10)
+	require.NoError(t, err)
+	require.Empty(t, logs)
+}
+
+// TestUpdateOperationV2StatusIf_ComparesAndSets pins the compare-and-set
+// Registry.Cancel and the worker's stand-down pickup gate rely on: the write
+// applies only from the named status, a miss leaves the row and its indexes
+// alone, and a hit maintains the queue and active indexes exactly as
+// UpdateOperationV2Status does (it is the same code path).
+func TestUpdateOperationV2StatusIf_ComparesAndSets(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	s := store.(OpsV2Store)
+
+	queuedIDs := func(t *testing.T) map[string]bool {
+		t.Helper()
+		rows, err := s.ListQueuedOperationsV2()
+		require.NoError(t, err)
+		ids := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			ids[r.ID] = true
+		}
+		return ids
+	}
+	activeIDs := func(t *testing.T) map[string]bool {
+		t.Helper()
+		rows, err := s.ListActiveOperationsV2()
+		require.NoError(t, err)
+		ids := make(map[string]bool, len(rows))
+		for _, r := range rows {
+			ids[r.ID] = true
+		}
+		return ids
+	}
+
+	t.Run("a hit from queued writes the status, message and indexes", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-q", "queued")))
+		require.True(t, queuedIDs(t)["op-cas-q"])
+
+		msg := "canceled by user"
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-q", "queued", "canceled", nil, nil, &msg)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		got, err := s.GetOperationV2("op-cas-q")
+		require.NoError(t, err)
+		require.Equal(t, "canceled", got.Status)
+		require.NotNil(t, got.CompletedAt, "a terminal write is stamped even with a nil completedAt")
+		require.NotNil(t, got.ErrorMessage)
+		require.Equal(t, msg, *got.ErrorMessage)
+		require.False(t, queuedIDs(t)["op-cas-q"], "the queue index entry must go with the queued status")
+		require.False(t, activeIDs(t)["op-cas-q"], "a canceled row is not active")
+	})
+
+	t.Run("a miss leaves the row and its indexes alone", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-miss", "queued")))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-miss", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+
+		got, err := s.GetOperationV2("op-cas-miss")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+		require.Nil(t, got.CompletedAt)
+		require.True(t, queuedIDs(t)["op-cas-miss"], "a missed compare-and-set must not touch the queue index")
+	})
+
+	t.Run("a promotion out of waiting_deps makes a waiting_deps cancel miss", func(t *testing.T) {
+		// Registry.Cancel reads waiting_deps, the deps scheduler promotes the
+		// row to queued, and Cancel's write must then miss rather than
+		// overwrite a row a worker can now claim.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-deps", "waiting_deps")))
+		require.NoError(t, s.PromoteToQueued("op-cas-deps"))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-deps", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+		got, err := s.GetOperationV2("op-cas-deps")
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.Status)
+
+		// And a hit from waiting_deps on a row still parked there.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-deps-2", "waiting_deps")))
+		updated, err = s.UpdateOperationV2StatusIf("op-cas-deps-2", "waiting_deps", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+		got, err = s.GetOperationV2("op-cas-deps-2")
+		require.NoError(t, err)
+		require.Equal(t, "canceled", got.Status)
+	})
+
+	t.Run("a hit to running adds the active index entry", func(t *testing.T) {
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-run", "interrupted_quiesced")))
+
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-run", "interrupted_quiesced", "running", nil, nil, nil)
+		require.NoError(t, err)
+		require.True(t, updated)
+		require.True(t, activeIDs(t)["op-cas-run"])
+	})
+
+	t.Run("an empty message clears error_message", func(t *testing.T) {
+		// A run that completed over a gap cancel writes "completed" from
+		// "canceled" and must not keep the cancel's message; nil means
+		// "leave unchanged", so the clear is an empty message.
+		require.NoError(t, s.InsertOperationV2(buildTestOpRow("op-cas-clear", "running")))
+		msg := "canceled by user while running (no live run in this process)"
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-clear", "running", "canceled", nil, nil, &msg)
+		require.NoError(t, err)
+		require.True(t, updated)
+		empty := ""
+		updated, err = s.UpdateOperationV2StatusIf("op-cas-clear", "canceled", "completed", nil, nil, &empty)
+		require.NoError(t, err)
+		require.True(t, updated)
+		got, err := s.GetOperationV2("op-cas-clear")
+		require.NoError(t, err)
+		require.Equal(t, "completed", got.Status)
+		require.Nil(t, got.ErrorMessage)
+	})
+
+	t.Run("a missing row is not applied and not an error", func(t *testing.T) {
+		updated, err := s.UpdateOperationV2StatusIf("op-cas-absent", "queued", "canceled", nil, nil, nil)
+		require.NoError(t, err)
+		require.False(t, updated)
+	})
+}

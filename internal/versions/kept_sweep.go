@@ -1,7 +1,7 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/series_books_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f2c5d81-3ab9-4e60-9c47-58d3e0b6a214
-// last-edited: 2026-08-16
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ── the series list must carry ITS OWN books ────────────────────────────────

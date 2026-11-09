@@ -1,7 +1,7 @@
 // file: internal/undo/book_create.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7f3a9c21-5e8b-4d06-a1c4-2b9e6d0f8a53
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

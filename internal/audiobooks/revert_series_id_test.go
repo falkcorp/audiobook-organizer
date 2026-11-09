@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_id_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 5a0e7c3d-9b41-4f62-8d17-c2e4a6f19b08
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

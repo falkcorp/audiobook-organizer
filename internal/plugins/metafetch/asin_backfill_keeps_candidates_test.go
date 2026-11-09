@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_keeps_candidates_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d5ebda3-5398-4145-9b58-a7ada44bd718
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestASINBackfill_KeepsTheCachedCandidateItConfirms is the production shape

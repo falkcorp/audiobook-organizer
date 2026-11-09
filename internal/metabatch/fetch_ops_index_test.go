@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5b7e0a34-9c26-4d18-a0f7-3e9b2c41d685
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metabatch_test
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 )
 

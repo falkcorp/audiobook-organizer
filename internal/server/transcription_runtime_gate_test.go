@@ -1,7 +1,7 @@
 // file: internal/server/transcription_runtime_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c7e92-3b41-4a86-9f1e-c27a6b8d4e03
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 )

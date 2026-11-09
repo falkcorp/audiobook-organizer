@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

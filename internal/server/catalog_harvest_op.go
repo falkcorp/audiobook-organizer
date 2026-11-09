@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -20,9 +20,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"

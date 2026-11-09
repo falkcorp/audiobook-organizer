@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integrity_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c1d7e2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 //
 // Integrity-finding regression tests from the 2026-07-17 multi-discipline
 // review:
@@ -25,9 +25,9 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

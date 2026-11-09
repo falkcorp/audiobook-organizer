@@ -1,14 +1,14 @@
 // file: internal/applygate/cast_test.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 3f9b6d20-8e1c-4a75-b2d4-6c0e9a7f1d58
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

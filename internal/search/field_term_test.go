@@ -1,7 +1,7 @@
 // file: internal/search/field_term_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 554d8e4d-4fc1-4a8e-a7d4-b817a4325b65
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package search
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestFieldNodeForTerm_MatchesTheQueryParser(t *testing.T) {

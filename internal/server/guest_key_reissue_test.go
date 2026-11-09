@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7adb11d4-24ec-4f03-a1b2-9e8a576a5ab1
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"

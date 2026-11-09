@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/own_folder_duration_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 351283f9-d5b7-4792-be3b-be7929a7d86a
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A book whose rows span its own folder and other folders neither lists nor

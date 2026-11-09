@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3e6f2d-1c47-4a9e-b5d0-6e2f8a1c4d97
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

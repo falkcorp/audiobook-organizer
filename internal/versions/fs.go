@@ -1,7 +1,7 @@
 // file: internal/versions/fs.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Filesystem primitives for the `.versions/{id}/` layout (spec 3.1).
 //
@@ -31,7 +31,7 @@ import (
 )
 
 // VersionsDirName is the hidden directory inside a book's folder
-// where alt-version files live. Declared in pathutil so internal/database,
+// where alt-version files live. Declared in pathutil so internal/books/store,
 // which cannot import this package, recognises a slot by the same name.
 const VersionsDirName = pathutil.VersionsDirName
 

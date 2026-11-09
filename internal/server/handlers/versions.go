@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_chapters.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b4e1f78-25ac-4d93-9e07-3c8f1ab60d24
-// last-edited: 2026-09-22
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

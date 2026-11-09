@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_ownership_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1e5bf761-ee82-4110-865a-948c137494ee
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestReOrganizeInPlace_RefusesUnsafeMoves pins each refusal

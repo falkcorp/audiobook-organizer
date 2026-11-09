@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.7
+// version: 1.135.8
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -31,8 +31,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
@@ -352,7 +352,7 @@ func AcquireScanCache(cache map[string]database.ScanCacheEntry) func() {
 // by the store's works generation (database.WorkStore.WorksGeneration), which
 // every writer of a work row bumps after its commit — CreateWork, UpdateWork,
 // DeleteWork and Reset are the complete set of writers of
-// work: keys in internal/database. The map records the generation read BEFORE
+// work: keys in internal/books/store. The map records the generation read BEFORE
 // its load plus the number of works this package created and added to the
 // map since (worksLookupOwnWrites). Reuse requires
 //

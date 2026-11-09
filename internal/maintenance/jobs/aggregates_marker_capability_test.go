@@ -1,14 +1,14 @@
 // file: internal/maintenance/jobs/aggregates_marker_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f6b8d15-7a34-49c0-8e72-1b5d3c9a06f8
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package jobs
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type markerStore struct {

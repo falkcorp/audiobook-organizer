@@ -1,7 +1,7 @@
 // file: internal/books/encryption_key_guard_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2f58c3a9-6e41-4b07-90d8-7a13e5b2f846
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // guardStore is what guardAgainstKeyRegeneration reads (settingsCensus). The

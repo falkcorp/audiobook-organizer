@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6b8c9a6c-b168-4fb9-ba23-99937427b562
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Tests for Engine.DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 

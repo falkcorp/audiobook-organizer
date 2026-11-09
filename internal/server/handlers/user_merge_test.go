@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_merge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 91c4e7b2-5d38-4a60-a7f1-3b08d6e2c945
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/gin-gonic/gin"

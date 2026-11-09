@@ -1,7 +1,7 @@
 // file: internal/server/server_search.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 12815699-f9ea-4788-9af3-2e854d710315
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,8 +17,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

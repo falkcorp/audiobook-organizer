@@ -1,7 +1,7 @@
 // file: internal/server/web_session_epoch_integration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bf3e46f8-d6da-4ac3-889b-0debee0221ae
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"

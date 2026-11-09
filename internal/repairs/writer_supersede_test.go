@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_supersede_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bef3b82c-20e5-47e0-842a-047e9b961426
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // reverterJournal is the credit fake's op journal plus the ChangeReverter

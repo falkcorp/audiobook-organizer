@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/store_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: be635650-8d61-463e-b257-fce48c067cd3
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -32,7 +32,7 @@ var capabilityPackages = map[string]string{
 	"":          "internal/operations/registry",
 	"registry":  "internal/operations/registry",
 	"opswriter": "internal/operations/opswriter",
-	"database":  "internal/database",
+	"database":  "internal/books/store",
 }
 
 // TestWorldStoreServesEveryCapability: the World's store has no Unwrap, so a

@@ -1,5 +1,5 @@
 // file: internal/books/r0store_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d8a1f36-2c7e-4b94-a0d3-6e9b4c1f7a28
 // last-edited: 2026-11-09
 
@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // r0Tag is release R0, the production release OWNER-02 cut and kept
@@ -37,7 +37,7 @@ import (
 const r0Tag = "v0.223.0"
 
 // r0LastMigration is the highest migration version R0's binary carries
-// (internal/database/migrations.go at r0Tag). R0's RunMigrations applies
+// (internal/books/store/migrations.go at r0Tag). R0's RunMigrations applies
 // only migrations above the stored db_version, so a store R1 left at a
 // higher version opens on R0 with nothing pending.
 const r0LastMigration = 66

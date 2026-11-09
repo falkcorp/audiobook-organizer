@@ -1,7 +1,7 @@
 // file: internal/decisions/helpers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b5e03c18-7a64-4d29-8f10-c94a6e27d3b8
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

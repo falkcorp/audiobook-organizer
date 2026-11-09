@@ -1,7 +1,7 @@
 // file: internal/merge/combine_incomplete_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3d698376-7775-4e75-b18b-bdb85372ac0e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -15,7 +15,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // failAbsorbedRetire fails the soft-delete of one absorbed book, after the

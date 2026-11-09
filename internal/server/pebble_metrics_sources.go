@@ -1,12 +1,12 @@
 // file: internal/server/pebble_metrics_sources.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 790014b3-eca8-4d71-8304-cc119aa559bd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 

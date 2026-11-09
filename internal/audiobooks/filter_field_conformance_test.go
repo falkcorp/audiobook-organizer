@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_field_conformance_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d84f0b6-31ca-4e57-9a1f-6b70c8e2d415
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // searchParserPath is the frontend's field list, read as a fixture. Relative to

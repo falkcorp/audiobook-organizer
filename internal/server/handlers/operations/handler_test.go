@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.16.2
+// version: 1.16.3
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (stale-op clear, pause-state
@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	operationsmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

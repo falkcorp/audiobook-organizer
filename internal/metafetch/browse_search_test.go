@@ -1,7 +1,7 @@
 // file: internal/metafetch/browse_search_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2d4b17-c95a-4f03-b6e1-2a7c9d0f5b48
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

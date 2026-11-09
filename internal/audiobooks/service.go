@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.57.0
+// version: 1.57.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

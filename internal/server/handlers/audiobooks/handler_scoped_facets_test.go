@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_scoped_facets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a6e9f3c-5d1b-4c78-8e04-b7f1d3a9c625
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // scoped=1 must evaluate the facets over EXACTLY the predicate GET /audiobooks

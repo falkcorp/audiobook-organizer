@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/review_queue_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cab247f4-53e7-444a-aa35-bc2ca52f380f
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 // Regression tests for the review-queue-only rule on the bulk link endpoints:
 // bulk-link must honour the list's source filter, and neither bulk-link nor
@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_action_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5c1f0a83-6d47-4e29-b0a5-3f7c8e2d94b1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Tests for ACTION-KEYED approve dispatch (owner item 2, 2026-08-06).
 //
@@ -25,7 +25,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )

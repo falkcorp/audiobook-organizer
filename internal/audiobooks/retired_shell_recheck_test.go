@@ -1,7 +1,7 @@
 // file: internal/audiobooks/retired_shell_recheck_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 451c02fe-0c9c-4bd1-9bcd-2b1f5484b71e
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireMeanwhileStore retires the shell DURING the operation under test, the

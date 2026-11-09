@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_deadcode_ratchet.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 2b8e41c7-6d09-4f3a-a5e2-90c1d7f3b648
-# last-edited: 2026-11-07
+# last-edited: 2026-11-09
 """Unit tests for scripts/deadcode-ratchet.py (stdlib unittest, no Go needed)."""
 
 import importlib.util
@@ -35,13 +35,13 @@ internal/foo/c.go:5:6: unreachable func: SetXForTesting
 pkg/sdk/s.go:5:6: unreachable func: Exported
 internal/writeback/w.go:5:6: unreachable func: Write
 internal/testutil/t.go:5:6: unreachable func: Make
-internal/database/dbtest/t.go:5:6: unreachable func: Make
+internal/books/store/storetest/t.go:5:6: unreachable func: Make
 internal/versionprimary/vptest/t.go:5:6: unreachable func: Make
-internal/database/aggtest/t.go:5:6: unreachable func: Make
+internal/books/store/aggtest/t.go:5:6: unreachable func: Make
 internal/logger/logtest/t.go:5:6: unreachable func: Make
 internal/conformance/c.go:5:6: unreachable func: Run
 internal/rapidgen/g.go:5:6: unreachable func: Gen
-internal/database/mock_store.go:5:6: unreachable func: Mock
+internal/books/store/mock_store.go:5:6: unreachable func: Mock
 """
 
 
@@ -56,7 +56,7 @@ class ParseTest(unittest.TestCase):
 
 class TestDirAllowListTest(unittest.TestCase):
     def test_listed_helper_dirs_are_excluded(self):
-        for d in ("aggtest", "dbtest", "vptest", "logtest"):
+        for d in ("aggtest", "storetest", "vptest", "logtest"):
             self.assertEqual(dr.parse(f"internal/x/{d}/t.go:1:6: unreachable func: F\n"), {}, d)
 
     def test_unlisted_test_suffix_dir_is_kept(self):

@@ -1,7 +1,7 @@
 // file: internal/merge/primary_handoff_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4c1e8b27-6a9f-4d53-b0e2-7f3a5d91c846
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

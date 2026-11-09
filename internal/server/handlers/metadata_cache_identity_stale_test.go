@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_identity_stale_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 67f60b15-7a67-4a45-a66a-d2c5e7f8502f
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestGetCacheReviewResults_RetitledPendingBookIsIdentityStale: a retitle

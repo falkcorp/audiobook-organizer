@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/scan.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5f6a7b8-c9d0-1234-def0-123456789abc
-// last-edited: 2026-05-06
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

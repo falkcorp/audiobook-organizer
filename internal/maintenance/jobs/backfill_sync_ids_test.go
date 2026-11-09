@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a20f7354-5d7e-49aa-b3b5-94758d52bfc9
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Package jobs_test — coverage for the backfill-sync-ids maintenance job
 // (TASK-04). Every test drives a real PebbleStore because the sync_item /
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 )

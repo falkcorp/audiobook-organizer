@@ -1,7 +1,7 @@
 // file: internal/undo/author_rename_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6f3d9b25-8c4a-4e71-a02b-9d4f7a1c3e86
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestAuthorRenameRow_RoundTripsAndChecks(t *testing.T) {

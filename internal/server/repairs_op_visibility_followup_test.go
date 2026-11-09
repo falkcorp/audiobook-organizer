@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // The operations v3 routes (/api/v3/ops) and the activity log as the server
 // wires them, driven through the real router: a Repairs run (repairs.plan,
@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

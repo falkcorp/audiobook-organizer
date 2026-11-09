@@ -1,14 +1,14 @@
 // file: internal/dedup/store.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

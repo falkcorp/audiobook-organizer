@@ -1,7 +1,7 @@
 // file: internal/merge/plan_virtual_holders_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2dc80dae-a233-411b-ba47-721acf3d06b6
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pickBooks builds a bookOf for pickRowAtPath out of a map of fixed answers, and

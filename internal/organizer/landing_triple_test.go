@@ -1,11 +1,11 @@
 // file: internal/organizer/landing_triple_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f2b7c1e-9d4a-4e8b-b5c6-7a1d2e3f4a5b
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package organizer
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // organizeDirTriple is the (dir, map, err) shape OrganizeBookDirectory had
 // until 2026-09-02, kept for the in-package tests that were written against

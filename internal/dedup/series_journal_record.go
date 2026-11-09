@@ -1,12 +1,12 @@
 // file: internal/dedup/series_journal_record.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d19c3-8e52-4f06-b3a8-62d1f5e9c70b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix_book_unit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d1f6a52-8c7e-4b19-a4d0-6e2b9f50c7a3
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

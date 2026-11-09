@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 91c4e7b2-5a38-4d60-b7f1-3e8a0d9c2b64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // eventStore records, in order, the re-read of the carry target that

@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/run.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4f6b2d-1c83-4e57-b0d9-3e8a5f7c2b61
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"

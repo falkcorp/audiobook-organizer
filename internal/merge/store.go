@@ -1,12 +1,12 @@
 // file: internal/merge/store.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 

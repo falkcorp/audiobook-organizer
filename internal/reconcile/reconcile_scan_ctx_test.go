@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_scan_ctx_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f7a1d92-6c48-4e05-b1a9-8d2e5c70f634
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

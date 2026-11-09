@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_counters_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 01caa381-c1de-491b-b20f-5e348267cd4e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // counterStore is a one-book MockStore for the summary-counter tests.

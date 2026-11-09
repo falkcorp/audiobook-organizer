@@ -1,7 +1,7 @@
 // file: internal/batch/hard_delete_state_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3ef207f6-91b5-4980-9272-904c924edc09
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A: the batch hard delete carries a book's users' listening state to the

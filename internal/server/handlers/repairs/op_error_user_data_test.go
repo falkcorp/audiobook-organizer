@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/op_error_user_data_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d41a7c93-6e02-4b58-a9f7-1c85e3b0d26f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

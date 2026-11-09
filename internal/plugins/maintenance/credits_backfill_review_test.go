@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_review_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b0f2c1e-8a47-4d3b-9e6a-27c4d1f08b93
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

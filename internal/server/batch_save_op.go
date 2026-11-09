@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

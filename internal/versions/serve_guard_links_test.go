@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard_links_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a3e8ca0-20ed-4c8d-9eb4-b8bf2efde8c4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A book organized with the symlink strategy has a book_file row that names the

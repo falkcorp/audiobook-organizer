@@ -1,15 +1,15 @@
 // file: internal/server/tag_roundtrip_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/assert"

@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_isbn_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5a1f7c92-6d84-4e3b-9f21-8c0a4b6e2d75
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Tests for CollectISBNASIN (scoring-path ISBN/ASIN collector): the indexed fast
 // path must emit a signal set identical to the O(N) GetAllBooksCore scan, and
@@ -14,7 +14,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

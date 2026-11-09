@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/preview_behaviour_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6ed53ee5-4d03-443a-b99b-f92ae49430e7
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

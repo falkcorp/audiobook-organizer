@@ -1,7 +1,7 @@
 // file: internal/fileops/service.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package fileops
 
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/library"
 )
 

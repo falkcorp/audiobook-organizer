@@ -1,7 +1,7 @@
 // file: internal/metafetch/file_pipeline.go
-// version: 2.2.4
+// version: 2.2.5
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // The metadata-apply rename path, expressed entirely in terms of
 // internal/organizer.
@@ -29,8 +29,8 @@ import (
 	"errors"
 	"log/slog"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )

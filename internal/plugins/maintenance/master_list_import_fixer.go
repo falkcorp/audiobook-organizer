@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

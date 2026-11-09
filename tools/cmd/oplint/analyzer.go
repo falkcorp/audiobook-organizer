@@ -1,7 +1,7 @@
 // file: tools/cmd/oplint/analyzer.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package main
 
@@ -23,7 +23,7 @@ import (
 )
 
 // writePrefixes are the method-name prefixes that make a call on a store
-// declared in internal/database a write (rule writer-bypass). Tune here.
+// declared in internal/books/store a write (rule writer-bypass). Tune here.
 var writePrefixes = []string{
 	"Create", "Update", "Delete", "Set", "Modify", "Upsert", "Insert", "Put",
 	"Add", "Remove", "Save", "Mark", "Record", "Repoint", "Merge",
@@ -45,7 +45,7 @@ const (
 	modulePath  = "github.com/falkcorp/audiobook-organizer"
 	opsPath     = modulePath + "/pkg/ops"
 	opstestPath = opsPath + "/opstest"
-	dbPath      = modulePath + "/internal/database"
+	dbPath      = modulePath + "/internal/books/store"
 	catalogPath = modulePath + "/internal/opscatalog"
 	v2Registry  = modulePath + "/internal/operations/registry"
 
@@ -75,7 +75,7 @@ Rules, by diagnostic category:
                        or an All entry that is not a direct pkg.Ops reference
   writer-bypass        inside a Run/Item/Apply/AfterApply func of an ops.*Spec literal (and the same-package
                        functions it calls, one level deep), a write-named method call on a store declared in
-                       internal/database; allowed only with "//oplint:allow <reason>" on the call line
+                       internal/books/store; allowed only with "//oplint:allow <reason>" on the call line
   store-in-deps        a Deps struct (or a struct an Ops function takes) with a field that is or implements
                        database.Store, or a database.Store captured by a definition's closure (R21)
   sequential-no-reason ops.Sequential("") with an empty or blank reason
@@ -781,7 +781,7 @@ func (c *lintState) writerBypass(body ast.Node, field string, depth int, visited
 	})
 }
 
-// isStoreWrite reports a method declared in internal/database (or below it)
+// isStoreWrite reports a method declared in internal/books/store (or below it)
 // whose name starts with a write prefix.
 func (c *lintState) isStoreWrite(fn *types.Func) bool {
 	sig, ok := fn.Type().(*types.Signature)

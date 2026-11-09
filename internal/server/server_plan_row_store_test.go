@@ -1,7 +1,7 @@
 // file: internal/server/server_plan_row_store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2e8c5a14-9b73-4d06-a1f2-6c0d3e7b5a98
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

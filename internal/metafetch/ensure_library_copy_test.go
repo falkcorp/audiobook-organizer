@@ -1,7 +1,7 @@
 // file: internal/metafetch/ensure_library_copy_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f0c81ad-9b2e-4f37-8a51-c4d739e0b182
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestEnsureLibraryCopy_EmptyOrganizeIsNotSuccess is the F6 regression.

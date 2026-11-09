@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,9 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opsv3"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/pcache_stats.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c53d70fc-2f66-45db-9cd2-239e74f3580d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

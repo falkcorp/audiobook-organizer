@@ -1,7 +1,7 @@
 // file: internal/server/signals_coverage_handler_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9dc1c17f-e225-48b7-a3c4-79f0246d7c9c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

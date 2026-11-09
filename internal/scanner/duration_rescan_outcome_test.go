@@ -1,7 +1,7 @@
 // file: internal/scanner/duration_rescan_outcome_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a0c6d3e-6b0a-4f0e-9a58-0f6c2c1d7e41
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

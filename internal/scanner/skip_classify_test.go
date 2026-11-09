@@ -1,7 +1,7 @@
 // file: internal/scanner/skip_classify_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2a1c47-6b3d-4e59-9a0f-2d7c4b8e1a63
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // gateOff is the freshCutoff value that disables the rescan-age gate: the

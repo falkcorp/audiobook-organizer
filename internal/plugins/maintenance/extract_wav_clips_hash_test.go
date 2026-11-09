@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips_hash_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c8a1d5f3-2e94-4b07-a6d1-5f83b20c9e7a
-// last-edited: 2026-09-01
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

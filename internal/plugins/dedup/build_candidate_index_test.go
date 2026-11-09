@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d8f1c2a-6b4e-4a9d-9c7f-1e5a8b3d6f20
-// last-edited: 2026-07-11
+// last-edited: 2026-11-09
 
 // Tests for the dedup.build-candidate-status-index op (INIT-2 T4).
 //
@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

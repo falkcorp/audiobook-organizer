@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.176.2
+// version: 1.176.3
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-11-09
 
@@ -1852,7 +1852,7 @@ type Config struct {
 	// sorts the whole library under one empty key. Those two sorts are served
 	// by resolving the name from the authors/series tables while materialising
 	// the match set — correct, and it costs no index. See
-	// hydrateSortNames in internal/database/memdb_summaries.go.
+	// hydrateSortNames in internal/books/store/memdb_summaries.go.
 	//
 	// ⚠️ THE DEFAULT IS NARROW, AND THAT IS DELIBERATE. Each index costs real
 	// memory, measured rather than estimated at 100,000 books:

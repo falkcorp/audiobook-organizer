@@ -1,7 +1,7 @@
 // file: internal/usermerge/plan.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

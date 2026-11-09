@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -16,7 +16,7 @@ import (
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

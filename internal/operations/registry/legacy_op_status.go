@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry
 
@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )

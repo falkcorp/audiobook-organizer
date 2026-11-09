@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.17.4
+# version: 2.17.5
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-11-07
+# last-edited: 2026-11-09
 
 name: Frontend CI
 
@@ -70,7 +70,7 @@ jobs:
       system-packages: 'libtag1-dev'
       coverage-threshold: '30'  # repo gate is 30% (coverage-check-short); reusable default of 80 is aspirational
       # Per test binary. Without it the go-test helper falls back to Go's 10m
-      # default, and internal/database alone runs 510-600s under -race here.
+      # default, and internal/books/store alone runs 510-600s under -race here.
       # 25m matches the Makefile and ci.yml. reusable-ci's Go CI job cap (60m)
       # covers values up to 30m; above that it must be raised upstream first.
       # nightly.yml passes the same value; keep them together.

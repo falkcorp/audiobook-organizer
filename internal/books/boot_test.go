@@ -1,7 +1,7 @@
 // file: internal/books/boot_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e1b7c92-3a6d-4f08-8b25-9c0d7e5a1f36
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
 )

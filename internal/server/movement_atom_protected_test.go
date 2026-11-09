@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_protected_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f2c4b18-e9a3-4d65-b1f0-38c6a5e2d947
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	taglib "go.senan.xyz/taglib"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

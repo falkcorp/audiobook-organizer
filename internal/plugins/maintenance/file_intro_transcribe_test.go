@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

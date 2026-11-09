@@ -1,7 +1,7 @@
 // file: internal/audiobooks/sort_indexed_path_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c15a83f7-90e2-4b64-a7d3-6f0e2b94d517
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

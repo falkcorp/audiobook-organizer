@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_liveness_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4c8f0282-d1ad-446a-af3d-d36cea86888b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

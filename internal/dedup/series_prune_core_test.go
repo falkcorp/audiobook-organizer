@@ -1,7 +1,7 @@
 // file: internal/dedup/series_prune_core_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e4a47712-ccaf-464e-9213-29a55a6dbe52
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pruneFake is a small in-memory library for the prune cores.

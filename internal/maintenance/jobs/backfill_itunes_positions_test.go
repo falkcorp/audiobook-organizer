@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5577372a-b3ed-4283-9217-345d654e2a57
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package jobs_test — coverage for the backfill-itunes-positions maintenance
 // job. The owner is migrating off iTunes/Apple Books and their existing
@@ -19,8 +19,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/review_3478_failclosed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1e8c3d-4f27-4b95-b0d6-c9e2f7a3d148
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // plantCorruptPosition backs w's positions with a REAL PebbleStore holding a

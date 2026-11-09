@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books_locks_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6c1d4e9b-3a72-4f58-b0e6-8d2a5c7f1e34
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ddLockFixture is a keeper with a blank, user-LOCKED narrator and a dup that

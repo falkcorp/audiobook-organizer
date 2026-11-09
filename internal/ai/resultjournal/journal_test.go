@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5c28e392-3a6b-4bf2-9949-6f7efc1aedd2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package resultjournal
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func openPebble(t *testing.T, dir string) *database.PebbleStore {

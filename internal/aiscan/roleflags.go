@@ -1,7 +1,7 @@
 // file: internal/aiscan/roleflags.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91c4e7b2-6d38-4a05-b8f1-3e2a7d5c9046
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // RawRoleFlags are the "this one is a narrator / publisher" answers the model

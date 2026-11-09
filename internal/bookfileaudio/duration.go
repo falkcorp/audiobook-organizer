@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/duration.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 81298124-2825-49f4-b115-ae8aa117cd68
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package bookfileaudio fills a book_file row's audio facts (duration, codec)
 // at the moment the row is created, so no writer stores a readable file with
@@ -21,7 +21,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )

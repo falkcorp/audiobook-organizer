@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_asin_replaced_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e7a9d14-6b2c-4f58-a0d1-8c5e2b7f9a36
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 // A book's cached candidates survive an ASIN change (database
 // candidateSearchIdentityChanged). The row records the ASIN its candidates
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

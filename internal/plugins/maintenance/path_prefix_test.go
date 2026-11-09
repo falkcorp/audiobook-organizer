@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/path_prefix_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e41b6d09-2f7a-4c83-9b15-6a0d8e3c47f2
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

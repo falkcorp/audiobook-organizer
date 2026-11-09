@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.6.2
+// version: 2.6.3
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -97,8 +97,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/rules_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c1d4e8b5-7f23-4a90-9b01-6e2c5d8f3a47
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dataset
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestCatchers(t *testing.T) {

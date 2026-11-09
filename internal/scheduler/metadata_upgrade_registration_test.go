@@ -1,7 +1,7 @@
 // file: internal/scheduler/metadata_upgrade_registration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c8f0a61-9e27-4d5b-b4c3-6f1a7e2d9b08
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"testing"
 
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

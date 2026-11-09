@@ -1,7 +1,7 @@
 // file: internal/server/catalog_stage_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e9c34a70-5b18-4d2f-86a1-3d0f7b92c584
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/time/rate"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

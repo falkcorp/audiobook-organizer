@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series_phase1_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c4e1a90-3d52-4b18-8f6a-2ad9e5b71c34
-// last-edited: 2026-08-23
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TASK-044 follow-up. Phase 1 of cleanup-series was the one guarded call site

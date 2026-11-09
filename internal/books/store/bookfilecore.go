@@ -1,0 +1,285 @@
+// file: internal/books/store/bookfilecore.go
+// version: 1.12.3
+// guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
+// last-edited: 2026-11-09
+
+package store
+
+import "time"
+
+// BookFileCore is the projection of BookFile that survives the memdb strip
+// performed by stripBookFileForMemdb. It contains every BookFile field EXCEPT
+// the heavy set that memdb clears before insertion:
+//
+//	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
+//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta
+//
+// IntroTranscription and IntroMeta are the only members of the per-file
+// intro-transcription group that are stripped. The others (TranscribedTitle/
+// Author/Narrator/Translator/CoverArtist, IntroTranscribedAt, TranscribeStatus,
+// TranscribeError, TranscribeAttemptedAt, IntroSourceHash, IntroRunOpID) are
+// RETAINED here — they are the small, queryable fields (IntroSourceHash is the
+// op's done marker, IntroRunOpID what clear-by-run-id selects on), and the raw
+// transcript carries ~99% of the group's bytes. See memdb_strip.go for the math.
+//
+// Note the two fingerprint-adjacent fields that are intentionally RETAINED
+// (they are NOT stripped in memdb_strip.go and therefore belong on Core):
+//
+//	FingerprintFailedAt              — 24B/row, read by the LSH index builder.
+//	AcoustIDFingerprintDurationSec   — preserved as the fingerprint_status proxy.
+//
+// Keeping BookFileCore mechanically in sync with the strip set is enforced by
+// the reflection tests in bookfilecore_test.go: the name-set diff between
+// BookFile and BookFileCore must equal exactly the stripped set, and Core()
+// must copy every BookFileCore field.
+//
+// json tags are carried verbatim from BookFile so a BookFileCore serializes
+// identically to a stripped BookFile.
+type BookFileCore struct {
+	ID     string `json:"id"`
+	BookID string `json:"book_id"`
+
+	VersionID string `json:"version_id,omitempty"`
+	// Retired is RETAINED on Core (a single bool): the retired-aware readers
+	// return Core rows too, and a Core-derived write must not un-retire a row.
+	Retired            bool   `json:"retired,omitzero"`
+	FilePath           string `json:"file_path"`
+	OriginalFilename   string `json:"original_filename,omitempty"`
+	ITunesPath         string `json:"itunes_path,omitempty"`
+	ITunesPersistentID string `json:"itunes_persistent_id,omitempty"`
+	TrackNumber        int    `json:"track_number,omitempty"`
+	TrackCount         int    `json:"track_count,omitempty"`
+	DiscNumber         int    `json:"disc_number,omitempty"`
+	DiscCount          int    `json:"disc_count,omitempty"`
+	Title              string `json:"title,omitempty"`
+
+	RawTags map[string]string `json:"raw_tags,omitempty"`
+	Format  string            `json:"format,omitempty"`
+	Codec   string            `json:"codec,omitempty"`
+	// Duration: see BookFile.Duration (nil = not measured, stored value > 0).
+	Duration             *int   `json:"duration,omitzero"`
+	FileSize             int64  `json:"file_size,omitempty"`
+	BitrateKbps          int    `json:"bitrate_kbps,omitempty"`
+	SampleRateHz         int    `json:"sample_rate_hz,omitempty"`
+	Channels             int    `json:"channels,omitempty"`
+	BitDepth             int    `json:"bit_depth,omitempty"`
+	FileHash             string `json:"file_hash,omitempty"`
+	OriginalFileHash     string `json:"original_file_hash,omitempty"`
+	OriginalFileHashKind string `json:"original_file_hash_kind,omitempty"`
+	PostMetadataHash     string `json:"post_metadata_hash,omitempty"`
+	// Scan must live on Core, not in the stripped set. The stripped fields are
+	// heavy payloads (fingerprints, diagnostic JSON, the raw transcript); Scan is
+	// five small flags that the dedup and bulk-write paths FILTER on. If it were
+	// stripped, every reader coming through the memdb projection would see a zero
+	// ScanState and IsProvisional would answer false for provisional rows -- the
+	// exclusion would fail OPEN, silently, which is the direction that merges
+	// un-hashed books.
+	Scan ScanState `json:"scan,omitzero"`
+
+	// AcoustIDFingerprintDurationSec is RETAINED on Core (not stripped).
+	AcoustIDFingerprintDurationSec float64 `json:"acoustid_fingerprint_duration_sec,omitempty"`
+	// AcoustIDFPVersion is RETAINED on Core (see BookFile.AcoustIDFPVersion).
+	AcoustIDFPVersion int `json:"acoustid_fp_version,omitempty"`
+
+	// FingerprintFailedAt is RETAINED on Core (not stripped).
+	FingerprintFailedAt *time.Time `json:"fingerprint_failed_at,omitempty"`
+
+	AcoustIDOnlineRecordingID string     `json:"acoustid_online_recording_id,omitempty"`
+	AcoustIDOnlineScore       float64    `json:"acoustid_online_score,omitempty"`
+	AcoustIDOnlineLookedUpAt  *time.Time `json:"acoustid_online_looked_up_at,omitempty"`
+	OrganizeMethod            string     `json:"organize_method,omitempty"`
+	Missing                   bool       `json:"missing"`
+	SkipScan                  bool       `json:"skip_scan"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	UpdatedAt                 time.Time  `json:"updated_at"`
+
+	DelugeHash           string     `json:"deluge_hash,omitempty"`
+	DownloadHash         string     `json:"download_hash,omitempty"`
+	DelugeOriginalPath   string     `json:"deluge_original_path,omitempty"`
+	ImportedFromDelugeAt *time.Time `json:"imported_from_deluge_at,omitempty"`
+
+	// Per-file intro transcription — the 7 RETAINED fields. IntroTranscription
+	// (the raw transcript) is deliberately absent: it is the stripped one.
+	TranscribedTitle    *string `json:"transcribed_title,omitempty"`
+	TranscribedAuthor   *string `json:"transcribed_author,omitempty"`
+	TranscribedNarrator *string `json:"transcribed_narrator,omitempty"`
+	// TranscribedTranslator is credited between author and narrator in
+	// translated works; before it existed the author absorbed it.
+	TranscribedTranslator *string `json:"transcribed_translator,omitempty"`
+	// TranscribedCoverArtist is the album/cover art credit ("Cover art by X").
+	TranscribedCoverArtist *string    `json:"transcribed_cover_artist,omitempty"`
+	IntroTranscribedAt     *time.Time `json:"intro_transcribed_at,omitempty"`
+	TranscribeStatus       *string    `json:"transcribe_status,omitempty"`
+	TranscribeError        *string    `json:"transcribe_error,omitempty"`
+	TranscribeAttemptedAt  *time.Time `json:"transcribe_attempted_at,omitempty"`
+	// IntroSourceHash is the per-file done marker (== FileHash when done) and
+	// IntroRunOpID the op that wrote the result; see BookFile.
+	IntroSourceHash string `json:"intro_source_hash,omitempty"`
+	IntroRunOpID    string `json:"intro_run_op_id,omitempty"`
+	// IntroTimeouts / IntroTimeoutHash are the decoder-timeout strikes and the
+	// FileHash they were counted against; see BookFile.
+	IntroTimeouts     int    `json:"intro_timeouts,omitempty"`
+	IntroTimeoutHash  string `json:"intro_timeout_hash,omitempty"`
+	IntroTimeoutRunID string `json:"intro_timeout_run_id,omitempty"`
+	// IntroTimeoutAt is when the latest strike was counted or a first known
+	// machine recorded; see BookFile.
+	IntroTimeoutAt *time.Time `json:"intro_timeout_at,omitempty"`
+	// IntroTimeoutWorker is the opaque identity of the machines that gave the
+	// counted strikes (never an endpoint address); see BookFile.
+	IntroTimeoutWorker string `json:"intro_timeout_worker,omitempty"`
+
+	// Per-file scan cache. RETAINED rather than stripped: the stripped set is the
+	// heavy fingerprint/transcript strings, and these are three small scalars that
+	// the scan path queries on every walk -- "small and queryable", which is the
+	// stated rule for staying on Core.
+	//
+	// Retaining them also keeps the projection safe to round-trip. A field absent
+	// from Core reads back as its zero value, so stripping these would let any
+	// Core-derived write erase a scan stamp; the file would then re-read forever.
+	LastScanMtime *int64 `json:"last_scan_mtime,omitzero"`
+	LastScanSize  *int64 `json:"last_scan_size,omitzero"`
+	NeedsRescan   *bool  `json:"needs_rescan,omitzero"`
+}
+
+// Core returns the BookFileCore projection of f — every BookFile field that
+// survives the memdb strip, copied by value. The heavy fingerprint-diagnostic
+// fields (see BookFileCore doc) are dropped. Purely additive: it neither reads
+// nor mutates state beyond f.
+func (f *BookFile) Core() BookFileCore {
+	return BookFileCore{
+		ID:                             f.ID,
+		BookID:                         f.BookID,
+		VersionID:                      f.VersionID,
+		Retired:                        f.Retired,
+		FilePath:                       f.FilePath,
+		OriginalFilename:               f.OriginalFilename,
+		ITunesPath:                     f.ITunesPath,
+		ITunesPersistentID:             f.ITunesPersistentID,
+		TrackNumber:                    f.TrackNumber,
+		TrackCount:                     f.TrackCount,
+		DiscNumber:                     f.DiscNumber,
+		DiscCount:                      f.DiscCount,
+		Title:                          f.Title,
+		RawTags:                        f.RawTags,
+		Format:                         f.Format,
+		Codec:                          f.Codec,
+		Duration:                       cloneBookFileScalar(f.Duration),
+		FileSize:                       f.FileSize,
+		BitrateKbps:                    f.BitrateKbps,
+		SampleRateHz:                   f.SampleRateHz,
+		Channels:                       f.Channels,
+		BitDepth:                       f.BitDepth,
+		FileHash:                       f.FileHash,
+		OriginalFileHash:               f.OriginalFileHash,
+		OriginalFileHashKind:           f.OriginalFileHashKind,
+		PostMetadataHash:               f.PostMetadataHash,
+		Scan:                           f.Scan,
+		AcoustIDFingerprintDurationSec: f.AcoustIDFingerprintDurationSec,
+		AcoustIDFPVersion:              f.AcoustIDFPVersion,
+		FingerprintFailedAt:            f.FingerprintFailedAt,
+		AcoustIDOnlineRecordingID:      f.AcoustIDOnlineRecordingID,
+		AcoustIDOnlineScore:            f.AcoustIDOnlineScore,
+		AcoustIDOnlineLookedUpAt:       f.AcoustIDOnlineLookedUpAt,
+		OrganizeMethod:                 f.OrganizeMethod,
+		Missing:                        f.Missing,
+		SkipScan:                       f.SkipScan,
+		CreatedAt:                      f.CreatedAt,
+		UpdatedAt:                      f.UpdatedAt,
+		DelugeHash:                     f.DelugeHash,
+		DownloadHash:                   f.DownloadHash,
+		DelugeOriginalPath:             f.DelugeOriginalPath,
+		ImportedFromDelugeAt:           f.ImportedFromDelugeAt,
+		TranscribedTitle:               f.TranscribedTitle,
+		TranscribedAuthor:              f.TranscribedAuthor,
+		TranscribedNarrator:            f.TranscribedNarrator,
+		TranscribedTranslator:          f.TranscribedTranslator,
+		TranscribedCoverArtist:         f.TranscribedCoverArtist,
+		IntroTranscribedAt:             f.IntroTranscribedAt,
+		TranscribeStatus:               f.TranscribeStatus,
+		TranscribeError:                f.TranscribeError,
+		TranscribeAttemptedAt:          f.TranscribeAttemptedAt,
+		IntroSourceHash:                f.IntroSourceHash,
+		IntroRunOpID:                   f.IntroRunOpID,
+		IntroTimeouts:                  f.IntroTimeouts,
+		IntroTimeoutHash:               f.IntroTimeoutHash,
+		IntroTimeoutRunID:              f.IntroTimeoutRunID,
+		IntroTimeoutAt:                 f.IntroTimeoutAt,
+		IntroTimeoutWorker:             f.IntroTimeoutWorker,
+		LastScanMtime:                  f.LastScanMtime,
+		LastScanSize:                   f.LastScanSize,
+		NeedsRescan:                    f.NeedsRescan,
+	}
+}
+
+// AsBookFile is the inverse of Core: a BookFile carrying every Core field,
+// with the stripped heavy fields (fingerprint diagnostics, AcoustID
+// fingerprint and segments) left zero. For read paths that already hold a
+// batch of BookFileCore rows (GetBookFilesForIDsCore) and must hand them to a
+// []BookFile consumer that reads none of the stripped fields -- runtime
+// (ComputeBookRuntime), the search-title resolver, the review book info --
+// instead of re-reading each book's rows from Pebble.
+func (c *BookFileCore) AsBookFile() BookFile {
+	return BookFile{
+		ID:                             c.ID,
+		BookID:                         c.BookID,
+		VersionID:                      c.VersionID,
+		Retired:                        c.Retired,
+		FilePath:                       c.FilePath,
+		OriginalFilename:               c.OriginalFilename,
+		ITunesPath:                     c.ITunesPath,
+		ITunesPersistentID:             c.ITunesPersistentID,
+		TrackNumber:                    c.TrackNumber,
+		TrackCount:                     c.TrackCount,
+		DiscNumber:                     c.DiscNumber,
+		DiscCount:                      c.DiscCount,
+		Title:                          c.Title,
+		RawTags:                        c.RawTags,
+		Format:                         c.Format,
+		Codec:                          c.Codec,
+		Duration:                       cloneBookFileScalar(c.Duration),
+		FileSize:                       c.FileSize,
+		BitrateKbps:                    c.BitrateKbps,
+		SampleRateHz:                   c.SampleRateHz,
+		Channels:                       c.Channels,
+		BitDepth:                       c.BitDepth,
+		FileHash:                       c.FileHash,
+		OriginalFileHash:               c.OriginalFileHash,
+		OriginalFileHashKind:           c.OriginalFileHashKind,
+		PostMetadataHash:               c.PostMetadataHash,
+		Scan:                           c.Scan,
+		AcoustIDFingerprintDurationSec: c.AcoustIDFingerprintDurationSec,
+		AcoustIDFPVersion:              c.AcoustIDFPVersion,
+		FingerprintFailedAt:            c.FingerprintFailedAt,
+		AcoustIDOnlineRecordingID:      c.AcoustIDOnlineRecordingID,
+		AcoustIDOnlineScore:            c.AcoustIDOnlineScore,
+		AcoustIDOnlineLookedUpAt:       c.AcoustIDOnlineLookedUpAt,
+		OrganizeMethod:                 c.OrganizeMethod,
+		Missing:                        c.Missing,
+		SkipScan:                       c.SkipScan,
+		CreatedAt:                      c.CreatedAt,
+		UpdatedAt:                      c.UpdatedAt,
+		DelugeHash:                     c.DelugeHash,
+		DownloadHash:                   c.DownloadHash,
+		DelugeOriginalPath:             c.DelugeOriginalPath,
+		ImportedFromDelugeAt:           c.ImportedFromDelugeAt,
+		TranscribedTitle:               c.TranscribedTitle,
+		TranscribedAuthor:              c.TranscribedAuthor,
+		TranscribedNarrator:            c.TranscribedNarrator,
+		TranscribedTranslator:          c.TranscribedTranslator,
+		TranscribedCoverArtist:         c.TranscribedCoverArtist,
+		IntroTranscribedAt:             c.IntroTranscribedAt,
+		TranscribeStatus:               c.TranscribeStatus,
+		TranscribeError:                c.TranscribeError,
+		TranscribeAttemptedAt:          c.TranscribeAttemptedAt,
+		IntroSourceHash:                c.IntroSourceHash,
+		IntroRunOpID:                   c.IntroRunOpID,
+		IntroTimeouts:                  c.IntroTimeouts,
+		IntroTimeoutHash:               c.IntroTimeoutHash,
+		IntroTimeoutRunID:              c.IntroTimeoutRunID,
+		IntroTimeoutAt:                 c.IntroTimeoutAt,
+		IntroTimeoutWorker:             c.IntroTimeoutWorker,
+		LastScanMtime:                  c.LastScanMtime,
+		LastScanSize:                   c.LastScanSize,
+		NeedsRescan:                    c.NeedsRescan,
+	}
+}

@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e2f7a1c4-6b90-4d38-8a5e-1c3f9d2b7e60
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 //
 // READ-ONLY book_file iTunes-PID integrity census. A PID is minted unique per
 // book_file (TrackProvisioner.Provision → GeneratePIDHex → crypto/rand), so the
@@ -37,7 +37,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // PIDIntegrityStore is the read-only slice of the store the census needs.

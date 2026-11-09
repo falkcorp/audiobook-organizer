@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_repair_options_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d7f3a92-6c15-4e8b-9a24-b51e8c6d3f07
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The ApplyOptions a Repairs fixer (maintenance.version-twin-metadata) applies

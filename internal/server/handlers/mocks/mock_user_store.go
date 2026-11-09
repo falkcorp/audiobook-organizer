@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,23 +48,23 @@ func (_m *MockUserStore) EXPECT() *MockUserStore_Expecter {
 }
 
 // ConsumeInvite provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) ConsumeInvite(token string, algo string, hash string) (*database.User, error) {
+func (_mock *MockUserStore) ConsumeInvite(token string, algo string, hash string) (*store.User, error) {
 	ret := _mock.Called(token, algo, hash)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ConsumeInvite")
 	}
 
-	var r0 *database.User
+	var r0 *store.User
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string) (*database.User, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) (*store.User, error)); ok {
 		return returnFunc(token, algo, hash)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, string) *database.User); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) *store.User); ok {
 		r0 = returnFunc(token, algo, hash)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.User)
+			r0 = ret.Get(0).(*store.User)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string, string) error); ok {
@@ -111,37 +111,37 @@ func (_c *MockUserStore_ConsumeInvite_Call) Run(run func(token string, algo stri
 	return _c
 }
 
-func (_c *MockUserStore_ConsumeInvite_Call) Return(user *database.User, err error) *MockUserStore_ConsumeInvite_Call {
+func (_c *MockUserStore_ConsumeInvite_Call) Return(user *store.User, err error) *MockUserStore_ConsumeInvite_Call {
 	_c.Call.Return(user, err)
 	return _c
 }
 
-func (_c *MockUserStore_ConsumeInvite_Call) RunAndReturn(run func(token string, algo string, hash string) (*database.User, error)) *MockUserStore_ConsumeInvite_Call {
+func (_c *MockUserStore_ConsumeInvite_Call) RunAndReturn(run func(token string, algo string, hash string) (*store.User, error)) *MockUserStore_ConsumeInvite_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CreateInvite provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) CreateInvite(invite *database.Invite) (*database.Invite, error) {
+func (_mock *MockUserStore) CreateInvite(invite *store.Invite) (*store.Invite, error) {
 	ret := _mock.Called(invite)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateInvite")
 	}
 
-	var r0 *database.Invite
+	var r0 *store.Invite
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*database.Invite) (*database.Invite, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Invite) (*store.Invite, error)); ok {
 		return returnFunc(invite)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*database.Invite) *database.Invite); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Invite) *store.Invite); ok {
 		r0 = returnFunc(invite)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Invite)
+			r0 = ret.Get(0).(*store.Invite)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*database.Invite) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*store.Invite) error); ok {
 		r1 = returnFunc(invite)
 	} else {
 		r1 = ret.Error(1)
@@ -155,16 +155,16 @@ type MockUserStore_CreateInvite_Call struct {
 }
 
 // CreateInvite is a helper method to define mock.On call
-//   - invite *database.Invite
+//   - invite *store.Invite
 func (_e *MockUserStore_Expecter) CreateInvite(invite any) *MockUserStore_CreateInvite_Call {
 	return &MockUserStore_CreateInvite_Call{Call: _e.mock.On("CreateInvite", invite)}
 }
 
-func (_c *MockUserStore_CreateInvite_Call) Run(run func(invite *database.Invite)) *MockUserStore_CreateInvite_Call {
+func (_c *MockUserStore_CreateInvite_Call) Run(run func(invite *store.Invite)) *MockUserStore_CreateInvite_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.Invite
+		var arg0 *store.Invite
 		if args[0] != nil {
-			arg0 = args[0].(*database.Invite)
+			arg0 = args[0].(*store.Invite)
 		}
 		run(
 			arg0,
@@ -173,34 +173,34 @@ func (_c *MockUserStore_CreateInvite_Call) Run(run func(invite *database.Invite)
 	return _c
 }
 
-func (_c *MockUserStore_CreateInvite_Call) Return(invite1 *database.Invite, err error) *MockUserStore_CreateInvite_Call {
+func (_c *MockUserStore_CreateInvite_Call) Return(invite1 *store.Invite, err error) *MockUserStore_CreateInvite_Call {
 	_c.Call.Return(invite1, err)
 	return _c
 }
 
-func (_c *MockUserStore_CreateInvite_Call) RunAndReturn(run func(invite *database.Invite) (*database.Invite, error)) *MockUserStore_CreateInvite_Call {
+func (_c *MockUserStore_CreateInvite_Call) RunAndReturn(run func(invite *store.Invite) (*store.Invite, error)) *MockUserStore_CreateInvite_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CreateSession provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) CreateSession(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*database.Session, error) {
+func (_mock *MockUserStore) CreateSession(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*store.Session, error) {
 	ret := _mock.Called(userID, ip, ua, ttl, credentialEpoch)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateSession")
 	}
 
-	var r0 *database.Session
+	var r0 *store.Session
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) (*database.Session, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) (*store.Session, error)); ok {
 		return returnFunc(userID, ip, ua, ttl, credentialEpoch)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) *database.Session); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) *store.Session); ok {
 		r0 = returnFunc(userID, ip, ua, ttl, credentialEpoch)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Session)
+			r0 = ret.Get(0).(*store.Session)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, int64) error); ok {
@@ -259,12 +259,12 @@ func (_c *MockUserStore_CreateSession_Call) Run(run func(userID string, ip strin
 	return _c
 }
 
-func (_c *MockUserStore_CreateSession_Call) Return(session *database.Session, err error) *MockUserStore_CreateSession_Call {
+func (_c *MockUserStore_CreateSession_Call) Return(session *store.Session, err error) *MockUserStore_CreateSession_Call {
 	_c.Call.Return(session, err)
 	return _c
 }
 
-func (_c *MockUserStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)) *MockUserStore_CreateSession_Call {
+func (_c *MockUserStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*store.Session, error)) *MockUserStore_CreateSession_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -321,23 +321,23 @@ func (_c *MockUserStore_DeleteInvite_Call) RunAndReturn(run func(token string) e
 }
 
 // GetInvite provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) GetInvite(token string) (*database.Invite, error) {
+func (_mock *MockUserStore) GetInvite(token string) (*store.Invite, error) {
 	ret := _mock.Called(token)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetInvite")
 	}
 
-	var r0 *database.Invite
+	var r0 *store.Invite
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Invite, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Invite, error)); ok {
 		return returnFunc(token)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Invite); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Invite); ok {
 		r0 = returnFunc(token)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Invite)
+			r0 = ret.Get(0).(*store.Invite)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -372,34 +372,34 @@ func (_c *MockUserStore_GetInvite_Call) Run(run func(token string)) *MockUserSto
 	return _c
 }
 
-func (_c *MockUserStore_GetInvite_Call) Return(invite *database.Invite, err error) *MockUserStore_GetInvite_Call {
+func (_c *MockUserStore_GetInvite_Call) Return(invite *store.Invite, err error) *MockUserStore_GetInvite_Call {
 	_c.Call.Return(invite, err)
 	return _c
 }
 
-func (_c *MockUserStore_GetInvite_Call) RunAndReturn(run func(token string) (*database.Invite, error)) *MockUserStore_GetInvite_Call {
+func (_c *MockUserStore_GetInvite_Call) RunAndReturn(run func(token string) (*store.Invite, error)) *MockUserStore_GetInvite_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserByID provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) GetUserByID(id string) (*database.User, error) {
+func (_mock *MockUserStore) GetUserByID(id string) (*store.User, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserByID")
 	}
 
-	var r0 *database.User
+	var r0 *store.User
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.User, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.User, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.User); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.User); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.User)
+			r0 = ret.Get(0).(*store.User)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -434,34 +434,34 @@ func (_c *MockUserStore_GetUserByID_Call) Run(run func(id string)) *MockUserStor
 	return _c
 }
 
-func (_c *MockUserStore_GetUserByID_Call) Return(user *database.User, err error) *MockUserStore_GetUserByID_Call {
+func (_c *MockUserStore_GetUserByID_Call) Return(user *store.User, err error) *MockUserStore_GetUserByID_Call {
 	_c.Call.Return(user, err)
 	return _c
 }
 
-func (_c *MockUserStore_GetUserByID_Call) RunAndReturn(run func(id string) (*database.User, error)) *MockUserStore_GetUserByID_Call {
+func (_c *MockUserStore_GetUserByID_Call) RunAndReturn(run func(id string) (*store.User, error)) *MockUserStore_GetUserByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListActiveInvites provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) ListActiveInvites() ([]database.Invite, error) {
+func (_mock *MockUserStore) ListActiveInvites() ([]store.Invite, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListActiveInvites")
 	}
 
-	var r0 []database.Invite
+	var r0 []store.Invite
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.Invite, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.Invite, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.Invite); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.Invite); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Invite)
+			r0 = ret.Get(0).([]store.Invite)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -489,34 +489,34 @@ func (_c *MockUserStore_ListActiveInvites_Call) Run(run func()) *MockUserStore_L
 	return _c
 }
 
-func (_c *MockUserStore_ListActiveInvites_Call) Return(invites []database.Invite, err error) *MockUserStore_ListActiveInvites_Call {
+func (_c *MockUserStore_ListActiveInvites_Call) Return(invites []store.Invite, err error) *MockUserStore_ListActiveInvites_Call {
 	_c.Call.Return(invites, err)
 	return _c
 }
 
-func (_c *MockUserStore_ListActiveInvites_Call) RunAndReturn(run func() ([]database.Invite, error)) *MockUserStore_ListActiveInvites_Call {
+func (_c *MockUserStore_ListActiveInvites_Call) RunAndReturn(run func() ([]store.Invite, error)) *MockUserStore_ListActiveInvites_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListUserSessions provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) ListUserSessions(userID string) ([]database.Session, error) {
+func (_mock *MockUserStore) ListUserSessions(userID string) ([]store.Session, error) {
 	ret := _mock.Called(userID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListUserSessions")
 	}
 
-	var r0 []database.Session
+	var r0 []store.Session
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Session, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.Session, error)); ok {
 		return returnFunc(userID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.Session); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.Session); ok {
 		r0 = returnFunc(userID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Session)
+			r0 = ret.Get(0).([]store.Session)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -551,34 +551,34 @@ func (_c *MockUserStore_ListUserSessions_Call) Run(run func(userID string)) *Moc
 	return _c
 }
 
-func (_c *MockUserStore_ListUserSessions_Call) Return(sessions []database.Session, err error) *MockUserStore_ListUserSessions_Call {
+func (_c *MockUserStore_ListUserSessions_Call) Return(sessions []store.Session, err error) *MockUserStore_ListUserSessions_Call {
 	_c.Call.Return(sessions, err)
 	return _c
 }
 
-func (_c *MockUserStore_ListUserSessions_Call) RunAndReturn(run func(userID string) ([]database.Session, error)) *MockUserStore_ListUserSessions_Call {
+func (_c *MockUserStore_ListUserSessions_Call) RunAndReturn(run func(userID string) ([]store.Session, error)) *MockUserStore_ListUserSessions_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListUsers provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) ListUsers() ([]database.User, error) {
+func (_mock *MockUserStore) ListUsers() ([]store.User, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListUsers")
 	}
 
-	var r0 []database.User
+	var r0 []store.User
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.User, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.User, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.User); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.User); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.User)
+			r0 = ret.Get(0).([]store.User)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -606,12 +606,12 @@ func (_c *MockUserStore_ListUsers_Call) Run(run func()) *MockUserStore_ListUsers
 	return _c
 }
 
-func (_c *MockUserStore_ListUsers_Call) Return(users []database.User, err error) *MockUserStore_ListUsers_Call {
+func (_c *MockUserStore_ListUsers_Call) Return(users []store.User, err error) *MockUserStore_ListUsers_Call {
 	_c.Call.Return(users, err)
 	return _c
 }
 
-func (_c *MockUserStore_ListUsers_Call) RunAndReturn(run func() ([]database.User, error)) *MockUserStore_ListUsers_Call {
+func (_c *MockUserStore_ListUsers_Call) RunAndReturn(run func() ([]store.User, error)) *MockUserStore_ListUsers_Call {
 	_c.Call.Return(run)
 	return _c
 }

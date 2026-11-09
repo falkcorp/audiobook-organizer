@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_list_not_loaded_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a217e80d-6a0c-49a9-ac4c-2d4b435b7c7c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // listState is a rename-source guard whose Deluge list can be loaded or not,

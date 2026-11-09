@@ -1,11 +1,11 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package jobs
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // Narrow store slices for this package's free helper functions.
 //

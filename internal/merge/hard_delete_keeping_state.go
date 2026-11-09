@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Hard deletes a user asks for (owner decision 2026-10-05, 19:15): the

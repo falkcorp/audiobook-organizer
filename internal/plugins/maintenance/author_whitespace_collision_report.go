@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_whitespace_collision_report.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a5d0c32-4fbc-47b6-ab12-2cfbbff82249
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -25,7 +25,7 @@ import (
 // whitespace (TASK-086), so "Raymond  L.  Weil" and "Raymond L. Weil" now
 // normalize to one key. Rows created before that are still separate authors.
 // Merging them, and re-keying the legacy author:name: index entries (see
-// internal/database/pebble_store_name_index.go), both have to pick a surviving
+// internal/books/store/pebble_store_name_index.go), both have to pick a surviving
 // row per group; the owner chose to see the groups first. This op lists them.
 //
 // Two kinds of group are counted separately:

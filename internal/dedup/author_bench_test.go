@@ -1,7 +1,7 @@
 // file: internal/dedup/author_bench_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c0d4e918-6b57-42fa-8e13-9a72b5f04c8d
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // benchAuthorCorpus generates an author set sized on the production library's

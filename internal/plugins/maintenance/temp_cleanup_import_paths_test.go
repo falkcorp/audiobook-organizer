@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/temp_cleanup_import_paths_test.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 5b8e2f4a-7c19-4d63-a0e5-91f3c6d28b47
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

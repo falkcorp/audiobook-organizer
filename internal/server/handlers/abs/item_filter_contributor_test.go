@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item_filter_contributor_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d17b8e0-96ca-4c33-a5f1-2e0b7d4996a1
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ── ?filter=authors.* and ?filter=narrators.* ───────────────────────────────

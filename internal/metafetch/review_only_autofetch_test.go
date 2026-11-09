@@ -1,7 +1,7 @@
 // file: internal/metafetch/review_only_autofetch_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b881bf7b-f075-494b-b50e-cdc671118002
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/require"
 )

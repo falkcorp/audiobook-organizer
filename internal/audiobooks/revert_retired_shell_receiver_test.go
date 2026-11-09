@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retired_shell_receiver_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3d6b8e25-71c4-4a90-b2f8-5e1a9c0d7b43
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

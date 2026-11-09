@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_viewer_failures_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3e9c1a74-6b05-4d82-a7f1-c20d58e4b196
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

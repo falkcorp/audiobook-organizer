@@ -1,7 +1,7 @@
 // file: internal/server/quarantine_service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b26d7d64-1256-4cf7-96a5-c008ca54c3cb
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 

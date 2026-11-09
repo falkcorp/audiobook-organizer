@@ -1,7 +1,7 @@
 // file: internal/versionprimary/signals_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6867c1e8-4791-4a48-a289-aeb5326fa25b
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type stubFiles map[string][]database.BookFile

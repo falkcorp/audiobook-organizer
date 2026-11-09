@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_merge_journal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f883c97-c8f7-4228-a0d0-6d5838ef6e7b
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 // Regression tests for DA-02: the three bulk/manual merge endpoints
 // (merge-series, bulk-merge, merge-cluster) called MergeService.MergeBooks
@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

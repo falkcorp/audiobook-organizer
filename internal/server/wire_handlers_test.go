@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1a9dc63b-e7ec-4a27-ad84-f117b891a41f
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ai_journal_prune_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 27ded651-bee8-45c3-a464-9159918a1f1f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

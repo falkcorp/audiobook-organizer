@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/unknown_author_audit_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 397e4a71-cb8f-4f03-8a55-f548a6c33cf4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_identity_hold.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: acb6d67e-dc3f-4d2f-adcb-ee17eacb8ca4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 //
 // Keeps a rescan from rewriting an existing book's identity, whatever the
 // scanned value came from, and records what it would have written.
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 

@@ -1,0 +1,155 @@
+// file: internal/books/store/memdb_search.go
+// version: 1.6.3
+// guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+)
+
+// getBookRowForSearch reads one book: row and decodes it, with no book_sig:
+// hydration and no memdb involvement.
+//
+// This is deliberately NOT GetBookByID. That is the full-fidelity read and folds
+// in the book_sig: sidecar; SearchBooks' disk scan does a bare json.Unmarshal of
+// the row and therefore returns books without signatures. Search results are
+// serialized straight into API responses, and BookSigV1 alone is ~22KB of base64
+// per book — routing search hits through the hydrating read would have quietly
+// re-inflated the payload that PR #3125 had just cut.
+//
+// A missing row returns (nil, nil): between the memdb match and this read, a
+// concurrent delete can land, and a search should skip that book rather than
+// fail.
+func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
+	value, closer, err := p.db.Get([]byte("book:" + id))
+	if err == pebble.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer closer.Close()
+
+	var book Book
+	if err := json.Unmarshal(value, &book); err != nil {
+		return nil, err
+	}
+	return &book, nil
+}
+
+// SearchBookIDs runs the library search predicate against the in-memory book
+// table and returns the matching book IDs, in the same order and with the same
+// pagination semantics as PebbleStore.SearchBooks' on-disk scan.
+//
+// Why IDs and not Books: memdb holds a *projection*. stripBookForMemdb clears
+// Description, VersionNotes and the BookSig* family before insertion, so
+// returning these rows directly would silently blank a description that the
+// Pebble scan returns in full. The strip comment names the contract — callers
+// needing the whole record fetch it from Pebble — so matching happens here and
+// hydration happens at the call site.
+//
+// This works only because the three fields the predicate reads (Title,
+// Narrator, AuthorID) are exactly the ones stripBookForMemdb does NOT clear. If
+// a future strip touches any of them, this fast path starts returning fewer
+// results than the disk scan and must be revisited.
+//
+// The predicate below is a deliberate transcription of the Pebble scan, quirks
+// included, because SearchBooks has callers beyond the ABS UI (the iTunes
+// handler overfetches through it) and a "tidier" predicate here would silently
+// change what they match:
+//
+//   - Author names compare against util.NormalizeAuthor (lower + whitespace
+//     collapse) while Title and Narrator compare against a bare
+//     strings.ToLower. The author branch accepts the query as typed OR
+//     normalized the same way (authorMatchesQuery), so it only ever widens.
+//   - `offset` skips the first N *matches* in ranked order (see
+//     SubstringSearchRank / SearchRank), not the first N books. Results are
+//     ranked by relevance tier, then title length, then ID — not ULID order —
+//     and the order is total, so offset paging is stable.
+//   - Soft-deleted books are NOT excluded. The disk scan does not filter them,
+//     so neither does this. (Worth revisiting — separately.)
+func (m *MemStore) SearchBookIDs(query string, limit, offset int) ([]string, error) {
+	return m.searchBookIDs(query, limit, offset, nil)
+}
+
+// SearchBookIDsFiltered is SearchBookIDs restricted to the books f admits,
+// applied INSIDE the scan so only admitted matches count toward offset and
+// limit. Post-filtering a limit-capped SearchBookIDs result would return fewer
+// than limit hits — often none — whenever hidden rows sort first, which on
+// production was 89% of matches.
+func (m *MemStore) SearchBookIDsFiltered(query string, limit, offset int, f BookSummaryFilter) ([]string, error) {
+	if f.RestrictToIDs != nil && len(f.RestrictToIDs) == 0 {
+		return []string{}, nil
+	}
+	return m.searchBookIDs(query, limit, offset, func(b *Book) bool { return bookMatchesSummaryFilter(b, f) })
+}
+
+// searchBookIDs is the shared scan; keep (nil = admit all) runs before a match
+// is counted.
+func (m *MemStore) searchBookIDs(query string, limit, offset int, keep func(*Book) bool) ([]string, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	// Author id -> normalized name. The disk scan rebuilds this map from a full
+	// author: iteration on every call; here it is a walk of an in-memory table.
+	authIter, err := txn.Get(memTableAuthors, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb search: authors: %w", err)
+	}
+	authorNames := make(map[int]string, 4096)
+	for obj := authIter.Next(); obj != nil; obj = authIter.Next() {
+		a, ok := obj.(*Author)
+		if !ok {
+			continue
+		}
+		authorNames[a.ID] = util.NormalizeAuthor(a.Name)
+	}
+
+	// Iteration order no longer decides which rows survive the limit: results
+	// are ordered by SearchRank (tier, title length, ID), a total order the
+	// Pebble disk scan applies identically, so both paths select the same rows
+	// in the same order regardless of how their tables iterate.
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb search: books: %w", err)
+	}
+
+	lowerQuery := strings.ToLower(query)
+
+	// Every admitted match is ranked (SubstringSearchRank) and the ranker
+	// applies offset and limit AFTER ranking, so the cut keeps the most
+	// relevant rows instead of the oldest. There is no early exit any more: a
+	// ULID-order early exit is exactly what dropped an exact-title match behind
+	// `limit` older substring hits. The ranker keeps at most offset+limit items
+	// in a bounded heap, so a broad query does not hold every match.
+	//
+	// Nothing here is sized from `limit`: it is request input and not
+	// validated at every call site (a negative value once panicked a
+	// make([]string, 0, limit) here, and CodeQL flags
+	// go/uncontrolled-allocation-size). The ranker grows by append only.
+	ranker := newSearchRanker[string](limit, offset)
+
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b, ok := obj.(*Book)
+		if !ok {
+			continue
+		}
+
+		if keep != nil && !keep(b) {
+			continue
+		}
+		if rank, ok := SubstringSearchRank(b.ID, b.Title, b.Narrator, b.AuthorID, authorNames, lowerQuery); ok {
+			ranker.Add(rank, b.ID)
+		}
+	}
+
+	return ranker.Result(offset), nil
+}

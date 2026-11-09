@@ -1,12 +1,12 @@
 // file: internal/organizer/listener_identity.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 78f69da0-7954-44c1-84b5-9d2415376bf5
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

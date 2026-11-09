@@ -1,7 +1,7 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: e7c9d4a2-f1b3-49a8-8c4f-7d2e5a1f3c9e
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

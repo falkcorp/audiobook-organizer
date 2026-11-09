@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/mock"

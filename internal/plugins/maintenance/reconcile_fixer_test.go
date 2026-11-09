@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer_test.go
-// version: 2.13.1
+// version: 2.13.2
 // guid: 8f0c7a5e-2b3d-4c61-9e47-a1d5b6c3f902
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -22,7 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

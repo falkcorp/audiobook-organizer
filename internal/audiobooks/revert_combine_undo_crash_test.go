@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_combine_undo_crash_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 63945e51-9b1a-4083-92cc-94923d03df26
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,8 +14,8 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package versions
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

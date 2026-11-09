@@ -1,14 +1,14 @@
 // file: internal/reconcile/soft_delete_records_state_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c484bb18-2691-4395-ac04-9a531e0d13c4
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package reconcile
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lockFreeStore answers the field-lock read the metadata merge makes before

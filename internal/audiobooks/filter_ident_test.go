@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_ident_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b7e3c52-4f18-4d0a-8e6b-2a1c5d9f7e30
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,7 +16,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newIdentFilterStore(t testing.TB) *database.PebbleStore {

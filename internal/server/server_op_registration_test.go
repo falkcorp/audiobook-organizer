@@ -1,7 +1,7 @@
 // file: internal/server/server_op_registration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f2a4c81-9d63-4e05-b8a7-1c30e95d6f24
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // Regression test for the RootDir op-registration gate.
 //
@@ -18,9 +18,9 @@ package server
 import (
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 )

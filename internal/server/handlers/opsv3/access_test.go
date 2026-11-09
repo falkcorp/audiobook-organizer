@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/access_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 91c4e7a2-5d38-4b06-a2f1-6e0b8d3c7a95
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"

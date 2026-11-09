@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f5390ae9-0910-4c20-811f-36ab977aec8e
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // holdFixture is a pebble-backed scanner with one existing book imported

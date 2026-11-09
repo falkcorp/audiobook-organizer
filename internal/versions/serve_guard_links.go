@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard_links.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 084c9637-0527-4749-af27-b59f723f52ef
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The link index: who else reaches a file through a symlink.

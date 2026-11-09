@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -36,7 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/single_file_book_file_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 4d81b0f2-6ce7-4a39-91b5-2f0a7c63d5e8
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

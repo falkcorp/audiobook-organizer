@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore_writeback_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2d7f4a16-08b5-4c93-91ae-5f6c3d20b784
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"
 )

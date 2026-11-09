@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_flag_holder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c6c97550-3cc8-40ed-a690-45cfa6b45942
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

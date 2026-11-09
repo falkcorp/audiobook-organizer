@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // hookedPathStore is a PebbleStore whose path lookups can be intercepted: the

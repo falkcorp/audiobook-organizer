@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

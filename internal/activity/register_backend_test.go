@@ -1,7 +1,7 @@
 // file: internal/activity/register_backend_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 6d2e8b41-37a9-4c5f-9e0d-1b8a4f7c2e93
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package activity
 
@@ -13,8 +13,8 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

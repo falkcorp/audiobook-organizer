@@ -1,7 +1,7 @@
 // file: internal/organizer/pattern_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestPatternExpansionWithRealData tests pattern expansion with real-world examples

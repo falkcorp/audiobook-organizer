@@ -1,7 +1,7 @@
 // file: internal/dedup/rescore.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b1d4f27-6a90-4c3e-9d21-0f5a7c2e8b64
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Package dedup — per-pair signal gather shared by the operational unified scan
 // and the dedup.rescore-labeled-examples op (ScorePairsForBook).
@@ -36,7 +36,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_refetch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 53254e8b-33e1-4370-80d0-245b21ecc8f8
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

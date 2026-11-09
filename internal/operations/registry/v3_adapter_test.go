@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_adapter_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 3ffc035f-1ee4-4409-afce-613375ef8fcd
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package registry
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

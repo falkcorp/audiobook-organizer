@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package undo
 
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // This file is the single classifier for "can POST /operations/:id/revert

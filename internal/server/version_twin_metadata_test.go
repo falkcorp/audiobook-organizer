@@ -1,7 +1,7 @@
 // file: internal/server/version_twin_metadata_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b7da4e2-27d6-48df-af29-a925a2f8338e
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // BooksWithMetadataSourceHashInMemory reaches PebbleStore's memdb-only lookup

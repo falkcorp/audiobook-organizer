@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/gen_pipeline_bot_tasks.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 2e2a3779-57b4-4f8c-8c09-7b94bb1a03a2
-# last-edited: 2026-10-20
+# last-edited: 2026-11-09
 
 """Generate the 23 bot-task files for the dedup pipeline spec.
 
@@ -114,14 +114,14 @@ and `fingerprint_match_log`. See spec §3.2 for column rationale.
 
 ## Files to Create / Edit
 
-1. **Create** `internal/database/fingerprint_db.go` — `OpenFingerprintDB` constructor + migration runner
-2. **Create** `internal/database/fingerprint_db_test.go` — schema round-trip test
+1. **Create** `internal/books/store/fingerprint_db.go` — `OpenFingerprintDB` constructor + migration runner
+2. **Create** `internal/books/store/fingerprint_db_test.go` — schema round-trip test
 3. **Edit** `internal/config/config.go` — add `FingerprintDBPath string` field with default `data/fingerprints.db`
 
 ## Step 1 — Create the DB module
 
 ```go
-// file: internal/database/fingerprint_db.go
+// file: internal/books/store/fingerprint_db.go
 // version: 1.0.0
 // guid: <fresh-uuid>
 // last-edited: 2026-05-02
@@ -207,7 +207,7 @@ func migrateFingerprintDB(db *sql.DB) error {
 ## Step 2 — Test
 
 ```go
-// file: internal/database/fingerprint_db_test.go
+// file: internal/books/store/fingerprint_db_test.go
 // version: 1.0.0
 // guid: <fresh-uuid>
 
@@ -262,8 +262,8 @@ if cfg.FingerprintDBPath == "" {
 ## Verify
 
 ```bash
-go test ./internal/database/ -run TestOpenFingerprintDB
-go vet ./internal/database/...
+go test ./internal/books/store/ -run TestOpenFingerprintDB
+go vet ./internal/books/store/...
 ```
 
 ## Definition of Done
@@ -290,12 +290,12 @@ and be unblocked as soon as P0-02 merges.
 
 ## Files to Create / Edit
 
-1. **Create** `internal/database/fingerprint_store.go`
+1. **Create** `internal/books/store/fingerprint_store.go`
 
 ## Step 1 — Interface + types
 
 ```go
-// file: internal/database/fingerprint_store.go
+// file: internal/books/store/fingerprint_store.go
 // version: 1.0.0
 // guid: <fresh-uuid>
 // last-edited: 2026-05-02
@@ -378,7 +378,7 @@ type FingerprintStore interface {
 ## Verify
 
 ```bash
-go vet ./internal/database/...
+go vet ./internal/books/store/...
 go build ./...
 ```
 
@@ -405,13 +405,13 @@ on base64-decoded segments — already implemented for `internal/fingerprint`,
 
 ## Files to Create / Edit
 
-1. **Create** `internal/database/fingerprint_store_sqlite.go`
-2. **Create** `internal/database/fingerprint_store_sqlite_test.go`
+1. **Create** `internal/books/store/fingerprint_store_sqlite.go`
+2. **Create** `internal/books/store/fingerprint_store_sqlite_test.go`
 
 ## Step 1 — Implementation skeleton
 
 ```go
-// file: internal/database/fingerprint_store_sqlite.go
+// file: internal/books/store/fingerprint_store_sqlite.go
 // version: 1.0.0
 // guid: <fresh-uuid>
 // last-edited: 2026-05-02
@@ -621,7 +621,7 @@ func scanFingerprintRows(rows *sql.Rows) ([]FingerprintRecord, error) {
 ## Step 2 — Tests
 
 ```go
-// file: internal/database/fingerprint_store_sqlite_test.go
+// file: internal/books/store/fingerprint_store_sqlite_test.go
 // version: 1.0.0
 // guid: <fresh-uuid>
 
@@ -672,7 +672,7 @@ func stringRepeat(s string, n int) string { out := ""; for i := 0; i < n; i++ { 
 ## Verify
 
 ```bash
-go test ./internal/database/ -run TestFingerprintStore -count=1
+go test ./internal/books/store/ -run TestFingerprintStore -count=1
 ```
 
 ## Definition of Done
@@ -698,7 +698,7 @@ records emitted by every Phase 1 stage.
 
 ## Files to Create / Edit
 
-1. **Edit** `internal/database/migrations.go` — add new `CREATE TABLE` near
+1. **Edit** `internal/books/store/migrations.go` — add new `CREATE TABLE` near
    the other dedup-related tables (search for `dedup_candidates`).
 2. **Create** `internal/dedup/signals/kind.go`
 3. **Create** `internal/dedup/signals/store.go`
@@ -707,7 +707,7 @@ records emitted by every Phase 1 stage.
 ## Step 1 — Migration
 
 Add this block inside `migrateSchema` (or the closest equivalent) in
-`internal/database/migrations.go`. Use `CREATE TABLE IF NOT EXISTS` so it is
+`internal/books/store/migrations.go`. Use `CREATE TABLE IF NOT EXISTS` so it is
 safe to run twice.
 
 ```go
@@ -920,7 +920,7 @@ Adds the `identity_results` table that stores the matrix output for every book.
 
 ## Files to Create / Edit
 
-1. **Edit** `internal/database/migrations.go` — add the table
+1. **Edit** `internal/books/store/migrations.go` — add the table
 
 ## Step 1 — Migration
 
@@ -945,7 +945,7 @@ Add inside `migrateSchema` near the dedup_signals migration:
 ## Step 2 — Test
 
 ```go
-// add to internal/database/migrations_test.go (or a new file if missing)
+// add to internal/books/store/migrations_test.go (or a new file if missing)
 func TestIdentityResultsMigration(t *testing.T) {
     db := newTestSQLiteDB(t) // existing helper
     _, err := db.Exec(`INSERT INTO identity_results (book_id, identity_score, signal_revision, decided_at, summary_json)
@@ -957,7 +957,7 @@ func TestIdentityResultsMigration(t *testing.T) {
 ## Verify
 
 ```bash
-go test ./internal/database/ -run TestIdentityResultsMigration
+go test ./internal/books/store/ -run TestIdentityResultsMigration
 ```
 
 ## Definition of Done
@@ -981,7 +981,7 @@ into this one in Phase 6.
 
 ## Files to Create / Edit
 
-1. **Edit** `internal/database/migrations.go`
+1. **Edit** `internal/books/store/migrations.go`
 
 ## Step 1 — Migration
 
@@ -1152,7 +1152,7 @@ stage_task(
     "stage-embedding-similarity",
     "Pipeline stage: chromem embedding similarity",
     "Reuses the existing `EmbeddingStore` / `ChromemEmbeddingStore` "
-    "(`internal/database/embedding_store.go`, `chromem_embedding_store.go`). "
+    "(`internal/books/store/embedding_store.go`, `chromem_embedding_store.go`). "
     "Emits one `KindEmbeddingSimilarity` per pair with cosine ≥ 0.80.",
     """- Lookup vector for the book; if missing, request a backfill via
   existing `embedding_backfill` machinery.
@@ -1573,7 +1573,7 @@ add(
     ["P2-02"],
     """## What This Does
 
-Walks the legacy `dedup_candidates` table (`internal/database/embedding_store.go`)
+Walks the legacy `dedup_candidates` table (`internal/books/store/embedding_store.go`)
 and emits equivalent rows in `dedup_match_groups`:
 
 - For every `pending` candidate: create a new open group with

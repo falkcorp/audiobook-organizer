@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.15.1
+// version: 2.15.2
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -89,7 +89,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

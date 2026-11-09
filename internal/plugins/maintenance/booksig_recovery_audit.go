@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

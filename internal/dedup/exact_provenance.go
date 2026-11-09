@@ -1,7 +1,7 @@
 // file: internal/dedup/exact_provenance.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 22577d99-1104-4959-9603-0e04543d0eb1
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 // Package dedup — exact-rule provenance and the placeholder-title guard.
 //
@@ -38,7 +38,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

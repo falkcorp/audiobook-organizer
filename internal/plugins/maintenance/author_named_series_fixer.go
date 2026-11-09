@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 51518f40-1a71-43e8-bb8c-bb056522bedd
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	"github.com/stretchr/testify/require"

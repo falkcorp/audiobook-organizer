@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_swr_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3ca5f9d1-807b-42e6-95af-1d60428c7bf3
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // resetMetaResultsCache puts the package cache in a known state for a test.

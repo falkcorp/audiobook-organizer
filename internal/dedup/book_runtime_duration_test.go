@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime_duration_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 6ae0f0e7-3cf7-42c7-b2c5-88b2a24e8c27
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // chapterRows is n present file rows of sec seconds for bookID; only the

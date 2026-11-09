@@ -1,7 +1,7 @@
 // file: internal/undo/master_list_elsewhere.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3a91e57-48d2-4f06-b7e1-9d05a2f6c814
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeMasterListElsewhereCreate: the master-list import created one

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/filterdata_decades_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a4d3fc3f-08e0-4bfb-bf42-7081bb8235eb
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestFilterData_PublishedDecadesComeFromTheWholeLibrary is the SQ-05

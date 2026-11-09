@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/bookmarks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d3c15af-6e29-4b70-91c8-4a05f7e2b3d6
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs
 
@@ -16,7 +16,7 @@ import (
 )
 
 // Phase 6 — bookmarks CRUD, over the keyspace TASK-09 built
-// (internal/database/pebble_store_bookmarks.go). Shapes captured from real
+// (internal/books/store/pebble_store_bookmarks.go). Shapes captured from real
 // Audiobookshelf 2.36.0 on 2026-08-02:
 //
 //	GET    /api/me/bookmarks/:id              -> 200 {"bookmarks":[…]}

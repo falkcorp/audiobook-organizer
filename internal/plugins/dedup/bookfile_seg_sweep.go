@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7a3b5c8e-d1f2-4e9a-b6c0-3d7f1a2e5b8c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.bookfile-seg-drop (T020, SPEC 3 §6 item 2).
 //
@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

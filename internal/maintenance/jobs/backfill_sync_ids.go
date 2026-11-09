@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_sync_ids.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 85ae5c94-d001-49d9-9f65-97f73f32522b
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

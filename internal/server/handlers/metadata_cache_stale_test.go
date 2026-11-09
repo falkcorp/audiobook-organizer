@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: bd448962-829a-45be-aa5f-86e10c847ff3
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // The review rail's `stale` count and the refetch-all-stale set
 // (StaleCachedBookIDs, behind POST batch-fetch-candidates {stale:true}) must be
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

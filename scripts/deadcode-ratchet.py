@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.4.2
+# version: 1.4.3
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 """Ratchet on production functions unreachable from every `main`.
 
 Runs golang.org/x/tools/cmd/deadcode (pinned) and compares the set of
@@ -137,7 +137,7 @@ EXCLUDED_DIR_PREFIXES = ("pkg/", "internal/writeback/")
 # Update this list when a new test-helper package is added.
 TEST_HELPER_DIRS = {
     "aggtest",
-    "dbtest",
+    "storetest",
     "vptest",
     "logtest",
     "opstest",

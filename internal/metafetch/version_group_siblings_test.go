@@ -1,7 +1,7 @@
 // file: internal/metafetch/version_group_siblings_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9ab09957-d8ac-43d1-adb7-067273050274
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

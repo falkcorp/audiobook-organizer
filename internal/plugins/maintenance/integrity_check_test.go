@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a9d1e2f-4b5c-4d6e-8f7a-1b2c3d4e5f6a
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestFindIntegrityMismatches_ReportOnly verifies the core scan: given a mix

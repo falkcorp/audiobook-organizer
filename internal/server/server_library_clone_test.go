@@ -1,7 +1,7 @@
 // file: internal/server/server_library_clone_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d2e4b17-6a3c-4f59-b0e8-5c1a9d7f2e64
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )

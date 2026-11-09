@@ -1,14 +1,14 @@
 // file: internal/server/version_twin_metadata.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8d3e1a57-6c2b-4f90-b4e8-71a9c05d2f36
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 )
 

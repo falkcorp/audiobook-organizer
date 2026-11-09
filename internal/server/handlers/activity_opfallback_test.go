@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_opfallback_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a1f3c85-2d9e-4b47-8c06-e5b2d7a9f134
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

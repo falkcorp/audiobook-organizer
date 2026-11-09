@@ -1,7 +1,7 @@
 // file: internal/server/signals_coverage_handler.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: ca3e529b-ef05-451d-8a67-8a643e16c176
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"

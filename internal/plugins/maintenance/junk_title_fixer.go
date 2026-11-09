@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -25,8 +25,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"

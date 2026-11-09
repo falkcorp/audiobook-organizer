@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version_inplace_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f1e58660-8576-49f2-8dee-c84f15c18012
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

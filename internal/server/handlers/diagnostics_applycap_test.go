@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_applycap_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5f2c8d17-9b3e-4a60-b7d4-1c6e0a2f8b95
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

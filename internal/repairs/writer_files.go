@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -52,7 +52,7 @@ var ErrNotJournaled = errors.New("repairs: undo row not recorded; the write was 
 // database.ErrUnclassifiedChangeType, the error every journal writer gets from
 // database.RecordOperationChange, so one errors.Is matches all of them. The
 // write is not made, so it also matches ErrNotJournaled. Classify the type in
-// internal/database/change_type_class.go.
+// internal/books/store/change_type_class.go.
 var ErrUnclassifiedChangeType = database.ErrUnclassifiedChangeType
 
 // checkChangeTypeClassified refuses a change type the journal does not

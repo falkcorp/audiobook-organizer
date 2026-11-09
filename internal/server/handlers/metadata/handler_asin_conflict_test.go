@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_asin_conflict_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a8e2f63-1c9d-4b07-95e3-d6b0c7a1f248
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package metadatahandler_test
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 )

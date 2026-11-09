@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_result_keyspace_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b654171b-40ad-4ba9-88df-841c4d39c5cc
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 )
 

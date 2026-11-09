@@ -1,7 +1,7 @@
 // file: internal/quarantine/auto_quarantine_errors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3af135eb-9bc7-4793-982e-1920f18299b2
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package quarantine
 
@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 

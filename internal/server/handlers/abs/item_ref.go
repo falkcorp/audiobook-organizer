@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item_ref.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1e9a47-2b58-4f3d-8e70-a94d3c51b2f8
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs
 
@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"

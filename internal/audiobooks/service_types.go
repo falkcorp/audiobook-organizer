@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // AudiobooksListResponse represents the response for listing audiobooks
@@ -326,7 +326,7 @@ func IsPerUserField(field string) bool {
 // clears from memdb-resident copies. Predicate filters on these fields
 // silently miss against memdb Books (which is the default code path in
 // production) — callers must fetch the full Book from Pebble via
-// GetBookByID and re-test those filters. See internal/database/memdb_strip.go.
+// GetBookByID and re-test those filters. See internal/books/store/memdb_strip.go.
 var strippedMemdbFields = map[string]bool{
 	"description":   true,
 	"version_notes": true,

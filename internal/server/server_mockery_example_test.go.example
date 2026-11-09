@@ -1,5 +1,5 @@
 // file: internal/server/server_mockery_example_test.go.example
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 
 // This is an EXAMPLE of how tests would look with mockery-generated mocks
@@ -15,7 +15,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jdfalk/audiobook-organizer/internal/database"
+	"github.com/jdfalk/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

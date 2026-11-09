@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_pipeline_stale_write_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a7c2e91-6b3d-4f08-9d15-e8b0c6a3f752
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // renameFixture is a two-file book under RootDir/incoming that the rename

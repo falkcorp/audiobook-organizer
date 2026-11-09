@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_export_redaction_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d6a9f13-8b47-4c20-a5e1-7f3b0c92d684
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

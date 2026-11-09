@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )
 

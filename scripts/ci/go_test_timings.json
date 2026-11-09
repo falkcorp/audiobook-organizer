@@ -1,5 +1,5 @@
 {
-"internal/database": {
+"internal/books/store": {
 "TestABSSession_CreateGetRoundTrip": 0.02,
 "TestABSSession_DeleteExpiredRemovesRecordAndIndexes": 0.02,
 "TestABSSession_DoesNotCollideWithBrowserSessions": 0.02,

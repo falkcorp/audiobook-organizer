@@ -1,14 +1,14 @@
 # file: scripts/verify_interface_split.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 3a71b5cd-0e68-49f2-a4b1-8c05d9e37f26
-# last-edited: 2026-10-20
+# last-edited: 2026-11-09
 #
 # Proves an interface split preserved the method set exactly. Compares the full
 # signature set -- methods AND embedded interfaces, followed one level through
 # the composition -- between a base revision and the working tree:
 #
 #   BASE_REV=origin/main python3 scripts/verify_interface_split.py \
-#       internal/database/iface_book.go:BookReader
+#       internal/books/store/iface_book.go:BookReader
 #
 # BASE_REV is an explicit parameter on purpose. It defaulted to HEAD once, which
 # after a rebase points at the split commit itself, so the check compared the

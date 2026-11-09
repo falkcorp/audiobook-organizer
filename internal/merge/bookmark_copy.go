@@ -1,7 +1,7 @@
 // file: internal/merge/bookmark_copy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e2d9a14-3b6c-4f58-b0e1-8c4a5d2f9b37
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

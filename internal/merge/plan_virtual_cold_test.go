@@ -1,7 +1,7 @@
 // file: internal/merge/plan_virtual_cold_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // goCold makes the store behave as it does while memdb is warming up after a

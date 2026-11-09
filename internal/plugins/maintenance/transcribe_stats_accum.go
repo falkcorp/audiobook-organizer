@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Per-book transcription outcome categories. These are written to

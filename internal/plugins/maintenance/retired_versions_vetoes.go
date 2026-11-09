@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: d3a96b50-1e87-4f2c-8a64-b05c7e19f3d2
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

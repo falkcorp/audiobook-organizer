@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a2d9e51-0c47-4f83-b16e-2e9f7c34d0a8
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/oklog/ulid/v2"

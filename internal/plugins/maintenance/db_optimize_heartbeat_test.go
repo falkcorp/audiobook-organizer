@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_optimize_heartbeat_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6b27f0a4-91c3-4de8-8a05-3c7e1b94d260
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // maintenance.db-optimize could not finish on a real database.
 //
@@ -40,7 +40,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c9f5e73-1b48-4d06-a7e3-6d0b8f4c2a95
-// last-edited: 2026-08-14
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // uaFixture builds a root with four cases and a store describing them:

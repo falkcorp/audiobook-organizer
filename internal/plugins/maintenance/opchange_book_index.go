@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -23,7 +23,7 @@ import (
 // --- opchange_by_book: index rebuild op ---
 //
 // The index and its invariant live in
-// internal/database/pebble_store_opchange_index.go. A binary that predates
+// internal/books/store/pebble_store_opchange_index.go. A binary that predates
 // the index (a rollback) writes opchange rows without entries, and the
 // sentinel cannot know, so the index is untrusted at every boot until a
 // verify of the whole journal passes. This op owns that check and the

@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/identification"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

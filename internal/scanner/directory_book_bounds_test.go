@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -17,8 +17,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

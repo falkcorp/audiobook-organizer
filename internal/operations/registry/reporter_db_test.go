@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

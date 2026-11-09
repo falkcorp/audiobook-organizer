@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/require"

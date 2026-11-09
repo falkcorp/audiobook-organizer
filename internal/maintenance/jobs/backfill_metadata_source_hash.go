@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_metadata_source_hash.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1000015-0000-0000-0000-000000000015
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

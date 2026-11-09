@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/itunes_flags.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c1e5a94-3b82-4d6f-a0e9-52f8d4c1b673
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package deduphandler
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

@@ -1,7 +1,7 @@
 // file: internal/versions/kept_sweep_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7d2c9e41-6b0a-4f58-a3d7-1e4b8c5f0926
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // keptFixture is a live book (Batman: Year One) with a purged version whose

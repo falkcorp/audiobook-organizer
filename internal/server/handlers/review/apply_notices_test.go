@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/apply_notices_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: cf6332c7-7866-4c55-aded-862c8ab7215d
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )

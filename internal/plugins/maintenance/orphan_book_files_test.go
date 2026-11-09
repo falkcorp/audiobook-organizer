@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles is a data-loss guard.

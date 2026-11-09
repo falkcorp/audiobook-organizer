@@ -1,6 +1,6 @@
 // file: internal/readstatus/readstatus_test.go
-// version: 1.1.1
-// last-edited: 2026-11-04
+// version: 1.1.2
+// last-edited: 2026-11-09
 // guid: 9e2a8c4d-5b1f-4f70-a7c6-2d8e0f1b9a57
 
 package readstatus
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // setupReadTestStore creates a PebbleStore + seeds one book with

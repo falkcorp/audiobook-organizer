@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockITunesStore) EXPECT() *MockITunesStore_Expecter {
 }
 
 // GetAuthorByID provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) GetAuthorByID(id int) (*database.Author, error) {
+func (_mock *MockITunesStore) GetAuthorByID(id int) (*store.Author, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAuthorByID")
 	}
 
-	var r0 *database.Author
+	var r0 *store.Author
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Author, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Author, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Author); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Author); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Author)
+			r0 = ret.Get(0).(*store.Author)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -97,34 +97,34 @@ func (_c *MockITunesStore_GetAuthorByID_Call) Run(run func(id int)) *MockITunesS
 	return _c
 }
 
-func (_c *MockITunesStore_GetAuthorByID_Call) Return(author *database.Author, err error) *MockITunesStore_GetAuthorByID_Call {
+func (_c *MockITunesStore_GetAuthorByID_Call) Return(author *store.Author, err error) *MockITunesStore_GetAuthorByID_Call {
 	_c.Call.Return(author, err)
 	return _c
 }
 
-func (_c *MockITunesStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*database.Author, error)) *MockITunesStore_GetAuthorByID_Call {
+func (_c *MockITunesStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*store.Author, error)) *MockITunesStore_GetAuthorByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookByID provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) GetBookByID(id string) (*database.Book, error) {
+func (_mock *MockITunesStore) GetBookByID(id string) (*store.Book, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByID")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -159,34 +159,34 @@ func (_c *MockITunesStore_GetBookByID_Call) Run(run func(id string)) *MockITunes
 	return _c
 }
 
-func (_c *MockITunesStore_GetBookByID_Call) Return(book *database.Book, err error) *MockITunesStore_GetBookByID_Call {
+func (_c *MockITunesStore_GetBookByID_Call) Return(book *store.Book, err error) *MockITunesStore_GetBookByID_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockITunesStore_GetBookByID_Call) RunAndReturn(run func(id string) (*database.Book, error)) *MockITunesStore_GetBookByID_Call {
+func (_c *MockITunesStore_GetBookByID_Call) RunAndReturn(run func(id string) (*store.Book, error)) *MockITunesStore_GetBookByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetLibraryFingerprint provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) GetLibraryFingerprint(path string) (*database.LibraryFingerprintRecord, error) {
+func (_mock *MockITunesStore) GetLibraryFingerprint(path string) (*store.LibraryFingerprintRecord, error) {
 	ret := _mock.Called(path)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLibraryFingerprint")
 	}
 
-	var r0 *database.LibraryFingerprintRecord
+	var r0 *store.LibraryFingerprintRecord
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.LibraryFingerprintRecord, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.LibraryFingerprintRecord, error)); ok {
 		return returnFunc(path)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.LibraryFingerprintRecord); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.LibraryFingerprintRecord); ok {
 		r0 = returnFunc(path)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.LibraryFingerprintRecord)
+			r0 = ret.Get(0).(*store.LibraryFingerprintRecord)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -221,34 +221,34 @@ func (_c *MockITunesStore_GetLibraryFingerprint_Call) Run(run func(path string))
 	return _c
 }
 
-func (_c *MockITunesStore_GetLibraryFingerprint_Call) Return(libraryFingerprintRecord *database.LibraryFingerprintRecord, err error) *MockITunesStore_GetLibraryFingerprint_Call {
+func (_c *MockITunesStore_GetLibraryFingerprint_Call) Return(libraryFingerprintRecord *store.LibraryFingerprintRecord, err error) *MockITunesStore_GetLibraryFingerprint_Call {
 	_c.Call.Return(libraryFingerprintRecord, err)
 	return _c
 }
 
-func (_c *MockITunesStore_GetLibraryFingerprint_Call) RunAndReturn(run func(path string) (*database.LibraryFingerprintRecord, error)) *MockITunesStore_GetLibraryFingerprint_Call {
+func (_c *MockITunesStore_GetLibraryFingerprint_Call) RunAndReturn(run func(path string) (*store.LibraryFingerprintRecord, error)) *MockITunesStore_GetLibraryFingerprint_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetOperationV2 provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) GetOperationV2(id string) (*database.OperationV2Row, error) {
+func (_mock *MockITunesStore) GetOperationV2(id string) (*store.OperationV2Row, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetOperationV2")
 	}
 
-	var r0 *database.OperationV2Row
+	var r0 *store.OperationV2Row
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.OperationV2Row, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.OperationV2Row, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.OperationV2Row); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.OperationV2Row); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.OperationV2Row)
+			r0 = ret.Get(0).(*store.OperationV2Row)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -283,34 +283,34 @@ func (_c *MockITunesStore_GetOperationV2_Call) Run(run func(id string)) *MockITu
 	return _c
 }
 
-func (_c *MockITunesStore_GetOperationV2_Call) Return(operationV2Row *database.OperationV2Row, err error) *MockITunesStore_GetOperationV2_Call {
+func (_c *MockITunesStore_GetOperationV2_Call) Return(operationV2Row *store.OperationV2Row, err error) *MockITunesStore_GetOperationV2_Call {
 	_c.Call.Return(operationV2Row, err)
 	return _c
 }
 
-func (_c *MockITunesStore_GetOperationV2_Call) RunAndReturn(run func(id string) (*database.OperationV2Row, error)) *MockITunesStore_GetOperationV2_Call {
+func (_c *MockITunesStore_GetOperationV2_Call) RunAndReturn(run func(id string) (*store.OperationV2Row, error)) *MockITunesStore_GetOperationV2_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListBooksByITunesPID provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) ListBooksByITunesPID(limit int, offset int) ([]database.Book, error) {
+func (_mock *MockITunesStore) ListBooksByITunesPID(limit int, offset int) ([]store.Book, error) {
 	ret := _mock.Called(limit, offset)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBooksByITunesPID")
 	}
 
-	var r0 []database.Book
+	var r0 []store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]store.Book, error)); ok {
 		return returnFunc(limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int, int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) []store.Book); ok {
 		r0 = returnFunc(limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int, int) error); ok {
@@ -351,34 +351,34 @@ func (_c *MockITunesStore_ListBooksByITunesPID_Call) Run(run func(limit int, off
 	return _c
 }
 
-func (_c *MockITunesStore_ListBooksByITunesPID_Call) Return(books []database.Book, err error) *MockITunesStore_ListBooksByITunesPID_Call {
+func (_c *MockITunesStore_ListBooksByITunesPID_Call) Return(books []store.Book, err error) *MockITunesStore_ListBooksByITunesPID_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockITunesStore_ListBooksByITunesPID_Call) RunAndReturn(run func(limit int, offset int) ([]database.Book, error)) *MockITunesStore_ListBooksByITunesPID_Call {
+func (_c *MockITunesStore_ListBooksByITunesPID_Call) RunAndReturn(run func(limit int, offset int) ([]store.Book, error)) *MockITunesStore_ListBooksByITunesPID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // SearchBooks provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) SearchBooks(query string, limit int, offset int) ([]database.Book, error) {
+func (_mock *MockITunesStore) SearchBooks(query string, limit int, offset int) ([]store.Book, error) {
 	ret := _mock.Called(query, limit, offset)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SearchBooks")
 	}
 
-	var r0 []database.Book
+	var r0 []store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int, int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int, int) ([]store.Book, error)); ok {
 		return returnFunc(query, limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, int, int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int, int) []store.Book); ok {
 		r0 = returnFunc(query, limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, int, int) error); ok {
@@ -425,12 +425,12 @@ func (_c *MockITunesStore_SearchBooks_Call) Run(run func(query string, limit int
 	return _c
 }
 
-func (_c *MockITunesStore_SearchBooks_Call) Return(books []database.Book, err error) *MockITunesStore_SearchBooks_Call {
+func (_c *MockITunesStore_SearchBooks_Call) Return(books []store.Book, err error) *MockITunesStore_SearchBooks_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockITunesStore_SearchBooks_Call) RunAndReturn(run func(query string, limit int, offset int) ([]database.Book, error)) *MockITunesStore_SearchBooks_Call {
+func (_c *MockITunesStore_SearchBooks_Call) RunAndReturn(run func(query string, limit int, offset int) ([]store.Book, error)) *MockITunesStore_SearchBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
@@ -84,7 +84,7 @@ func init() { maintenance.Register(&repointVersionPrimaryJob{}) }
 type repointVersionPrimaryJob struct{}
 
 // Library-state literals. There is no shared constant for these in
-// internal/database (only scanner/override_guard.go's unexported
+// internal/books/store (only scanner/override_guard.go's unexported
 // libraryStateImported), so they are spelled here with this note rather than
 // reaching into another package for a private identifier.
 const (

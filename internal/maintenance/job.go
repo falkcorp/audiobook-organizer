@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

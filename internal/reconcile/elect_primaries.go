@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 25e1f705-9130-4eb0-bd4b-04d45908c704
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -16,7 +16,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"golang.org/x/sync/errgroup"

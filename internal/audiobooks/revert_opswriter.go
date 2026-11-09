@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_opswriter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fabc7c66-a593-4d41-92c3-0280d8b95b61
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

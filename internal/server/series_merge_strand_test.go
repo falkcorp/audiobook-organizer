@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_strand_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7b1c4e29-3a86-4d51-9f70-2c8ad6be4415
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestMergeSeriesGroupHelper_RepointsNonPrimaryVersions pins the stranding fix.

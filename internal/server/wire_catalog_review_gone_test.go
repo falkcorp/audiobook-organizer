@@ -1,7 +1,7 @@
 // file: internal/server/wire_catalog_review_gone_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2f249ef1-e42a-4424-9b7a-b8d1c8e263c2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

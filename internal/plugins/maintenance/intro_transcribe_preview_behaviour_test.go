@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_preview_behaviour_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f479366b-0525-4f2f-a944-65aa99b39977
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )
 

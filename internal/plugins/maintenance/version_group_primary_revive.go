@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_revive.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e9fda51-d134-40e9-a8f9-cf9377034a24
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

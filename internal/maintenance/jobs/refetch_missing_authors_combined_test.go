@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors_combined_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9491d68a-a546-43db-9cd6-39abba52f631
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestLinkTagAuthors_SplitsAMultiAuthorTag(t *testing.T) {

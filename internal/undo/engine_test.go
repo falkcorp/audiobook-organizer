@@ -1,7 +1,7 @@
 // file: internal/undo/engine_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3f8b0e2d-4c5e-4f9g-b2d6-8e0f3g5c9d4b
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestPreflightUndoConflicts_ReportsContentChanged(t *testing.T) {

@@ -1,14 +1,14 @@
 // file: internal/merge/merge_loser_redirect_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 799aa880-0cbb-4b00-8dff-70479ab80a19
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package merge
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

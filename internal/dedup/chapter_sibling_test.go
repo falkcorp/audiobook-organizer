@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e3a8c7d1-4b62-4f90-9a05-7c2e1d8b6f54
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func chapterBook(id, title, path string) *database.Book {

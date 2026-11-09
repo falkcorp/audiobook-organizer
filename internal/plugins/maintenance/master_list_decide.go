@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_decide.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d2e84a1-5b3c-4f90-a6e8-1c9f0b47d352
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

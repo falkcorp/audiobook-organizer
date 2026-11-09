@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_failure_record_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f13c8b0-4a72-49de-85c1-2b90e7d43a1f
-// last-edited: 2026-08-13
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

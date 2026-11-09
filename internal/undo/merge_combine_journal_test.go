@@ -1,7 +1,7 @@
 // file: internal/undo/merge_combine_journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d14b6e2-7a3c-4f95-b0d7-2e9c51a4f6d8
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The classifier and the revert agree on the split-book fixer's pointer row:

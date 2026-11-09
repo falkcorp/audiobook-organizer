@@ -1,7 +1,7 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,9 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/apply_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1174eeba-dc3c-4dc8-a8fe-ed7d13c8bb81
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package authoritybuild
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

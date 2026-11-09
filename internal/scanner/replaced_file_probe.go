@@ -1,13 +1,13 @@
 // file: internal/scanner/replaced_file_probe.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6b2e9f41-8c37-4d05-a9e1-3f7d2c5b8a64
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )

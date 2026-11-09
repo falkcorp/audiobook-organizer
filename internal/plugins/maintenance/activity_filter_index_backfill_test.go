@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill_test.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: dc247b67-8e09-445e-82bd-0249e292a052
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

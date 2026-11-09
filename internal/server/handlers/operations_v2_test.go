@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/signature_lost_update_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d4ae5494-c39a-4c29-8456-9a40033177cc
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

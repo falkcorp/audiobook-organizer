@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_breakdown_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a4d7f21-5e83-4c06-b1d7-3f8092ac5e14
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

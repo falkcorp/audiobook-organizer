@@ -1,7 +1,7 @@
 // file: internal/arch/core_key_names_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: abe6650e-8365-489d-8e43-6c768e14351c
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package arch
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/mediacore/archtest"
 )
 

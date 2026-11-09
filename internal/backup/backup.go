@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-09
 
@@ -694,7 +694,7 @@ var ErrUnresolvableSymlink = errors.New("a symlink on the restore's path does no
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
 // TestExtractStore_RefusesAnEntryNamedForTheSnapshotDirectory in
-// internal/database builds its entry from that function, so the two cannot
+// internal/books/store builds its entry from that function, so the two cannot
 // drift apart unnoticed).
 const hnswSnapshotDirName = "hnsw"
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: ffab1405-9fb5-45b7-ac8a-8baf146cb3c3
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // package jobs, not jobs_test: bulkDelugeImportJob is unexported, so the test
 // has to live inside the package to construct it directly. That is also why
@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

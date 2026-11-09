@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link_guards_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f21c5a7-4d63-4b90-a1e8-6c07f2d95b31
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The SAFETY BARS of maintenance.author-path-link, in their own file because

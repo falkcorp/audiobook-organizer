@@ -1,7 +1,7 @@
 // file: internal/pathutil/itunes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e78a7a41-4cb6-4a20-a070-9bfce89450a6
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package pathutil
 
@@ -40,7 +40,7 @@ const FrozenITunesSegment = "books/itunes/"
 // "itunes"). This is their union, and it is the ONE spelling of the rule.
 //
 // It lives in this leaf package rather than in internal/config so that
-// internal/database (which config imports) can apply it too: database's
+// internal/books/store (which config imports) can apply it too: database's
 // copy-keeper choice (keeperLess) and the duration backfill's iTunes skip
 // must agree on which rows are frozen.
 //

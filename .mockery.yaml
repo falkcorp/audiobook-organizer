@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.31.0
+# version: 1.31.1
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-10-26
+# last-edited: 2026-11-09
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -11,12 +11,12 @@
 # (see backlog 5.9 and the PR #234 / stubStore incident). Regenerate
 # with `mockery` after editing this file and commit the result.
 all: false
-dir: internal/database/mocks
+dir: internal/books/store/mocks
 filename: mock_store.go
 pkgname: mocks
 
 packages:
-  github.com/falkcorp/audiobook-organizer/internal/database:
+  github.com/falkcorp/audiobook-organizer/internal/books/store:
     interfaces:
       Store:
       ImportPathStore:

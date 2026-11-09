@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.6
+// version: 4.4.7
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/mock"

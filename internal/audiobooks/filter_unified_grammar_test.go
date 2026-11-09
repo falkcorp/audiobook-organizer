@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 

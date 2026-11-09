@@ -1,7 +1,7 @@
 // file: internal/merge/combine_override_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1e933924-4b94-4b6c-9a57-613b0274c40c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -15,7 +15,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // overrideJournalStore fails every combine-journal write that carries an

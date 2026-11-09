@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7c2e4a90-1d6f-4b38-8e57-3a9b5c1f0d26
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_update_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c1f0b7e-2d94-4a58-9e3b-7f2a5c8d1b04
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 

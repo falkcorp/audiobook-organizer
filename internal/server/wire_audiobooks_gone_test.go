@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_gone_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3b6e1f08-92d4-4c75-a8e3-5d71c0f2b94a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredAudiobookRoutes are the per-book routes retired by 01-P81d, with the

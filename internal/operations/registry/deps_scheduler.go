@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps_scheduler.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a3b4c5d6-e7f8-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-07-18
+// last-edited: 2026-11-09
 
 // deps_scheduler.go implements the event-driven + sweep re-evaluation loop for
 // waiting_deps operations. It is the bridge between op lifecycle events
@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Ensure SchedulerStore embeds DepStore (compile-time check).

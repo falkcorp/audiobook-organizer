@@ -1,7 +1,7 @@
 // file: internal/merge/undo_shell_index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a8c5e72-1f94-4b06-9d3e-6c7a2b0f8e51
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // UndoShellIndex answers one question for the purge: is this soft-deleted book

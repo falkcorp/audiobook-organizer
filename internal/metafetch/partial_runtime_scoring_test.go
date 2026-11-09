@@ -1,7 +1,7 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

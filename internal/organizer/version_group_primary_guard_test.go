@@ -1,7 +1,7 @@
 // file: internal/organizer/version_group_primary_guard_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c41b8d6-2e59-4a03-b18f-6d0a3e95c247
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Regression tests for the surplus-primary defect found 2026-08-13.
 //
@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // countPrimariesInGroup re-derives the answer from stored rows rather than from

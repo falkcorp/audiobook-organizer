@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_backfill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b41849c-b912-4800-9ead-9c3ea4beb456
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs" // registers backfill-merge-undo-pointers
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

@@ -1,14 +1,14 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package abs
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/saferename_emptydir_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e12d01fe-5747-4d06-98b6-ac7563d9621b
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Directory moves onto an existing destination.
 //
@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestMoveExclusive_DirOntoEmptyDirSucceeds(t *testing.T) {

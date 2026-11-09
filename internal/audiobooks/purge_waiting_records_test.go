@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_waiting_records_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c27a90d3-61e4-4b58-8f0a-d3e19b6a7c42
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // journalGone journals a removal of a file that is not there, in a folder that

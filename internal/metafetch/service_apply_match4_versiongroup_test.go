@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_match4_versiongroup_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7669f76e-d58c-4ea7-9a18-44badb294ca5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // match4Fixture is a real Pebble store with a library root and a separate

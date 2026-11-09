@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_recheck.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e8c2a47-d1b9-4f63-a0e5-7b3c9d12f684
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Merge-time recheck of a stored split-book candidate.
 //
@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ErrSplitBookRefused is what errors.Is matches on a merge that

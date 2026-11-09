@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_evidence_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 477ad146-9156-4328-bc92-4bad0d35ece0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func resetFolderEvidenceCache(t *testing.T) {

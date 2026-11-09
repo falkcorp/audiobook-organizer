@@ -1,0 +1,431 @@
+// file: internal/books/store/iface_book.go
+// version: 2.30.1
+// guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
+// last-edited: 2026-11-09
+
+package store
+
+import "time"
+
+// UpdateBookRatingRequest carries partial-update fields for user ratings.
+// Each field uses a pointer so the caller can distinguish "omitted" (nil)
+// from "set to zero/empty" (non-nil pointing to zero value).
+// To clear a rating to NULL, set ClearOverall = true (etc.).
+type UpdateBookRatingRequest struct {
+	Overall      *float64
+	ClearOverall bool
+	Story        *float64
+	ClearStory   bool
+	Performance  *float64
+	ClearPerf    bool
+	Notes        *string
+	ClearNotes   bool
+}
+
+// BookByIDReader fetches books by their primary identifiers.
+type BookByIDReader interface {
+	GetBookByID(id string) (*Book, error)
+	// GetBooksByIDs returns the full Book rows for ids, preserving input
+	// order and silently skipping IDs that do not resolve (mirrors
+	// GetBookByID's nil-on-not-found). Full fidelity: reads the complete
+	// book:<id> row — heavy fields (AcoustIDFingerprint etc.) intact.
+	GetBooksByIDs(ids []string) ([]Book, error)
+	// ListBookIDs returns just the IDs of all non-deleted books, without
+	// materializing Book structs. Saves ~50x memory vs GetAllBooksCore(0,0)
+	// when the caller only needs the ID set (e.g., diff'ing against another set).
+	ListBookIDs() ([]string, error)
+}
+
+// BookBulkReader reads the whole library in bulk shapes.
+type BookBulkReader interface {
+	// GetAllBooksCore is Core-typed (STOREFID W5a/W5z): the return type is
+	// BookCore, not Book, so the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of the heavy fields MUST fetch via GetBookByID / GetAllBooksFullFrom
+	// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetAllBooksCore(limit, offset int) ([]BookCore, error)
+	// GetAllBooksFullFrom returns up to limit non-deleted books whose PebbleDB key
+	// sorts after "book:<afterID>". Pass afterID="" to start from the beginning.
+	// This is an O(1) seek vs GetAllBooksCore's O(offset) skip — use for search
+	// index backfill and other full-table cursor scans.
+	//
+	// Paging callers (a dozen full-table walks) depend on two guarantees, and
+	// every implementation must keep both:
+	//
+	//   - An absent cursor resumes, it does not end the walk. If afterID no
+	//     longer exists (the book was merged or deleted between two pages), the
+	//     page starts at the first ID greater than afterID in plain byte order.
+	//     An empty page therefore means afterID is at or past the last book.
+	//   - A page shorter than limit means the end of the table. An
+	//     implementation that lists IDs and then loads rows must fill the page
+	//     past rows that vanish between the two steps rather than return a
+	//     short page, because callers stop on len(page) < limit.
+	//
+	// PebbleStore implements both on its memdb path (binary search over the
+	// byte-ordered memdb ID index, then point reads that skip vanished rows)
+	// and on its Pebble path (a key seek to "book:<afterID>\x01"). MockStore
+	// (hand-written and the generated mocks.MockStore) and the narrowed store
+	// interfaces in the consuming packages re-declare this method; the
+	// guarantees hold for whatever concrete store backs them.
+	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
+	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
+	// ListBookSearchRows returns one (id, title, file_path, author name) row per
+	// non-deleted book, with the author name joined by the store. It is the
+	// projection for a whole-library text search that would otherwise read
+	// GetAllBooksCore(0, 0) plus GetAllAuthors and keep three strings per book.
+	// The book set is GetAllBooksCore's (soft-deleted rows excluded); an unknown
+	// or absent author yields an empty AuthorName.
+	ListBookSearchRows() ([]BookSearchRow, error)
+}
+
+// BookNaturalKeyReader resolves books by a single-valued natural key: the
+// path's owner key, a hash, or an external ID.
+type BookNaturalKeyReader interface {
+	GetBookByFilePath(path string) (*Book, error)
+	GetBookByITunesPersistentID(persistentID string) (*Book, error)
+	ListBooksByITunesPID(limit, offset int) ([]Book, error)
+	GetBookByFileHash(hash string) (*Book, error)
+	GetBookByOriginalHash(hash string) (*Book, error)
+	GetBookByOrganizedHash(hash string) (*Book, error)
+	// GetBookIDsByISBNASIN returns the distinct book IDs whose ISBN10, ISBN13,
+	// or ASIN match any of the supplied non-empty values.  It is a set-union:
+	// an ID is returned if it appears in any of the three index namespaces.
+	// Returns IDs only — callers load the full Book via GetBookByID when needed.
+	// Returns an empty slice (not nil, not error) when no match is found.
+	// Only valid after the book_isbn_index_v1_done flag is set; callers must
+	// gate on that flag themselves.
+	GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error)
+	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
+}
+
+// BookPathSetReader answers "which books sit at this path?" (live only, or
+// every row) from the multi-valued book_atpath index.
+type BookPathSetReader interface {
+	// LiveBookIDsAtPath returns the id of EVERY live (not soft-deleted) book
+	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
+	// whose single-owner key names at most one book (last writer wins), this
+	// is the answer to "is this path free?". Any read or decode error fails
+	// the call rather than returning a partial set. That includes a book row
+	// ANYWHERE in the store that does not decode: its path is unknown, so no
+	// path can be vouched for until it is rewritten or removed.
+	//
+	// It is on Store (via BookLookupReader), not a narrower capability, so
+	// every decorator that embeds Store forwards it.
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// BookRowPathReader is LiveBookIDsAtPath without the live filter. It is NOT
+// part of Store (Store's flattened width is a ratchet, store_width_test.go, and
+// exactly one consumer needs this), so it is discovered with AsCapability, which
+// looks through decorators that opt in via StoreUnwrapper. *PebbleStore and
+// MockStore implement it.
+type BookRowPathReader interface {
+	// BookIDsAtPath returns the id of EVERY book row, soft-deleted ones
+	// included, whose FilePath is exactly path, in id order, with the same
+	// fail-closed rule as LiveBookIDsAtPath. It answers "does any book, a
+	// trashed one that a restore would bring back included, still name this
+	// path?", which the purge asks per path at the moment it removes a file,
+	// instead of reading the whole trash once beforehand.
+	BookIDsAtPath(path string) ([]string, error)
+}
+
+var (
+	_ BookRowPathReader = (*PebbleStore)(nil)
+	_ BookRowPathReader = (*MockStore)(nil)
+)
+
+// BookDirLister lists live books beneath a folder. Its own interface,
+// embedded in BookStore (so still on Store and forwarded by decorators) rather
+// than in BookReader: only the chapter merge calls it, and on the reader every
+// read-only test double would have to carry a method it never uses.
+type BookDirLister interface {
+	// LiveBookPathsUnderDir returns id -> FilePath for every live book whose
+	// FilePath lies beneath dir (any depth), index-backed once the
+	// book_atpath index is built. Fails closed like LiveBookIDsAtPath. The
+	// chapter merge re-lists a group's folder with it under the merge lock
+	// instead of loading the whole library.
+	LiveBookPathsUnderDir(dir string) (map[string]string, error)
+}
+
+// BookPathIndexStatus reports on the book_atpath index behind
+// LiveBookIDsAtPath.
+//
+// Its own interface, embedded in BookStore rather than in BookReader, because
+// only a caller that asks LiveBookIDsAtPath once PER ITEM needs it (the orphan
+// repoint plan). BookReader is embedded by narrow consumer interfaces across
+// the tree (itunes.RebuildStore among them) whose code never asks, and every
+// one of their test doubles would have had to grow a method nothing calls.
+// It is still on Store, so a Store-embedding decorator forwards it.
+type BookPathIndexStatus interface {
+	// BookAtPathIndexBuilt reports whether the book_atpath backfill sentinel
+	// exists. Until it does, LiveBookIDsAtPath answers from a scan of EVERY
+	// book row, so a caller that asks per item should check this first.
+	BookAtPathIndexBuilt() (bool, error)
+}
+
+// BookLookupReader resolves books by a natural key: path, hash, or external ID.
+//
+// Split into the 2 interfaces above on 2026-09-12 (interfacebloat caps an
+// interface at 8 entries). This name is retained as their composition so the
+// method set is byte-identical and no consumer moves; the type checker proves it.
+type BookLookupReader interface {
+	BookNaturalKeyReader
+	BookPathSetReader
+}
+
+// BookDuplicateReader finds candidate duplicates.
+type BookDuplicateReader interface {
+	GetDuplicateBooks() ([][]Book, error)
+	// GetFolderDuplicatesCore is Core-typed (STOREFID W6): the return type is
+	// BookCore, not Book, so the nine heavy fields being absent is
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of the heavy fields MUST fetch via GetBookByID (full Pebble). See
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetFolderDuplicatesCore() ([][]BookCore, error)
+	// GetDuplicateBooksByMetadataCore is Core-typed (STOREFID W6): see
+	// GetFolderDuplicatesCore's doc comment.
+	GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error)
+	GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error)
+}
+
+// BookRelationReader reads books via their relations to other entities.
+type BookRelationReader interface {
+	// GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
+	// BookCore, not Book, so the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series) being absent is
+	// compiler-enforced rather than silently nil'd. A caller that needs any
+	// of those MUST fetch via GetBookByID / GetAllBooksFullFrom (full
+	// Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDAllVersions is GetBooksBySeriesIDCore without the
+	// primary-version filter — the COMPLETE set of live books attached to
+	// the series. Merges and deletes must use THIS one: a non-primary
+	// version invisible to the listing getter is a book the merge will not
+	// repoint before deleting the series, which strands it (series_bookref.go
+	// measured 6,893 phantom series IDs held by 13,322 live books from
+	// exactly that). Listing/display callers want the Core twin above.
+	// Soft-deleted books are excluded from BOTH; the unfiltered
+	// SeriesRefCounts counter is what covers trashed rows.
+	// Core-typed on the same rationale as GetBooksBySeriesIDCore.
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error)
+	// GetBooksByAuthorIDCore is Core-typed (STOREFID P3-W2): the memdb
+	// projection is stripped of the nine heavy fields (Description,
+	// VersionNotes, BookSigV1, BookSigV1Mask, BookSigSegments,
+	// BookSigBuiltAt, BookSigCoveragePct, Author, Series), and that fact is
+	// now enforced by the return TYPE rather than left as a comment a caller
+	// can miss. A caller that needs any of those MUST fetch via GetBookByID
+	// / GetAllBooksFullFrom (full Pebble). See
+	// docs/specs/2026-07-05-store-getter-fidelity-unification.md.
+	GetBooksByAuthorIDCore(authorID int) ([]BookCore, error)
+	GetBooksByVersionGroup(groupID string) ([]Book, error)
+}
+
+// BookSearchReader covers search and facet enumeration.
+type BookSearchReader interface {
+	SearchBooks(query string, limit, offset int) ([]Book, error)
+	GetDistinctGenres() ([]string, error)
+	// GetGenreCounts returns, for every distinct non-empty genre across all
+	// primary books, the number of books carrying it. Same walk as
+	// GetDistinctGenres; callers that need both take this one.
+	GetGenreCounts() (map[string]int, error)
+	GetDistinctLanguages() ([]string, error)
+	// GetDistinctPublishedYears returns the sorted distinct non-zero published
+	// years across all live (non-soft-deleted) books. A book's published year
+	// is AudiobookReleaseYear, falling back to PrintYear when that is unset —
+	// the same coalesce the ABS /filterdata decade facet has always applied.
+	//
+	// It exists so a facet can be built from the WHOLE library without
+	// materializing a BookCore per row: the memdb path reads two *int off each
+	// row pointer, and the Pebble fallback is the same keyspace scan as
+	// GetDistinctLanguages. Before it existed, /filterdata derived decades from
+	// GetAllBooksCore(5000, 0) — the first 5,000 rows in ULID order, every
+	// call — so a decade first appearing in book #5,001+ was never listed.
+	GetDistinctPublishedYears() ([]int, error)
+}
+
+// BookCountReader reports library counts.
+type BookCountReader interface {
+	CountPrimaryBooks() (int, error)
+	// CountAllBooks returns the total number of non-deleted books regardless of
+	// IsPrimaryVersion. Use this when iterating with GetAllBooksCore/PageBooks so
+	// progress denominators match what the iterator actually visits.
+	CountAllBooks() (int, error)
+	CountQuarantinedBooks() (int, error)
+}
+
+// BookSnapshotReader reads historical versions of a book.
+type BookSnapshotReader interface {
+	GetBookSnapshots(id string, limit int) ([]BookSnapshot, error)
+	GetBookAtVersion(id string, ts time.Time) (*Book, error)
+}
+
+// BookLifecycleReader reads books in non-active lifecycle states.
+type BookLifecycleReader interface {
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error)
+	GetBookTombstone(id string) (*Book, error)
+	ListBookTombstones(limit int) ([]Book, error)
+	GetQuarantinedBooks(limit, offset int) ([]Book, error)
+}
+
+// BookITunesReader reads iTunes sync work queues.
+type BookITunesReader interface {
+	GetITunesDirtyBooks() ([]Book, error)
+	GetITunesPurgePendingBooks() ([]Book, error)
+}
+
+// BookReader is the read-only slice of Store for callers that only
+// read books. See spec 2026-04-17-store-interface-segregation-design.md.
+//
+// Split into the ten interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves.
+// The type checker proves that: every implementation -- PebbleStore (496
+// methods) and database.MockStore (399) among them -- fails to compile if a
+// method is dropped or re-signatured in the regrouping.
+//
+// Consumers should migrate to whichever of the ten they use; this composition
+// is the transitional shape, not the destination.
+type BookReader interface { //nolint:interfacebloat // transitional composition of the ten
+	// interfaces above, deleted once consumers migrate to the piece each uses. Was 35
+	// methods; this is 10 embeds and shrinks to 0 as migration proceeds.
+	BookByIDReader
+	BookBulkReader
+	BookLookupReader
+	BookDuplicateReader
+	BookRelationReader
+	BookSearchReader
+	BookCountReader
+	BookSnapshotReader
+	BookLifecycleReader
+	BookITunesReader
+}
+
+// BookMutator creates, updates and deletes books.
+type BookMutator interface {
+	CreateBook(book *Book) (*Book, error)
+	UpdateBook(id string, book *Book) (*Book, error)
+	// ModifyBook reads the stored row and writes fn's changes to it under the
+	// book's write lock, so no concurrent write lands between the read and the
+	// write and gets reverted. (nil, nil) when the book does not exist; fn
+	// returning ErrSkipBookWrite writes nothing. fn must not write any book.
+	// Prefer it over GetBookByID -> mutate -> UpdateBook; for a caller that
+	// must do slow work between read and write, pair it with SnapshotBook and
+	// MergeBookChanges. A nil Author fn leaves is written as nil (fn holds the
+	// full row, so it is a deliberate clear); UpdateBook instead keeps the
+	// stored Author when handed nil.
+	ModifyBook(id string, fn func(*Book) error) (*Book, error)
+	// ClearBookSignature deletes the book's stored signature (all BookSig*
+	// fields) under the book's write lock. Passing nil fields through
+	// ModifyBook/UpdateBook cannot do this: nil means "not loaded" and the
+	// stored signature is preserved. Used when a re-synthesis finds no usable
+	// data, so a stale or legacy-era signature does not outlive its inputs.
+	ClearBookSignature(id string) error
+	UpdateBookRating(id string, req UpdateBookRatingRequest) error
+	// FillBookMediaInfo sets the patch's media fields on the stored row only
+	// where they are still empty, re-reading the row inside the store; it
+	// writes nothing when no field needs filling. For read paths that backfill
+	// from the file -- never UpdateBook a struct read before slow work.
+	FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error)
+	DeleteBook(id string) error
+}
+
+// BookSyncMarker records that a book has been written out or synced.
+type BookSyncMarker interface {
+	SetLastWrittenAt(id string, t time.Time) error
+	MarkITunesSynced(bookIDs []string) (int64, error)
+}
+
+// BookVersionMutator manipulates a book's version history.
+type BookVersionMutator interface {
+	RevertBookToVersion(id string, ts time.Time) (*Book, error)
+	PruneBookSnapshots(id string, keepCount int) (int, error)
+	// CountBookSnapshots reports how many snapshots a book has WITHOUT reading
+	// their payloads, so a prune can be planned without paying for one.
+	CountBookSnapshots(id string) (int, error)
+}
+
+// BookTombstoneWriter manages tombstones for deleted books.
+type BookTombstoneWriter interface {
+	CreateBookTombstone(book *Book) error
+	DeleteBookTombstone(id string) error
+}
+
+// BookScanFailStore tracks consecutive scan failures per book.
+type BookScanFailStore interface {
+	// Scan-fail counter for auto-quarantine (keyed on sha256[:8] of path).
+	GetScanFailCount(pathHash string) (int, error)
+	IncrScanFailCount(pathHash string) (int, error)
+	ResetScanFailCount(pathHash string) error
+}
+
+// BookAggregateWriter performs merges and aggregate recomputation.
+type BookAggregateWriter interface {
+	// FlagMetadataHashDuplicate marks duplicateID as absorbed into primaryID by
+	// setting merged_into_book_id=primaryID and is_primary_version=0 on the
+	// duplicate. Used by MATCH-4 auto-dedup at metadata-apply time.
+	FlagMetadataHashDuplicate(primaryID, duplicateID string) error
+	// RecomputeBookAggregates sums Duration and FileSize from the book's
+	// BookFile records and writes the result back to the Book row.
+	// Applies the partial-data rule: if the existing snapshot was computed
+	// from more files-with-durations than the current file set exposes, the
+	// old value is preserved and a warning is logged instead of overwriting
+	// with a less-complete sum. Idempotent; safe to call from BookFile
+	// create/update/delete paths as a best-effort hook.
+	RecomputeBookAggregates(bookID string) error
+}
+
+// BookWriter is the write-only slice of Store for callers that only
+// mutate books.
+//
+// Split into the 6 interfaces above on 2026-08-18. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it, because every implementation -- PebbleStore (496 methods)
+// and database.MockStore (399) among them -- fails to compile on a dropped or
+// re-signatured method.
+type BookWriter interface {
+	BookMutator
+	BookSyncMarker
+	BookVersionMutator
+	BookTombstoneWriter
+	BookScanFailStore
+	BookAggregateWriter
+}
+
+// BookCompletenessReader reads the library in a shape whose ABSENCES are
+// load-bearing — a set-difference that authorizes destroying whatever falls
+// outside it.
+//
+// Deliberately NOT part of BookBulkReader. Every read-only consumer of the
+// library (the iTunes rebuild diff, the merge engine, the organizer) embeds
+// BookBulkReader and none of them deletes anything on the strength of a book
+// being absent, so widening that interface would have made ~10 unrelated
+// interfaces and their test fakes carry a method whose entire purpose is to
+// gate a delete. Kept here, on the composed store, so the guarded getter is
+// reachable by the one path that needs it and invisible to the rest.
+type BookCompletenessReader interface {
+	// GetAllBooksCoreComplete returns the same set as GetAllBooksCore but
+	// refuses to be served from a memdb known to be missing rows, recomputing
+	// from the authoritative Pebble scan instead. Use it — and only it — when
+	// the ABSENCE of a book from the result authorizes destroying something,
+	// as findOrphanBookFiles' hard delete of book_file rows does. Ordinary
+	// listings must keep using GetAllBooksCore: a recorded loss does not clear
+	// without a restart, so routing every caller through this one would pin
+	// the whole process to full Pebble scans for the rest of its life.
+	GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error)
+	// GetAllBookFilesCoreComplete is GetAllBookFilesCore under the same
+	// rule: never served from a memdb known to be missing book_file rows.
+	// For a caller that reads "no row holds this audio" as permission to
+	// write (the chapter-fragment fixer's whole-library apply re-check).
+	GetAllBookFilesCoreComplete() ([]BookFileCore, error)
+}
+
+// BookStore combines BookReader and BookWriter for callers that need both.
+type BookStore interface {
+	BookReader
+	BookWriter
+	BookCompletenessReader
+	BookPathIndexStatus
+	BookDirLister
+}

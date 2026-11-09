@@ -1,7 +1,7 @@
 // file: internal/remux/rewrite_record_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f6b9a04-8c31-4d75-b1e8-93a7d0c5e264
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package remux
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnosis"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )

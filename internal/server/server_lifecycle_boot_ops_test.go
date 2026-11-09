@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle_boot_ops_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5b9e2a74-1c6d-4f38-8a07-3d4e6f2b9c18
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 )
 

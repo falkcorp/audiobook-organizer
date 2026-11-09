@@ -1,7 +1,7 @@
 // file: internal/metafetch/segment_titles_stale_write_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b9d6f14-c3a7-4e58-9f01-d8e6a4b7c250
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )

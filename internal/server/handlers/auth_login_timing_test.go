@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_login_timing_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2fc86d12-0fda-4c10-920b-0b83f4b2f534
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

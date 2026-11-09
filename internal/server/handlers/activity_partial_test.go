@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_partial_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 768e4939-c876-45fc-9357-b2d6303dfa42
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )

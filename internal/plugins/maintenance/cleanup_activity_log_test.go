@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup_activity_log_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 5c8b1f37-92ad-4e60-b3d1-8a4f26c0e7b9
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // activityCleanupDeps overrides fakeDeps' MaintainActivityLog so the cleanup job

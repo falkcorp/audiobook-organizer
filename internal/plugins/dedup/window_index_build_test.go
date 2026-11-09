@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c1a8f37-d29e-4b60-93a4-8e0f6b2d7c15
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

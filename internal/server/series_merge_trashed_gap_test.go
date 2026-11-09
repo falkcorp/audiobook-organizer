@@ -1,14 +1,14 @@
 // file: internal/server/series_merge_trashed_gap_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d6a5f7e-4b1c-4e3a-8f0d-2a7c9b6e5d41
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestMergeSeriesGroupHelper_RefusesWhenTrashedRowsAreInvisible pins

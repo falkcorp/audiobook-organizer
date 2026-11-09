@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

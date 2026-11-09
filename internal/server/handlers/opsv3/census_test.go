@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/census_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c8b6190-c9c8-436b-bf9f-2f269af7f052
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 

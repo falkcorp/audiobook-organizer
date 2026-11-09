@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -27,7 +27,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"

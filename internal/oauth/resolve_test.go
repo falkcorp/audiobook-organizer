@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4c9e1b73-6a20-4d58-8f16-2b5a7c0e9d38
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package oauth
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newResolverStore returns a MockStore wired so nothing exists yet; individual tests

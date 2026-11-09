@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d2e5b1a-4c8f-4e93-a6b0-2f9d3c7e8a15
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

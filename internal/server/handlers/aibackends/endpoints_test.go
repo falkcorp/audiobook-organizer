@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/endpoints_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5a7c9e13-2b4d-4f86-a0c1-7d3e5b9f2a68
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package aibackendshandler_test
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 )
 

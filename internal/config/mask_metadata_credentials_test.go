@@ -1,7 +1,7 @@
 // file: internal/config/mask_metadata_credentials_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 2c4f9a71-6b83-4d05-9e12-7a8f3b6c0d54
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fixtureKey is long enough that database.MaskSecret shows its last two characters

@@ -1,7 +1,7 @@
 // file: internal/server/list_cache_generation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 51004630-5b56-463f-851b-8225e2367353
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

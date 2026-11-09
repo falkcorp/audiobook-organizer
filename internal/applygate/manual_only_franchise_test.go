@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type moFake struct {

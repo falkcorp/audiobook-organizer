@@ -1,7 +1,7 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/mock"
 )
 

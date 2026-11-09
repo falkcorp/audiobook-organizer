@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_authors_undo_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b4f2c61-3e9a-4d07-a5c2-6f1d9e8b3a47
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

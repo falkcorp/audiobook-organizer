@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/audiobooth_fixtures_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e8a2c17-94b3-4d6f-a0e1-7c3b9f24d8a6
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

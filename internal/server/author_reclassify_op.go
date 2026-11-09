@@ -1,7 +1,7 @@
 // file: internal/server/author_reclassify_op.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 40643c5c-2000-4271-813a-297ab2aa23e1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // author_reclassify_op registers entities.author-reclassify: the op behind the
 // Authors view's "reclassify as narrator" button (POST
@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 )

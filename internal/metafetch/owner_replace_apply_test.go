@@ -1,7 +1,7 @@
 // file: internal/metafetch/owner_replace_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2da7a64b-6955-4983-b67b-61999a88725c
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 //
 // Owner ruling 2026-09-27: the review page's bulk buttons get a toggle, "Fill
 // empty fields" (default) or "Replace existing". Replace reaches the apply as
@@ -14,7 +14,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

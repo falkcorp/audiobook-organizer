@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/plugin.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: d4e5f6a7-b8c9-0123-def0-123456789abc
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 // Package acoustid is the UOS plugin for AcoustID fingerprinting operations.
 // It wraps the internal dedup.Engine and registers OperationDefs through
@@ -12,7 +12,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_embeddings_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a53bc26a-3ecb-4aab-bef8-d6e76c174cd7
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 // Tests for the dedup.cleanup-orphan-embeddings op (retroactive counterpart to
 // PR #1802's DeleteBook fix).
@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

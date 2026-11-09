@@ -1,7 +1,7 @@
 // file: internal/server/author_ref_audit_route_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e1d8c37-52b6-4a09-8d74-1f9b0a63c5e2
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

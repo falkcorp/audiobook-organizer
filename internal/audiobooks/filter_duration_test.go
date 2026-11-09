@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9a3d6e14-2c7b-4f58-8e01-6b4f2d9c7a35
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestParseDurationValue_Units(t *testing.T) {

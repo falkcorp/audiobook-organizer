@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_reader_abort_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2e91d4-3b58-4a06-9e1f-d84a5b60c2f7
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // storeWithoutRetiredReader is a store that cannot read retired rows: it

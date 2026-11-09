@@ -1,7 +1,7 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

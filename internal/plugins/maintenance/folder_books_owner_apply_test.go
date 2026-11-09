@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_owner_apply_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7c41e9b8-2d05-4f36-a8c1-5e3b9d0f6a24
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

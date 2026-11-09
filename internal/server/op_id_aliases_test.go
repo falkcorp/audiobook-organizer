@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 // Guard tests for operation-ID renames.
 //
@@ -28,9 +28,9 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"

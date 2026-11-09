@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -41,7 +41,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

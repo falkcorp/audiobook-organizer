@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_review_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: b4e8c1a7-6f23-4d95-8a10-3c9d7e5f2b61
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

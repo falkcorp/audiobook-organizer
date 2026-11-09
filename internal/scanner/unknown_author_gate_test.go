@@ -1,7 +1,7 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 

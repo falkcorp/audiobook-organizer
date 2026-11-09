@@ -1,7 +1,7 @@
 // file: internal/server/server_narrators_fieldstates_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-narrator0test
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with Store interface calls.
 
@@ -13,7 +13,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

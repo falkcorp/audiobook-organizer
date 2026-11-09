@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

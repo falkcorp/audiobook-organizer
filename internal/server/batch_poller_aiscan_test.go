@@ -1,7 +1,7 @@
 // file: internal/server/batch_poller_aiscan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a008296-7c1f-4478-bfaa-bbcba3a27e55
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

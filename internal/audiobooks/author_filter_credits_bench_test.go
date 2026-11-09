@@ -1,7 +1,7 @@
 // file: internal/audiobooks/author_filter_credits_bench_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c53e5018-1c53-4ecd-82fc-426c49954ae4
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // BenchmarkAuthorFilterCredits_10k times the per-query credit load on its own

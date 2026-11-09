@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/revert_user_data_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3b9f7d20-c4a1-4e58-9d62-8a1e5f0b7c36
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	operationsmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations/mocks"

@@ -1,7 +1,7 @@
 // file: internal/batch/trash_grants.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5e7d5df1-473b-4136-b691-2798b1df7c12
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TrashGrants is what the HTTP caller of a batch request may do to books' place

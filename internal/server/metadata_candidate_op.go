@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.17.0
+// version: 3.17.1
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

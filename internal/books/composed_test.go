@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-09
 
@@ -32,8 +32,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -123,7 +123,7 @@ func checkClaimViolations(t *testing.T, a *app.App, c *composed) {
 	slices.Sort(lines)
 	if len(lines) > 0 {
 		t.Errorf("storage claim guard: out-of-claim accesses this boot did not expect (register the family in "+
-			"internal/database/keyfamilies.go, or call expectClaimViolations):\n  %s", strings.Join(lines, "\n  "))
+			"internal/books/store/keyfamilies.go, or call expectClaimViolations):\n  %s", strings.Join(lines, "\n  "))
 	}
 }
 

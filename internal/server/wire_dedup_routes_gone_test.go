@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c6e41aa4-3cd4-4771-b556-56d39cb542d4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredBookDuplicatesRoutes are the five /audiobooks/duplicates routes and

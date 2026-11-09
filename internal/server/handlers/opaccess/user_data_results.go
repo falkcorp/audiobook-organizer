@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/user_data_results.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3c7f2a91-5d84-4e06-9b1a-e2d4f6a80c73
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opaccess
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

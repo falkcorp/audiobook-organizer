@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7f4a2b3c-9d1e-4f6a-8b5c-2e0d1f3a4b5c
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

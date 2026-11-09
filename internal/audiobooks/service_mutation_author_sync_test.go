@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation_author_sync_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3f9a0c71-6d24-4e83-b1a7-5c8e9f0a2d13
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

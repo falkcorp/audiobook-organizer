@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_bounds_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b4e1f73-2a96-4c05-9d38-e6a1c7f50b24
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

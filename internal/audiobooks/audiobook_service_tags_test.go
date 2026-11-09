@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_tags_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f6a8d8d-0c5d-4c0a-9f1d-5b9ad01a5b42
 
 package audiobooks
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_lock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 511d8e1c-2f2f-49f7-a5f0-1e48bce72f0f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // A1#10: applyBookMergeReroute used to copy the losers' iTunes stats onto the
 // keep book itself -- GetBookByID + full-row UpdateBook, outside
@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 )

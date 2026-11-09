@@ -1,7 +1,7 @@
 // file: internal/undo/version_group_join.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 03d9635a-205f-4a87-a5bf-f49a1396f7bd
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeRepairVersionGroupJoin: a Repairs fixer put a live book that had

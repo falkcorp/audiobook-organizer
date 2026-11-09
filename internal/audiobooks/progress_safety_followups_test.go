@@ -1,7 +1,7 @@
 // file: internal/audiobooks/progress_safety_followups_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 47073aff-f39f-47da-8927-07cdae028edb
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

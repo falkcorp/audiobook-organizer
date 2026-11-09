@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

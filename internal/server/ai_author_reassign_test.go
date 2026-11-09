@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8b1d3f27-6c94-4a05-9e21-3d7f0a58c4b6
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeReassignStore implements the narrow authorReassignStore surface so the

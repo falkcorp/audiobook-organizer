@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_logs_user_data_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3f6a21-47c9-4b05-9e18-c2a7f0d5b364
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

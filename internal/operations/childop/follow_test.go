@@ -1,7 +1,7 @@
 // file: internal/operations/childop/follow_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b8d4e17-6a93-4c5f-b1e2-9f7a3c0d5e64
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package childop
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // scriptReader returns one scripted row per read and repeats the last one.

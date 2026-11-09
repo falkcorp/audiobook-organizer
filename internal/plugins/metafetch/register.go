@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/register.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7a2f9c1d-4e63-4b80-9c15-6d0e1f2a3b40
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Service registry registration for the metafetch UOS plugin (INIT-3-T1).
 //
@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 

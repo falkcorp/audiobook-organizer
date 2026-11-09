@@ -1,7 +1,7 @@
 // file: internal/server/registry_search_observer_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: c4e1f0a2-7d3b-4f58-9a61-2b8e5d7c3f90
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )

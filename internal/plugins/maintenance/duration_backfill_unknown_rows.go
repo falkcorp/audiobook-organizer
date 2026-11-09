@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -25,7 +25,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

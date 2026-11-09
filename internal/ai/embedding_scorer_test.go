@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_scorer_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 9c3e5b17-6f8a-4d2e-b091-5a7c8d4e2f6a
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package ai
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeEmbedAPI is an in-process stand-in for the OpenAI embeddings endpoint.

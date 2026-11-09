@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_perbook_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d727c43-4cac-44cd-a1d2-3e4c07c99da4
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

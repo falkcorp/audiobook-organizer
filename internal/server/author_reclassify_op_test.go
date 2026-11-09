@@ -1,7 +1,7 @@
 // file: internal/server/author_reclassify_op_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 23b520a4-9079-4e61-acf1-e2caab81d462
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c1d9e42-3a8b-4f60-9c21-5e0a7b2d6f48
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package deduphandler
 
@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 )

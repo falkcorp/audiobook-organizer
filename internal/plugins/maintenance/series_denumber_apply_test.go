@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestRunSeriesDenumber_ApplyRepointsNonPrimaryVersions covers the APPLY path,

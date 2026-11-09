@@ -1,7 +1,7 @@
 // file: internal/search/per_user_match.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: a82911d7-d9dc-4f47-9863-1a7638e47194
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Per-user DSL filter evaluation (INIT-4 T2). Moved here — verbatim —
 // from internal/playlist/evaluator.go so internal/search is the single
@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // MatchPerUserFilters reports whether state satisfies EVERY filter

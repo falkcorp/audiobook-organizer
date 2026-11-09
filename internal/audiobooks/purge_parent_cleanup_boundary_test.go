@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // After purging a book's files, PurgeSoftDeletedUnattended removes the parent

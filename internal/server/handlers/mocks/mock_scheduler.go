@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -234,23 +234,23 @@ func (_c *MockScheduler_RunMaintenanceWindow_Call) RunAndReturn(run func(ctx con
 }
 
 // RunTaskManual provides a mock function for the type MockScheduler
-func (_mock *MockScheduler) RunTaskManual(name string) (*database.Operation, error) {
+func (_mock *MockScheduler) RunTaskManual(name string) (*store.Operation, error) {
 	ret := _mock.Called(name)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunTaskManual")
 	}
 
-	var r0 *database.Operation
+	var r0 *store.Operation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Operation, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Operation, error)); ok {
 		return returnFunc(name)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Operation); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Operation); ok {
 		r0 = returnFunc(name)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Operation)
+			r0 = ret.Get(0).(*store.Operation)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -285,12 +285,12 @@ func (_c *MockScheduler_RunTaskManual_Call) Run(run func(name string)) *MockSche
 	return _c
 }
 
-func (_c *MockScheduler_RunTaskManual_Call) Return(operation *database.Operation, err error) *MockScheduler_RunTaskManual_Call {
+func (_c *MockScheduler_RunTaskManual_Call) Return(operation *store.Operation, err error) *MockScheduler_RunTaskManual_Call {
 	_c.Call.Return(operation, err)
 	return _c
 }
 
-func (_c *MockScheduler_RunTaskManual_Call) RunAndReturn(run func(name string) (*database.Operation, error)) *MockScheduler_RunTaskManual_Call {
+func (_c *MockScheduler_RunTaskManual_Call) RunAndReturn(run func(name string) (*store.Operation, error)) *MockScheduler_RunTaskManual_Call {
 	_c.Call.Return(run)
 	return _c
 }

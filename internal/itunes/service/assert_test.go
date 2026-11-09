@@ -1,11 +1,11 @@
 // file: internal/itunes/service/assert_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bdd01af3-56b2-4412-93b5-25c65ddb02ab
 
 package itunesservice_test
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 

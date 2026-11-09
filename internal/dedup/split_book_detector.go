@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9c1f0a3e-b7d2-4e84-8c12-3fa8e1d6b9c0
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 // Package dedup — split-book backfill detector.
 //
@@ -54,8 +54,8 @@ import (
 	"sort"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // SplitBookCandidate is one detected cluster of Books that look like

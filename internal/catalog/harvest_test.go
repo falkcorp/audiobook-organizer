@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.7
+// version: 1.7.8
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -24,7 +24,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

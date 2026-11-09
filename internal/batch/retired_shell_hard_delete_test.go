@@ -1,7 +1,7 @@
 // file: internal/batch/retired_shell_hard_delete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b14cac72-dfef-4461-8a91-97acbdcfe369
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package batch
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newShellStore(t *testing.T) *database.PebbleStore {

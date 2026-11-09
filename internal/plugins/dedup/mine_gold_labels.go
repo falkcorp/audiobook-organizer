@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8f4c2a16-5d70-4e93-bc28-1a6e9d3b7c52
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.mine-gold-labels (dedup tuning dataset, positive miner).
 //
@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

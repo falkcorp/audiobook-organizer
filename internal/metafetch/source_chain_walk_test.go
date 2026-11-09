@@ -1,7 +1,7 @@
 // file: internal/metafetch/source_chain_walk_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3e91c7d4-8b52-4a06-9f13-6c8d2e5a70b4
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

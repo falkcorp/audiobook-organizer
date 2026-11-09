@@ -1,7 +1,7 @@
 // file: internal/server/organize_integration_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456f01
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

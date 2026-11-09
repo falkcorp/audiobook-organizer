@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // metadata-fetch-service / operations-registry deps are generated mocks; the
@@ -27,8 +27,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

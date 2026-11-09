@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package transcribe
 
@@ -25,7 +25,7 @@ import (
 // failure mode is silent and points the wrong way. An allow-list refuses what
 // it cannot vouch for, and the refusal names the device, so the fix is
 // obvious. This is the same fail-closed shape as the activity-index pushdown
-// gate in internal/database.
+// gate in internal/books/store.
 //
 // Membership is a claim that the backend actually offloads decoding:
 //   - cuda  -- ctranslate2's NVIDIA backend.

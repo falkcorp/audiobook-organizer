@@ -1,7 +1,7 @@
 // file: internal/metafetch/score_breakdown_fixture_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a1f8c05-42d7-4b93-8e10-9c5b3f7a2e64
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

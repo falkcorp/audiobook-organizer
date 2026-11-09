@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/register.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 1a0a0218-f81b-4d79-8713-5286333bbe3f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Service registry registration for the dedup UOS plugin (W5/W7).
 //
@@ -22,7 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

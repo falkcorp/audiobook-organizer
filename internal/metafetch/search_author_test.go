@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_author_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: bf7207f0-35f9-406d-8c06-9010e2079b36
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

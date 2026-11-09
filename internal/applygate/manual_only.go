@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

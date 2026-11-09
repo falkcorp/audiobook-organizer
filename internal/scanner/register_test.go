@@ -1,14 +1,14 @@
 // file: internal/scanner/register_test.go
-// version: 1.0.1
-// last-edited: 2026-11-08
+// version: 1.0.2
+// last-edited: 2026-11-09
 
 package scanner_test
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )

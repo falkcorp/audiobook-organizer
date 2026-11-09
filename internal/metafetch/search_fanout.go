@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.5
+// version: 1.7.6
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"

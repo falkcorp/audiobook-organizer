@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: aa557927-956b-41a5-a90b-6ef0093fdcbc
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 

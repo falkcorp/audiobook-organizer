@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_retired_path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1a8e36-b2f9-4d70-8a14-9e63d7b0c2f5
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // A purge removes a trashed book's file from disk only when no book_file row

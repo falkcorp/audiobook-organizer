@@ -3,7 +3,7 @@
 # Format: NAME | FILE | PERL_EXPRESSION      (see scripts/mutation-matrix.sh)
 # Run:
 #   scripts/mutation-matrix.sh \
-#     --pkg ./internal/database/ \
+#     --pkg ./internal/books/store/ \
 #     --table scripts/mutation-tables/activity-index-pushdown.muts
 #
 # WHAT THIS TABLE IS FOR. queryByIndexPrefixPaged returns a page AND a `total`,
@@ -41,33 +41,33 @@
 # stopped being run. Every pattern below quotes executable text.
 
 # ── the existence merge that defines `total` ─────────────────────────────────
-M01 count every ref, alive or not | internal/database/pebble_activity_store.go | s/if pit\.Valid\(\) && bytes\.Equal\(pit\.Key\(\), k\) \{/if true {/
-M02 never mark anything alive | internal/database/pebble_activity_store.go | s/alive\[bucket\.pos\[i\]\] = true/_ = i/
-M03 total ignores the merge result | internal/database/pebble_activity_store.go | s/\tlive\+\+\n/\t\n/
+M01 count every ref, alive or not | internal/books/store/pebble_activity_store.go | s/if pit\.Valid\(\) && bytes\.Equal\(pit\.Key\(\), k\) \{/if true {/
+M02 never mark anything alive | internal/books/store/pebble_activity_store.go | s/alive\[bucket\.pos\[i\]\] = true/_ = i/
+M03 total ignores the merge result | internal/books/store/pebble_activity_store.go | s/\tlive\+\+\n/\t\n/
 
 # ── the reverse scan the newest-first order rests on ─────────────────────────
-M04 scan the index forward instead of backward | internal/database/pebble_activity_store.go | s/for iter\.Last\(\); iter\.Valid\(\); iter\.Prev\(\) \{/for iter.First(); iter.Valid(); iter.Next() {/
+M04 scan the index forward instead of backward | internal/books/store/pebble_activity_store.go | s/for iter\.Last\(\); iter\.Valid\(\); iter\.Prev\(\) \{/for iter.First(); iter.Valid(); iter.Next() {/
 
 # ── the two scan-time rejections that keep the two totals equal ──────────────
-M05 accept a key that only PREFIX-matches the id | internal/database/pebble_activity_store.go | s/if !pactIndexKeyNamesExactly\(iter\.Key\(\), prefix\) \{/if false {/
-M06 accept a ref that cannot become a primary key | internal/database/pebble_activity_store.go | s/if ti < 0 \{\n\t\t\tcontinue\n\t\t\}/if ti < -1 {\n\t\t\tcontinue\n\t\t}/
+M05 accept a key that only PREFIX-matches the id | internal/books/store/pebble_activity_store.go | s/if !pactIndexKeyNamesExactly\(iter\.Key\(\), prefix\) \{/if false {/
+M06 accept a ref that cannot become a primary key | internal/books/store/pebble_activity_store.go | s/if ti < 0 \{\n\t\t\tcontinue\n\t\t\}/if ti < -1 {\n\t\t\tcontinue\n\t\t}/
 
 # ── the three per-population corrections to `total` ──────────────────────────
-M07 pruned-between-passes row stays in total | internal/database/pebble_activity_store.go | s/\t\t\t\/\/ Deleted between markLiveRefs and now \(a concurrent prune\)\. The\n(.*\n)*?\t\t\ttotal--\n/\t\t\t/
-M08 undecodable row stays in total | internal/database/pebble_activity_store.go | s/\t\t\ts\.decodeFailures\.Add\(1\)\n\t\t\ttally\.record\(primaryKey, jsonErr\)\n\t\t\ttotal--\n/\t\t\ts.decodeFailures.Add(1)\n\t\t\ttally.record(primaryKey, jsonErr)\n/
-M09 foreign row in the page stays in total | internal/database/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n/if !matchesFilter(entry, f) {\n/
+M07 pruned-between-passes row stays in total | internal/books/store/pebble_activity_store.go | s/\t\t\t\/\/ Deleted between markLiveRefs and now \(a concurrent prune\)\. The\n(.*\n)*?\t\t\ttotal--\n/\t\t\t/
+M08 undecodable row stays in total | internal/books/store/pebble_activity_store.go | s/\t\t\ts\.decodeFailures\.Add\(1\)\n\t\t\ttally\.record\(primaryKey, jsonErr\)\n\t\t\ttotal--\n/\t\t\ts.decodeFailures.Add(1)\n\t\t\ttally.record(primaryKey, jsonErr)\n/
+M09 foreign row in the page stays in total | internal/books/store/pebble_activity_store.go | s/if !matchesFilter\(entry, f\) \{\n\t\t\ttotal--\n/if !matchesFilter(entry, f) {\n/
 
 # ── the page is taken by rank over SURVIVORS, not by index position ──────
-M10 an orphaned ref consumes an offset slot | internal/database/pebble_activity_store.go | s/\t\tif !alive\[i\] \{\n\t\t\tcontinue\n\t\t\}/\t\tif !alive[i] {\n\t\t\tskipped++\n\t\t\tcontinue\n\t\t}/
-M11 off-by-one in the offset skip | internal/database/pebble_activity_store.go | s/if skipped < f\.Offset \{/if skipped <= f.Offset {/
+M10 an orphaned ref consumes an offset slot | internal/books/store/pebble_activity_store.go | s/\t\tif !alive\[i\] \{\n\t\t\tcontinue\n\t\t\}/\t\tif !alive[i] {\n\t\t\tskipped++\n\t\t\tcontinue\n\t\t}/
+M11 off-by-one in the offset skip | internal/books/store/pebble_activity_store.go | s/if skipped < f\.Offset \{/if skipped <= f.Offset {/
 
 # ── the ordering contract both paths are held to ─────────────────────────────
-M12 drop the tie-break, leaving ties unordered | internal/database/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn 0/
-M13 tie-break ascending instead of descending | internal/database/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn strings.Compare(a.entryID, b.entryID)/
-M14 sort oldest-first instead of newest-first | internal/database/pebble_activity_store.go | s/\t\tif c := b\.entry\.Timestamp\.Compare\(a\.entry\.Timestamp\); c != 0 \{/\t\tif c := a.entry.Timestamp.Compare(b.entry.Timestamp); c != 0 {/
+M12 drop the tie-break, leaving ties unordered | internal/books/store/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn 0/
+M13 tie-break ascending instead of descending | internal/books/store/pebble_activity_store.go | s/\t\treturn strings\.Compare\(b\.entryID, a\.entryID\)/\t\treturn strings.Compare(a.entryID, b.entryID)/
+M14 sort oldest-first instead of newest-first | internal/books/store/pebble_activity_store.go | s/\t\tif c := b\.entry\.Timestamp\.Compare\(a\.entry\.Timestamp\); c != 0 \{/\t\tif c := a.entry.Timestamp.Compare(b.entry.Timestamp); c != 0 {/
 
 # ── the write-time guard that keeps key order == chronological order ─────────
-M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_activity_store.go | s/if e\.Timestamp\.UnixNano\(\) < 0 \{/if false {/
+M15 admit pre-epoch timestamps into the keyspace | internal/books/store/pebble_activity_store.go | s/if e\.Timestamp\.UnixNano\(\) < 0 \{/if false {/
 
 # ── the eligibility gate that decides whether the pushdown runs at all ───────
 #
@@ -101,8 +101,8 @@ M15 admit pre-epoch timestamps into the keyspace | internal/database/pebble_acti
 # make it disagree with the decoded e.Tier that matchesFilter compares. Only a
 # test asserting tier specifically can kill it.
 
-M16 wrongly classify tier as decidable from the index key | internal/database/pebble_activity_store.go | s/\t"Until":       true, \/\/ accepted only because BOTH paths ignore it\n\}/\t"Until": true,\n\t"Tier": true,\n}/
-M17 push down on an unknown index family | internal/database/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
+M16 wrongly classify tier as decidable from the index key | internal/books/store/pebble_activity_store.go | s/\t"Until":       true, \/\/ accepted only because BOTH paths ignore it\n\}/\t"Until": true,\n\t"Tier": true,\n}/
+M17 push down on an unknown index family | internal/books/store/pebble_activity_store.go | s/\t\t\/\/ An unknown index family: neither id predicate can be justified by\n\t\t\/\/ construction, so refuse rather than guess\.\n\t\treturn false/\t\treturn true/
 
 
 # ── the allow-list's two silent failure modes: one open, one closed ──────
@@ -111,13 +111,13 @@ M17 push down on an unknown index family | internal/database/pebble_activity_sto
 # live predicate. Nothing returns a wrong ANSWER — the fast path is just quietly
 # lost for those callers, which is why only a test that asserts eligibility for
 # an empty slice can see it.
-M19 treat a non-nil empty slice as a live predicate | internal/database/pebble_activity_store.go | s/\t\treturn v\.Len\(\) > 0/\t\treturn !v.IsNil()/
+M19 treat a non-nil empty slice as a live predicate | internal/books/store/pebble_activity_store.go | s/\t\treturn v\.Len\(\) > 0/\t\treturn !v.IsNil()/
 # M20 is the fail-OPEN direction: bypassing the allow-list entirely restores the
 # behaviour of the deny-list this gate replaced, where every field counts as
 # decidable and every filter is pushed down. M19 above is the fail-CLOSED
 # direction — no wrong answer, just the fast path silently gone. Both are worth
 # a mutation; only one of them can return a wrong `total`.
-M20 treat every filter field as decidable | internal/database/pebble_activity_store.go | s/\t\tif pactPushdownDecidable\[t\.Field\(i\)\.Name\] \{/\t\tif true {/
+M20 treat every filter field as decidable | internal/books/store/pebble_activity_store.go | s/\t\tif pactPushdownDecidable\[t\.Field\(i\)\.Name\] \{/\t\tif true {/
 
 # ── known equivalent mutant, listed so nobody rediscovers it ─────────────
-M18 drop the merge iterator advance (EQUIVALENT - expect SURVIVED) | internal/database/pebble_activity_store.go | s/\t\t\t\tpit\.Next\(\)\n//
+M18 drop the merge iterator advance (EQUIVALENT - expect SURVIVED) | internal/books/store/pebble_activity_store.go | s/\t\t\t\tpit\.Next\(\)\n//

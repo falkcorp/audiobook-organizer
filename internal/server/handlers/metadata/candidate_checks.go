@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/candidate_checks.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d2c5e91-3a8b-4f60-b1e4-9c0f6a2d8e57
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metadatahandler
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

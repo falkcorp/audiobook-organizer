@@ -1,14 +1,14 @@
 // file: internal/dedup/dataset/pair_dedupe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d2e6c14-95af-4b73-8f1c-6a0d3e29b7c4
-// last-edited: 2026-07-11
+// last-edited: 2026-11-09
 
 package dataset
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestDedupeByPairPrefersHuman verifies a human-sourced row survives over a

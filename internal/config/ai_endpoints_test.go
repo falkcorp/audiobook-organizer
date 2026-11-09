@@ -1,7 +1,7 @@
 // file: internal/config/ai_endpoints_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b2d4e61-0c7f-4a93-b5d8-2f1e6a9c3b74
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package config
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 const testLocalURL = "http://127.0.0.1:11434/v1"

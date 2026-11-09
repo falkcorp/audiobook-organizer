@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history_incomplete_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e4a1c73-2d6b-4f95-a3c0-6b9e2d7f4a81
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

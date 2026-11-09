@@ -1,7 +1,7 @@
 // file: internal/organizer/move.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // MoveBookFileResult captures the outcome of an atomic file move.

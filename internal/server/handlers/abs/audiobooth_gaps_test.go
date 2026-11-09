@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/audiobooth_gaps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c9e5b89-8301-444c-bb5d-386530b87351
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Regression tests for the item-6 AudioBooth decode matrix (2026-09-19): app

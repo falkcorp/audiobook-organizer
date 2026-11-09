@@ -1,7 +1,7 @@
 // file: internal/scheduler/full_sweep.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a0bad6dd-4723-4b3b-8a78-9072a26b4bcd
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fullSweepLastRunSetting is the settings key holding the RFC3339 timestamp of
@@ -80,7 +80,7 @@ func (ts *TaskScheduler) loadLastFullSweep() (time.Time, bool, error) {
 	}
 	setting, err := store.GetSetting(fullSweepLastRunSetting)
 	// A MISSING KEY ARRIVES AS AN ERROR, not as (nil, nil): PebbleStore.GetSetting
-	// wraps ErrSettingNotFound (internal/database/settings.go), and that type
+	// wraps ErrSettingNotFound (internal/books/store/settings.go), and that type
 	// exists precisely so callers stop telling the two apart by error string.
 	// Treating every error as a backend failure would make the normal first-boot
 	// path "decline without seeding" -- the clock would never be written and the

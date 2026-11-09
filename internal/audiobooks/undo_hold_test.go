@@ -1,7 +1,7 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/decisions/retired_versions.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7c41e2a9-0d58-4b36-a1f3-5e92b6d08c74
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

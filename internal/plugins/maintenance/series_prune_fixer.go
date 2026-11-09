@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3aa1a5a7-404c-42f9-9a8d-b6213e7b09f2
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

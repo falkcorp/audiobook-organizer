@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_writer_evidence_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 3ebbf9a7-49e9-4226-b8b5-535c23956b47
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package registry
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"

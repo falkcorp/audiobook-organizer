@@ -1,7 +1,7 @@
 // file: internal/scanner/process_file.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 // Package scanner provides file scanning and processing utilities for the
 // audiobook organizer. ProcessFile is the single-pass entry point that opens
@@ -18,7 +18,7 @@ import (
 
 	"github.com/dhowden/tag"
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"

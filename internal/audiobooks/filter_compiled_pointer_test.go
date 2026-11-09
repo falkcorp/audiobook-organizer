@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_pointer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b7e2c14-8a93-4d60-b1f7-3c9a0e6d2f58
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

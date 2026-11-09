@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/auto_resolve_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e0a5c93-2b18-4f64-9d07-1a6c8f3b0e52
-// last-edited: 2026-07-03
+// last-edited: 2026-11-09
 
 // Tests for the dedup.auto-resolve op wrapper (TASK-17). The engine-level
 // eligibility, merge, journal, and unmerge behaviour is covered in
@@ -15,8 +15,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"

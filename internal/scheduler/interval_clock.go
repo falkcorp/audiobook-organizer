@@ -1,7 +1,7 @@
 // file: internal/scheduler/interval_clock.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c3d1f57-92ab-4e60-b1d4-7a5e0c9f2b83
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The interval clock makes a scheduled task's cadence survive a process

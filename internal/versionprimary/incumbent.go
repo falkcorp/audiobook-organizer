@@ -1,14 +1,14 @@
 // file: internal/versionprimary/incumbent.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a10a4338-0d70-498e-aa2f-5f8db63bf26d
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package versionprimary
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Incumbent returns the member of a version group that currently acts as its

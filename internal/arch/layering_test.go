@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.7
+// version: 1.5.8
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-11-09
 
@@ -80,7 +80,7 @@ type edge = archtest.Edge
 // internal/realtime, internal/syncapi = 5; cmd/*, tools/cmd/* = 6), else
 // max(layer of the package's in-module imports) floored at 3, else 0 when it
 // imports no module package. matcher and fingerprint are the table's domain
-// packages that internal/database imports; each imports only layer-0
+// packages that internal/books/store imports; each imports only layer-0
 // packages (go list evidence: matcher -> personname; fingerprint ->
 // audioutil), so both are layer 0. chaptershape, metastate and
 // syncapi/progress import nothing from the module, so they compute to 0.
@@ -97,7 +97,7 @@ var layerOf = map[string]int{
 	"internal/cfservicetoken":        0, // computed: imports no module package
 	"internal/chaptershape":          0, // computed: imports no module package
 	"internal/covertext":             0, // computed: imports no module package
-	"internal/database/aggtest":      0, // computed: imports no module package
+	"internal/books/store/aggtest":   0, // computed: imports no module package
 	"internal/diagnosis":             0, // computed: imports no module package
 	"internal/errhandling":           0, // computed: imports no module package
 	"internal/filehash":              0, // computed: imports no module package
@@ -147,7 +147,7 @@ var layerOf = map[string]int{
 	"internal/config": 1, // table: config
 
 	// Layer 2: storage
-	"internal/database":    2, // table: storage
+	"internal/books/store": 2, // table: storage
 	"internal/openlibrary": 2, // table: storage
 	"internal/search":      2, // table: storage
 
@@ -174,8 +174,8 @@ var layerOf = map[string]int{
 	"internal/bookfiles":                3, // computed: max of imports=2, floored at 3
 	"internal/bookfileaudio":            3, // computed: max of imports=3, floored at 3
 	"internal/covers":                   3, // computed: max of imports=0, floored at 3
-	"internal/database/dbtest":          3, // computed: max of imports=2, floored at 3
-	"internal/database/mocks":           3, // computed: max of imports=2, floored at 3
+	"internal/books/store/storetest":    3, // computed: max of imports=2, floored at 3
+	"internal/books/store/mocks":        3, // computed: max of imports=2, floored at 3
 	"internal/decisions":                3, // computed: max of imports=2, floored at 3
 	"internal/dedup":                    3, // table: domain
 	"internal/dedup/dataset":            3, // computed: max of imports=3, floored at 3
@@ -311,7 +311,7 @@ var allowed = map[edge]string{
 	{"internal/config", "internal/aidispatch"}:                  "config reaches a package that floors at domain; 07-M1 makes config a leaf",
 	{"internal/config", "internal/auth"}:                        "config imports auth (which imports database); 07-M1",
 	{"internal/config", "internal/backup"}:                      "config reaches a package that floors at domain; 07-M1",
-	{"internal/config", "internal/database"}:                    "config reads the store directly; 07-M1",
+	{"internal/config", "internal/books/store"}:                 "config reads the store directly; 07-M1",
 	{"internal/config", "internal/dedup/unified"}:               "config reaches a package that floors at domain; 07-M1",
 	{"internal/dedup", "internal/operations/registry"}:          "domain package registers operations itself; move registration into plugins/dedup",
 	{"internal/metadata", "internal/operations/registry"}:       "provider clients import the operations registry; 07-M4",
@@ -494,7 +494,7 @@ var namedLayer = map[string]int{
 	// Layer 1 config.
 	"internal/config": 1,
 	// Layer 2 storage.
-	"internal/database": 2, "internal/openlibrary": 2, "internal/search": 2,
+	"internal/books/store": 2, "internal/openlibrary": 2, "internal/search": 2,
 	// Layer 3 domain.
 	"internal/merge": 3, "internal/versionprimary": 3, "internal/versions": 3, "internal/dedup": 3,
 	"internal/matcher": 3, "internal/fingerprint": 3, "internal/metadata": 3, "internal/organizer": 3,

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/narrator_tiers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b2f6d14-3c07-49a5-b6e8-1f90a7d25c38
-// last-edited: 2026-08-03
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // 🔴 TestNarratorsTab_UsesAllThreeTiers is the regression for the near-empty

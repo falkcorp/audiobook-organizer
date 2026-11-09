@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/aijobs.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8231e2ae-fa34-4594-80fd-f0f9dc60bc3b
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package aijobs
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/oklog/ulid/v2"
 )

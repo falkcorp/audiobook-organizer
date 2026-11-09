@@ -1,7 +1,7 @@
 // file: internal/server/candidate_feedback.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 432e499b-32d5-468b-9799-b4874d2e0f55
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -27,7 +27,7 @@ var candidateFeedbackLog = logger.New("server.candidate-feedback")
 // Metadata-candidate feedback endpoints (owner request 2026-10-07): the
 // Candidates view's per-row thumbs-down ("not the best match") and the
 // implicit thumbs-up an Apply records, kept as scoring training data. See
-// internal/database/candidate_feedback.go for what is stored and why.
+// internal/books/store/candidate_feedback.go for what is stored and why.
 //
 //	POST   /metadata/candidate-feedback       upsert one label
 //	DELETE /metadata/candidate-feedback/:id   undo (?label= limits it to that label)

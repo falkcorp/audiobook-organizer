@@ -1,5 +1,5 @@
 // file: cmd/child_mode_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5e2b9c71-3f4a-4d86-a0e7-8c1f6b2d9a34
 // last-edited: 2026-11-09
 
@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/storage/restorejournal"

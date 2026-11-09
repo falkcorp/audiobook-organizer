@@ -1,7 +1,7 @@
 // file: internal/undo/membership_adversarial_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a9d17c3-e605-4b82-8f31-c27d5b09e164
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package undo
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // advSim is an adversarial row-level model of the carry and its revert, with

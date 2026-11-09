@@ -1,7 +1,7 @@
 // file: internal/organizer/checkpoint_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a9b0c1d-2e3f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestCheckpoint_SetAndHas(t *testing.T) {

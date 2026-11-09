@@ -1,7 +1,7 @@
 // file: internal/operations/registry/queued_summary_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d3c0e57-b41a-4f62-8e05-6a7c1b9042fd
-// last-edited: 2026-09-09
+// last-edited: 2026-11-09
 
 // OperationDef.SummarizeQueued lets a run that has not started say how much
 // work it is holding, so a pending batch apply reads as "1,204 books to apply"
@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

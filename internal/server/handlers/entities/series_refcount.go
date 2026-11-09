@@ -1,14 +1,14 @@
 // file: internal/server/handlers/entities/series_refcount.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2f5a19-7d64-4c03-b8a1-5f93c0e64b27
-// last-edited: 2026-08-14
+// last-edited: 2026-11-09
 
 package entities
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seriesRefCounts returns, per series ID, how many books reference it in ANY

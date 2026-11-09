@@ -1,7 +1,7 @@
 // file: internal/server/oplog_download_gzip_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3f8e1c52-7a4d-4b96-9e0c-5d2a8b61f7c3
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"

@@ -1,14 +1,14 @@
 // file: internal/dedup/collectors_acoustid_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2b8f14-3c7a-4e91-a5d0-8b1f47e2c963
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

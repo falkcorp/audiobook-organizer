@@ -1,5 +1,5 @@
 // file: internal/versions/swap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d4e6f3b-9c5a-4a70-b8c5-3d7e0f1b9a99
 
 package versions
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func readTestFile(t *testing.T, path string) string {

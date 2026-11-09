@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_swap_incomplete_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c3a5cd5-875d-4b04-9627-713ffb43e692
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // listFailsStore fails only the listing of the versions a swap left unfinished.

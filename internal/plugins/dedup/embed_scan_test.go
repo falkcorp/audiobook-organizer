@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 6a1d9c3e-4b7f-4a2d-9e6c-8f1b2c3d4e5f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Tests for CONC-5: parallelizing the dedup.embed-scan synchronous per-book
 // EmbedBook loop with registry.RunItems.
@@ -22,8 +22,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

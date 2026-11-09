@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/series_pagination_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9c4a17e5-62b8-4d03-a7f1-3e58b0d94c27
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ── the series list must honour page/limit ──────────────────────────────────

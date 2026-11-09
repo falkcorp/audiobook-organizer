@@ -1,7 +1,7 @@
 // file: internal/audiobooks/list_query_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9572478-f826-4128-b318-9035db01bf94
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

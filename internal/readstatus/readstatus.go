@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 //
 // RecomputeUserBookStateLocked derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Store is what this package reads and writes to derive a read status.

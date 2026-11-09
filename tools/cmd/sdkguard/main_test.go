@@ -1,7 +1,7 @@
 // file: tools/cmd/sdkguard/main_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b4d1e37-6a02-45c8-bf19-8e73a5c0d264
-// last-edited: 2026-08-20
+// last-edited: 2026-11-09
 
 package main
 
@@ -40,7 +40,7 @@ func TestFilterInternal(t *testing.T) {
 // package with "internal" in its path is not our concern.
 func TestFilterInternalRejectsPkgLookalike(t *testing.T) {
 	got := filterInternal([]string{
-		"github.com/someoneelse/audiobook-organizer/internal/database",
+		"github.com/someoneelse/audiobook-organizer/internal/books/store",
 		"github.com/falkcorp/audiobook-organizer/pkg/internal/thing",
 	})
 	if len(got) != 0 {

@@ -1,7 +1,7 @@
 // file: internal/metafetch/pcache_followup_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: e971d44a-1aa0-4ff3-8223-e9a5a43c932b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

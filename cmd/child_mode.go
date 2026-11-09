@@ -1,5 +1,5 @@
 // file: cmd/child_mode.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-09
 
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"os"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 )

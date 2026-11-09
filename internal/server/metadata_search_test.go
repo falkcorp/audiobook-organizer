@@ -1,7 +1,7 @@
 // file: internal/server/metadata_search_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

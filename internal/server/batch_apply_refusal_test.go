@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_refusal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 25c4fe3e-8309-4f4c-ae42-148ff9105880
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 //
 // metadata.batch-apply-cached remembers structural gate refusals and does not
 // re-offer a book whose inputs are unchanged. The tests drive the same three
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -27,7 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	unifiedpkg "github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

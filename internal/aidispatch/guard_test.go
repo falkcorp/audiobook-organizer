@@ -1,7 +1,7 @@
 // file: internal/aidispatch/guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 978462ae-b706-482d-b878-4b12387747d8
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package aidispatch
 
@@ -23,7 +23,7 @@ import (
 // without going through this package.
 //
 // It parses source with go/parser, the pattern of
-// internal/database/mock_store_override_test.go, because the rule is
+// internal/books/store/mock_store_override_test.go, because the rule is
 // structural: an import path, a selector chain on a client, a path literal.
 // golangci-lint cannot carry it (CI runs it with --enable-only nolintlint).
 //

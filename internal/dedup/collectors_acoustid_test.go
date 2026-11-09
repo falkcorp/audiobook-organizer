@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b8c4d952-e0f3-5a26-99b1-6cd23f458g7e
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )

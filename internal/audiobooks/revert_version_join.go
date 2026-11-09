@@ -1,14 +1,14 @@
 // file: internal/audiobooks/revert_version_join.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 119df611-0727-437b-923d-15523fd6172b
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1c8e53-0d72-4f9b-b3e4-9c5a2d7f1e08
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

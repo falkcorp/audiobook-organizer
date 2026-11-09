@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9c2e7a14-5b80-4d36-8f21-3a6e0c9d5b18
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mkBook creates a book with one file of the given duration, at a unique path.

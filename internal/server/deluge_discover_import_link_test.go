@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discover_import_link_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2d9c4e61-8b57-4f03-a1e8-6c3b7d905a42
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 //
 // Tests for the torrent-to-book link that POST /api/v1/deluge/discover/import
 // writes: BookVersion.TorrentHash and BookFile.DelugeHash.
@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"

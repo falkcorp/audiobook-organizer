@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

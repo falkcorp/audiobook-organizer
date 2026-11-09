@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_emit_shard_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e1f2a93-4b6c-4d5e-8f01-2a3b4c5d6e7f
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // Race/invariant tests for CONC-3 (INIT-2 T5): the full-scan emit() no longer
 // runs under one global mutex. Per-pair "already handled" state is sharded
@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

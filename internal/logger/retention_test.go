@@ -1,7 +1,7 @@
 // file: internal/logger/retention_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d0c7a3e-91b4-4f6a-8e25-c3a1f7b94d60
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package logger
 
@@ -15,7 +15,7 @@ import (
 // chunkedFake is a RetentionStore whose prunes "commit" fixed chunk sizes and
 // "scan" a fixed number of rows per chunk, so PruneOldLogs's progress and
 // cancellation handling can be checked without a database. The real chunking
-// and scan heartbeat are tested against Pebble in internal/database.
+// and scan heartbeat are tested against Pebble in internal/books/store.
 type chunkedFake struct {
 	logs, activity  []int // chunk sizes each prune commits, in order
 	cancelAfterLogs context.CancelFunc

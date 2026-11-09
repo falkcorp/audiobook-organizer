@@ -1,14 +1,14 @@
 // file: internal/scanner/chapter_store_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d41a893-2c57-4f1b-90e8-3a7b5c2d8e14
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type chapterCapableStore struct {

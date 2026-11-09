@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: b8c9d0e1-f2a3-4567-bcde-567890123456
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -12,7 +12,7 @@ import (
 	"net/http"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/readstatus"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // The same-path-twin class of the consolidation-leftovers fixer (owner
 // decision 2026-10-06, plan op 01M48JSTKZV97BK42W675089GY): a leftover whose
@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

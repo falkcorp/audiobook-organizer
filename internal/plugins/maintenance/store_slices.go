@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

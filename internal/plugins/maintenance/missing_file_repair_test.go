@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c47f0a91-5e6b-4d28-93af-2b8054e17c6d
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

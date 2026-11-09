@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, link / reject / remove, bulk link, stats,
@@ -23,7 +23,7 @@ package deduphandler
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

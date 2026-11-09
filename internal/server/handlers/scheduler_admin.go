@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/gin-gonic/gin"

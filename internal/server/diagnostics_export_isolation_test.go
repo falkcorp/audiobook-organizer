@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_export_isolation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d2c8e41-7a93-4f06-b1d8-0e6a9c3f7b52
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // What one account's diagnostics export may share with another's: the run
 // itself (it is built for, and narrowed to, the account that started it) and the
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Not parallel: it swaps the process-wide config.

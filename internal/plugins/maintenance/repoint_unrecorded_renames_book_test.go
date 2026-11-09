@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames_book_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: de8d720f-bb4b-4093-9619-009ad0feca1e
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

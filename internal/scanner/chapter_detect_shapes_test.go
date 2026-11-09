@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_detect_shapes_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8d2b6c1e-47a9-4b35-a0f2-6e1c9d3b7a52
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // shBook is a single-file record with an explicit title (the chapter shapes

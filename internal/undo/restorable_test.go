@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestNotRestorableLabel_BookFileRepoint(t *testing.T) {

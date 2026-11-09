@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books_softdelete_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a1f3c5e-7b2d-4e64-a8f0-1c3e5a7b9d2f
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // softDeleteProbe is the narrowest bookSoftDeleter: it records every write and

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/file_not_found_reason_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b3f0d92-47a1-4e6c-95d8-2c710fa6e534
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

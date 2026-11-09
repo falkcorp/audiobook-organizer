@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_outcomes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: de2bb3ee-9054-4ce7-ba91-b3f361468064
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/kept_sweep_guard_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4e8b1a37-9c52-4d06-b7f3-2a6d0c9e5b18
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

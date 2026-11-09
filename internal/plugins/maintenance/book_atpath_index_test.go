@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1b7e4c92-5a3d-4e68-9f02-c6d8a1b3e5f7
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

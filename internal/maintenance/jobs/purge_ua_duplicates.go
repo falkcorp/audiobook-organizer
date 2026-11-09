@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_duplicates.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7a4d1e58-9c26-4b73-b0f2-5e8c3a6d9f41
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

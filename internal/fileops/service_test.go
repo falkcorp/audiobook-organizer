@@ -1,7 +1,7 @@
 // file: internal/fileops/service_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c9d0e1f2-a3b4-5c6d-7e8f-9a0b1c2d3e4f
-// last-edited: 2026-06-17
+// last-edited: 2026-11-09
 
 package fileops
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 func TestFilesystemService_BrowseDirectory_Empty(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_swap_hold_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e27b94c1-3d58-4a60-b9f2-1c8d05a7e346
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

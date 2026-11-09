@@ -1,14 +1,14 @@
 // file: internal/importer/path_service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-05-01
+// last-edited: 2026-11-09
 
 package importer
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestImportPathService_CreateImportPath_Success(t *testing.T) {

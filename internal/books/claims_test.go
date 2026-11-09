@@ -1,7 +1,7 @@
 // file: internal/books/claims_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b2e4c96-1f3a-4d85-9c60-5e8a2d7f1b34
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 

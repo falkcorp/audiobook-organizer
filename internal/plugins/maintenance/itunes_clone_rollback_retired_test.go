@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_rollback_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7c3e920-4d15-4a8f-9e62-f0a1d8c5b374
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireRowOnto creates a live row for shellID at path (or retires an existing

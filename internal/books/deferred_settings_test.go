@@ -1,7 +1,7 @@
 // file: internal/books/deferred_settings_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4d2c71-6e3b-4f58-b1a0-7c5e8d2f9b36
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 )
 

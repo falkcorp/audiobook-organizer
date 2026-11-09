@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

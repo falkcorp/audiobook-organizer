@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.11.3
+// version: 1.11.4
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
 // last-edited: 2026-11-09
 
@@ -29,9 +29,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

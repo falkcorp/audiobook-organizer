@@ -1,13 +1,13 @@
 // file: tools/cmd/oplint/testdata/src/github.com/falkcorp/audiobook-organizer/internal/oplintcases/clean/clean.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: af42c461-77e6-43a6-99c0-db11c31b5361
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 // Package clean is a well-formed bundle: oplint reports nothing.
 package clean
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

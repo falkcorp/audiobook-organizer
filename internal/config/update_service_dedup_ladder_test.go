@@ -1,7 +1,7 @@
 // file: internal/config/update_service_dedup_ladder_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 7d1c3a9e-5b2f-4e8a-9c6d-0f1e2a3b4c5d
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package config
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/stretchr/testify/mock"
 )

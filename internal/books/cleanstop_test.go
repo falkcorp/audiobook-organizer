@@ -1,5 +1,5 @@
 // file: internal/books/cleanstop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 90934ec3-bdf7-42d6-b6fd-7867e2638f55
 // last-edited: 2026-11-09
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )

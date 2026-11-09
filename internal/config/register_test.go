@@ -1,6 +1,6 @@
 // file: internal/config/register_test.go
-// version: 1.1.1
-// last-edited: 2026-11-08
+// version: 1.1.2
+// last-edited: 2026-11-09
 
 package config_test
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

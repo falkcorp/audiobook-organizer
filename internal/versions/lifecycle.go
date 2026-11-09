@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.18.3
+// version: 1.18.4
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -56,7 +56,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

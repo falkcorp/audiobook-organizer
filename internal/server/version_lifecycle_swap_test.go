@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_swap_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6b1d8e3f-7a24-4c95-8e0b-d2f4a9c1b753
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,7 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )

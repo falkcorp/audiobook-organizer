@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -102,8 +102,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a1000005-0000-0000-0000-000000000005
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -20,8 +20,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	ulid "github.com/oklog/ulid/v2"

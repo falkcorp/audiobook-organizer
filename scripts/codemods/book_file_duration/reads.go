@@ -1,7 +1,7 @@
 // file: scripts/codemods/book_file_duration/reads.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e1b6f40-27c8-4d35-a0b7-58f3c4d92e16
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 //go:build ignore
 
@@ -60,7 +60,7 @@ func isBF(t types.Type) bool {
 		return false
 	}
 	o := n.Obj()
-	return o.Pkg() != nil && strings.HasSuffix(o.Pkg().Path(), "/internal/database") && (o.Name() == "BookFile" || o.Name() == "BookFileCore")
+	return o.Pkg() != nil && strings.HasSuffix(o.Pkg().Path(), "/internal/books/store") && (o.Name() == "BookFile" || o.Name() == "BookFileCore")
 }
 
 func main() {

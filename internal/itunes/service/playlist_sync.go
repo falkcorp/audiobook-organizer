@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: 1e9f0a8b-2c3d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 //
 // iTunes playlist sync (spec 3.4 tasks 5-6).
 //
@@ -24,7 +24,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 

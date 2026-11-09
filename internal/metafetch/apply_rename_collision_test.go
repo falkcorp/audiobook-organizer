@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_rename_collision_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9b61d0e4-2f7a-4c38-a5e9-4d1c8f0b7e26
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 // End-to-end reproduction of the 2026-09-13 batch-apply failure through
 // runApplyPipeline: a book whose two files carry the same track number (disc 1
@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

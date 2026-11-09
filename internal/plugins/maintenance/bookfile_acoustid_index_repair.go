@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

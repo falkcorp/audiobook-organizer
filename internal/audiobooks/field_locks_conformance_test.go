@@ -1,14 +1,14 @@
 // file: internal/audiobooks/field_locks_conformance_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8517d74f-37bb-483a-8f1a-ac589f71c89f
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The writer's keys must all be in the shared lock vocabulary. This is the

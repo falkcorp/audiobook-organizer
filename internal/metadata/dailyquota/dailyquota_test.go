@@ -1,7 +1,7 @@
 // file: internal/metadata/dailyquota/dailyquota_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 446c17dc-de7c-45d8-955e-b98f0e40859d
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package dailyquota
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func fixed(total, background int) func() Limits {

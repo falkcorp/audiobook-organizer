@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/evidence_journal.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3d79460b-a54c-4691-ba04-dc81be729043
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeScanner is the whole-journal read RowApplied falls back to while

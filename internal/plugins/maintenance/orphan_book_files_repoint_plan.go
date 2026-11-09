@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"golang.org/x/sync/errgroup"

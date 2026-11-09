@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_retired_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f4b7d29-6a1c-4e83-9d52-c8e1a7b30f64
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredFixture is a live holder book whose directory carries the files of a

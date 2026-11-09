@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_purge_race_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4f1b6a93-7c28-4d05-b3e8-0a9d5c2e7f16
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

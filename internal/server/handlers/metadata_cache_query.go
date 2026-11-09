@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -24,8 +24,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

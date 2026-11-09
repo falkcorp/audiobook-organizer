@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_followups_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: de17f8c2-593a-4eea-9ce9-4dac637b04e8
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -20,8 +20,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )

@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_userstate.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c7635eb-815c-443d-830a-34ca2ca14c4a
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

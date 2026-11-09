@@ -1,7 +1,7 @@
 // file: internal/merge/combine_override_author_undo_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 7b2d94e1-5c63-4f08-a1d7-3e90c4b6a258
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The combine and its undo never delete an author (createdAuthorNote has the

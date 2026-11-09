@@ -1,12 +1,12 @@
 // file: internal/merge/sync_follow.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package merge: sync-identity follow hooks.
 //
 // The ABS-compatible sync layer exposes a durable `libraryItemId` (a syncID,
-// see internal/database/pebble_store_syncid.go) rather than the raw Book ULID,
+// see internal/books/store/pebble_store_syncid.go) rather than the raw Book ULID,
 // because this app's core loop -- moving, retagging and merging books --
 // churns ULIDs. Every code path that retires or replaces a Book ULID must
 // therefore carry the syncID (and the per-user listening position keyed to the
@@ -21,7 +21,7 @@
 //
 // A second, file-scoped identity layer sits alongside the book-level one:
 // each BookFile has a durable sync_file `ino` backing the ABS contentUrl
-// scheme `/api/items/{itemId}/file/{ino}` (internal/database's
+// scheme `/api/items/{itemId}/file/{ino}` (internal/books/store's
 // pebble_store_syncfile.go). PR #2074 wired item-level identity and progress
 // through CombineBooks and the untagged-move path but left per-file `ino`
 // behind, since sync_file entries are keyed (bookID, fileID) and the old
@@ -38,12 +38,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // SyncFollower is satisfied by anything that can record a merge in the
-// sync-identity layer (internal/database's SyncIdentityStore). Optional: nil
+// sync-identity layer (internal/books/store's SyncIdentityStore). Optional: nil
 // is a valid, no-op value -- a store that does not implement it (a mock, a
 // MemStore) simply means merges do not touch sync identity.
 type SyncFollower interface {

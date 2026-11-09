@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_admin_scope_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8afdf68e-ebe4-4c3d-a322-5a92e08da421
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // everyAtom is a key scope list holding every permission atom (auth.All()).

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5c7e9f1a-b3d5-4f7e-9a1c-b3d5f7e9a1c3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Tests for dedup.bookfile-seg-drop op (T020).
 //
@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mockSegDropStore implements BookfileSegDropStore for testing.

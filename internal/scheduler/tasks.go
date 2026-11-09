@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.38.1
+// version: 1.38.2
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -16,8 +16,8 @@ import (
 	"log/slog"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

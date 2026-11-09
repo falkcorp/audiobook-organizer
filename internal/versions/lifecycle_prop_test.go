@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_prop_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4c4cd2b-c578-4a11-8229-83a516271b1b
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 // Property-based tests for BookVersion lifecycle transitions (spec 4.5 task 6).
 //
@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/rapidgen"
 	"pgregory.net/rapid"
 )

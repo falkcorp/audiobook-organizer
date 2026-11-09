@@ -1,7 +1,7 @@
 // file: internal/itunes/service/import_corruption_regression_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4e9a1c7b-8d23-4f5e-b6a0-2c7d9e1f3b58
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 //
 // Regression tests for the 2026-09-13 iTunes import audit: each one runs the
 // real code path against a real PebbleStore and asserts the stored data.
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

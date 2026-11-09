@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.20.3
+// version: 1.20.4
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -85,8 +85,8 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

@@ -1,7 +1,7 @@
 // file: internal/config/mask_remaining_secrets_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6d1730c3-5896-4dab-8d11-e541faca253f
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The four secrets GET /api/v1/config used to return in full cleartext.

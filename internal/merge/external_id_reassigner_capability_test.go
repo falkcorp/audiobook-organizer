@@ -1,7 +1,7 @@
 // file: internal/merge/external_id_reassigner_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 796c0588-3a53-4897-b715-bd745e0714c0
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // narrowMergeDecorator decorates a store by EMBEDDING the narrow merge.Store

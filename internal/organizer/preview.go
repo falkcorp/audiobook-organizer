@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

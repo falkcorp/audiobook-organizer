@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_scan_merge_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b2e4f61-9d03-4a75-b6c8-1e7f3a5d9c02
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package server
 
@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 )

@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c9a7e-2b64-4d1f-8a55-c1e7d9b2f604
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

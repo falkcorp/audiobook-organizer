@@ -1,15 +1,15 @@
 // file: internal/reconcile/reconcile_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea0798e4-b9ae-402f-9662-c7ec718821b3
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package reconcile
 
 import (
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // reconcileLostUpdateStore wraps fakeReconcileStore with the OTHER writer: it

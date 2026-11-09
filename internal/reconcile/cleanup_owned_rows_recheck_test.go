@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_owned_rows_recheck_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f1c8a36-92d4-4b70-a3e8-6d07b4c91f25
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireAfterFirstReadStore keys a retired row under bookID right after the

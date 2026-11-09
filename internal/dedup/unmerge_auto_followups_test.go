@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_followups_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d2a9e64-1c7b-4f03-b8e6-0a4f3c9d7b12
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,8 +13,8 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"

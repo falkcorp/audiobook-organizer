@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: d58e1b7a-3f94-4c26-a0b1-7e6c9f2d4853
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

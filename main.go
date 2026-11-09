@@ -1,7 +1,7 @@
 // file: main.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package main
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/cmd"
 	"github.com/falkcorp/audiobook-organizer/internal/books"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"

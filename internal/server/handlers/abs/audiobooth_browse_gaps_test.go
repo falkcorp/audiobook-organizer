@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/audiobooth_browse_gaps_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 21a537e2-8789-4517-9ef9-576957a6fe05
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

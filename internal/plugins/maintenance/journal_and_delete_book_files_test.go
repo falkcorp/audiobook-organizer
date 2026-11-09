@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/journal_and_delete_book_files_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9a4d6c1e-2b57-4f0a-8c3e-7e1d5b9a0f42
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 

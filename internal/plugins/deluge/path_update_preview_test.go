@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update_preview_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f7ea2f7c-4454-4eb8-881b-09016a583879
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

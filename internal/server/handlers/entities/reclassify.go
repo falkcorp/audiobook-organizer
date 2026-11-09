@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package entities
 
@@ -13,7 +13,7 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/organize_row_writers_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7f4c1a92-53d8-4a06-9c7e-1b0d2e6f84a3
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

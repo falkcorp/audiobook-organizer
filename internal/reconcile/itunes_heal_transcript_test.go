@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_transcript_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c0f6a52-9a4e-4d57-8f0b-6f0a2b7f1c11
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 

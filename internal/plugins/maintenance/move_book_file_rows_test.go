@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ec59dece-f7b5-45f6-83e1-f69b95f45340
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )

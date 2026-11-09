@@ -1,7 +1,7 @@
 // file: internal/arch/journal_direct_writers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2f9a6e-1d84-4c37-a0e3-7c91d2f4b685
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package arch
 
@@ -33,12 +33,12 @@ var journalWriteMethods = map[string]bool{
 
 // journalHelperFile holds RecordOperationChange(s), the checked path. The scan
 // must see it call the store, or the scan is not reading what it thinks it is.
-const journalHelperFile = "internal/database/change_type_class.go"
+const journalHelperFile = "internal/books/store/change_type_class.go"
 
 // journalStoreDir is the package that implements and wraps the store methods
 // (the Pebble store, the in-memory store, decorators, the helper): it is where
 // the method lives, not a writer of rows.
-const journalStoreDir = "internal/database"
+const journalStoreDir = "internal/books/store"
 
 // journalDirectAllowed lists the files outside journalStoreDir that may select
 // a journal write method, each with why. Adding a file here needs the same
@@ -100,7 +100,7 @@ func scanJournalDirectWrites(t *testing.T, root string) (hits map[string]int, fi
 }
 
 // TestJournalRowsAreCreatedThroughTheClassificationCheck: no non-test file
-// outside internal/database and journalDirectAllowed selects a journal write
+// outside internal/books/store and journalDirectAllowed selects a journal write
 // method. A new journal writer calls database.RecordOperationChange (or goes
 // through repairs.Writer, which does), so the classification check runs for it.
 func TestJournalRowsAreCreatedThroughTheClassificationCheck(t *testing.T) {
@@ -127,7 +127,7 @@ func TestJournalRowsAreCreatedThroughTheClassificationCheck(t *testing.T) {
 	for _, o := range offenders {
 		t.Errorf("%s creates a journal row without the classification check: call database.RecordOperationChange(store, row) "+
 			"(or database.RecordOperationChanges for a batch); an unclassified change type is refused there, "+
-			"and a new type is classified in internal/database/change_type_class.go", o)
+			"and a new type is classified in internal/books/store/change_type_class.go", o)
 	}
 	for file := range journalDirectAllowed {
 		if hits[file] == 0 {

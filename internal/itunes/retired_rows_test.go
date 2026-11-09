@@ -1,14 +1,14 @@
 // file: internal/itunes/retired_rows_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b6e92d4-5a17-4c3f-8d20-e4f1a7c93b58
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package itunes
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredAwareMock is a PIDIntegrityStore + PIDCoverageStore that behaves like

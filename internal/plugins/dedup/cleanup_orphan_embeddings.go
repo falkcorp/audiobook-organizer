@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_embeddings.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9be49561-c03e-484c-ae53-723bbe299ebe
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.cleanup-orphan-embeddings.
 //
@@ -39,7 +39,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

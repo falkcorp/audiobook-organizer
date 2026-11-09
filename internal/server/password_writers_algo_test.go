@@ -1,7 +1,7 @@
 // file: internal/server/password_writers_algo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7d5b38-c1a4-4f92-8d63-b94a27f1c0e6
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

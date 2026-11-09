@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 42f7956b-7f83-42cb-adf4-96b00b38786d
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

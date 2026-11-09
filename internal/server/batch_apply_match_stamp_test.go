@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_match_stamp_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 118151c9-2974-4fad-96ae-08925b5c5f9f
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 //
 // A batch row's options decide whether a kept (locked) title blocks the match
 // record: a row the owner approved in the review lane records it, an
@@ -13,7 +13,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

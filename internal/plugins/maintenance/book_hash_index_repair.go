@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_hash_index_repair.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2a8c15-4d93-4e70-b1a6-3c9e0d7b5a28
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -32,7 +32,7 @@ import (
 // per-book keys cannot be erased by another book's write; this op writes the
 // keys the existing rows lack, which is also the one-time backfill of the new
 // layout. The rules (what a lookup returns, the sentinel, the order of the
-// legacy sweep) are in internal/database/pebble_store_book_hash_index.go.
+// legacy sweep) are in internal/books/store/pebble_store_book_hash_index.go.
 //
 // Modes:
 //   - preview (default, owner rule 2026-09-25): counts the missing keys and the

@@ -1,7 +1,7 @@
 // file: internal/server/event_stream_credential_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8d4b6a-71c3-4e95-b0a8-6d3e1c9f5a27
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // An event stream outlives the request that opened it, so it must end when the
 // credential it was opened on stops standing: the account disabled, the session
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // credentialCase opens a stream as some credential of the ops-manager user and

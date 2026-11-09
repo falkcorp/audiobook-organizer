@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/retired_reader_fake_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c6a10507-b500-4753-9187-089b0fd6deb3
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
 import (
 	"errors"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // errFakeReadNotModelled is what noRetiredRows answers for a retired-reader read

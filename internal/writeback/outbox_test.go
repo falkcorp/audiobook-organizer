@@ -1,7 +1,7 @@
 // file: internal/writeback/outbox_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-08-20
+// last-edited: 2026-11-09
 
 package writeback
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

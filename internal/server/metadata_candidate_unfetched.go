@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -24,7 +24,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

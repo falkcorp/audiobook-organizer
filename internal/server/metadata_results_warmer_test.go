@@ -1,14 +1,14 @@
 // file: internal/server/metadata_results_warmer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e07a3c6-14bd-4f28-8506-b2971fe0a4d3
-// last-edited: 2026-08-06
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestWarmMetadataResultsCacheNilStore: the warmer must degrade, never panic,

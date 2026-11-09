@@ -1,7 +1,7 @@
 // file: internal/scanner/retired_mock_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b3e1f84-52a9-4d06-8c71-e94a0d2b6f35
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A scanner test on the hand-written MockStore reaches the retired-content

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: db53792e-6046-4acd-ba6c-1857084924cc
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 // Tests for dedup.breakdown-backfill. A fake pairScorer (shared with the
 // rescore-labeled-examples tests) stands in for the real Engine so the op's
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"

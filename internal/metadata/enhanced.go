@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -194,7 +194,7 @@ func ValidateMetadata(updates map[string]any, rules map[string]ValidationRule) [
 // Widening the parameter from database.BookStore leaves ImportMetadata (still
 // database.BookStore) untouched; the sole production caller passes
 // handlers/metadata's MetadataStore, which already embeds database.BookStore
-// and declares these methods. No internal/database interface, mock, or
+// and declares these methods. No internal/books/store interface, mock, or
 // generated file changes — this is a call-signature widening only.
 // batchUpdateStore is what this package actually calls, measured by emptying the
 // interface and reading the compiler's enumeration: 7 methods. It was a

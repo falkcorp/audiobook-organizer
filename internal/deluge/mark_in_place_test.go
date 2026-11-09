@@ -1,7 +1,7 @@
 // file: internal/deluge/mark_in_place_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 40ec4d5f-fb5b-43c9-a2b5-718d5c2ebb77
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

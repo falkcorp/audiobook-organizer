@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"

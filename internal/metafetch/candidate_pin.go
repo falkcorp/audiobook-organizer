@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Pin origins that earn an owner-review override. Owner ruling 2026-09-27:

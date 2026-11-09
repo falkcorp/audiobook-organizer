@@ -1,5 +1,5 @@
 // file: internal/organizer/organizer_integration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0123-defa-456789012bcd
 
 package organizer
@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/ai_author_reassign.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4e8c1b53-9a27-4d60-bf14-7c9e0a35d2f1
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // authorReassignStore is the minimal store surface reassignBooksFromAuthor needs.

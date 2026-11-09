@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/retry_later_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d8f5a63-91c4-4e07-b6a2-c3e1f40d7b95
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )

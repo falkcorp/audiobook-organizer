@@ -1,7 +1,7 @@
 // file: internal/server/ident_missing_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e59aba3-1d79-4ad8-b33e-68e7f9cd1482
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // identParityFixtureRelPath is the fixture the Library's vitest

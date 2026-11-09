@@ -1,7 +1,7 @@
 // file: internal/versionprimary/rank_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 18620ce0-4bca-4216-a65a-507cf54533a0
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // organizedBook is an eligible-looking row; signals decide eligibility.

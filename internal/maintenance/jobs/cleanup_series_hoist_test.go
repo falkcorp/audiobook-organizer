@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series_hoist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e7b91d4-0c5a-4f28-a6e2-d91c47b8f053
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestCleanupSeriesRun_HoistedMembershipStaysCurrentAcrossPhases pins two

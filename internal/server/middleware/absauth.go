@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/util"

@@ -1,7 +1,7 @@
 // file: internal/merge/ident_dirty_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f4f4c67-02ef-49d5-a914-d4bbb5a0b6d8
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A successful merge marks the surviving primary for the identification

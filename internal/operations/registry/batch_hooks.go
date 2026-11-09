@@ -1,14 +1,14 @@
 // file: internal/operations/registry/batch_hooks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b0f3c52-8e47-4d1a-9f2b-3c7a5e91d846
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package registry
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

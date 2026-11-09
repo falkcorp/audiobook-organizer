@@ -1,5 +1,5 @@
 // file: internal/books/restore_stager.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a1f6c38-2d7e-4b50-8e94-c3b05d71e2a6
 // last-edited: 2026-11-09
 
@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 

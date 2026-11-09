@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/personalized_shelves_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: bfebef16-8d78-4765-909a-90ec835b61f4
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

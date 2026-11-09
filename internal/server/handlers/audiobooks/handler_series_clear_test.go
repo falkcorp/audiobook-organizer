@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_series_clear_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7f040721-48bc-4639-919d-3da56ceab6e3
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"

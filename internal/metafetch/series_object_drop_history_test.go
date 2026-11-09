@@ -1,7 +1,7 @@
 // file: internal/metafetch/series_object_drop_history_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6de38339-35ee-4dd6-953c-e64f58267f8b
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seedStaleSeriesObject leaves the row an older build wrote: SeriesID nil

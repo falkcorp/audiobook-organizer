@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b3e7f2a1-9c45-4d80-8e62-5f1a3d6c7b90
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dataset
 
@@ -11,7 +11,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // makeTestSig builds a valid BookSigV1 string: 4096 uint32 words encoded as

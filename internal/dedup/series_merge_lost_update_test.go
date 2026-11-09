@@ -1,7 +1,7 @@
 // file: internal/dedup/series_merge_lost_update_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5cdf8fef-1d80-433f-81c5-b44a8916ae81
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lostUpdateBookStore is a stateful book store for the lost-update race:

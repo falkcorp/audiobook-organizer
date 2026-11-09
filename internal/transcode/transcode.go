@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: f8a1b2c3-d4e5-6789-abcd-ef0123456789
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package transcode
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )

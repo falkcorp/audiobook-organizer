@@ -1,5 +1,5 @@
 // file: internal/decisions/backup_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d6a41f93-58e2-4b07-9c1d-3e8f720b5a64
 // last-edited: 2026-11-09
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 )
 

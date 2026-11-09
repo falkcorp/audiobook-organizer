@@ -1,7 +1,7 @@
 // file: internal/search/per_user_term_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e2c9a14-d5b7-4f83-a0e6-1b94c7d2f305
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package search
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 var termNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)

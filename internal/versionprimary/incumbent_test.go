@@ -1,14 +1,14 @@
 // file: internal/versionprimary/incumbent_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d03a53c-7bc5-4dd5-9361-8479a58fb2f8
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package versionprimary
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestIncumbent(t *testing.T) {

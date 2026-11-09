@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_copy_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3c9d4b7e-1a62-4f08-b5e3-8d2f6a0c9e41
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func copyFixture(t *testing.T) (*database.PebbleStore, *Service, string, string) {

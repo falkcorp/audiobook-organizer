@@ -1,6 +1,6 @@
 // file: internal/server/playlist_handlers_test.go
-// version: 1.2.0
-// last-edited: 2026-10-06
+// version: 1.2.1
+// last-edited: 2026-11-09
 // guid: 8b4d6f3e-9c4a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/gin-gonic/gin"
 )

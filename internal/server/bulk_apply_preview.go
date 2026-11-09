@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -39,7 +39,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan_handback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41e7a9d-6b25-4f03-8d1a-92e5b07f3c68
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireRowOf is the book_file_retire row an Apply journals for one file of

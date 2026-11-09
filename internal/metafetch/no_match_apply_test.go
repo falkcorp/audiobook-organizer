@@ -1,7 +1,7 @@
 // file: internal/metafetch/no_match_apply_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5b0e7c3a-91d4-4f62-8a1e-3c7d2f90b6a4
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

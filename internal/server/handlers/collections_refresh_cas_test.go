@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_refresh_cas_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8c41e0b9-6d27-4a53-b1f8-2e9d7a35c640
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

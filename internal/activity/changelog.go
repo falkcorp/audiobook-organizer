@@ -1,7 +1,7 @@
 // file: internal/activity/changelog.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package activity
 
@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

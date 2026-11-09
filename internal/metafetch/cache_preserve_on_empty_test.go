@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_preserve_on_empty_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c1e93a7-4b62-4d08-9f3a-1e7d0b56c284
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // An empty search result used to DESTROY the candidates an earlier search had
 // found. cacheSearchResponse wrote unconditionally -- its doc comment said
@@ -28,7 +28,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

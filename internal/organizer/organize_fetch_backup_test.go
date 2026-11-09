@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_fetch_backup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8e2f41-9c6d-4a37-b0e5-7d1f3a9c2e68
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )

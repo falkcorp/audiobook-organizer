@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

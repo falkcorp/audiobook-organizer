@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // scanExisting is every way saveBookToDatabase finds the stored row a scanned

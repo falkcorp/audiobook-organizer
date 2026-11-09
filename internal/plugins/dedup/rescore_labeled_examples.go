@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.rescore-labeled-examples.
 //
@@ -52,7 +52,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

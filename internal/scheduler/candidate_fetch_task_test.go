@@ -1,5 +1,5 @@
 // file: internal/scheduler/candidate_fetch_task_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1a7011f9-8a3c-46d3-841a-382e3e576d43
 // last-edited: 2026-11-09
 
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

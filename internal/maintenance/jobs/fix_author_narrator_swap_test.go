@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

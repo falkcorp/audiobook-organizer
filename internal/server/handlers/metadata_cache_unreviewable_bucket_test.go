@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_unreviewable_bucket_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3b7e91c4-58d2-4a6f-9e13-c0a4f27d8b95
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // GET /metadata/cache/review?bucket=unreviewable lists the books the review
 // rail's chips count but the default list drops (owner request 2026-09-27:
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

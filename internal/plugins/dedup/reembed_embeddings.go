@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 9d8c7b6a-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.reembed-embeddings.
 //
@@ -56,8 +56,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"

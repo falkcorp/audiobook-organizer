@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -99,8 +99,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize_apikey_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a3d6e12-7c48-4b5f-b0e9-2d81f4c6a573
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"

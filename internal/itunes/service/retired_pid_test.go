@@ -1,7 +1,7 @@
 // file: internal/itunes/service/retired_pid_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2d4b71-6a39-4c05-9f1e-5b7a03c82d94
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_coverage.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bf7e672f-6693-455c-a992-d8b4aa4ca1d0
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 //
 // READ-ONLY iTunes track Persistent ID coverage census (TASK-184,
 // ITUNES-SMARTCRIT-PARSE). Before anyone promises a "Playlist Items snapshot"
@@ -44,7 +44,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // PIDCoverageStore is the read-only slice of the store the coverage census needs.

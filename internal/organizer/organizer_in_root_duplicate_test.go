@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_in_root_duplicate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e6f2b73-5a91-4d48-b3c7-9a14d8e0f625
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Two live books in different version groups, both already inside the library

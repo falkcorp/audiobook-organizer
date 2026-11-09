@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_phase2_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f3d21c6-47ba-4e09-95d1-6c027ea3b4d8
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Phase 1 of executeSeriesPrune now REFUSES to delete a series when a book could

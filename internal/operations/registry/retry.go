@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 

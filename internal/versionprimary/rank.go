@@ -1,7 +1,7 @@
 // file: internal/versionprimary/rank.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: c2a14de5-3125-41f3-a4e8-e0126c71293f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 // Package versionprimary is the ONE rule for which member of a version group
 // is its primary. Before 2026-09-24 four places answered that question with
@@ -27,7 +27,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Content tiers, best first. TierNone is a member whose content cannot be

@@ -1,7 +1,7 @@
 // file: internal/batch/user_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1e5b8c47-9d20-4a63-b7f1-4c8e2a05d963
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package batch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A batch update is a human editing many books at once. Until 2026-09-02 it

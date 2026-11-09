@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 000a3aed-48a5-49fd-b36a-d52d7d4de58e
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 //
 // Regression tests for a PARTIALLY built search index.
 //
@@ -21,7 +21,7 @@ package server
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )

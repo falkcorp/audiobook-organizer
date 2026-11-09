@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -15,8 +15,8 @@ import (
 	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"

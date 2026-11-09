@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.56.0
+// version: 1.56.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 //
 // Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -20,7 +20,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

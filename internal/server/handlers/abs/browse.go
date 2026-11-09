@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse.go
-// version: 1.36.3
+// version: 1.36.4
 // guid: 5e0b83c7-2a41-4d96-b7e8-1c53fd90a2b4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs
 
@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/util"

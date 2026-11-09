@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_review_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7b1e4c92-5d38-4a06-b9f7-2c6a8d0e3f15
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

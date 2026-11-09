@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering_pushdown_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c9e7a41-2b5d-4f80-9c16-8a2e5d0b1f7c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

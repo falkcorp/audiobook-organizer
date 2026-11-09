@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2a8e4f6-7c19-4d53-a0e8-3f5d1c9b6a27
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

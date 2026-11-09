@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/world.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c6d1f8e-2b47-4a95-b3e1-7d5c9a2f4e18
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 // Package opstest is the test harness for operations v3 definitions
 // (sdk-api.md section 12). A World is a real in-memory store, a fake clock
@@ -75,7 +75,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

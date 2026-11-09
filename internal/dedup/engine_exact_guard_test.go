@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_exact_guard_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 4a1e6d3f-9c72-4a0b-8e35-1f6b2c7d9e40
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Regression guard for DEDUP-INTRO-1 (residual): upsertExactCandidate is the
 // shared chokepoint for every exact-family emitter. It must reject pairs
@@ -26,7 +26,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestUpsertExactCandidate_BoilerplateTitleGuard(t *testing.T) {

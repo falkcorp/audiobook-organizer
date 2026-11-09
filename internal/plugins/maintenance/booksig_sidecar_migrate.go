@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -37,7 +37,7 @@ import (
 //
 // The per-book primitive, its CAS-and-skip race handling, and the reasoning for
 // not doing this via UpdateBook all live in
-// internal/database/pebble_store_booksig_migrate.go.
+// internal/books/store/pebble_store_booksig_migrate.go.
 
 // bookSigSidecarMigrateParams controls the migration. DryRun defaults to true:
 // callers must explicitly pass dryRun=false to write anything.

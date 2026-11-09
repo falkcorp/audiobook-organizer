@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_partial_chunk_delete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8b2d71-6c3a-4f95-b0d8-1a7c5e9f3b26
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // dedupeChunk is the store's commit chunk for a bulk book_file delete

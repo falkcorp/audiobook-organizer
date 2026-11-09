@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package activity
 
@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // batchRecorder is the optional capability an activity store may offer: persist

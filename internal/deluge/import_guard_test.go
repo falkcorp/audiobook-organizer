@@ -1,7 +1,7 @@
 // file: internal/deluge/import_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c2d5f37-6a1e-4b94-a7d3-0f9e4b6c2185
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

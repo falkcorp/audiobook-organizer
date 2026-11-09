@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_fpwin_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9578f32b-f95b-4ff6-a7bf-4ceead8fea41
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A row merge collapses several book_file rows for ONE file into a keeper and

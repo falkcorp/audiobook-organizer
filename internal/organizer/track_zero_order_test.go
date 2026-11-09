@@ -1,7 +1,7 @@
 // file: internal/organizer/track_zero_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d2f4a6c-1e3b-4f5a-9c7d-0b2e4f6a8c13
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TrackNumber 0 is the "no number" sentinel, not "first". A book with a

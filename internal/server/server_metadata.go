@@ -1,14 +1,14 @@
 // file: internal/server/server_metadata.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, string) {

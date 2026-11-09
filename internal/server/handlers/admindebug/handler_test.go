@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package admindebug
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/gin-gonic/gin"

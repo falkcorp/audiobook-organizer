@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_pending_journal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b2d8e60-1c47-4a93-b0f5-9e3a7d1c4826
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // pendingFilePrefix keys the journal of file removals a purge pass has decided

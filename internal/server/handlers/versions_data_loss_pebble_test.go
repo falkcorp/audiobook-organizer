@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_data_loss_pebble_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5c0e2a7d-9b41-4f6e-8a3c-1d7f4b2e6a95
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

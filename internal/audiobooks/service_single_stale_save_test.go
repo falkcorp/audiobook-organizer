@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single_stale_save_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 727f8bc0-ddad-4dd8-b81c-2a3cb7624332
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )
 

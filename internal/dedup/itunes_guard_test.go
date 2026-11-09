@@ -1,7 +1,7 @@
 // file: internal/dedup/itunes_guard_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3c9e1f47-2b8a-4d6e-9f15-7a0c4e2b8d61
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/stretchr/testify/assert"

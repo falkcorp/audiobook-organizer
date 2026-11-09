@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f1e2d3c4-b5a6-7890-fedc-ba0987654321
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // End-to-end tests for the build-isbn-index op.
 //
@@ -19,7 +19,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // isbnIndexStoreAdapter wraps a *PebbleStore so it satisfies database.Store

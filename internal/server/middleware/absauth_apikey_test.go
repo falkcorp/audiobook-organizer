@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d3b8a71-9e64-4c02-b1f7-8a06d2e93c45
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"

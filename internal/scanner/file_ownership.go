@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"sync"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

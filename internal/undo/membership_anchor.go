@@ -1,7 +1,7 @@
 // file: internal/undo/membership_anchor.go
-// version: 3.4.1
+// version: 3.4.2
 // guid: 7c2e9a40-5b1d-4f86-a3d7-e0b8c4f19a65
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A retire that removes a book from a collection or playlist records where it

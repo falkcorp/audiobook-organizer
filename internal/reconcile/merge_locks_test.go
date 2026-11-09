@@ -1,7 +1,7 @@
 // file: internal/reconcile/merge_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a8c2f41-9e7d-4b36-8c1a-d2f6e0b4a793
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

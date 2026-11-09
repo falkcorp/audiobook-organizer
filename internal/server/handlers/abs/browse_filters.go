@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_filters.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: bb2cd357-d7f1-4d95-a61d-676c82fdc680
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package abs
 
@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"

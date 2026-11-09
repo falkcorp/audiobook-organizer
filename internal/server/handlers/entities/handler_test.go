@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package entities_test
 
@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	entitiesmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/work"

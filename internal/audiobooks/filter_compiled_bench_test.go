@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_bench_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8d90d532-6d88-49e0-b5b8-a4bba9dc1ace
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 

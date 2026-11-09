@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.4.1
+# version: 1.4.2
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 """Run the whole short Go test suite as one of N shards, then merge coverage.
 
 `make test-short` runs `go test ./... -short -race` as one process tree, so
@@ -45,7 +45,7 @@ balance it was written for would silently stop applying.
 
 Weights (short_test_weights.json, package -> seconds; JSON carries no header,
 so its provenance is recorded here). The values for internal/server (414 s),
-internal/metafetch (240 s) and internal/database (157 s) are the Mac `-short`
+internal/metafetch (240 s) and internal/books/store (157 s) are the Mac `-short`
 numbers from appendix A.7 of
 docs/proposals/2026-10-holistic/07-design-decisions-and-modularity.md.
 internal/plugins/maintenance is 186 s, its package elapsed time under

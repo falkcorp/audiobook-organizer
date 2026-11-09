@@ -1,7 +1,7 @@
 // file: internal/organizer/lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d740a064-a183-468d-91b3-214faf0ec18b
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lostUpdateStore is a stateful book store: GetBookByID returns a copy,

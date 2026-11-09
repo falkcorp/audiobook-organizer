@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_journal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b62c07fa-91e5-4d38-8c74-3a19de5b20f7
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

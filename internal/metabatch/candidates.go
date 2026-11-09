@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )

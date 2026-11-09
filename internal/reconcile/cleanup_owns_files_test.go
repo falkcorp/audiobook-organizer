@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_owns_files_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0e41a60d-a159-4c2a-9e4d-ff27e052715f
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // CleanupDuplicateVersionGroups used to os.Remove a duplicate library copy's

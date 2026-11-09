@@ -1,7 +1,7 @@
 // file: internal/server/op_params_decode_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5a7c1e93-2d84-4f60-b1a7-9e3c05d8f271
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

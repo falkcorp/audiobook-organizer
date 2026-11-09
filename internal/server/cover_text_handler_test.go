@@ -1,7 +1,7 @@
 // file: internal/server/cover_text_handler_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a0c7e39-4d2b-4f81-96e3-1b8d2f6a9c04
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 )
 

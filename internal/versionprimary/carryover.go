@@ -1,7 +1,7 @@
 // file: internal/versionprimary/carryover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f80b709-4872-485c-875e-59b84753da2e
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Metadata carry-over: when the content winner is not the metadata-best

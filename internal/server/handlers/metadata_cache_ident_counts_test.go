@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_ident_counts_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 12551103-eea0-4207-90b8-15df669deded
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -12,7 +12,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestIdentCountsSummary: the review summary's ident_counts block is the

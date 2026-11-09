@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.28.1
+// version: 2.28.2
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -209,8 +209,8 @@ import (
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

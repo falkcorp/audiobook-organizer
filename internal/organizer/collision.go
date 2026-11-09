@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -60,7 +60,7 @@ import (
 	"github.com/falkcorp/mediacore/library"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )

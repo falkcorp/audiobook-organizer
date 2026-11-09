@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_stuck_purge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4e8b1d27-6c93-4f05-a7d2-9b3e5f0c8a61
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // undecidableOwn is a guard that cannot tell, for the two paths the trashed

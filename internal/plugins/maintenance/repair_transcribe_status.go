@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"

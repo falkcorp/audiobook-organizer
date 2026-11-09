@@ -1,7 +1,7 @@
 // file: internal/server/catalog_coverage_op_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c3d94f17-8a2e-4b60-9d15-7e1b0a6f3c82
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,8 +20,8 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

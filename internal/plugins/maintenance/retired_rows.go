@@ -1,11 +1,11 @@
 // file: internal/plugins/maintenance/retired_rows.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b2d4e61-9c07-4f35-a1d8-3e5f60b7c249
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // countLiveCores is the number of rows in cores that are not retired book
 // versions. The plans that read the whole table INCLUDING retired rows (so a

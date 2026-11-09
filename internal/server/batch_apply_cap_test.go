@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_cap_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d3f9a52-6c1e-4b8a-9e07-5a2d8c4f1b63
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -19,9 +19,9 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/gin-gonic/gin"

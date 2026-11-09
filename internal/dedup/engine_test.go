@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_test.go
-// version: 2.12.1
+// version: 2.12.2
 // guid: 2a7e4d91-c538-4f06-b1d3-9e8c5a6f0d72
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

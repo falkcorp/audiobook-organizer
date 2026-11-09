@@ -1,7 +1,7 @@
 // file: internal/batch/restore_locked_judge_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0f6c2b8e-4d19-4a73-9b5e-6a1d3c7e8f24
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

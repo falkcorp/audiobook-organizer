@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_layer1_parallel_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // Regression tests for CONC-4: FullScan's main pass now splits into a
 // parallel Pass 1 (Layer-1 exact checks — checkExactFileHash/ISBN/Title/
@@ -37,7 +37,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fullScanLayer1FixtureBooks builds n books that all share one ISBN13, one

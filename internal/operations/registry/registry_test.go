@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5a
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

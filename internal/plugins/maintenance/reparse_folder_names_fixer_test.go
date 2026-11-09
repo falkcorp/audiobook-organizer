@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f823acd0-485e-4ec1-87a1-49cfedc17554
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

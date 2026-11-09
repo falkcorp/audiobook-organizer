@@ -1,7 +1,7 @@
 // file: internal/quarantine/lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a07e362f-63c1-4df5-9bb8-6e1183202317
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package quarantine
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lostUpdateStore is a stateful book store: GetBookByID returns a copy,

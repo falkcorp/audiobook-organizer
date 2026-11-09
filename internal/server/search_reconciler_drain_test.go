@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_drain_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b1e8d3c-7a2f-4e90-b6c4-9d0a2f7e1b38
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 //
 // Drain, restart and live-write tests for the batched search reconciler
 // (the 2026-09-25 wedge: a 100k dirty set that never drained and a live
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

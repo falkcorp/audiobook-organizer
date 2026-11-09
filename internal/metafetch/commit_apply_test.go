@@ -1,14 +1,14 @@
 // file: internal/metafetch/commit_apply_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c1e4a92-3b5d-4f60-8e27-9d0a6b3c1f48
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

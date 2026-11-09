@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

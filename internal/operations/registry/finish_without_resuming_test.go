@@ -1,7 +1,7 @@
 // file: internal/operations/registry/finish_without_resuming_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e9a2d17-6b3c-48f5-9a1e-c5d70b82f364
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package registry
 
@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

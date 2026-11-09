@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.103.4
+// version: 1.103.5
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -185,7 +185,7 @@ type opsBookFileMover interface {
 // method set stays byte-identical and no consumer moves — the type checker
 // verifies that, because every implementation fails to compile if a method were
 // dropped or re-signatured in the regrouping. Same shape as the
-// BookFileReader/Writer/Deleter split in internal/database.
+// BookFileReader/Writer/Deleter split in internal/books/store.
 type opsBookFileWriter interface {
 	opsBookFileMutator
 	opsBookFileDeleter
@@ -204,7 +204,7 @@ type opsAuthorStore interface {
 	// only caller in this package and now reads database.AuthorFileRefCounts,
 	// which resolves the unfiltered counter as a capability off the concrete
 	// store. Re-adding it here would put the filtered display counter back within
-	// arm's reach of a safety gate — see internal/database/author_file_refs.go.
+	// arm's reach of a safety gate — see internal/books/store/author_file_refs.go.
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
@@ -1149,7 +1149,7 @@ type VersionTwinMetadata interface {
 // All operations are expressed as methods so there is no import cycle.
 //
 // Split into the 14 interfaces above on 2026-08-18. At 43 methods this was the
-// widest interface in the repository -- wider than anything in internal/database,
+// widest interface in the repository -- wider than anything in internal/books/store,
 // which is where the debt was assumed to live.
 //
 // The name is retained as their composition so the method set is byte-identical:

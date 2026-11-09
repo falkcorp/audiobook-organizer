@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 5b6e7f4a-9c1d-4e0a-8f2b-3a6d1c9e5b70
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

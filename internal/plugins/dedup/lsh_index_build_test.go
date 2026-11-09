@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c1cf5590-1bc1-4f88-9031-62333bcb593f
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

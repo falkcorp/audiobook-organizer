@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -23,7 +23,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

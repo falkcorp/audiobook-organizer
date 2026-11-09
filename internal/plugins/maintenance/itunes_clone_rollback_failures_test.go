@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_rollback_failures_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b07ff01f-6cf6-482c-a79d-2b4cbad437be
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // icStepFailStore fails one step of a version clone's rollback.

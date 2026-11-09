@@ -1,7 +1,7 @@
 // file: internal/undo/membership_epoch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b3e8d12-4a97-4c05-9f21-e7d0a5c18b34
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The epoch rule: a survivor is in a list on a retire's account from a "took"

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_file_modes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f6e3a58-2d94-4c07-b8e5-9a3c7d1f4b62
-// last-edited: 2026-08-14
+// last-edited: 2026-11-09
 
 //go:build unix
 
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fixModesFixture: one 0600 file (broken — must be repaired), one 0644 file

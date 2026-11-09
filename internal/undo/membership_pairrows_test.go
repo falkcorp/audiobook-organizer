@@ -1,12 +1,12 @@
 // file: internal/undo/membership_pairrows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1a9e43-b7f0-4c28-8e35-c04a7f2d9b16
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pairRows is rows plus, for every live survivor-side marker among them that has

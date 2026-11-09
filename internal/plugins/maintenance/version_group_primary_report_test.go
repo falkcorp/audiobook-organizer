@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_report_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2e9a41-5d8f-4b36-a1e0-8f3b6d2c9e57
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"

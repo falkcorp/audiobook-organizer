@@ -1,7 +1,7 @@
 // file: internal/organizer/target_occupied_classification_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 2d7f4a19-8b06-4c35-91ea-3f70c852bd64
-// last-edited: 2026-08-28
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func TestNextAvailableTargetPathSkipsExistingCopies(t *testing.T) {

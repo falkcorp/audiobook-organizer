@@ -1,7 +1,7 @@
 // file: internal/reconcile/merge_dupe_stored_row_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f7d4c8a-6e1b-4a93-b5d0-9c3e8f2a1d67
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

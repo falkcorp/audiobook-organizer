@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/durable_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: d96ffcde-7b33-4014-985a-a56c427cac9d
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package aijobs
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

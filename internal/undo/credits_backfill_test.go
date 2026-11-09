@@ -1,7 +1,7 @@
 // file: internal/undo/credits_backfill_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 13d57ee7-2dda-4c77-b02f-ecdf96215b72
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func cbIntPtr(v int) *int       { return &v }

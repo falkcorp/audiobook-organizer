@@ -1,7 +1,7 @@
 // file: internal/importer/torrent_link_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e2a91c4-0b7d-4f53-a8e6-3d15c9b7f402
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package importer
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

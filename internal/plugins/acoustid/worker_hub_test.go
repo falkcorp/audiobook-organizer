@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 23143bc2-39af-48f3-a47c-8c1f392e2ab9
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -19,8 +19,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
 )

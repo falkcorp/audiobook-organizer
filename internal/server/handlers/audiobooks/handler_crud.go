@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.19.5
+// version: 1.19.6
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -23,8 +23,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

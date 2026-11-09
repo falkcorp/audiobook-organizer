@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_split_one_book_pebble_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2b4d6f8a-0c1e-4f3a-8d5b-9e1f3a5c7b86
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

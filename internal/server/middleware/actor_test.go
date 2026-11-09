@@ -1,7 +1,7 @@
 // file: internal/server/middleware/actor_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f6b9d14-7e83-4a05-b1c9-d40e5a8736f2
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

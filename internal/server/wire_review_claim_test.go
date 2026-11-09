@@ -1,7 +1,7 @@
 // file: internal/server/wire_review_claim_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c06d748-d485-44de-9d5a-2ad16e6fedd7
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The review handler and the regroup reconcile resolve their claim-aware store

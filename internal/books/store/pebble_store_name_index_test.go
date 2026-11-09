@@ -1,0 +1,428 @@
+// file: internal/books/store/pebble_store_name_index_test.go
+// version: 1.1.2
+// guid: f51fb8d5-ac26-4268-85ee-c4bdb523de0b
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"encoding/json"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+)
+
+// These tests pin the data-safety half of TASK-086. NormalizeAuthor collapses
+// internal whitespace since 2026-09-12; index entries written before that are
+// keyed by NormalizeAuthorLegacy. The tests seed such pre-change entries by
+// moving an index value from its current key to its legacy key, which is
+// byte-for-byte what the old code wrote.
+
+func newNameIndexTestStore(t *testing.T) *PebbleStore {
+	t.Helper()
+	store, cleanup := setupTestDB(t)
+	t.Cleanup(cleanup)
+	ps, ok := store.(*PebbleStore)
+	require.True(t, ok, "setupTestDB must return a *PebbleStore")
+	return ps
+}
+
+// moveToLegacyKey rewrites the index entry for name from the current key to
+// the legacy key, simulating a row written before the normalization change.
+func moveToLegacyKey(t *testing.T, p *PebbleStore, keyFor nameIndexKeyFunc, name string) {
+	t.Helper()
+	cur := []byte(keyFor(util.NormalizeAuthor(name)))
+	legacy := []byte(keyFor(util.NormalizeAuthorLegacy(name)))
+	require.NotEqual(t, string(cur), string(legacy), "test name must differ under the two normalizations")
+	v, err := p.getValueCopy(cur)
+	require.NoError(t, err)
+	require.NotNil(t, v, "current key %q must exist before the move", cur)
+	require.NoError(t, p.db.Delete(cur, pebble.Sync))
+	require.NoError(t, p.db.Set(legacy, v, pebble.Sync))
+}
+
+func keyExists(t *testing.T, p *PebbleStore, key string) bool {
+	t.Helper()
+	v, err := p.getValueCopy([]byte(key))
+	require.NoError(t, err)
+	return v != nil
+}
+
+func TestNameIndex_NewAuthorsDedupeAcrossWhitespace(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	a, err := p.CreateAuthor("Raymond L. Weil")
+	require.NoError(t, err)
+	for _, spelling := range []string{"Raymond  L.  Weil", "raymond\tl. weil", " RAYMOND L. WEIL "} {
+		b, err := p.CreateAuthor(spelling)
+		require.NoError(t, err)
+		require.Equal(t, a.ID, b.ID, "CreateAuthor(%q) minted a duplicate", spelling)
+	}
+}
+
+func TestNameIndex_LegacyAuthorKeyStillResolves(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	a, err := p.CreateAuthor("Karen  Joy Fowler")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, authorNameIndexKey, a.Name)
+
+	got, err := p.GetAuthorByName("Karen  Joy Fowler")
+	require.NoError(t, err)
+	require.NotNil(t, got, "a row indexed under the legacy key became unfindable")
+	require.Equal(t, a.ID, got.ID)
+
+	again, err := p.CreateAuthor("Karen  Joy Fowler")
+	require.NoError(t, err)
+	require.Equal(t, a.ID, again.ID, "legacy-keyed row was duplicated on the next import")
+}
+
+// The defect the collapse would introduce without ownership checks: two rows
+// whose names collapse to one key, and deleting one takes the other's entry.
+func TestNameIndex_DeleteDoesNotRemoveAnotherAuthorsEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	legacyRow, err := p.CreateAuthor("John  Smith")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, authorNameIndexKey, legacyRow.Name)
+	canonical, err := p.CreateAuthor("John Smith")
+	require.NoError(t, err)
+	require.NotEqual(t, legacyRow.ID, canonical.ID, "setup: two rows expected")
+
+	require.NoError(t, p.DeleteAuthor(legacyRow.ID))
+
+	got, err := p.GetAuthorByName("John Smith")
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the double-spaced row removed the canonical row's index entry")
+	require.Equal(t, canonical.ID, got.ID)
+	require.False(t, keyExists(t, p, authorNameIndexKey("john  smith")), "the deleted row's own legacy entry must go")
+}
+
+func TestNameIndex_RenameDoesNotRemoveAnotherAuthorsEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	legacyRow, err := p.CreateAuthor("Valery  Starsky")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, authorNameIndexKey, legacyRow.Name)
+	canonical, err := p.CreateAuthor("Valery Starsky")
+	require.NoError(t, err)
+
+	require.NoError(t, p.UpdateAuthorName(legacyRow.ID, "Someone Else"))
+
+	got, err := p.GetAuthorByName("Valery Starsky")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, canonical.ID, got.ID, "renaming the double-spaced row removed the canonical row's entry")
+	renamed, err := p.GetAuthorByName("someone else")
+	require.NoError(t, err)
+	require.NotNil(t, renamed)
+	require.Equal(t, legacyRow.ID, renamed.ID)
+	require.False(t, keyExists(t, p, authorNameIndexKey("valery  starsky")))
+}
+
+func TestNameIndex_LegacySeriesKeyAndGuardedDelete(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Series Author")
+	require.NoError(t, err)
+	scope := seriesNameIndexKey(strconv.Itoa(author.ID))
+
+	legacySeries, err := p.CreateSeries("The  Long Earth", &author.ID)
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, scope, legacySeries.Name)
+
+	got, err := p.GetSeriesByName("The  Long Earth", &author.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "legacy-keyed series became unfindable")
+	require.Equal(t, legacySeries.ID, got.ID)
+	again, err := p.CreateSeries("The  Long Earth", &author.ID)
+	require.NoError(t, err)
+	require.Equal(t, legacySeries.ID, again.ID, "legacy-keyed series was duplicated")
+
+	canonical, err := p.CreateSeries("The Long Earth", &author.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, legacySeries.ID, canonical.ID)
+	require.NoError(t, p.DeleteSeries(legacySeries.ID))
+	got, err = p.GetSeriesByName("The Long Earth", &author.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the double-spaced series removed the canonical series' entry")
+	require.Equal(t, canonical.ID, got.ID)
+}
+
+func TestNameIndex_LegacyNarratorAndAliasKeysResolve(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	n, err := p.CreateNarrator("Ray  Porter")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, narratorNameIndexKey, n.Name)
+	gotN, err := p.GetNarratorByName("Ray  Porter")
+	require.NoError(t, err)
+	require.NotNil(t, gotN, "legacy-keyed narrator became unfindable")
+	require.Equal(t, n.ID, gotN.ID)
+	againN, err := p.CreateNarrator("Ray  Porter")
+	require.NoError(t, err)
+	require.Equal(t, n.ID, againN.ID, "legacy-keyed narrator was duplicated")
+
+	author, err := p.CreateAuthor("Alias Owner")
+	require.NoError(t, err)
+	alias, err := p.CreateAuthorAlias(author.ID, "A.  Owner", "pen_name")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, aliasNameIndexKey, alias.AliasName)
+	gotA, err := p.FindAuthorByAlias("A.  Owner")
+	require.NoError(t, err)
+	require.NotNil(t, gotA, "legacy-keyed alias became unfindable")
+	require.Equal(t, author.ID, gotA.ID)
+	_, err = p.CreateAuthorAlias(author.ID, "A.  Owner", "pen_name")
+	require.Error(t, err, "duplicate alias must still be refused when the existing one sits under the legacy key")
+	require.NoError(t, p.DeleteAuthorAlias(alias.ID))
+	require.False(t, keyExists(t, p, aliasNameIndexKey("a.  owner")), "alias delete must remove its legacy entry")
+}
+
+// DeleteNarrator took the index entry by raw key, so deleting a legacy-keyed
+// "john  smith" removed the canonical "john smith" narrator's current entry
+// and left its own legacy entry behind.
+func TestNameIndex_DeleteNarratorDoesNotRemoveAnotherNarratorsEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	legacyRow, err := p.CreateNarrator("John  Smith")
+	require.NoError(t, err)
+	moveToLegacyKey(t, p, narratorNameIndexKey, legacyRow.Name)
+	canonical, err := p.CreateNarrator("John Smith")
+	require.NoError(t, err)
+	require.NotEqual(t, legacyRow.ID, canonical.ID, "setup: two rows expected")
+
+	require.NoError(t, p.DeleteNarrator(legacyRow.ID))
+
+	got, err := p.GetNarratorByName("John Smith")
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the double-spaced narrator removed the canonical narrator's index entry")
+	require.Equal(t, canonical.ID, got.ID)
+	again, err := p.CreateNarrator("John Smith")
+	require.NoError(t, err)
+	require.Equal(t, canonical.ID, again.ID, "canonical narrator was duplicated after the other row's delete")
+	require.False(t, keyExists(t, p, narratorNameIndexKey("john  smith")), "the deleted narrator's own legacy entry must go")
+}
+
+// Roles and playlists are not person names: their indexes keep the plain
+// trim+lowercase key and are unaffected by the collapse.
+func TestNameIndex_RoleAndPlaylistLookupsKeepTheirOwnKey(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	role, err := p.CreateRole(&Role{Name: "Library  Curator", Permissions: []string{}})
+	require.NoError(t, err)
+	gotR, err := p.GetRoleByName("Library  Curator")
+	require.NoError(t, err)
+	require.NotNil(t, gotR, "double-spaced role name became unfindable")
+	require.Equal(t, role.ID, gotR.ID)
+	require.NoError(t, p.DeleteRole(role.ID))
+	require.False(t, keyExists(t, p, "idx:role:name:library  curator"), "role delete must remove its index entry")
+
+	pl, err := p.CreateUserPlaylist(&UserPlaylist{Name: "My  List", Type: "static"})
+	require.NoError(t, err)
+	gotP, err := p.GetUserPlaylistByName("My  List")
+	require.NoError(t, err)
+	require.NotNil(t, gotP, "double-spaced playlist name became unfindable")
+	require.Equal(t, pl.ID, gotP.ID)
+}
+
+// CreateRole wrote its index key with strings.ToLower and no trim, while
+// GetRoleByName and DeleteRole trim. A padded name was unfindable by any
+// spelling and DeleteRole left its entry behind.
+func TestNameIndex_PaddedRoleNameIsFindableAndDeletable(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	role, err := p.CreateRole(&Role{Name: " Editor ", Permissions: []string{}})
+	require.NoError(t, err)
+	require.True(t, keyExists(t, p, "idx:role:name:editor"), "padded role must be indexed under the trimmed key")
+
+	for _, spelling := range []string{"editor", " Editor "} {
+		got, err := p.GetRoleByName(spelling)
+		require.NoError(t, err)
+		require.NotNil(t, got, "GetRoleByName(%q) did not find the padded role", spelling)
+		require.Equal(t, role.ID, got.ID)
+	}
+
+	_, err = p.CreateRole(&Role{Name: "editor", Permissions: []string{}})
+	require.Error(t, err, "a second role differing only by padding must be refused")
+
+	require.NoError(t, p.DeleteRole(role.ID))
+	require.False(t, keyExists(t, p, "idx:role:name:editor"), "role delete must remove its index entry")
+	gone, err := p.GetRoleByName("editor")
+	require.NoError(t, err)
+	require.Nil(t, gone)
+
+	_, err = p.CreateRole(&Role{Name: "   ", Permissions: []string{}})
+	require.Error(t, err, "a whitespace-only role name must be refused")
+	require.False(t, keyExists(t, p, "idx:role:name:"), "no role may claim the empty key")
+}
+
+// A role written before the fix with a padded name sits under an untrimmed
+// key. Deleting it must not remove the entry of the role that owns the
+// trimmed key.
+func TestNameIndex_DeleteRoleDoesNotRemoveAnotherRolesEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	canonical, err := p.CreateRole(&Role{Name: "Curator", Permissions: []string{}})
+	require.NoError(t, err)
+
+	legacy := &Role{ID: "legacy-curator", Name: " Curator ", Permissions: []string{}, Version: 1}
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, p.db.Set([]byte("role:"+legacy.ID), data, pebble.Sync))
+	// Byte-for-byte what the pre-fix CreateRole wrote: lowercased, untrimmed.
+	require.NoError(t, p.db.Set([]byte("idx:role:name: curator "), []byte(legacy.ID), pebble.Sync))
+
+	require.NoError(t, p.DeleteRole(legacy.ID))
+
+	got, err := p.GetRoleByName("curator")
+	require.NoError(t, err)
+	require.NotNil(t, got, "deleting the padded legacy role removed the canonical role's index entry")
+	require.Equal(t, canonical.ID, got.ID)
+	gone, err := p.GetRoleByID(legacy.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone, "the legacy role record itself must be deleted")
+}
+
+// installRacingWriter makes deleteNameIndexIfOwned, the first time it has
+// matched the owner of contested and before it stages the delete, start
+// compete in another goroutine and wait for it -- up to a bound, because with
+// the family lock in place compete blocks until the delete commits. So the
+// competing write lands INSIDE the read-to-commit window when nothing guards
+// it, and strictly after the commit when the lock does. The returned channel
+// yields compete's error. Tests using this must not run in parallel: the hook
+// is a package variable.
+func installRacingWriter(t *testing.T, contested string, compete func() error) (fired *atomic.Bool, done <-chan error) {
+	t.Helper()
+	fired = &atomic.Bool{}
+	result := make(chan error, 1)
+	nameIndexTestHookAfterOwnerCheck = func(key string) {
+		if key != contested || !fired.CompareAndSwap(false, true) {
+			return
+		}
+		go func() { result <- compete() }()
+		select {
+		case err := <-result:
+			result <- err // leave it for the test to read
+		case <-time.After(300 * time.Millisecond):
+			// Blocked on the family lock, as it should be.
+		}
+	}
+	t.Cleanup(func() { nameIndexTestHookAfterOwnerCheck = nil })
+	return fired, result
+}
+
+// A delete read "author:name:x is mine", then a concurrent rename took the key
+// over before the delete's batch committed. Without nameIdx.author held
+// across the read-check-commit, the commit erased the renamed author's entry:
+// it stopped resolving by name and the next CreateAuthor minted a duplicate.
+func TestNameIndex_DeleteAuthorRacingRenameKeepsTakenOverEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	doomed, err := p.CreateAuthor("Contested Name")
+	require.NoError(t, err)
+	survivor, err := p.CreateAuthor("Survivor Before Rename")
+	require.NoError(t, err)
+
+	contested := authorNameIndexKey(util.NormalizeAuthor(doomed.Name))
+	fired, done := installRacingWriter(t, contested, func() error {
+		return p.UpdateAuthorName(survivor.ID, doomed.Name)
+	})
+
+	require.NoError(t, p.DeleteAuthor(doomed.ID))
+	require.NoError(t, <-done)
+	require.True(t, fired.Load(), "the hook never fired; the test did not exercise the window")
+
+	got, err := p.GetAuthorByName(doomed.Name)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the delete erased the index entry the concurrent rename had taken over")
+	require.Equal(t, survivor.ID, got.ID)
+
+	again, err := p.CreateAuthor(doomed.Name)
+	require.NoError(t, err)
+	require.Equal(t, survivor.ID, again.ID, "CreateAuthor minted a duplicate of the renamed author")
+}
+
+// The same window on the series path, where the delete goes straight to p.db
+// rather than through a batch.
+func TestNameIndex_DeleteSeriesRacingRenameKeepsTakenOverEntry(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Series Race Author")
+	require.NoError(t, err)
+	doomed, err := p.CreateSeries("Contested Saga", &author.ID)
+	require.NoError(t, err)
+	survivor, err := p.CreateSeries("Survivor Saga", &author.ID)
+	require.NoError(t, err)
+
+	contested := seriesNameIndexKey(strconv.Itoa(author.ID))(util.NormalizeAuthor(doomed.Name))
+	fired, done := installRacingWriter(t, contested, func() error {
+		return p.UpdateSeriesName(survivor.ID, doomed.Name)
+	})
+
+	require.NoError(t, p.DeleteSeries(doomed.ID))
+	require.NoError(t, <-done)
+	require.True(t, fired.Load(), "the hook never fired; the test did not exercise the window")
+
+	got, err := p.GetSeriesByName(doomed.Name, &author.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the delete erased the index entry the concurrent rename had taken over")
+	require.Equal(t, survivor.ID, got.ID)
+
+	again, err := p.CreateSeries(doomed.Name, &author.ID)
+	require.NoError(t, err)
+	require.Equal(t, survivor.ID, again.ID, "CreateSeries minted a duplicate of the renamed series")
+}
+
+// CreateSeries checked the index and then committed with nothing held, so
+// concurrent creates of one name each minted a row. Same failure CreateAuthor
+// had before nameIdx.author (see its doc comment).
+func TestNameIndex_ConcurrentCreateSeriesMintsOneRow(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Concurrent Series Author")
+	require.NoError(t, err)
+
+	const n = 24
+	ids := make([]int, n)
+	errs := make([]error, n)
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for i := range n {
+		wg.Go(func() {
+			start.Wait()
+			s, err := p.CreateSeries("One Series Only", &author.ID)
+			errs[i] = err
+			if s != nil {
+				ids[i] = s.ID
+			}
+		})
+	}
+	start.Done()
+	wg.Wait()
+	for i := range n {
+		require.NoError(t, errs[i])
+		require.Equal(t, ids[0], ids[i], "concurrent CreateSeries minted more than one row")
+	}
+}
+
+// CreateAuthorAlias had the same unguarded check-then-create: concurrent
+// calls could all see the name free and all mint an alias, leaving every
+// alias but one unreachable by name.
+func TestNameIndex_ConcurrentCreateAuthorAliasAcceptsOne(t *testing.T) {
+	p := newNameIndexTestStore(t)
+	author, err := p.CreateAuthor("Concurrent Alias Owner")
+	require.NoError(t, err)
+
+	const n = 24
+	var ok atomic.Int32
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for range n {
+		wg.Go(func() {
+			start.Wait()
+			if _, err := p.CreateAuthorAlias(author.ID, "One Alias Only", "pen_name"); err == nil {
+				ok.Add(1)
+			}
+		})
+	}
+	start.Done()
+	wg.Wait()
+	require.Equal(t, int32(1), ok.Load(), "concurrent CreateAuthorAlias accepted more than one alias for one name")
+	aliases, err := p.GetAuthorAliases(author.ID)
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+}

@@ -1,7 +1,7 @@
 // file: internal/merge/service_concurrent_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5c8a1f42-9d6b-4e73-8a10-2b4c6d9e0f13
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	ulid "github.com/oklog/ulid/v2"
 )
 

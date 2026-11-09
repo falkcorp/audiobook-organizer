@@ -1,7 +1,7 @@
 // file: internal/organizer/path_containment_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c83e5a17-2b9f-4c64-8d01-f5a7e3b92c46
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The organizer decides "already in the library" from RootDir. A sibling

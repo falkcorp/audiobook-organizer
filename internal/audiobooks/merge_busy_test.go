@@ -1,7 +1,7 @@
 // file: internal/audiobooks/merge_busy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c4f7a19-3e8d-4b52-a6d1-7e92b5c08f34
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

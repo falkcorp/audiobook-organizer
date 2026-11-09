@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,9 +21,9 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 

@@ -1,5 +1,5 @@
 // file: internal/scheduler/full_sweep_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a8eab374-460f-4ba3-816a-4e5d365ca8f6
 // last-edited: 2026-11-09
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/assert"

@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore_retired_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a1e5d93-2c48-4f06-b3a9-0d6c82f1e574
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

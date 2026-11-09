@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus_lock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 08b94ace-eddd-4afc-96fb-fe716d31a803
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package readstatus
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // SetManualStatus waits for the per-(user, book) user-state stripe.

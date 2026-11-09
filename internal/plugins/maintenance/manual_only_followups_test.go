@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )

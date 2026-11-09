@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -52,8 +52,8 @@ import (
 	"strconv"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

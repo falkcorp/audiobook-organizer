@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collapse_series.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4d2e71-5c3b-4f86-b0e2-7d19c6a8f354
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 package abs
 
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"

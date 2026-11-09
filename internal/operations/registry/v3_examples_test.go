@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_examples_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 483e4659-2825-4023-a407-0e33318d6b94
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package registry
 
@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

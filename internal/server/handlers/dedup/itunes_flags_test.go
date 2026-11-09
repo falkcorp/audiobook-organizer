@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/itunes_flags_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e9a6d12-8c47-4f05-b1d3-7a20c5e84f96
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"

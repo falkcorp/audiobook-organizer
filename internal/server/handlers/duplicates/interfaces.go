@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed author/series duplicate detection, async link / refresh
@@ -22,7 +22,7 @@ package duplicates
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

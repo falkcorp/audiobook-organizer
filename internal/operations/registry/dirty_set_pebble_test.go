@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dirty_set_pebble_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d9a7c13-e2b4-4f08-a6d1-3c7e90b24f58
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package registry
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

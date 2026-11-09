@@ -1,7 +1,7 @@
 // file: internal/versions/kept_sweep_modes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3e8a5c17-92d4-4b06-8f1a-6c0d7b2e9a54
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

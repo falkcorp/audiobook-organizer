@@ -1,7 +1,7 @@
 // file: internal/authority/authority_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f4c2a85-1e9b-4d37-a8c6-0b5e7d3f9a12
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package authority
 
@@ -16,17 +16,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestLeafImports keeps this package a leaf. authorcredit, the importer,
 // metafetch, applygate and the maintenance fixers are its consumers; any of
 // them in this package's import graph would be a cycle. Only the standard
-// library, internal/database and internal/personname are allowed.
+// library, internal/books/store and internal/personname are allowed.
 func TestLeafImports(t *testing.T) {
 	allowed := map[string]bool{
-		"github.com/falkcorp/audiobook-organizer/internal/database":   true,
-		"github.com/falkcorp/audiobook-organizer/internal/personname": true,
+		"github.com/falkcorp/audiobook-organizer/internal/books/store": true,
+		"github.com/falkcorp/audiobook-organizer/internal/personname":  true,
 	}
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestKeyPrefixes_AreRegisteredFamilies(t *testing.T) {
 		registered[f.Prefix] = true
 	}
 	for _, p := range KeyPrefixes() {
-		require.True(t, registered[p], "%s is not in internal/database/keyfamilies.go", p)
+		require.True(t, registered[p], "%s is not in internal/books/store/keyfamilies.go", p)
 		require.False(t, strings.HasPrefix(p, "author"), "%s would nest under the author families", p)
 	}
 }

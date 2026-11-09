@@ -1,7 +1,7 @@
 // file: internal/reconcile/path_containment_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 71a4c9e2-3f8b-4d06-a5c1-e92b7d04f6a3
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Every reconcile pass that splits books into "in the library" and "not in the

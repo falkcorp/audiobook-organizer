@@ -1,7 +1,7 @@
 // file: internal/arch/filtered_getter_callers_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c2f9d04-1b8e-4a73-85d6-e0a47b31c9f2
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package arch
 
@@ -19,7 +19,7 @@ import (
 
 // filteredGetters are the book_file / book readers that answer LIVE rows only: a
 // row (or segment hash) held only by a retired version answers nil, so a nil is
-// "no LIVE owner", never "free" (internal/database/iface_retired.go, THE ONE
+// "no LIVE owner", never "free" (internal/books/store/iface_retired.go, THE ONE
 // RULE). A caller that treats nil as "nothing holds this" before writing a row
 // on the identity, importing a file as new, or releasing a file is a bug the
 // type system cannot see: the complete lookups are BookFilesAtPath /
@@ -53,13 +53,13 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"internal/plugins/maintenance/repoint_book_file_rows.go|rbfCheckDisk|GetBookFileByPath": "A second opinion AFTER the complete owner scan above it (AllBookFilesCoreIncludingRetired, retired rows included); it can only add an owner, never clear one.",
 	"internal/scanner/replaced_file_probe.go|storedBookFileAt|GetBookFileByPath":            liveByIntent + "nil only skips the replaced-file probe (the safe direction); the upsert it mirrors matches live rows only (retired rows are never an upsert match).",
 
-	// --- Inside internal/database: the getter's own plumbing and live-row writers.
-	"internal/database/pebble_store_bookfiles.go|PebbleStore.GetBookFileByAcoustIDFuzzy|GetBookFileByAcoustIDFuzzy": "The store's own delegation to the memdb implementation of the same live-only reader.",
-	"internal/database/pebble_store_scancache.go|PebbleStore.UpdateBookFileScanCache|GetBookFileByPath":             liveByIntent + "Stamps mtime/size on the live row at the path; a retired row is not scanned, and no row is created from nil.",
-	"internal/database/retired_mock_store.go|MockStore.GetBookFileByPIDIncludingRetired|GetBookFileByPID":           "MockStore holds no retired rows, so its live reader is its including-retired reader.",
-	"internal/database/retired_mock_store.go|MockStore.GetBookFileByPathIncludingRetired|GetBookFileByPath":         "MockStore holds no retired rows, so its live reader is its including-retired reader.",
-	"pkg/ops/opstest/fakes.go|FakeBooks.GetBookFileByPath|GetBookFileByPath":                                        "Test fake delegating to its own in-memory store.",
-	"pkg/ops/opstest/store.go|worldStore.GetBookFileByPath|GetBookFileByPath":                                       "Test fake delegating to its own in-memory store.",
+	// --- Inside internal/books/store: the getter's own plumbing and live-row writers.
+	"internal/books/store/pebble_store_bookfiles.go|PebbleStore.GetBookFileByAcoustIDFuzzy|GetBookFileByAcoustIDFuzzy": "The store's own delegation to the memdb implementation of the same live-only reader.",
+	"internal/books/store/pebble_store_scancache.go|PebbleStore.UpdateBookFileScanCache|GetBookFileByPath":             liveByIntent + "Stamps mtime/size on the live row at the path; a retired row is not scanned, and no row is created from nil.",
+	"internal/books/store/retired_mock_store.go|MockStore.GetBookFileByPIDIncludingRetired|GetBookFileByPID":           "MockStore holds no retired rows, so its live reader is its including-retired reader.",
+	"internal/books/store/retired_mock_store.go|MockStore.GetBookFileByPathIncludingRetired|GetBookFileByPath":         "MockStore holds no retired rows, so its live reader is its including-retired reader.",
+	"pkg/ops/opstest/fakes.go|FakeBooks.GetBookFileByPath|GetBookFileByPath":                                           "Test fake delegating to its own in-memory store.",
+	"pkg/ops/opstest/store.go|worldStore.GetBookFileByPath|GetBookFileByPath":                                          "Test fake delegating to its own in-memory store.",
 
 	// --- Deliberately live after the retired check.
 	"internal/scanner/scan_existing.go|scanExisting.lookupSegments|GetBookBySegmentFileHash": "The live segment vote. A nil answer only means no LIVE book matches; it is not read as free: lookupScanExisting then calls lookupRetiredContent (RetiredHoldersOfHash on every segment hash) before the book may be imported as new, and skips the import on a retired match or on a check that cannot be answered.",

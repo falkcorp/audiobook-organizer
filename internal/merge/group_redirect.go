@@ -1,7 +1,7 @@
 // file: internal/merge/group_redirect.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a0f4c2e-9b1d-4e57-8a3c-2d7e5f1b9c40
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
