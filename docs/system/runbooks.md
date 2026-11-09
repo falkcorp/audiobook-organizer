@@ -1,5 +1,5 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.7.1 -->
+<!-- version: 1.7.2 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -38,7 +38,7 @@ For debug builds (verbose logging): use `make deploy-debug` instead of `make dep
 
 ### Systemd service
 
-The service is managed as `audiobook-organizer.service`. Server-specific config (env vars, ExecStart overrides) is in `deploy/local.conf` (gitignored) and deployed as a systemd drop-in at `/etc/systemd/system/audiobook-organizer.service.d/local.conf`.
+The service is managed as `audiobook-organizer.service`. Server-specific environment variables are in `deploy/local.conf` (gitignored); deploy renders its `Environment=` lines into the systemd drop-in `/etc/systemd/system/audiobook-organizer.service.d/local.conf`. The `ExecStart` override and other host settings are in `host.conf` beside it, which the owner installs as root and deploy never writes ([deploy-and-gpu-ops.md](deploy-and-gpu-ops.md)).
 
 ```bash
 # Service control

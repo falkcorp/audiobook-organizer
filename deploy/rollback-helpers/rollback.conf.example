@@ -1,5 +1,5 @@
 # file: deploy/rollback-helpers/rollback.conf.example
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8bafb640-d659-4122-8365-282864483ab6
 # last-edited: 2026-11-09
 #
@@ -23,8 +23,9 @@ offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook
 # The unit's Group=, if not service_user. install-staged unit refuses a unit
 # whose User= or Group= differ from these.
 service_group =
-# Where make deploy uploads the binary, the unit and local.conf (scp, as the
-# deploy user); install-staged binary|unit|local-conf installs from these.
+# Where make deploy uploads the binary and local.conf (scp, as the deploy
+# user); install-staged binary|local-conf installs from these. The unit is
+# not uploaded: install-staged unit installs the copy of
+# deploy/audiobook-organizer.service installed with the helpers.
 stage_bin = /home/USER/audiobook-organizer
-stage_unit = /home/USER/audiobook-organizer.service
 stage_local_conf = /home/USER/audiobook-organizer-local.conf

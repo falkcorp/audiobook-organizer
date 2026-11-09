@@ -1,5 +1,5 @@
 # file: deploy/audiobook-organizer.service
-# version: 4.7.0
+# version: 4.8.0
 # guid: f1e2d3c4-b5a6-9870-8765-4321fedcba98
 # last-edited: 2026-11-09
 #
@@ -51,8 +51,8 @@
 #      sudo systemctl enable --now audiobook-organizer
 #
 # Server-specific overrides (TLS certs, DB path, HTTP/3 port, etc.):
-#   Create a drop-in file at:
-#     /etc/systemd/system/audiobook-organizer.service.d/local.conf
+#   Create a drop-in file, as root, at:
+#     /etc/systemd/system/audiobook-organizer.service.d/host.conf
 #   with the contents:
 #     [Service]
 #     ExecStart=
@@ -60,7 +60,9 @@
 #           --db /path/to/audiobooks.pebble \
 #           --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
 #           --http3-port 8484
-#   See deploy/local.conf (gitignored) for the production example.
+#   Environment variables go in the local.conf drop-in beside it, which
+#   `make deploy` renders from deploy/local.conf's Environment= lines (see
+#   deploy/local.conf.example and docs/system/deploy-and-gpu-ops.md).
 #
 # File access:
 #   The audiobook service user needs read access to your library. Configure with:
