@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.2.3
+// version: 2.2.4
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -174,7 +174,7 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 		Build:      build,
 		StateFiles: o.StateFiles,
 		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true,
-			Spec: BooksSpecObserved(func() { migrated.Store(true) })}},
+			Spec: BooksSpec(func() { migrated.Store(true) })}},
 		Logger: logger.FromContext(ctx).With("subsystem", "storage"),
 	})
 	if err != nil {

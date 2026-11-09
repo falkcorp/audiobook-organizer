@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-09
 
@@ -89,7 +89,8 @@ type booksModule struct {
 	stateDir string
 	// cleanStop is the HNSW clean-stop marker Options took before app.New
 	// (database.ClaimHNSWCleanStop), and migrated is set when one of books'
-	// migration steps runs inside New (the manifest's BooksSpecObserved);
+	// migration steps runs inside New (the observer the manifest passes
+	// database.BooksSpec);
 	// Register hands both to the store it builds.
 	cleanStop *database.HNSWCleanStopClaim
 	migrated  atomic.Bool
@@ -129,7 +130,7 @@ func (m *booksModule) Manifest() module.Manifest {
 		// (05-storage §5S.3.4, §5S.9.3; internal/database booksspec.go).
 		// Each step marks this boot migrated, which voids the HNSW
 		// clean-stop marker Options took (AdoptHNSWCleanStopClaim).
-		Storage: database.BooksSpecObserved(func() { m.migrated.Store(true) }),
+		Storage: database.BooksSpec(func() { m.migrated.Store(true) }),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

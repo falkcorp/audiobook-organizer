@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -165,7 +165,7 @@ func ClaimHNSWCleanStop(dbPath string) *HNSWCleanStopClaim {
 
 // AdoptHNSWCleanStopClaim hands the store the marker ClaimHNSWCleanStop took,
 // for the server's snapshot import. migrated says one of books' migration
-// steps ran in this boot (BooksSpecObserved), which voids it
+// steps ran in this boot (BooksSpec's observer), which voids it
 // (adoptCleanStop). Books' Register calls it right after NewBooksStore,
 // before the settings boot writes anything through the store. A nil claim
 // does nothing.
