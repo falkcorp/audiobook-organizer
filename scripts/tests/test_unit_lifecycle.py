@@ -1,5 +1,5 @@
 # file: scripts/tests/test_unit_lifecycle.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 42763f48-1a7c-4d74-8f41-6d9477d4162e
 # last-edited: 2026-11-09
 
@@ -221,6 +221,9 @@ class UnitLifecycleTest(unittest.TestCase):
                 cls.created_dirs.append(d)
             d.mkdir(parents=True, exist_ok=True)
             sh("chown", f"{SERVICE_USER}:{SERVICE_USER}", str(d))
+            # R1-25's swap.lock refuses a state directory that is group- or
+            # other-writable, so the mode is set here rather than left to umask.
+            d.chmod(0o750)
         sh("install", "-m", "0755", str(BINARY), str(BIN_DEST))
         shutil.copyfile(UNIT_SRC, UNIT_DIR / UNIT)
         DROPIN_DIR.mkdir()
@@ -276,8 +279,13 @@ class UnitLifecycleTest(unittest.TestCase):
             check=False,
         ).stdout
 
-    def wait_ready(self, timeout: int, overall: int) -> tuple[subprocess.CompletedProcess, float]:
+    def wait_ready(
+        self, timeout: int, overall: int, previous: str = ""
+    ) -> tuple[subprocess.CompletedProcess, float]:
         """scripts/deploy-wait-ready.sh in its unit mode, over the fake-ssh shim.
+
+        previous is the InvocationID read before a restart: with it the script
+        never calls the process that was already running ready.
 
         The shim runs `systemctl show -p ... UNIT` on this machine instead of
         over ssh; the URL is the proxy into the service's private namespace.
@@ -286,7 +294,15 @@ class UnitLifecycleTest(unittest.TestCase):
         env = dict(h["env"], DEPLOY_WAIT_INTERVAL="5")
         t = time.monotonic()
         proc = subprocess.run(
-            ["bash", str(WAIT_READY), BASE_URL, str(timeout), SSH_HOST, UNIT],
+            [
+                "bash",
+                str(WAIT_READY),
+                BASE_URL,
+                str(timeout),
+                SSH_HOST,
+                UNIT,
+                *([previous] if previous else []),
+            ],
             env=env,
             capture_output=True,
             text=True,
@@ -322,6 +338,8 @@ class UnitLifecycleTest(unittest.TestCase):
         proc, _ = self.wait_ready(timeout=180, overall=600)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr + self.journal()[-4000:])
         pid_before = unit_props("MainPID")["MainPID"]
+        invocation_before = unit_props("InvocationID")["InvocationID"]
+        self.assertTrue(invocation_before)
 
         answer = self.stage_restore()
         self.assertEqual(answer[0], 202, answer)
@@ -334,7 +352,7 @@ class UnitLifecycleTest(unittest.TestCase):
                 time.monotonic(), deadline, "never restarted:\n" + self.journal()[-4000:]
             )
             time.sleep(2)
-        proc, _ = self.wait_ready(timeout=180, overall=600)
+        proc, _ = self.wait_ready(timeout=180, overall=600, previous=invocation_before)
         journal = self.journal()
         out = f"{proc.stdout}\n{proc.stderr}\n{journal[-4000:]}"
         self.assertEqual(proc.returncode, 0, out)
@@ -342,6 +360,20 @@ class UnitLifecycleTest(unittest.TestCase):
         props = unit_props("ActiveState", "NRestarts", "MainPID")
         self.assertEqual((props["ActiveState"], props["NRestarts"]), ("active", "1"), out)
         self.assertNotEqual(props["MainPID"], pid_before, out)
+        self.assertNotEqual(unit_props("InvocationID")["InvocationID"], invocation_before, out)
+        self.assert_swap_lock_rules()
+
+    def assert_swap_lock_rules(self) -> None:
+        """R1-25's swap.lock rules hold for the state directory this test
+        installed: not group- or other-writable, and the lock file (if the
+        service has created one) owned by the directory's owner, mode 0600."""
+        state = STATE_DIR.stat()
+        self.assertEqual(state.st_mode & 0o022, 0, oct(state.st_mode))
+        lock = STATE_DIR / "swap.lock"
+        if lock.exists():
+            st = lock.stat()
+            self.assertEqual(st.st_uid, state.st_uid)
+            self.assertEqual(st.st_mode & 0o7777, 0o600, oct(st.st_mode))
 
     def stage_restore(self) -> tuple[int, dict]:
         """Bootstrap an admin, take a backup and POST the restore.
