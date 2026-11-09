@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -692,6 +692,17 @@ class InstallStaged(unittest.TestCase):
         code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.conf_path(h).read_text(), text)
+
+    def test_a_short_read_still_installs_the_whole_file(self):
+        """read(2) may return less than asked (a network-mounted home):
+        the helper reads to the end, never installing a truncated drop-in."""
+        h = self.host()
+        (self.stage / "audiobook-organizer-local.conf").write_text(REAL_SHAPED_LOCAL_CONF)
+        real = os.read
+        with unittest.mock.patch.object(h.mod.os, "read", lambda fd, n: real(fd, min(n, 7))):
+            code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.conf_path(h).read_text(), REAL_SHAPED_LOCAL_CONF)
 
     def test_a_real_shaped_local_conf_installs(self):
         h = self.host()
