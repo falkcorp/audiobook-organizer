@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-08
 
@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -152,13 +153,13 @@ type checkpointRecord struct {
 	ReadyAt     *time.Time        `json:"ready_at,omitempty"`
 	CompletedAt *time.Time        `json:"completed_at,omitempty"`
 	DeleteAfter *time.Time        `json:"delete_after,omitempty"`
-	Status      string            `json:"status"` // open, served, completed, restore_left
+	Status      string            `json:"status"` // open, served, completed, restore_left, consumed
 }
 
 // pending reports a record whose attempt is unfinished: open or served, not
 // completed, released or left by a failed restore.
 func (r checkpointRecord) pending() bool {
-	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left"
+	return r.CompletedAt == nil && r.DeleteAfter == nil && r.Status != "restore_left" && r.Status != statusConsumed
 }
 
 // open reports a pending record no boot has served past: the one kind a
@@ -187,13 +188,31 @@ type namedRecord struct {
 	rec  checkpointRecord
 }
 
+// cpFiles is one store's checkpoint directory and pointer, without the
+// store: what the boot's checkpoint code and storage restore-offline share
+// (§5S.3.12 "How"). The offline restore reads them while the store is
+// closed, and a store too broken to open is a main reason to restore.
+type cpFiles struct {
+	fs     vfs.FS
+	dir    string // <checkpoint_dir or the DB's parent>/.mediacore-checkpoints
+	dbPath string
+	chmod  func(path string, dir bool) error
+	log    *slog.Logger
+}
+
+// cp is the DB's checkpoint files.
+func (db *DB) cp() cpFiles {
+	o := &db.boot.opts
+	return cpFiles{fs: o.fs, dir: o.cpDir, dbPath: o.Path, chmod: o.chmod, log: db.log}
+}
+
 // checkpointRecords reads every <name>.json in the checkpoint directory. A
 // record that cannot be read fails the call; one removed since the listing
 // is skipped, and one that reads but does not parse is logged and skipped.
-func (db *DB) checkpointRecords() ([]namedRecord, error) {
-	st := db.boot
-	fs := st.opts.fs
-	names, err := fs.List(st.opts.cpDir)
+func (db *DB) checkpointRecords() ([]namedRecord, error) { return db.cp().records() }
+
+func (c cpFiles) records() ([]namedRecord, error) {
+	names, err := c.fs.List(c.dir)
 	if err != nil {
 		if oserrorNotExist(err) {
 			return nil, nil
@@ -207,7 +226,7 @@ func (db *DB) checkpointRecords() ([]namedRecord, error) {
 		if !ok || !isCheckpointName(base) {
 			continue
 		}
-		data, ok, err := ipebble.ReadFile(fs, filepath.Join(st.opts.cpDir, n))
+		data, ok, err := ipebble.ReadFile(c.fs, filepath.Join(c.dir, n))
 		if err != nil {
 			// An EIO or a permission error: skipping the record would take
 			// a second full checkpoint beside it, or orphan it under a new
@@ -221,7 +240,7 @@ func (db *DB) checkpointRecords() ([]namedRecord, error) {
 		if json.Unmarshal(data, &rec) != nil {
 			// Records are written atomically, so this is a hand edit or
 			// corruption; it is never reused or completed.
-			db.log.Error("storage: checkpoint record does not parse; never reused", "name", base)
+			c.log.Error("storage: checkpoint record does not parse; never reused", "name", base)
 			continue
 		}
 		out = append(out, namedRecord{name: base, rec: rec})
@@ -534,29 +553,33 @@ func (db *DB) copyStateFiles(dir string) ([]stateFileRecord, error) {
 }
 
 func (db *DB) writeRecord(name string, rec checkpointRecord) error {
-	st := db.boot
+	return db.cp().writeRecord(name, rec)
+}
+
+func (c cpFiles) writeRecord(name string, rec checkpointRecord) error {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(st.opts.cpDir, name+".json")
-	if err := ipebble.WriteFileAtomic(st.opts.fs, p, append(data, '\n')); err != nil {
+	p := filepath.Join(c.dir, name+".json")
+	if err := ipebble.WriteFileAtomic(c.fs, p, append(data, '\n')); err != nil {
 		return fmt.Errorf("storage: checkpoint record: %w", err)
 	}
-	return st.opts.chmod(p, false)
+	return c.chmod(p, false)
 }
 
-func (db *DB) writePointer(p checkpointPointer) error {
-	st := db.boot
+func (db *DB) writePointer(p checkpointPointer) error { return db.cp().writePointer(p) }
+
+func (c cpFiles) writePointer(p checkpointPointer) error {
 	data, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	path := st.opts.Path + ipebble.CheckpointSuffix
-	if err := ipebble.WriteFileAtomic(st.opts.fs, path, append(data, '\n')); err != nil {
+	path := c.dbPath + ipebble.CheckpointSuffix
+	if err := ipebble.WriteFileAtomic(c.fs, path, append(data, '\n')); err != nil {
 		return fmt.Errorf("storage: %s: %w", ipebble.CheckpointSuffix, err)
 	}
-	return st.opts.chmod(path, false)
+	return c.chmod(path, false)
 }
 
 // completeCheckpoint writes completed_at and delete_after = completed_at + 7
@@ -633,10 +656,11 @@ func (db *DB) completeRecord(name string, now time.Time, latest bool) (found boo
 }
 
 // pointer reads <db path>.migration-checkpoint; ok is false when it is absent.
-func (db *DB) pointer() (p checkpointPointer, ok bool, err error) {
-	st := db.boot
-	path := st.opts.Path + ipebble.CheckpointSuffix
-	data, ok, err := ipebble.ReadFile(st.opts.fs, path)
+func (db *DB) pointer() (p checkpointPointer, ok bool, err error) { return db.cp().pointer() }
+
+func (c cpFiles) pointer() (p checkpointPointer, ok bool, err error) {
+	path := c.dbPath + ipebble.CheckpointSuffix
+	data, ok, err := ipebble.ReadFile(c.fs, path)
 	if err != nil || !ok {
 		return p, false, err
 	}
