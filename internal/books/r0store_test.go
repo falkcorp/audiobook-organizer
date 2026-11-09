@@ -1,5 +1,5 @@
 // file: internal/books/r0store_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 5d8a1f36-2c7e-4b94-a0d3-6e9b4c1f7a28
 // last-edited: 2026-11-09
 
@@ -110,24 +110,74 @@ func sha256File(t *testing.T, path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// download fetches url to dst through a temp file renamed into place.
+// downloadAttempts and downloadBackoff bound download's retry of transient
+// failures: 2s, 4s, 8s, 16s between five attempts.
+const (
+	downloadAttempts = 5
+	downloadBackoff  = 2 * time.Second
+)
+
+// download fetches url to dst through a temp file renamed into place,
+// retrying transient failures (network errors, 5xx, 429) with backoff.
 func download(t *testing.T, url, dst string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
+	err := downloadWithRetry(ctx, t.Logf, http.DefaultClient, url, dst, downloadAttempts, downloadBackoff)
 	require.NoError(t, err, "download the R0 release archive (set %s to use a local binary)", r0BinaryEnv)
+}
+
+// downloadWithRetry is download with the attempt count and first backoff
+// injectable. The backoff doubles after each failed attempt. Any other 4xx
+// fails at once: retrying cannot change the answer.
+func downloadWithRetry(ctx context.Context, logf func(string, ...any), client *http.Client, url, dst string, attempts int, backoff time.Duration) error {
+	for attempt := 1; ; attempt++ {
+		transient, err := downloadOnce(ctx, client, url, dst)
+		if err == nil {
+			return nil
+		}
+		logf("download %s: attempt %d/%d failed: %v", url, attempt, attempts, err)
+		if !transient || attempt >= attempts {
+			return fmt.Errorf("download %s: %w", url, err)
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return fmt.Errorf("download %s: waiting to retry: %w", url, ctx.Err())
+		}
+		backoff *= 2
+	}
+}
+
+// downloadOnce makes one attempt. transient reports whether a failed attempt
+// is worth retrying: a network or body-read error, a 5xx, or a 429.
+func downloadOnce(ctx context.Context, client *http.Client, url, dst string) (transient bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return true, err
+	}
 	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "download %s", url)
+	if resp.StatusCode != http.StatusOK {
+		retry := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		return retry, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".r0-download-*")
-	require.NoError(t, err)
+	if err != nil {
+		return false, err
+	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	_, err = io.Copy(tmp, resp.Body)
-	require.NoError(t, err)
-	require.NoError(t, tmp.Close())
-	require.NoError(t, os.Rename(tmp.Name(), dst))
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		return true, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	return false, os.Rename(tmp.Name(), dst)
 }
 
 // extractTarEntry writes the regular file named name in the .tar.gz at
