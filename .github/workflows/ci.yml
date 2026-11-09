@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.36.1
+# version: 3.37.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -1123,6 +1123,32 @@ jobs:
       # would report those tests as passing while running none of them.
       - name: Install system dependencies
         run: scripts/ci/apt_install.sh libtag1-dev ffmpeg libchromaprint-tools
+
+      # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
+      # its archive from cache and fetch it here (gh, retrying, checksum
+      # pinned) so the test never downloads in CI: a runner proxy 504 failed it
+      # on every in-test retry. Keep the key in step with r0store_test.go.
+      - name: Restore the R0 release archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/audiobook-organizer-tests/r0
+          key: r0-release-v0.223.0-acbe9e096b04d80bd1a49d8e0ecc1bf7dc8171e004ea26cf795513e881ba1e6d
+
+      - name: Fetch the R0 binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R0_TAG: v0.223.0
+        # Exit 3 = the download failed on every attempt: carry on, and the
+        # test's own retrying download is the fallback. Any other failure
+        # (a checksum mismatch) fails the job.
+        run: |
+          rc=0
+          scripts/ci/fetch_r0.sh || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            echo "::warning::R0 prefetch failed; the test will try its own download"
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
 
       # FIXTURE_TIMES_FILE makes the run write per-package wall times as JSON;
       # the artifact below feeds scripts/ci/fixture_shard_weights.py, which
