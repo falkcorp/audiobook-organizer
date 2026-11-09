@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c1e6f47-2b80-4d3a-a5f1-7e04b9d2c816
 // last-edited: 2026-11-08
 
@@ -481,6 +481,27 @@ func TestPruneCheckpoints(t *testing.T) {
 			t.Fatalf("a refused prune changed %v to %v", before, after)
 		}
 	})
+	t.Run("refused while a restore is staged", func(t *testing.T) {
+		// A staged intent (a KindCheckpoint restore among them) is swapped
+		// in by the next boot and may name the checkpoint prune would
+		// delete.
+		pending := filepath.Join(stateDir, "restore", "pending.json")
+		if err := e.fs.MkdirAll(filepath.Dir(pending), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		f, err := e.fs.Create(pending, vfs.WriteCategoryUnspecified)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		defer func() { _ = e.fs.RemoveAll(filepath.Join(stateDir, "restore")) }()
+		before := cpNames(t, e.fs, cpDir(e))
+		_, err = PruneCheckpoints(context.Background(), opts)
+		mustErrIs(t, err, ErrPruneSwapInFlight)
+		if after := cpNames(t, e.fs, cpDir(e)); !slices.Equal(before, after) {
+			t.Fatalf("a refused prune changed %v to %v", before, after)
+		}
+	})
 	t.Run("refused while a sweep holds the lock", func(t *testing.T) {
 		// The lock is the OS's (cpArea.lock): on the real filesystem, a
 		// prune waits out its lockWait and gives up while a sweep holds it.
@@ -523,6 +544,54 @@ func TestPruneCheckpoints(t *testing.T) {
 			t.Fatalf("the pointer naming the pruned %s is still there: %v", completed, err)
 		}
 	})
+}
+
+// TestPruneCheckpointsProbesTheSwapUnderTheLock: prune reads the swap slot
+// after it holds the sweep lock, so a restore staged or started while it
+// waited for the lock is refused, not raced: a storage restore-offline
+// that holds the same lock while it swaps never overlaps a prune. Real
+// filesystem: the lock is the OS's.
+func TestPruneCheckpointsProbesTheSwapUnderTheLock(t *testing.T) {
+	for _, slot := range []string{"pending.json", filepath.Join("r-arkham", "inflight.json")} {
+		t.Run(slot, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "main.pebble")
+			stateDir := filepath.Join(dir, "state")
+			cps := filepath.Join(dir, checkpointLeaf)
+			const penguin = "20260302T000000Z-0b1e5e00"
+			released := time.Now().Add(-time.Hour)
+			writeForeignCheckpoint(t, vfs.Default, cps, penguin, "released", time.Now().Add(-8*24*time.Hour), &released)
+			l, err := vfs.Default.Lock(filepath.Join(cps, sweepLockName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := PruneCheckpoints(context.Background(), PruneOptions{Path: path, StateDir: stateDir, lockWait: time.Minute})
+				done <- err
+			}()
+			// The restore stages while prune waits for the lock, then the
+			// lock is released.
+			time.Sleep(150 * time.Millisecond)
+			p := filepath.Join(stateDir, "restore", slot)
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_ = l.Close()
+			select {
+			case err := <-done:
+				mustErrIs(t, err, ErrPruneSwapInFlight)
+			case <-time.After(30 * time.Second):
+				t.Fatal("prune did not return after the lock was released")
+			}
+			if _, err := os.Stat(filepath.Join(cps, penguin+".json")); err != nil {
+				t.Fatalf("a refused prune removed %s's record: %v", penguin, err)
+			}
+		})
+	}
 }
 
 func mustHealth(t *testing.T, db *DB) CheckpointHealth {
