@@ -1,5 +1,5 @@
 // file: internal/database/booksspec.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d814793-7285-4757-ae8a-aabc89f7a006
 // last-edited: 2026-11-09
 
@@ -33,13 +33,16 @@ import (
 // share it with another's.
 
 // BooksSpec is books' storage.Spec at release R1. Every migration step,
-// legacy or versioned, calls ran before it runs (nil: none). An opener
-// passes ran to learn that a step wrote the store in this boot: the steps
-// write through their own step stores and batches, so nothing the
-// opener's store counts sees them, and the HNSW clean-stop marker the
-// opener took before them no longer vouches (adoptCleanStop). Books'
-// manifest and OpenStandalone pass one.
-func BooksSpec(ran func()) storage.Spec {
+// legacy or versioned, calls ran before it runs (nil: none), and an error
+// from ran fails the step before it writes anything. An opener passes ran
+// to act before a step writes the store in this boot: the steps write
+// through their own step stores and batches, so nothing the opener's store
+// counts sees them, and the HNSW clean-stop marker beside the store no
+// longer vouches for the rows. Books' manifest discards the marker in its
+// ran, before the first step (the served boot takes its claim later, in
+// Register); OpenStandalone, which took its claim before Prepare, voids it
+// (adoptCleanStop).
+func BooksSpec(ran func() error) storage.Spec {
 	bk := &booksBookkeeping{}
 	return storage.Spec{
 		Claims:        BooksClaims(),
@@ -56,30 +59,36 @@ func BooksSpec(ran func()) storage.Spec {
 	}
 }
 
-// observeLegacySteps makes each step call ran before its Up (nil: as is).
-func observeLegacySteps(steps []storage.LegacyMigration, ran func()) []storage.LegacyMigration {
+// observeLegacySteps makes each step call ran before its Up, and fail with
+// its error (nil: as is).
+func observeLegacySteps(steps []storage.LegacyMigration, ran func() error) []storage.LegacyMigration {
 	if ran == nil {
 		return steps
 	}
 	for i := range steps {
 		up := steps[i].Up
 		steps[i].Up = func(ctx context.Context, r storage.LegacyRange) error {
-			ran()
+			if err := ran(); err != nil {
+				return err
+			}
 			return up(ctx, r)
 		}
 	}
 	return steps
 }
 
-// observeMigrations makes each step call ran before its Up (nil: as is).
-func observeMigrations(steps []storage.Migration, ran func()) []storage.Migration {
+// observeMigrations makes each step call ran before its Up, and fail with
+// its error (nil: as is).
+func observeMigrations(steps []storage.Migration, ran func() error) []storage.Migration {
 	if ran == nil {
 		return steps
 	}
 	for i := range steps {
 		up := steps[i].Up
 		steps[i].Up = func(ctx context.Context, tx *storage.MigrationTx) error {
-			ran()
+			if err := ran(); err != nil {
+				return err
+			}
 			return up(ctx, tx)
 		}
 	}

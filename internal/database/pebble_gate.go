@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-11-09
 
@@ -48,9 +48,9 @@ import (
 //   - Get closer: Get → closer.Close (pebble's Get pins an internal iterator
 //     until then). A not-found Get holds nothing and releases at once.
 //   - Snapshot: NewSnapshot → Close; its iterators and Gets take their own.
-//   - Writes and maintenance (Set, Delete, DeleteRange, Merge, LogData,
-//     batch Commit, Flush, Compact, Checkpoint, Metrics, SSTables,
-//     EstimateDiskUsage): the duration of the call. A commit past pebble's
+//   - Writes and maintenance (Set, Delete, DeleteRange, batch Commit,
+//     Flush, Compact, Checkpoint, Metrics, SSTables, EstimateDiskUsage):
+//     the duration of the call. A commit past pebble's
 //     prepare step is still applying to a memtable when Close could run.
 //   - SyncWAL (a sync-only WAL record): the duration of the call, and it is
 //     the one access still admitted while Close drains. See DURABILITY.
