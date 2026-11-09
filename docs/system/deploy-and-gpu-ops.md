@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -454,6 +454,13 @@ where Python and systemd read a line differently. Instead:
   whitespace, quotes and backslashes or wholly inside one pair of double or
   single quotes with no backslash. Anything else (`ExecStart=`, a second
   section, a continuation, two assignments on one line) refuses the deploy.
+  So does a variable that makes the loader, libc, an interpreter or the Go
+  runtime load or run something else, in any case and any quoting: `LD_*`,
+  `MALLOC_*`, `PYTHON*`, `PERL5*`, `GCONV_PATH`, `GETCONF_DIR`,
+  `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `NLSPATH`, `NODE_OPTIONS`,
+  `GODEBUG`, `TZDIR`, `GLIBC_TUNABLES` and `BASH_ENV`. This is defence in
+  depth behind the drop-in rules below; `GODEBUG` is on the list because it
+  can switch off Go's TLS and x509 checks.
   Every kept line may hold only printable ASCII and tabs, and a carriage
   return or NUL anywhere refuses: Python takes characters such as a vertical
   tab, `\x1c` or U+2028 for whitespace or line breaks and systemd does not, so
@@ -482,17 +489,35 @@ host-specific setting there too. Leave `TimeoutStopSec=` unset unless you
 need more than the base unit's 60 s, which is sized to the server's stop
 budget.
 
-host.conf must run nothing but the service user's `ExecStart=`: no other
-`Exec*=` line (`ExecStartPre=`, `ExecStopPost=`, ...), no `+` or `!` prefix,
-no `PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
+host.conf, and every other drop-in systemd applies to the unit, must run
+nothing but the service user's `ExecStart=`: no other `Exec*=` line
+(`ExecStartPre=`, `ExecStopPost=`, ...), no `+` or `!` prefix, no
+`PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
 `Group=` other than `service_user` and `service_group`. Every `Environment=`
 line `local.conf` deploys reaches whatever the unit runs, and a deploy user
-setting `LD_PRELOAD=` is harmless only while that is the service user's own
+setting a variable is harmless only while that is the service user's own
 binary, which the deploy user already controls. `install-staged unit` and
 `install-staged local-conf` run one shared check of this before they copy
-anything, and refuse unless host.conf exists as a regular file (not a
-symlink), owned by root and not writable by group or others. A refusal names
-the line, never its text. So a host without a good host.conf never gets the
+anything:
+
+- host.conf must exist as a regular file (not a symlink), owned by root and
+  not writable by group or others.
+- Every drop-in systemd will apply is checked by the same rules and must be
+  a regular file owned by root and not writable by group or others, in a
+  directory with the same ownership. The list is what
+  `systemctl show -p DropInPaths <unit>` reports (parsed strictly; a path
+  it cannot parse refuses) together with a scan of every unit directory
+  (`/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`,
+  the `.control`, `.attached`, transient and generator directories) for
+  `<unit>.d/`, each dash-prefix directory (`audiobook-.service.d/`) and the
+  type-wide `service.d/`. The scan is not only a fallback: systemd reports
+  only the drop-ins it loaded at its last reload, and both installs reload.
+  The helper's own drop-ins (`local.conf`, `pprof.conf`, the `Type=simple`
+  one) pass by construction. A masked drop-in (a symlink to `/dev/null`)
+  refuses like any other symlink.
+- The unit template in the helper bundle is checked by the same rules.
+
+A refusal names the file and the line, never the text. So a host without a good host.conf never gets the
 base unit installed, and can never restart on the base unit's `ExecStart`,
 whether or not the deploy carries a `local.conf`.
 

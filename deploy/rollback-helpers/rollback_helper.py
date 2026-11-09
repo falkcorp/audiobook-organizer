@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -595,6 +595,35 @@ _ENV_ASSIGNMENT = re.compile(
 )
 
 
+# Variables that make the dynamic loader, libc, an interpreter or the Go
+# runtime load or run something else, or weaken its checks: refused in
+# local.conf even though every Environment= line reaches only the service
+# user (defence in depth behind _check_rules). Compared upper-cased.
+# GODEBUG is refused too: it can switch off Go's TLS and x509 checks, and no
+# deployed local.conf uses it.
+_ENV_DENIED = frozenset(
+    {
+        "GCONV_PATH",
+        "GETCONF_DIR",
+        "HOSTALIASES",
+        "LOCALDOMAIN",
+        "RES_OPTIONS",
+        "NLSPATH",
+        "NODE_OPTIONS",
+        "GODEBUG",
+        "TZDIR",
+        "GLIBC_TUNABLES",
+        "BASH_ENV",
+    }
+)
+_ENV_DENIED_PREFIXES = ("LD_", "MALLOC_", "PYTHON", "PERL5")
+
+
+def _env_key_denied(assignment: str) -> bool:
+    key = assignment.lstrip("\"'").partition("=")[0].upper()
+    return key in _ENV_DENIED or key.startswith(_ENV_DENIED_PREFIXES)
+
+
 def render_local_conf(text: str, source: str) -> str:
     """The local.conf drop-in to install, rendered from the staged file:
     `[Service]` and its `Environment=` lines, each re-written as is after it
@@ -621,6 +650,11 @@ def render_local_conf(text: str, source: str) -> str:
         if s.startswith("Environment=") and section:
             value = s[len("Environment=") :]
             if _ENV_ASSIGNMENT.fullmatch(value):
+                if _env_key_denied(value):
+                    raise RefusedError(
+                        f"line {n}: a loader or runtime-injection variable (LD_*, MALLOC_*, PYTHON*, "
+                        "PERL5*, GCONV_PATH, GLIBC_TUNABLES, GODEBUG, NODE_OPTIONS, ...) is refused"
+                    )
                 lines.append(f"Environment={value}\n")
                 continue
             raise RefusedError(
@@ -640,37 +674,45 @@ def render_local_conf(text: str, source: str) -> str:
 
 
 HOST_CONF = "host.conf"
-# Exec lines and settings host.conf may not carry. Every Environment= line
-# local.conf deploys reaches the processes the unit runs; that is safe only
-# while those are the service user's own ExecStart (whose code the deploy
-# user already controls through the binary). A second command, a `+`/`!`
-# prefix, PermissionsStartOnly=, another User=/Group= or ambient
-# capabilities would hand those variables (LD_PRELOAD=, ...) to something
-# with more privilege.
+# The system unit directories systemd reads drop-ins from besides
+# SYSTEMD_DIR (systemd.unit(5), "Unit File Load Path"). /lib/systemd/system
+# is the same directory as /usr/lib/systemd/system on a merged-/usr host.
+UNIT_DIRS = (
+    "/etc/systemd/system.control",
+    "/run/systemd/system.control",
+    "/run/systemd/transient",
+    "/run/systemd/generator.early",
+    "/etc/systemd/system.attached",
+    "/run/systemd/system",
+    "/run/systemd/system.attached",
+    "/run/systemd/generator",
+    "/usr/local/lib/systemd/system",
+    "/usr/lib/systemd/system",
+    "/lib/systemd/system",
+    "/run/systemd/generator.late",
+)
+# Settings no drop-in may carry. Every Environment= line local.conf deploys
+# reaches the processes the unit runs; that is safe only while those are the
+# service user's own ExecStart (whose code the deploy user already controls
+# through the binary). A second command, a `+`/`!` prefix,
+# PermissionsStartOnly=, another User=/Group= or ambient capabilities would
+# hand those variables (LD_PRELOAD=, ...) to something with more privilege.
 _HOST_REFUSED = ("PermissionsStartOnly", "AmbientCapabilities")
+_WHY_RULES = (
+    "every drop-in of the unit may run only the service user's ExecStart, because every "
+    "Environment= line local.conf deploys reaches what it runs"
+)
 
 
-def _check_host_conf(cfg: dict[str, str]) -> None:
-    """local.conf carries only Environment= lines, so the ExecStart=
-    override and the host's other settings live in host.conf beside it,
-    which the owner writes as root. Without it the service would restart on
-    the base unit's ExecStart (no TLS, the wrong store), so install-staged
-    unit and local-conf both refuse, before they copy anything, unless
-    host.conf is a root-owned regular file, not writable by group or
-    others, that runs nothing but the service user's ExecStart.
-    A refusal names the line, never its text."""
-    path = f"{SYSTEMD_DIR}/{cfg['unit']}.d/{HOST_CONF}"
-    why = (
-        "it holds the ExecStart= override and the host's other settings, which local.conf no "
-        "longer carries; without it the service would restart on the base unit's ExecStart"
-    )
+def _read_root_conf(path: str) -> str:
+    """A unit file or drop-in systemd reads as root: no symlink, a regular
+    file owned by root and not writable by group or others, at most
+    UNIT_LIMIT bytes, UTF-8 with no CR or NUL. Raises FileNotFoundError when
+    it does not exist; any other problem refuses."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError as e:
-        raise RefusedError(
-            f"{path} is missing: {why}. The owner writes it as root "
-            "(docs/system/deploy-and-gpu-ops.md, host.conf); nothing installed"
-        ) from e
+    except FileNotFoundError:
+        raise
     except OSError as e:
         raise RefusedError(
             f"cannot open {path} ({e.strerror}; a symlink is refused); nothing installed"
@@ -680,7 +722,7 @@ def _check_host_conf(cfg: dict[str, str]) -> None:
         if not stat.S_ISREG(st.st_mode) or not _owner_ok(st) or st.st_size > UNIT_LIMIT:
             raise RefusedError(
                 f"{path} must be a regular file of at most {UNIT_LIMIT} bytes, owned by root and "
-                f"not writable by group or others ({why}); nothing installed"
+                "not writable by group or others; nothing installed"
             )
         data = _read_all(fd, UNIT_LIMIT + 1)
     finally:
@@ -691,6 +733,16 @@ def _check_host_conf(cfg: dict[str, str]) -> None:
         raise RefusedError(f"{path} is not UTF-8; nothing installed") from e
     if "\r" in text or "\0" in text:
         raise RefusedError(f"{path}: carriage returns and NUL bytes are refused; nothing installed")
+    return text
+
+
+def _check_rules(text: str, cfg: dict[str, str], path: str) -> None:
+    """Refuse a unit file or drop-in that runs anything but the service
+    user's ExecStart: another Exec*= line, a + or ! prefix,
+    PermissionsStartOnly=, AmbientCapabilities=, or a User=/Group= other
+    than the config's. Continuation lines are not directives; directive
+    lines must be printable ASCII. A refusal names the line, never its
+    text."""
     want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
     continued = False
     for n, raw in enumerate(text.split("\n"), 1):
@@ -723,11 +775,97 @@ def _check_host_conf(cfg: dict[str, str]) -> None:
         elif key in want and value != want[key]:
             problem = f"sets {key}= to something other than service_{key.lower()} in {CONFIG}"
         if problem:
+            raise RefusedError(f"{path} line {n} {problem}; {_WHY_RULES}; nothing installed")
+
+
+def _check_host_conf(cfg: dict[str, str]) -> None:
+    """local.conf carries only Environment= lines, so the ExecStart=
+    override and the host's other settings live in host.conf beside it,
+    which the owner writes as root. Without it the service would restart on
+    the base unit's ExecStart (no TLS, the wrong store), so install-staged
+    unit and local-conf both refuse, before they copy anything, unless
+    host.conf is a root-owned regular file, not writable by group or
+    others, that runs nothing but the service user's ExecStart."""
+    path = f"{SYSTEMD_DIR}/{cfg['unit']}.d/{HOST_CONF}"
+    try:
+        text = _read_root_conf(path)
+    except FileNotFoundError as e:
+        raise RefusedError(
+            f"{path} is missing: it holds the ExecStart= override and the host's other settings, "
+            "which local.conf no longer carries; without it the service would restart on the base "
+            "unit's ExecStart. The owner writes it as root (docs/system/deploy-and-gpu-ops.md, "
+            "host.conf); nothing installed"
+        ) from e
+    _check_rules(text, cfg, path)
+
+
+def _dropin_dir_names(unit: str) -> list[str]:
+    """The drop-in directory names systemd applies to unit: <unit>.d, each
+    dash prefix (`foo-bar-baz.service` gives foo-bar-.service.d and
+    foo-.service.d) and the type-wide service.d (systemd.unit(5))."""
+    base = unit[: -len(".service")]
+    parts = base.split("-")
+    names = [f"{unit}.d"]
+    names += [f"{'-'.join(parts[:i])}-.service.d" for i in range(len(parts) - 1, 0, -1)]
+    return [*names, "service.d"]
+
+
+def _unit_dropins(cfg: dict[str, str]) -> list[str]:
+    """Every drop-in systemd applies to the unit: the ones it reports
+    loaded (`systemctl show -p DropInPaths`, parsed strictly) together with
+    a scan of every unit directory, since one added after the last
+    daemon-reload is not reported yet and both installs reload. A drop-in
+    directory must be a real directory owned by root and not writable by
+    group or others."""
+    p = subprocess.run(  # noqa: S603 (fixed argv)
+        [TOOLS["systemctl"], "show", "-p", "DropInPaths", "--value", cfg["unit"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    found: set[str] = set()
+    if p.returncode == 0:
+        for tok in p.stdout.split(" "):
+            tok = tok.strip("\n")
+            if not tok:
+                continue
+            if not _PATH.fullmatch(tok) or not tok.endswith(".conf") or "/../" in tok:
+                raise RefusedError(
+                    f"systemctl show -p DropInPaths for {cfg['unit']} gave a path the helper cannot "
+                    "parse; nothing installed"
+                )
+            found.add(tok)
+    dirs = {os.path.dirname(f) for f in found}
+    for root in (SYSTEMD_DIR, *UNIT_DIRS):
+        for name in _dropin_dir_names(cfg["unit"]):
+            d = f"{root}/{name}"
+            try:
+                dst = os.lstat(d)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(dst.st_mode):
+                raise RefusedError(f"{d} is not a directory; nothing installed")
+            dirs.add(d)
+            found.update(f"{d}/{e}" for e in os.listdir(d) if e.endswith(".conf"))
+    for d in sorted(dirs):
+        dst = os.lstat(d)
+        if not stat.S_ISDIR(dst.st_mode) or not _owner_ok(dst):
             raise RefusedError(
-                f"{path} line {n} {problem}; host.conf may run only the service user's ExecStart, "
-                "because every Environment= line local.conf deploys reaches what it runs; "
+                f"{d} must be a directory owned by root and not writable by group or others; "
                 "nothing installed"
             )
+    return sorted(found)
+
+
+def _check_unit_dropins(cfg: dict[str, str]) -> None:
+    """Apply _check_rules to every drop-in systemd applies to the unit,
+    host.conf and the helper's own fixed files included (they pass)."""
+    for path in _unit_dropins(cfg):
+        try:
+            text = _read_root_conf(path)
+        except FileNotFoundError as e:
+            raise RefusedError(f"{path} vanished while it was checked; nothing installed") from e
+        _check_rules(text, cfg, path)
 
 
 def _check_template(text: str, cfg: dict[str, str]) -> None:
@@ -845,9 +983,11 @@ def _read_template(cfg: dict[str, str]) -> bytes:
     finally:
         os.close(fd)
     try:
-        _check_template(data.decode("utf-8", "strict"), cfg)
+        text = data.decode("utf-8", "strict")
     except UnicodeDecodeError as e:
         raise RefusedError(f"{path} is not UTF-8") from e
+    _check_template(text, cfg)
+    _check_rules(text, cfg, path)
     return data
 
 
@@ -862,6 +1002,7 @@ def op_install(args: list[str]) -> int:
         # base unit's ExecStart would run (no TLS, the wrong store), so
         # neither the unit nor local.conf is installed.
         _check_host_conf(cfg)
+        _check_unit_dropins(cfg)
     if what == "unit":
         data = _read_template(cfg)
         os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)

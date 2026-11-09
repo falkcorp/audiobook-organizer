@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -90,6 +90,13 @@ if "ActiveState" in sys.argv:
         print(open({state!r}).read().strip())
     except FileNotFoundError:
         print("inactive")
+if "DropInPaths" in sys.argv:
+    if os.path.exists({state!r} + ".show-fails"):
+        sys.exit(1)
+    try:
+        print(open({state!r} + ".dropin-paths").read().strip())
+    except FileNotFoundError:
+        print("")
 sys.exit(0)
 """
 
@@ -878,6 +885,10 @@ class InstallStaged(unittest.TestCase):
 
     def host(self, **extra) -> Host:
         h = Host(self)
+        # The other unit directories systemd reads drop-ins from (/run,
+        # /usr/lib, ...), inside the sandbox.
+        self.unit_dirs = [h.root / "run-systemd", h.root / "usr-lib-systemd"]
+        h.mod.UNIT_DIRS = tuple(str(d) for d in self.unit_dirs)
         self.stage = h.root / "home"
         self.stage.mkdir()
         self.libdir = h.root / "libexec"
@@ -903,6 +914,18 @@ class InstallStaged(unittest.TestCase):
         self.host_conf_path.chmod(0o644)
         return h
 
+    def changes(self, h: Host) -> list[list[str]]:
+        """The tool calls that change something: every call but the
+        read-only `systemctl show -p DropInPaths`."""
+        return [t["argv"] for t in h.tools() if t["argv"][:3] != ["show", "-p", "DropInPaths"]]
+
+    def dropin(self, h: Host, name: str, text: str, root: Path | None = None, d: str = "") -> Path:
+        p = (root or h.systemd) / (d or "audiobook-organizer.service.d") / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        p.chmod(0o644)
+        return p
+
     def template(self, text: str | None = None, mode: int = 0o644) -> Path:
         p = self.libdir / "audiobook-organizer.service"
         p.write_text(committed_unit() if text is None else text)
@@ -927,7 +950,7 @@ class InstallStaged(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.unit_path(h).read_text(), committed_unit())
         self.assertEqual(stat.S_IMODE(os.stat(self.unit_path(h)).st_mode), 0o644)
-        self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
+        self.assertEqual(self.changes(h), [["daemon-reload"]])
 
     def test_the_committed_unit_installs_verbatim_for_its_own_user(self):
         h = self.host(service_user="audiobook")
@@ -993,7 +1016,7 @@ class InstallStaged(unittest.TestCase):
         body = [ln for ln in out.splitlines() if ln and not ln.startswith("#")]
         self.assertEqual(body, RENDERED_REAL_SHAPED.splitlines())
         self.assertTrue(out.isascii())
-        self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
+        self.assertEqual(self.changes(h), [["daemon-reload"]])
 
     def test_the_committed_local_conf_example_renders(self):
         h = self.host()
@@ -1011,7 +1034,7 @@ class InstallStaged(unittest.TestCase):
                 self.assertEqual(code, 1, (line, err))
                 self.assertIn("line 3", err)
                 self.assertFalse(self.conf_path(h).exists(), line)
-                self.assertEqual(h.tools(), [], line)
+                self.assertEqual(self.changes(h), [], line)
 
     def test_environment_before_service_is_refused(self):
         h = self.host()
@@ -1050,6 +1073,53 @@ class InstallStaged(unittest.TestCase):
                     code, _, err = h.run("install", "local-conf")
                     self.assertEqual(code, 1, (repr(ch), err))
                     self.assertFalse(self.conf_path(h).exists())
+
+    def test_loader_and_runtime_injection_keys_are_refused(self):
+        """Defence in depth on top of the drop-in rules: variables that make
+        the dynamic loader, libc, an interpreter or the Go runtime load or
+        run something else are refused, in every quoting form and any case."""
+        keys = (
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "LD_DEBUG",
+            "ld_preload",
+            "GCONV_PATH",
+            "GETCONF_DIR",
+            "HOSTALIASES",
+            "LOCALDOMAIN",
+            "RES_OPTIONS",
+            "MALLOC_CHECK_",
+            "MALLOC_ARENA_MAX",
+            "NLSPATH",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "PYTHONHOME",
+            "PERL5LIB",
+            "PERL5OPT",
+            "NODE_OPTIONS",
+            "GODEBUG",
+            "TZDIR",
+            "GLIBC_TUNABLES",
+            "BASH_ENV",
+        )
+        for key in keys:
+            for form in (f"{key}=/tmp/batcave", f'"{key}=/tmp/batcave"', f"'{key}=/tmp/batcave'"):
+                with self.subTest(form=form):
+                    h = self.host()
+                    self.stage_conf(f"[Service]\nEnvironment=A=1\nEnvironment={form}\n")
+                    code, _, err = h.run("install", "local-conf")
+                    self.assertEqual(code, 1, err)
+                    self.assertIn("line 3", err)
+                    self.assertNotIn("/tmp/batcave", err)
+                    self.assertFalse(self.conf_path(h).exists())
+
+    def test_keys_that_only_look_like_injection_keys_pass(self):
+        h = self.host()
+        text = "[Service]\nEnvironment=LDAP_URL=x\nEnvironment=OLD_PYTHON=x\nEnvironment=TZ=UTC\nEnvironment=GOMAXPROCS=4\n"
+        self.stage_conf(text)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
 
     def test_cr_and_nul_are_refused_anywhere(self):
         for text in (
@@ -1184,7 +1254,7 @@ class InstallStaged(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn(needle, err)
         self.assertFalse(self.conf_path(h).exists(), "nothing installed")
-        self.assertEqual(h.tools(), [], "no daemon-reload")
+        self.assertEqual(self.changes(h), [], "no daemon-reload")
         return err
 
     def test_local_conf_needs_host_conf(self):
@@ -1250,7 +1320,7 @@ class InstallStaged(unittest.TestCase):
                 self.assertEqual(code, 1, err)
                 self.assertIn("host.conf", err)
                 self.assertFalse(self.unit_path(h).exists(), "nothing copied")
-                self.assertEqual(h.tools(), [], "no daemon-reload")
+                self.assertEqual(self.changes(h), [], "no daemon-reload")
 
     def test_the_unit_and_local_conf_share_one_host_conf_check(self):
         h = self.host()
@@ -1264,6 +1334,147 @@ class InstallStaged(unittest.TestCase):
             self.stage_conf("[Service]\nEnvironment=A=1\n")
             self.assertEqual(h.run("install", "local-conf")[0], 0)
         self.assertEqual(calls, ["audiobook-organizer.service"] * 2)
+
+    # -- every drop-in systemd applies, not only host.conf ------------------
+
+    def install_refused(self, h: Host, what: str) -> str:
+        if what == "unit":
+            self.template()
+        else:
+            self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", what)
+        self.assertEqual(code, 1, err)
+        self.assertNotIn(["daemon-reload"], self.changes(h))
+        target = self.unit_path(h) if what == "unit" else self.conf_path(h)
+        self.assertFalse(target.exists(), "nothing installed")
+        return err
+
+    def test_a_root_run_line_in_any_dropin_is_refused(self):
+        """The LD_PRELOAD argument needs every drop-in systemd applies to run
+        nothing but the service user's ExecStart: another file beside
+        host.conf, the /run and /usr/lib unit directories, the dash-prefix
+        directory and the type-wide service.d all count."""
+        bad = "[Service]\nExecStartPre=+/usr/bin/true\n"
+        places = {
+            "beside host.conf": lambda h: self.dropin(h, "zz-joker.conf", bad),
+            "/run": lambda h: self.dropin(h, "joker.conf", bad, self.unit_dirs[0]),
+            "/usr/lib": lambda h: self.dropin(h, "joker.conf", bad, self.unit_dirs[1]),
+            "dash prefix": lambda h: self.dropin(h, "joker.conf", bad, d="audiobook-.service.d"),
+            "service.d": lambda h: self.dropin(
+                h, "joker.conf", bad, self.unit_dirs[1], "service.d"
+            ),
+        }
+        for what in ("unit", "local-conf"):
+            for name, place in places.items():
+                with self.subTest(what=what, place=name):
+                    h = self.host()
+                    place(h)
+                    err = self.install_refused(h, what)
+                    self.assertIn("joker.conf", err)
+                    self.assertNotIn("/usr/bin/true", err, "a refusal never echoes a drop-in")
+
+    def test_every_rule_applies_to_other_dropins(self):
+        for line in (
+            "ExecStopPost=/usr/bin/true",
+            "ExecStart=!/usr/local/bin/audiobook-organizer serve",
+            "PermissionsStartOnly=true",
+            "AmbientCapabilities=CAP_NET_ADMIN",
+            "User=root",
+            "Group=joker",
+        ):
+            with self.subTest(line=line):
+                h = self.host()
+                self.dropin(h, "50-riddler.conf", f"[Service]\n{line}\n", self.unit_dirs[0])
+                self.assertIn("line 2", self.install_refused(h, "local-conf"))
+
+    def test_an_unexpected_dropin_file_or_directory_is_refused(self):
+        def symlinked(h: Host) -> None:
+            real = h.root / "x.conf"
+            real.write_text("[Service]\n")
+            link = h.systemd / "audiobook-organizer.service.d" / "x.conf"
+            link.symlink_to(real)
+
+        cases = {
+            "symlink": symlinked,
+            "group-writable file": lambda h: self.dropin(h, "x.conf", "[Service]\n").chmod(0o664),
+            "directory named .conf": lambda h: (
+                h.systemd / "audiobook-organizer.service.d" / "x.conf"
+            ).mkdir(),
+            "group-writable directory": lambda h: self.dropin(
+                h, "x.conf", "[Service]\n", self.unit_dirs[0]
+            ).parent.chmod(0o775),
+            "control characters": lambda h: self.dropin(
+                h, "x.conf", "[Service]\nUser=alfred\x0b\n"
+            ),
+        }
+        for name, make in cases.items():
+            with self.subTest(case=name):
+                h = self.host()
+                make(h)
+                self.install_refused(h, "local-conf")
+
+    def test_harmless_dropins_and_other_files_pass(self):
+        h = self.host()
+        self.dropin(h, "pprof.conf", "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n")
+        self.dropin(h, "zz-rollback-type-simple.conf", "[Service]\nType=simple\n")
+        self.dropin(
+            h,
+            "10-timeout-abort.conf",
+            "[Service]\nTimeoutStopFailureMode=abort\n",
+            self.unit_dirs[1],
+            "service.d",
+        )
+        self.dropin(h, "README", "ExecStartPre=+/usr/bin/true\n")
+        self.dropin(h, "old.conf.bak", "ExecStartPre=+/usr/bin/true\n")
+        self.template()
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 0, err)
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_dropin_paths_systemd_reports_are_checked_too(self):
+        """systemctl show -p DropInPaths: a drop-in outside the scanned
+        directories (a generator's, say) is checked as well."""
+        h = self.host()
+        elsewhere = h.root / "generator" / "audiobook-organizer.service.d" / "penguin.conf"
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text("[Service]\nExecStartPost=/usr/bin/true\n")
+        Path(str(h.root / "transient-state") + ".dropin-paths").write_text(
+            f"{self.host_conf_path} {elsewhere}\n"
+        )
+        self.assertIn("penguin.conf", self.install_refused(h, "unit"))
+        shows = [t["argv"] for t in h.tools() if "DropInPaths" in t["argv"]]
+        self.assertEqual(
+            shows, [["show", "-p", "DropInPaths", "--value", "audiobook-organizer.service"]]
+        )
+
+    def test_an_unparsable_dropin_paths_answer_is_refused(self):
+        for answer in (
+            "relative/x.conf",
+            "/etc/x.conf;id",
+            "/etc/systemd/x.conf.d",
+            "/etc/a b.conf\x0b",
+        ):
+            with self.subTest(answer=answer):
+                h = self.host()
+                Path(str(h.root / "transient-state") + ".dropin-paths").write_text(answer)
+                self.assertIn("DropInPaths", self.install_refused(h, "local-conf"))
+
+    def test_a_failed_systemctl_still_scans_the_directories(self):
+        h = self.host()
+        Path(str(h.root / "transient-state") + ".show-fails").write_text("")
+        self.dropin(h, "joker.conf", "[Service]\nExecStartPre=/usr/bin/true\n", self.unit_dirs[0])
+        self.install_refused(h, "local-conf")
+
+    def test_the_unit_template_follows_the_same_rules(self):
+        h = self.host()
+        self.template(
+            committed_unit().replace("[Service]\n", "[Service]\nExecStartPre=+/usr/bin/true\n", 1)
+        )
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 1, err)
+        self.assertFalse(self.unit_path(h).exists())
 
     def test_a_good_host_conf_lets_local_conf_install(self):
         h = self.host()
@@ -1360,7 +1571,7 @@ class InstallStaged(unittest.TestCase):
                 self.assertEqual(code, 1, err)
                 self.assertIn("is not a regular file", err)
                 self.assertFalse(self.conf_path(h).exists())
-                self.assertEqual(h.tools(), [])
+                self.assertEqual(self.changes(h), [])
 
     def test_a_fifo_or_directory_staged_binary_is_refused(self):
         for kind in ("fifo", "directory"):
