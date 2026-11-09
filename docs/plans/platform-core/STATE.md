@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.52.0 -->
+<!-- version: 1.52.1 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -112,8 +112,8 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W23 | R1-19 | #4488 `af4432e3c` | T2: build identity: `--version-json`, `--print-upgrade-floor`, `app.BinaryID`, UI build-ID meta and the stale-build banner; the docker-image job's `PROBE_BUILD_ID` probe is on and passed on the real image. Re-cut for R1-17 (#4482 closed). Deployed 2026-11-08; `--version-json` verified on the deployed binary |
 | W24 | R1-30 | #4495 `f6f57bc7f` | T2: `core/web` npm workspace with `@mediacore/api-client` 0.1.0, consumed by `web/` through `file:`; both Docker frontend stages build it. Three CI rounds: CI's frontend job now builds the package first (`scripts/ci/ensure_core_web.sh`), minimatch overridden to 11.x under eslint only (GHSA-g3hv-75wg-m249), four permissive dev-dependency licences named in `allow-dependencies-licenses`, ruff format (#4483, #4491, #4494 closed). Deployed 2026-11-08 |
 | W25 | R1-06 | #4498 `de0ab0a1d` | T2: report-only core version check in core's merge gate, `core-checkpoint` job in the production release, `make -C core readiness` with the SC scripts, and a nightly split-readiness fold-in through the CI bot app (not a PAT). Draft #4489 closed after the re-cut |
-| W26 | R1-23 | #4504 `552d57c4f` | T4: storage flip: the kernel opens the one store at P2 and takes the pre-migration checkpoint before the first write; books reaches its rows only through strict claims (`ABO_CORE_STORAGE_CLAIMS_MODE=shadow` is the emergency dial; scans stay clipped either way). The review's six unregistered key families are covered by a registry-independent claim-violation guard. Re-cut three times (#4493, #4501 closed). Merged 2026-11-09 |
-| W27 | R1-24 | #4507 `c8421370a` | T3: checkpoint sweeper, `prune-checkpoints` and authenticated storage tokens; deletes the plaintext-secrets copy the first R1 boot leaves, which ends the deploy hold after R1-23. Creates `core/app/offline.go` and `cmd/offline.go` ahead of R1-25's `OfflineCommands`. Re-cut onto main after R1-23 (#4500, #4502 and #4505 closed). Merged 2026-11-09 |
+| W26 | R1-23 | #4504 `552d57c4f` | T4: storage flip: the kernel opens the one store at P2 and takes the pre-migration checkpoint before the first write; books reaches its rows only through strict claims (`ABO_CORE_STORAGE_CLAIMS_MODE=shadow` is the emergency dial; scans stay clipped either way). The review's six unregistered key families are covered by a registry-independent claim-violation guard. Re-cut three times (#4493, #4501 closed). Merged 2026-11-09; deployed with R1-24 (see W27) |
+| W27 | R1-24 | #4507 `c8421370a` | T3: checkpoint sweeper, `prune-checkpoints` and authenticated storage tokens; deletes the plaintext-secrets copy the first R1 boot leaves, which ends the deploy hold after R1-23. Creates `core/app/offline.go` and `cmd/offline.go` ahead of R1-25's `OfflineCommands`. Re-cut onto main after R1-23 (#4500, #4502 and #4505 closed). Merged 2026-11-09. R1-23 and R1-24 deployed together 2026-11-09 03:13 EST at `c8421370a`: service active, NRestarts=0, pre-migration checkpoint taken, books#67 and books#68 applied, no errors |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -146,7 +146,7 @@ W14 to W27 merged 2026-11-08 and 2026-11-09: R1-37, R1-20, R1-15, R1-16, R1-33, 
 - R1-26 waits on R1-25.
 - R1-31 (executive summary) last.
 
-The R1-15 follow-up (HNSW clean-stop marker) merged as #4512 `0aa7d519c` on 2026-11-09 at 07:40 EST and was deployed at 07:45; it supersedes #4496, #4506 and #4476, and ports the earlier work onto core storage. It is not a plan row, so the R1 count is unchanged. The deploy hold between R1-23 and R1-24 is over: both are merged.
+The R1-15 follow-up (HNSW clean-stop marker) merged as #4512 `0aa7d519c` on 2026-11-09 at 07:40 EST and was deployed at 07:45; it supersedes #4496, #4506 and #4476, and ports the earlier work onto core storage. It is not a plan row, so the R1 count is unchanged. The deploy hold between R1-23 and R1-24 is over: both are merged and were deployed together (W27).
 
 R1-23's deferred step 3 (engine re-home into core, the `database.Store` split, the Pebble collector move) and its kernel write gate (D14) become follow-up rows; its review confirmed no remaining R1 row depends on them. In plain terms: the server now starts, stops, logs and serves its web surface through the new framework, and reports its build identity; the new storage engine is built but not switched on yet.
 
