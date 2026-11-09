@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.4
+// version: 2.4.5
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -119,9 +119,6 @@ func TestMockStore_AllMethods(t *testing.T) {
 	// Test lifecycle methods
 	if err := mock.Close(); err != nil {
 		t.Errorf("Close() returned error: %v", err)
-	}
-	if err := mock.Reset(); err != nil {
-		t.Errorf("Reset() returned error: %v", err)
 	}
 
 	// Test metadata methods
@@ -521,33 +518,5 @@ func TestCloseStoreWithNilStore(t *testing.T) {
 	globalStore = nil
 	if err := CloseStore(); err != nil {
 		t.Errorf("CloseStore() with nil store returned error: %v", err)
-	}
-}
-
-// TestPebbleStoreReset tests the Pebble store Reset function
-func TestPebbleStoreReset(t *testing.T) {
-	store, cleanup := setupPebbleTestDB(t)
-	defer cleanup()
-
-	pebbleStore := store.(*PebbleStore)
-
-	// Create some data
-	_, err := store.CreateAuthor("Test Author")
-	if err != nil {
-		t.Fatalf("Failed to create author: %v", err)
-	}
-
-	// Reset the store
-	if err := pebbleStore.Reset(); err != nil {
-		t.Fatalf("Reset failed: %v", err)
-	}
-
-	// Verify data is cleared
-	authors, err := store.GetAllAuthors()
-	if err != nil {
-		t.Fatalf("Failed to get authors after reset: %v", err)
-	}
-	if len(authors) != 0 {
-		t.Errorf("Expected 0 authors after reset, got %d", len(authors))
 	}
 }

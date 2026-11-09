@@ -1,7 +1,7 @@
 // file: internal/scheduler/identification_advance_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98c67be8-967c-4bf7-a02a-5fbf94fbf6ed
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -66,7 +66,7 @@ func identAdvanceFixture(t *testing.T, marks int, active ...database.OperationV2
 	t.Helper()
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row
 	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()

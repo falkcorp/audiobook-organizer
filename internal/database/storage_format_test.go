@@ -1,5 +1,5 @@
 // file: internal/database/storage_format_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 8a965f29-0efc-4a0a-9fb9-bdc400520fd4
 // last-edited: 2026-11-08
 
@@ -236,31 +236,6 @@ func TestStorageFormat_SidecarWrittenAtOpen(t *testing.T) {
 	require.Equal(t, "1\n", string(data))
 	_, err = os.Stat(dir + ".storage-format.tmp")
 	require.True(t, errors.Is(err, os.ErrNotExist), "the temp file must be renamed away: %v", err)
-}
-
-// Reset wipes books' claims, the projection rows with them, and writes no
-// stamp back: the projection stays 1 (HEAD reads a store with data and no
-// stamp as 1), and core's keys, outside books' claims, survive.
-func TestStorageFormat_ResetWritesNoStamp(t *testing.T) {
-	s, err := NewPebbleStoreInMemory("/reset")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, s.Close()) }()
-	s.WaitForWarmup()
-	require.NoError(t, s.SetUserPreference("theme", "gotham-night"))
-
-	require.NoError(t, s.Reset())
-	row, err := s.GetRaw("preference:" + storageFormatPreferenceKey)
-	require.NoError(t, err)
-	require.Nil(t, row)
-	gone, err := s.GetUserPreference("theme")
-	require.NoError(t, err)
-	require.Nil(t, gone)
-
-	// The preference counter starts over, so the next preference is ID 1.
-	require.NoError(t, s.SetUserPreference("theme", "dark"))
-	theme, err := s.GetUserPreference("theme")
-	require.NoError(t, err)
-	require.Equal(t, 1, theme.ID)
 }
 
 func TestStorageFormat_CurrentStoreOpensAndServes(t *testing.T) {

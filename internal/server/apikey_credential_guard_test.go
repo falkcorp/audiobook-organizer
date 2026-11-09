@@ -1,7 +1,7 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Router-level coverage for the credential guard (2026-10-07): an API key
 // (here an all-scope admin key, the strongest there is) gets 403 from the
@@ -299,21 +299,18 @@ func TestCredentialGuard_KeyWithoutExpiryRefused(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 }
 
-// Store-replacing routes: a reset or factory reset wipes every user (after
-// which the public /auth/setup mints a new admin), and a backup restore
-// brings back the backup's users and password hashes. The session request
+// Store-replacing routes: a backup restore brings back the backup's users and
+// password hashes. The session request
 // carries an empty body, so the handler's own 400 proves the guard let it
 // through without wiping the test's store.
 func TestCredentialGuard_StoreReplacingRoutes(t *testing.T) {
 	f := setupCredGuardServer(t)
 	routes := []struct{ name, path string }{
-		{"system reset", "/api/v1/system/reset"},
-		{"factory reset", "/api/v1/system/factory-reset"},
 		{"backup restore", "/api/v1/backup/restore"},
 	}
 	for _, r := range routes {
 		t.Run("api key/"+r.name, func(t *testing.T) {
-			w := f.do(t, f.apiKey, http.MethodPost, r.path, map[string]any{"confirm": "RESET", "backup_filename": "x.tar.gz"})
+			w := f.do(t, f.apiKey, http.MethodPost, r.path, map[string]any{"backup_filename": "x.tar.gz"})
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			assert.Contains(t, w.Body.String(), servermiddleware.CredentialChangeRefusedMessage)
 		})

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.176.1
+// version: 1.176.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package config
 
@@ -2599,7 +2599,7 @@ func InitConfig() {
 }
 
 // defaultRegistrar is the part of *viper.Viper that declaring the shipped
-// defaults needs. InitConfig passes the process-wide viper; factoryDefaultConfig
+// defaults needs. InitConfig passes the process-wide viper; factoryDefaultConfigForTest
 // passes a registrar whose BindEnv does nothing, so one list of keys and
 // defaults feeds both and neither can drift from the other.
 type defaultRegistrar interface {
@@ -2607,13 +2607,13 @@ type defaultRegistrar interface {
 	BindEnv(input ...string) error
 }
 
-// noEnvRegistrar registers every default on a private viper and ignores the
+// noEnvRegistrarForTest registers every default on a private viper and ignores the
 // environment bindings, so a value read back from it is the shipped default
 // whatever the process environment holds.
-type noEnvRegistrar struct{ v *viper.Viper }
+type noEnvRegistrarForTest struct{ v *viper.Viper }
 
-func (n noEnvRegistrar) SetDefault(key string, value any) { n.v.SetDefault(key, value) }
-func (noEnvRegistrar) BindEnv(...string) error            { return nil }
+func (n noEnvRegistrarForTest) SetDefault(key string, value any) { n.v.SetDefault(key, value) }
+func (noEnvRegistrarForTest) BindEnv(...string) error            { return nil }
 
 // registerConfigDefaults declares every shipped default (and environment
 // binding) for the Config. It is the single source of truth for defaults: the
@@ -3211,7 +3211,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 
 // configFromViper builds a Config from every key v holds: the one place a viper
 // value (shipped default, config file, environment) becomes a Config field.
-// InitConfig calls it on the process-wide viper; factoryDefaultConfig on a
+// InitConfig calls it on the process-wide viper; factoryDefaultConfigForTest on a
 // private viper holding only the defaults.
 func configFromViper(v *viper.Viper) Config {
 	var cfg Config
@@ -4109,31 +4109,35 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// factoryDefaultConfig is the Config a fresh install gets from the shipped
+// factoryDefaultConfigForTest is the Config a fresh install gets from the shipped
 // defaults alone: the same registerConfigDefaults and configFromViper that
 // InitConfig runs, on a private viper with no config file and no environment
 // binding. Deriving it from them (instead of a second hand-written literal)
 // is the point: a key given a default there is restored here by construction.
-func factoryDefaultConfig() Config {
+func factoryDefaultConfigForTest() Config {
 	v := viper.New()
-	registerConfigDefaults(noEnvRegistrar{v})
+	registerConfigDefaults(noEnvRegistrarForTest{v})
 	return configFromViper(v)
 }
 
-// ResetToDefaults resets the AppConfig to factory defaults.
+// ResetToDefaultsForTest resets the AppConfig to factory defaults. It is a
+// test seam: HEAD's gin system and factory reset routes, its production
+// callers, are gone (R1-25), and the offline reset that replaces them never
+// resets a running config. It replaces the store with the service stopped,
+// so the next boot reads the shipped defaults from an empty settings store.
 //
-// The defaults are the shipped viper defaults only (see factoryDefaultConfig):
+// The defaults are the shipped viper defaults only (see factoryDefaultConfigForTest):
 // not the config file, and not the process environment. The few settings the
 // host owns through the environment are put back afterwards by
 // applyEnvAuthoritativeConfig, exactly as at database load. The library paths
 // and the boot-only sort indexes are carried over from the running config.
 //
 // WHY Mutate: whole-struct reset; concurrent readers must not see a torn state.
-func ResetToDefaults() {
+func ResetToDefaultsForTest() {
 	// Snapshot current paths before acquiring the write lock to avoid a
 	// deadlock (Mutate is not re-entrant).
 	cur := Snapshot()
-	defaults := factoryDefaultConfig()
+	defaults := factoryDefaultConfigForTest()
 	Mutate(func(c *Config) {
 		*c = defaults
 

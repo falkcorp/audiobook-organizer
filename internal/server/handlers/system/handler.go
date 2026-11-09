@@ -1,20 +1,18 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.13
+// version: 1.29.14
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
-// reset/factory-reset, config get/update, the SSE event stream, backup CRUD,
+// config get/update, the SSE event stream, backup CRUD,
 // dashboard, blocked-hash CRUD, user-preference CRUD, policy-tags, and
 // quick-queries.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (SystemStore, SystemService, ConfigUpdateService,
-// PluginHealthChecker, EventStreamer, OperationLogsProvider) plus the concrete
-// *metafetch.OpenLibraryService (factoryReset takes its .Mu and calls CloseStoreLocked,
-// which an interface cannot abstract) and three injected funcs (getDiskStats,
-// resetLibrarySizeCache, appVersion, filterReviewedAuthorGroups) that wrap
+// PluginHealthChecker, EventStreamer, OperationLogsProvider) plus three
+// injected funcs (getDiskStats, appVersion, filterReviewedAuthorGroups) that wrap
 // server-package helpers / build-tagged functions / mutable package vars that
 // stay in package server. As a result package system never imports package
 // server.
@@ -44,7 +42,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
@@ -84,21 +81,9 @@ type Handler struct {
 	// otherwise static body.
 	now func() time.Time
 
-	// olService is taken as a concrete pointer (not an interface) because
-	// factoryReset takes its .Mu (mutex) field and calls CloseStoreLocked under
-	// it; field access cannot go through an interface. A nil concrete pointer is fine — the
-	// handler nil-checks h.olService exactly as the original nil-checked
-	// s.olService.
-	olService *metafetch.OpenLibraryService
-
 	// getDiskStats wraps the build-tagged server-package getDiskStats
 	// (diskstats_unix.go / diskstats_windows.go), which stays in package server.
 	getDiskStats func(path string) (total, free uint64, err error)
-
-	// resetLibrarySizeCache wraps the server-package helper of the same name,
-	// which is also called from library_size_refresh_op.go and so stays in
-	// package server.
-	resetLibrarySizeCache func()
 
 	// appVersion returns the runtime app version (the mutable server-package
 	// `appVersion` var, set at startup). A getter func preserves read-at-call-time
@@ -213,9 +198,7 @@ func New(
 	plugins PluginHealthChecker,
 	getHub func() EventStreamer,
 	opLogs OperationLogsProvider,
-	olService *metafetch.OpenLibraryService,
 	getDiskStats func(path string) (total, free uint64, err error),
-	resetLibrarySizeCache func(),
 	appVersion func() string,
 	filterReviewedAuthorGroups func([]dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup,
 	getDegraded func() DegradedSource,
@@ -227,9 +210,7 @@ func New(
 		plugins:                    plugins,
 		getHub:                     getHub,
 		opLogs:                     opLogs,
-		olService:                  olService,
 		getDiskStats:               getDiskStats,
-		resetLibrarySizeCache:      resetLibrarySizeCache,
 		appVersion:                 appVersion,
 		filterReviewedAuthorGroups: filterReviewedAuthorGroups,
 		getDegraded:                getDegraded,
@@ -613,149 +594,12 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
 }
 
-// ResetSystem implements POST /system/reset.
-func (h *Handler) ResetSystem(c *gin.Context) {
-	// Require the same explicit {"confirm":"RESET"} token that the more
-	// destructive FactoryReset requires — ResetSystem also wipes the entire
-	// database (books, authors, series, settings), so a bare POST must not be
-	// enough to trigger it. Keep the token string identical to FactoryReset so
-	// callers use one confirmation contract for both.
-	var req struct {
-		Confirm string `json:"confirm"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Confirm != "RESET" {
-		httputil.RespondWithBadRequest(c, "request body must contain {\"confirm\": \"RESET\"}")
-		return
-	}
-
-	store := h.resolveStore()
-	// Reset database
-	if err := store.Reset(); err != nil {
-		httputil.InternalError(c, "failed to reset database", err)
-		return
-	}
-
-	// Reset config to defaults
-	config.ResetToDefaults()
-
-	// Reset caches
-	h.resetLibrarySizeCache()
-	store.InvalidateLibraryStats()
-
-	httputil.RespondWithOK(c, gin.H{"message": "System reset successfully"})
-}
-
 var systemLog = logger.New("handlers.system")
-
-// afterOLCloseHook, unset outside tests, runs in deleteOLDataLocked after the
-// Open Library store has closed cleanly and before its data directory is
-// removed: the window in which the service's Mu must still be held. It is an
-// atomic pointer so a test can install it while the handler is live.
-var afterOLCloseHook atomic.Pointer[func()]
 
 // beforeRestoreExtractHook, unset outside tests, runs in RestoreBackup just
 // before the extraction's first write: after the divergence mark and the
 // first marker removal.
 var beforeRestoreExtractHook atomic.Pointer[func()]
-
-// deleteOLDataLocked closes the Open Library store and removes its data
-// directory, holding the service's Mu from the close through the RemoveAll.
-// Releasing Mu between the two let an import's EnsureStore open a new engine
-// in the directory this was about to delete. Holding it across the RemoveAll
-// is what the delete-OL-data handler does too.
-func (h *Handler) deleteOLDataLocked() {
-	svc := h.olService
-	svc.Mu.Lock()
-	defer svc.Mu.Unlock()
-
-	olCloseErr := svc.CloseStoreLocked()
-	targetDir := metafetch.GetOLDumpDir()
-	if olCloseErr != nil {
-		// A failed Close may have left the engine open (an in-flight
-		// lookup or import outlived the drain timeout). Removing its
-		// directory would pull files out from under a live engine, so
-		// the OL data is kept and the rest of the reset goes on. The
-		// service keeps the half-closed store, so the next delete or
-		// import retries the close.
-		systemLog.Warn("Factory reset kept OL data: the OL store did not close: %v", olCloseErr)
-		return
-	}
-	if targetDir == "" {
-		return
-	}
-	if hook := afterOLCloseHook.Load(); hook != nil {
-		(*hook)()
-	}
-	if err := os.RemoveAll(targetDir); err != nil {
-		systemLog.Warn("Factory reset failed to remove OL data dir: %v", err)
-		return
-	}
-	systemLog.Info("Factory reset OL data deleted")
-}
-
-// FactoryReset implements POST /system/factory-reset.
-func (h *Handler) FactoryReset(c *gin.Context) {
-	var req struct {
-		Confirm string `json:"confirm"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Confirm != "RESET" {
-		httputil.RespondWithBadRequest(c, "request body must contain {\"confirm\": \"RESET\"}")
-		return
-	}
-
-	slog.Info("Factory reset initiated")
-	store := h.resolveStore()
-
-	// Reset database (books, authors, series, settings)
-	if err := store.Reset(); err != nil {
-		slog.Error("Factory reset database reset failed", "err", err)
-		httputil.InternalError(c, "failed to reset database", err)
-		return
-	}
-	slog.Info("Factory reset database cleared")
-
-	// Delete OL data (pebble store + dump files)
-	if h.olService != nil {
-		h.deleteOLDataLocked()
-	}
-
-	// Clear library folder contents (organized audiobooks)
-	if config.AppConfig.RootDir != "" {
-		libraryDir := config.AppConfig.RootDir
-		if library.IsDangerousRoot(libraryDir) {
-			slog.Error("Factory reset refused: RootDir is a protected system directory", "rootDir", libraryDir)
-			httputil.RespondWithBadRequest(c, "factory reset refused: library RootDir is a protected system directory")
-			return
-		}
-		entries, err := os.ReadDir(libraryDir)
-		if err == nil {
-			for _, entry := range entries {
-				entryPath := filepath.Join(libraryDir, entry.Name())
-				if err := os.RemoveAll(entryPath); err != nil {
-					slog.Warn("Factory reset failed to remove", "entryPath", entryPath, "err", err)
-				}
-			}
-			slog.Info("Factory reset library folder cleared ()", "libraryDir", libraryDir)
-		}
-	}
-
-	// Reset config to defaults, then clear paths so wizard re-shows
-	config.ResetToDefaults()
-	config.Mutate(func(c *config.Config) {
-		c.RootDir = ""
-		c.SetupComplete = false
-	})
-	if err := config.SaveConfigToDatabase(store); err != nil {
-		slog.Warn("Factory reset failed to persist config", "err", err)
-	}
-
-	// Reset caches
-	h.resetLibrarySizeCache()
-	store.InvalidateLibraryStats()
-
-	slog.Info("Factory reset complete")
-	httputil.RespondWithOK(c, gin.H{"message": "factory reset complete"})
-}
 
 // GetConfig implements GET /config.
 func (h *Handler) GetConfig(c *gin.Context) {

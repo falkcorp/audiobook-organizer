@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_narrator_fold_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1185cd5a-8949-4471-826b-d4302ed5756b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package database
 
@@ -391,18 +391,6 @@ func TestNarratorFoldIndex_PointVerifiesCandidates(t *testing.T) {
 	got, err = p.narratorsByFold("Renee Montoya")
 	require.NoError(t, err)
 	require.Empty(t, got, "a trusted lookup reads narrator_fold:, not the records")
-}
-
-func TestNarratorFoldIndex_ResetClearsTrust(t *testing.T) {
-	p := newNarratorSyncTestStore(t)
-	_, err := p.ReconcileNarratorFoldIndex(context.Background())
-	require.NoError(t, err)
-	require.True(t, p.NarratorFoldIndexTrusted())
-	require.NoError(t, p.Reset())
-	require.False(t, p.NarratorFoldIndexTrusted())
-	set, err := p.narratorFoldSentinelSet()
-	require.NoError(t, err)
-	require.False(t, set)
 }
 
 // CreateNarrator keeps its exact-name semantics for its other callers: the

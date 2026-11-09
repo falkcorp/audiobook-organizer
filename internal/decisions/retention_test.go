@@ -1,7 +1,7 @@
 // file: internal/decisions/retention_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2c8e5b17-94d0-4f63-a1b2-7e03d6c58a49
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package decisions_test
 
@@ -498,16 +498,6 @@ func TestRetention_CanaryEveryPruneLikeMethodIsCovered(t *testing.T) {
 	for q := range covered {
 		require.NotEmpty(t, q)
 	}
-}
-
-// Factory reset (PebbleStore.Reset) wipes the whole keyspace on purpose; it is
-// the one documented exception, not a retention job.
-func TestRetention_ResetIsTheOnlyWipe(t *testing.T) {
-	kv := newKV(t)
-	before := seedDecisions(t, kv)
-	require.NotEmpty(t, before)
-	require.NoError(t, kv.Reset())
-	require.Empty(t, snapshotDecisions(t, kv), "Reset wipes everything by design")
 }
 
 // Only this package builds decision: keys. A literal anywhere else is a second

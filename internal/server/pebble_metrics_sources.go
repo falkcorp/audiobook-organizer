@@ -1,7 +1,7 @@
 // file: internal/server/pebble_metrics_sources.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 790014b3-eca8-4d71-8304-cc119aa559bd
-// last-edited: 2026-10-04
+// last-edited: 2026-11-08
 
 package server
 
@@ -12,8 +12,8 @@ import (
 
 // registerPebbleMetricsSources wires the pebble_* Prometheus series to this
 // server's stores. The sources are resolved on every scrape, not captured
-// here: the OpenLibrary store is closed and re-opened by the delete and
-// factory-reset handlers, and the main store may sit behind the search-index
+// here: the OpenLibrary store is closed and re-opened by the delete
+// handler, and the main store may sit behind the search-index
 // decorator (database.AsCapability walks it; a bare assertion fails in prod).
 // The AI-scan store is deliberately not exported: it shares the main DB.
 func (s *Server) registerPebbleMetricsSources() {

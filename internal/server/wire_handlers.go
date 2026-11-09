@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.6
+// version: 2.64.7
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-11-09
 
@@ -325,7 +325,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	)
 
 	// System domain handler (health/status/announcements/storage/logs/
-	// activity-log/reset/factory-reset/config/SSE events/backups/dashboard/
+	// activity-log/config/SSE events/backups/dashboard/
 	// blocked-hashes/user-preferences/policy-tags/quick-queries). Guard typed-nil
 	// boxing for each interface-typed concrete-pointer dep so the handler's
 	// in-method nil guards (which mirror the old `s.X == nil` / `s.X != nil`
@@ -338,11 +338,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// snapshot): handleEvents read s.hub at request time, and a test nils s.hub
 	// AFTER wiring to drive the SSE 503 guard — snapshotting it here would capture
 	// a live hub and invoke HandleSSE instead of 503 (mirrors the operations
-	// getScheduler seam). s.olService is passed as a CONCRETE
-	// pointer (factoryReset takes its .Mu field and calls CloseStoreLocked while
-	// holding it, which an interface cannot abstract; the store itself is
-	// unexported and only reached through those methods); the handler nil-checks
-	// it directly. OperationLogsProvider is backed by
+	// getScheduler seam). OperationLogsProvider is backed by
 	// the v2 handler (see below). The store is passed as a LAZY
 	// provider closure (not a snapshot): the original handlers read s.Ops() at
 	// request time, and a router-integration test swaps server.store post-wire to
@@ -386,9 +382,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			return s.hub
 		},
 		sysOpLogs,
-		s.olService, // concrete pointer; handler nil-checks it for field access
 		getDiskStats,
-		resetLibrarySizeCache,
 		func() string { return appVersion },
 		s.filterReviewedAuthorGroups,
 		// Lazy: the startup runner is stored in Start, after wiring.

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.207.1
+// version: 2.207.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3252,19 +3252,6 @@ export async function getSystemStorage(): Promise<SystemStorage> {
   const response = await apiFetch(`${API_BASE}/system/storage`);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch system storage');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function factoryReset(confirm: string): Promise<{ message: string }> {
-  const response = await apiFetch(`${API_BASE}/system/factory-reset`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ confirm }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Factory reset failed');
   }
   const body = await response.json();
   return body.data;
