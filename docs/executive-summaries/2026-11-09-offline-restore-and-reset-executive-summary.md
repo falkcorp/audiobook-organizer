@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-09-offline-restore-and-reset-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 3022eed6-957a-4770-8cdf-e17ed51d8848 -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -70,14 +70,24 @@ and the previous database is kept to go back to.
   itself. The standard install's folder is fine. The refusal names the
   folder; `chmod g-w,o-w <folder>` fixes it.
 - `storage restore-offline` (in place, or into an empty folder with
-  `--into`), `storage reset` and any command-line tool that changes the
-  database run only as the user the server runs as, the owner of its data
-  folder. Run as root, they would leave files behind that only root can
-  read: the server would then fail to start, or, after an `--into` copy,
-  quietly stop clearing out old upgrade safety copies. They now refuse
+  `--into`), `storage reset`, `storage prune-checkpoints`, and any
+  command-line tool that changes the database, run only as the user the
+  server runs as, the owner of its data folder. Run as root, they would
+  leave files behind that only root can read. The server would then fail
+  to start. Or, after an `--into` copy or a prune, it would quietly stop
+  clearing out old upgrade safety copies, and every later restore would
+  wait 30 seconds and fail. An `--into` copy run as root before any safety
+  copy existed would also have made the next upgrade fail. They now refuse
   before changing anything and print the command to use instead,
   `sudo -u <that user> audiobook-organizer ...`. Tools that only read the
-  database run as any user.
+  database are not held to this rule, though they still need the server's
+  user or root to open it, and the two diagnostics tools that read it
+  directly no longer write to its folder while they read.
+- If a lock file from an earlier root run is still in the safety-copy
+  folder, the server now logs it as an error, and a prune or restore
+  refuses at once. Each names the file's owner and how to fix it, instead
+  of the server skipping it in silence and restores failing after a
+  30-second wait.
 - The review asked for a stricter rule, a data folder only its owner can
   even read. The standard install creates the folder readable by everyone,
   and nothing tightens it, so that rule would stop the server from starting
