@@ -118,7 +118,6 @@ internal/server/handlers/abs.Handler.SetSleep
 internal/server/middleware.ABSIdentityResolver.Config
 internal/startup.Class.String
 internal/telemetry.AttributeKeys
-internal/telemetry.HistogramBuckets
 internal/telemetry.PrometheusLabelName
 internal/telemetry.ScrapeOnlyAttributeKeys
 internal/transcribe.IntroClassification.IsCredits

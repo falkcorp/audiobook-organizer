@@ -98,4 +98,4 @@
 # Both are the follow-up's own: its round-6 head (262b37546) measured 684,
 # and round 7's writeEntry discards one Close error on its failure path
 # where the extraction it replaced discarded two (`_ = outFile.Close()`).
-683
+677
