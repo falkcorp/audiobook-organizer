@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-09
 
@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"log/slog"
 	"maps"
 	"path/filepath"
@@ -83,6 +84,7 @@ type OpenOptions struct {
 	dirIdentity func(path string) (fsid, ino uint64, err error)
 	sameDevice  func(a, b string) (bool, error)
 	chmod       func(path string, dir bool) error
+	modeWalk    func(root string, recursive bool, visit func(path string, mode iofs.FileMode)) error // nil = osModeWalk (checkpoint_sweep.go)
 	hooks       testHooks
 	seams       *bootseam.Seams // the crash-matrix kit's, from Open's ctx (swap.go)
 

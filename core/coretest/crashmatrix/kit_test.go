@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-08
 
@@ -261,6 +261,83 @@ func TestUnobservedNamesEveryLabel(t *testing.T) {
 	}
 }
 
+// sweepLabel is the scarecrow's writer label.
+const sweepLabel = "scarecrow.sweep"
+
+// scarecrow is a module whose Register leaves a checkpoint-named file
+// beside the store while it works, clears one an earlier run left, and logs
+// a failure and serves on, as the checkpoint sweeper does: an error injected
+// at the removal leaves the file behind a boot that reached readiness, and
+// only the next run's Register clears it. The kit counts the name as a
+// partial checkpoint (I6); storage's sweeps leave it alone, because it is
+// not a directory.
+type scarecrow struct{ db string }
+
+func (j scarecrow) Manifest() module.Manifest {
+	return module.Manifest{
+		ID: "scarecrow", Version: "1.0.0", DisplayName: "Scarecrow", MinCoreVersion: "0.1.0", DefaultEnabled: true,
+		Storage: storage.Spec{Keyspace: true},
+	}
+}
+
+func (j scarecrow) Register(r *module.Registrar) error {
+	ctx := r.Context()
+	defer bootseam.Region(ctx, sweepLabel)()
+	fs := bootseam.FS(ctx)
+	dir := filepath.Join(filepath.Dir(j.db), ".mediacore-checkpoints")
+	p := filepath.Join(dir, "20260101T000000Z-5ca7e000")
+	if _, err := fs.Stat(p); err == nil {
+		_ = fs.Remove(p) // an earlier run's leftover: the retry
+	}
+	if err := fs.MkdirAll(dir, 0o700); err != nil {
+		return nil //nolint:nilerr // logged and retried, as the sweeper's failures are
+	}
+	f, err := fs.Create(p, vfs.WriteCategoryUnspecified)
+	if err != nil {
+		return nil //nolint:nilerr // as above
+	}
+	_ = f.Close()
+	_ = fs.Remove(p)
+	return nil
+}
+
+// TestKitRebootsAfterARetriedWritersError (R1-24): an error injected into a
+// writer whose failure the next run repairs (Row.Retried, the checkpoint
+// sweeper) is checked against I6 after one more boot, so its leftovers are
+// legal; the same writer without the flag fails I6 at the boot that served,
+// so the pass is the reboot's and not the fixture's.
+func TestKitRebootsAfterARetriedWritersError(t *testing.T) {
+	t.Parallel()
+	for _, retried := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retried=%v", retried), func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			f := Fixture{Name: "arkham", StateDir: dir}
+			s := Scenario{
+				Build: func(_ testing.TB, inj *Injector) error {
+					_, err := inj.New(context.Background(), app.Options{AppID: "gotham", Logger: slog.New(slog.DiscardHandler)}, scarecrow{db: f.dbPath()})
+					return err
+				},
+				Fixtures: []Fixture{f},
+				Rows:     []Row{{Phase: "P5 (test)", Writer: "scarecrow: a checkpoint-named directory, removed", Labels: []string{sweepLabel}, Retried: retried}},
+			}
+			rep := &reports{}
+			run(t, rep, s, modeFull)
+			got := strings.Join(rep.errs, "\n")
+			if strings.Contains(got, "the fault-free boot") {
+				t.Fatalf("the fault-free boot failed, so the error runs prove nothing:\n%s", got)
+			}
+			const want = "I6: partial checkpoint directories left: [20260101T000000Z-5ca7e000]"
+			switch {
+			case retried && got != "":
+				t.Fatalf("the kit failed a retried writer whose next run repairs it:\n%s", got)
+			case !retried && !strings.Contains(got, want):
+				t.Fatalf("the kit's reports lack %q:\n%s", want, got)
+			}
+		})
+	}
+}
+
 // TestReadSlotSkipsDirectoriesWithNoSwap (R1-21 review n3): readSlot leaves
 // out a restore/<id>/ with neither a journal nor an in-flight file, which
 // holds no swap, and keeps one with an in-flight file and no journal, at
@@ -425,6 +502,28 @@ func TestStateKeyIsTheContent(t *testing.T) {
 	} {
 		if build(tc.entries...) == want {
 			t.Errorf("%s: the key did not change", tc.name)
+		}
+	}
+}
+
+// TestIsCheckpointName: the kit counts only names in the checkpoint grammar
+// (05-storage §5S.3.12 "Where") as checkpoints, so the scratch area, the
+// sweep's lock file and a stray name are never I6 partials.
+func TestIsCheckpointName(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[string]bool{
+		"20260314T150926Z-ba7ca5e0":  true,
+		"20260314T150926Z-BA7CA5E0":  false,
+		"20260314T150926Z-ba7ca5e":   false,
+		"20260314X150926Z-ba7ca5e0":  false,
+		"2026031aT150926Z-ba7ca5e0":  false,
+		"20260314T150926Z-ba7ca5eg":  false,
+		"scratch":                    false,
+		".sweep.lock":                false,
+		"20260314T150926Z-ba7ca5e0x": false,
+	} {
+		if got := isCheckpointName(n); got != want {
+			t.Errorf("isCheckpointName(%q) = %v, want %v", n, got, want)
 		}
 	}
 }

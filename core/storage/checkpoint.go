@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-08
 
@@ -187,46 +187,10 @@ type namedRecord struct {
 	rec  checkpointRecord
 }
 
-// checkpointRecords reads every <name>.json in the checkpoint directory. A
-// record that cannot be read fails the call; one removed since the listing
-// is skipped, and one that reads but does not parse is logged and skipped.
+// checkpointRecords reads every <name>.json in the checkpoint directory
+// (readRecords).
 func (db *DB) checkpointRecords() ([]namedRecord, error) {
-	st := db.boot
-	fs := st.opts.fs
-	names, err := fs.List(st.opts.cpDir)
-	if err != nil {
-		if oserrorNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("storage: list checkpoints: %w", err)
-	}
-	slices.Sort(names)
-	var out []namedRecord
-	for _, n := range names {
-		base, ok := strings.CutSuffix(n, ".json")
-		if !ok || !isCheckpointName(base) {
-			continue
-		}
-		data, ok, err := ipebble.ReadFile(fs, filepath.Join(st.opts.cpDir, n))
-		if err != nil {
-			// An EIO or a permission error: skipping the record would take
-			// a second full checkpoint beside it, or orphan it under a new
-			// install ID, so the caller refuses (review MINOR-1).
-			return nil, fmt.Errorf("storage: checkpoint record %s: %w", n, err)
-		}
-		if !ok {
-			continue // removed since the listing
-		}
-		var rec checkpointRecord
-		if json.Unmarshal(data, &rec) != nil {
-			// Records are written atomically, so this is a hand edit or
-			// corruption; it is never reused or completed.
-			db.log.Error("storage: checkpoint record does not parse; never reused", "name", base)
-			continue
-		}
-		out = append(out, namedRecord{name: base, rec: rec})
-	}
-	return out, nil
+	return readRecords(db.boot.opts.fs, db.boot.opts.cpDir, db.log)
 }
 
 // oserrorNotExist matches a missing file on the real and the in-memory
@@ -244,54 +208,14 @@ func (db *DB) currentVector() vector {
 	return v
 }
 
-// sweepGarbage removes checkpoint directories without a record and
-// <name>.tmp directories (a crash before the record), and drops records
-// whose directory is gone (§5S.3.12 "How"). It touches only names in the
-// checkpoint grammar (isCheckpointName), so the scratch area and anything
-// else in the directory stay.
+// sweepGarbage is P4a's garbage sweep, before the headroom check: the
+// checkpoint directories without a record and the <name>.tmp directories (a
+// crash before the record), and the records whose directory is gone
+// (§5S.3.12 "How"; cpArea.garbage). The checkpoint sweeper runs the same
+// rule after readiness (checkpoint_sweep.go).
 func (db *DB) sweepGarbage() error {
-	st := db.boot
-	fs := st.opts.fs
-	dir := st.opts.cpDir
-	names, err := fs.List(dir)
-	if err != nil {
-		if oserrorNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("storage: list checkpoints: %w", err)
-	}
-	has := map[string]bool{}
-	for _, n := range names {
-		has[n] = true
-	}
-	for _, n := range names {
-		p := filepath.Join(dir, n)
-		base, isRecord := strings.CutSuffix(n, ".json")
-		base, isTmp := strings.CutSuffix(base, ".tmp")
-		if !isCheckpointName(base) || (isRecord && isTmp) {
-			// The scratch area, or a name takeCheckpoint never writes: not
-			// the sweep's to delete, whatever the directory holds.
-			continue
-		}
-		switch {
-		case isRecord:
-			if !has[base] {
-				db.log.Warn("storage: checkpoint record without its directory dropped", "name", n)
-				if err := fs.Remove(p); err != nil {
-					return fmt.Errorf("storage: drop record %s: %w", n, err)
-				}
-			}
-		case isTmp || !has[base+".json"]:
-			if fi, err := fs.Stat(p); err != nil || !fi.IsDir() {
-				continue
-			}
-			db.log.Warn("storage: partial checkpoint swept", "name", n)
-			if err := fs.RemoveAll(p); err != nil {
-				return fmt.Errorf("storage: sweep %s: %w", n, err)
-			}
-		}
-	}
-	return ipebble.SyncDir(fs, dir)
+	_, err := db.area("").garbage(db.boot.opts.cpDir, labelSweep)
+	return err
 }
 
 // takeCheckpoint is §5S.4 step 6's checkpoint: sweep the garbage, reuse the
@@ -634,16 +558,7 @@ func (db *DB) completeRecord(name string, now time.Time, latest bool) (found boo
 
 // pointer reads <db path>.migration-checkpoint; ok is false when it is absent.
 func (db *DB) pointer() (p checkpointPointer, ok bool, err error) {
-	st := db.boot
-	path := st.opts.Path + ipebble.CheckpointSuffix
-	data, ok, err := ipebble.ReadFile(st.opts.fs, path)
-	if err != nil || !ok {
-		return p, false, err
-	}
-	if err := json.Unmarshal(data, &p); err != nil {
-		return p, false, fmt.Errorf("storage: %s unreadable: %w", path, err)
-	}
-	return p, true, nil
+	return readPointerFile(db.boot.opts.fs, db.boot.opts.Path+ipebble.CheckpointSuffix)
 }
 
 // CheckpointName is the checkpoint this boot took or reused; "" when none.

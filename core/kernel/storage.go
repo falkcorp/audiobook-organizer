@@ -1,5 +1,5 @@
 // file: core/kernel/storage.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
 // last-edited: 2026-11-08
 
@@ -44,6 +44,12 @@ type kernelStore struct {
 	opened *storage.Opened
 	db     *storage.DB
 	scope  *metrics.Scope // "<namespace>.storage"
+	// checkpoint is <namespace>_storage_checkpoint_bytes{state}, recorded at
+	// boot and again after every checkpoint sweep, whose deletions change it.
+	checkpoint metric.Int64Gauge
+	// sweeper is the checkpoint sweeper (sweeper.go), registered by boot
+	// after P5 and started by Run after readiness.
+	sweeper *sweeper
 }
 
 // DeclaresStorage reports whether m declares any storage: a keyspace, legacy
@@ -220,14 +226,26 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 		level.Record(ctx, int64(stored[o]), metric.WithAttributes(owner, attribute.String("kind", "store")))
 		level.Record(ctx, int64(supported[o]), metric.WithAttributes(owner, attribute.String("kind", "supported")))
 	}
+	k.store.checkpoint = checkpoint
+	k.recordCheckpointBytes(ctx)
+	return nil
+}
+
+// recordCheckpointBytes records <namespace>_storage_checkpoint_bytes{state}
+// from the checkpoint records now: at boot, and after each sweep. A
+// checkpoint that cannot be sized is logged and leaves the gauge as it was;
+// it fails nothing.
+func (k *Kernel) recordCheckpointBytes(ctx context.Context) {
+	if k.store == nil || k.store.db == nil || k.store.checkpoint == nil {
+		return
+	}
 	open, completed, err := k.store.db.Admin().CheckpointBytes()
 	if err != nil {
 		k.log.Warn("kernel: pre-migration checkpoints not sized; storage_checkpoint_bytes not recorded", "err", err)
-		return nil
+		return
 	}
-	checkpoint.Record(ctx, int64(open), metric.WithAttributes(attribute.String("state", "open")))
-	checkpoint.Record(ctx, int64(completed), metric.WithAttributes(attribute.String("state", "completed")))
-	return nil
+	k.store.checkpoint.Record(ctx, int64(open), metric.WithAttributes(attribute.String("state", "open")))
+	k.store.checkpoint.Record(ctx, int64(completed), metric.WithAttributes(attribute.String("state", "completed")))
 }
 
 // markServed is 05-storage §5S.3.12's served write, before Run's start step
