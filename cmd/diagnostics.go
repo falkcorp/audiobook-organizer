@@ -1,7 +1,7 @@
 // file: cmd/diagnostics.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -51,7 +52,14 @@ With no flag it lists the rows and the storage format sidecar. --delete KEY
 removes one row; --set KEY=N rewrites storage_format or db_version as a valid
 row. A change asks for confirmation (or --yes) and prints exactly what it
 changed. Deleting storage_format also removes the sidecar: the next open
-restamps a store with data as format 1.`,
+restamps a store with data as format 1.
+
+--delete and --set run only as the state directory's owner, the user the
+service runs as (sudo -u <that user>): they open the store read-write, and
+the files that open writes must be the service's to replace. Listing opens
+it read-only and adds nothing to the store, so that rule does not apply to
+it; like any open of the store, it still needs the service's user or root to
+open the store's LOCK file.`,
 		// A refusal is one line: no usage text, and no second "Error:" copy
 		// from cobra (main.go already prints the returned error).
 		SilenceUsage:  true,
@@ -74,7 +82,7 @@ restamps a store with data as format 1.`,
 			if err != nil {
 				return err
 			}
-			return runReservedPrefs(config.AppConfig.DatabasePath, del, set, yes, all, promptYesNo)
+			return runReservedPrefs(commandContext(cmd), config.AppConfig.DatabasePath, del, set, yes, all, promptYesNo)
 		},
 	}
 
@@ -253,7 +261,7 @@ func runRawPebbleQuery(limit int, prefix string) error {
 	// Exempt from the guard, not from the swap slot: a store a staged or
 	// in-flight restore or reset is about to replace, or has half replaced,
 	// is not inspected (refuseBusySwapSlot).
-	if err := refuseBusySwapSlot(); err != nil {
+	if _, err := refuseBusySwapSlot(); err != nil {
 		return err
 	}
 	// Raw mode is exempt from the storage-format guard by design (storage
@@ -262,7 +270,15 @@ func runRawPebbleQuery(limit int, prefix string) error {
 	// resolves to FormatMinSupported; Open only ratchets UP to the requested
 	// version, so an inspection can never raise the on-disk format. (Passing
 	// PebbleFormatMajorVersion here would raise an older store to the pin.)
-	db, err := pebble.Open(config.AppConfig.DatabasePath, &pebble.Options{})
+	// It opens read-only (R1-25 follow-up N-3): a read-write open writes a
+	// new WAL, manifest and OPTIONS file, which, run as root, the service
+	// could not replace, and creates an empty store at a mistyped path.
+	// Read-only, it adds nothing to the store directory, so the owner rule
+	// does not apply: run as root, it leaves nothing the service cannot
+	// replace. Like every Pebble open, read-only included, it still opens
+	// the store's existing LOCK file for writing, so in practice it runs as
+	// the service's user or root.
+	db, err := pebble.Open(config.AppConfig.DatabasePath, &pebble.Options{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("failed to open Pebble database: %w", err)
 	}
@@ -325,7 +341,7 @@ func hasPlaceholder(path string, tokens []string) bool {
 // in addition to the stdout report.
 var reservedPrefsLog = logger.New("cli.diagnostics.reserved-prefs")
 
-func runReservedPrefs(dbPath, del, set string, yes, all bool, confirm func(string) (bool, error)) error {
+func runReservedPrefs(ctx context.Context, dbPath, del, set string, yes, all bool, confirm func(string) (bool, error)) error {
 	if dbPath == "" {
 		return errors.New("database path is not set (--db / DATABASE_PATH)")
 	}
@@ -336,7 +352,8 @@ func runReservedPrefs(dbPath, del, set string, yes, all bool, confirm func(strin
 	// slot: a --set or --delete on a half-swapped directory would write to
 	// the wrong store, and a listing would show it as if it were the live
 	// one. Every mode refuses on a busy slot before any Pebble open.
-	if err := refuseBusySwapSlot(); err != nil {
+	stateDir, err := refuseBusySwapSlot()
+	if err != nil {
 		return err
 	}
 	if del == "" && set == "" {
@@ -367,17 +384,27 @@ func runReservedPrefs(dbPath, del, set string, yes, all bool, confirm func(strin
 		return nil
 	}
 
-	key, version, action := del, 0, "Delete"
+	key, version, action, flag := del, 0, "Delete", "--delete"
 	if set != "" {
 		k, v, ok := strings.Cut(set, "=")
 		n, err := strconv.Atoi(strings.TrimSpace(v))
 		if !ok || err != nil || n < 1 {
 			return fmt.Errorf("--set wants KEY=N with N >= 1, got %q", set)
 		}
-		key, version, action = strings.TrimSpace(k), n, fmt.Sprintf("Rewrite as version %d", n)
+		key, version, action, flag = strings.TrimSpace(k), n, fmt.Sprintf("Rewrite as version %d", n), "--set"
 	}
 	if !database.IsReservedPreferenceKey(key) {
 		return fmt.Errorf("%q is not a reserved preference key", key)
+	}
+	// The owner rule (seams.d/R1-25.md D29), as app.OpenOffline applies it
+	// to a read-write open, and before the prompt, so nobody confirms a
+	// change that is then refused: the repair opens the store read-write,
+	// and the WAL, manifest and OPTIONS files that open writes, and the
+	// sidecar a storage_format change rewrites, belong to whoever runs it.
+	// Run as root, they are files the service must replace and cannot. A
+	// listing opens read-only and is not refused.
+	if err := storage.RefuseNotStateDirOwner(ctx, stateDir, "diagnostics reserved-prefs "+flag); err != nil {
+		return err
 	}
 	if !yes {
 		ok, err := confirm(fmt.Sprintf("%s the reserved preference %q in %s (stop the service first)", action, key, dbPath))

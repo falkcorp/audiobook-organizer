@@ -1,7 +1,7 @@
 // file: internal/database/storage_format_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 8a965f29-0efc-4a0a-9fb9-bdc400520fd4
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -392,6 +392,35 @@ func TestStorageFormat_RepairDeletesBadStampSoStoreOpens(t *testing.T) {
 	require.True(t, present)
 	require.Equal(t, legacyStorageFormat, stamp, "a store with data and no stamp restamps as legacy")
 	require.Equal(t, "1\n", readSidecarFile(t, path))
+}
+
+// TestStorageFormat_ListOpensReadOnly (R1-25 follow-up N-3): the listing
+// opens the store read-only, so it adds no file to the store directory (a
+// read-write open writes a new WAL, manifest and OPTIONS file, which, run as
+// root, the service could not replace) and it reads a store directory this
+// process may not write. The repair still opens read-write.
+func TestStorageFormat_ListOpensReadOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "list-readonly.pebble")
+	openAndClose(t, path)
+	names := func() []string {
+		entries, err := os.ReadDir(path)
+		require.NoError(t, err)
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Name())
+		}
+		return out
+	}
+	before := names()
+	_, _, _, err := ListReservedPreferences(path)
+	require.NoError(t, err)
+	require.Equal(t, before, names(), "a listing added or removed a file in the store directory")
+	if os.Geteuid() != 0 {
+		require.NoError(t, os.Chmod(path, 0o500))
+		t.Cleanup(func() { _ = os.Chmod(path, 0o700) })
+		_, _, _, err := ListReservedPreferences(path)
+		require.NoError(t, err, "a listing of a store directory this process cannot write")
+	}
 }
 
 func TestStorageFormat_RepairRewritesStampAndSidecar(t *testing.T) {

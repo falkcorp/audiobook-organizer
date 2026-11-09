@@ -1,7 +1,7 @@
 // file: cmd/diagnostics_test.go
-// version: 2.3.3
+// version: 2.3.4
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
@@ -11,17 +11,20 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -356,6 +359,120 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 	}
 }
 
+// storeFileNames is the sorted names in a store directory: what an open adds
+// or removes there, not the mtimes a read-only open's lock touches.
+func storeFileNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("list %s: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
+// TestRawPebbleQuery_OpensReadOnly (R1-25 follow-up N-3): diagnostics query
+// --raw opens the store read-only. It adds no file to the store directory
+// (a read-write open writes a new WAL, manifest and OPTIONS file, which, run
+// as root, the service could not replace), it reads a store directory this
+// process may not write, and it does not create a store where there is none.
+func TestRawPebbleQuery_OpensReadOnly(t *testing.T) {
+	isolateStateDir(t)
+	dbPath := filepath.Join(t.TempDir(), "arkham.pebble")
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("book:x"), []byte("{}"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	origPath := config.AppConfig.DatabasePath
+	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
+	config.AppConfig.DatabasePath = dbPath
+
+	before := storeFileNames(t, dbPath)
+	if err := runRawPebbleQuery(1, "book:"); err != nil {
+		t.Fatalf("runRawPebbleQuery: %v", err)
+	}
+	if after := storeFileNames(t, dbPath); !slices.Equal(before, after) {
+		t.Fatalf("the raw query changed the store directory:\nbefore %v\nafter  %v", before, after)
+	}
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(dbPath, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dbPath, 0o700) })
+		if err := runRawPebbleQuery(1, "book:"); err != nil {
+			t.Fatalf("runRawPebbleQuery on a store directory this process cannot write: %v", err)
+		}
+	}
+
+	missing := filepath.Join(t.TempDir(), "joker.pebble")
+	config.AppConfig.DatabasePath = missing
+	if err := runRawPebbleQuery(1, "book:"); err == nil {
+		t.Fatal("runRawPebbleQuery where there is no store succeeded")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runRawPebbleQuery created %s (%v)", missing, err)
+	}
+}
+
+// TestReservedPrefs_ChangesRunOnlyAsTheOwner (R1-25 follow-up N-3):
+// reserved-prefs --set and --delete open the store read-write, so they run
+// only as the state directory's owner, refused before the prompt with the
+// sudo -u remedy, and change nothing; a listing opens read-only and is not
+// refused. The state directory here is the filesystem root, which root
+// owns, so a non-root test process is a non-owner without any seam, as in
+// production (os.Geteuid).
+func TestReservedPrefs_ChangesRunOnlyAsTheOwner(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root owns the directory this test borrows")
+	}
+	root := string(filepath.Separator)
+	if owner, ok, err := storage.StateDirOwner(vfs.Default, root); err != nil || !ok || owner != 0 {
+		t.Skipf("the filesystem root is not root's here (uid %d, %v, %v)", owner, ok, err)
+	}
+	t.Setenv(config.SecureStateDirEnv, root)
+	config.ResetStateDirForTest()
+	t.Cleanup(config.ResetStateDirForTest)
+	dbPath := filepath.Join(t.TempDir(), "gcpd.pebble")
+	seedStarted(t, dbPath)
+	rowsBefore, _, _, err := database.ListReservedPreferences(dbPath)
+	if err != nil || len(rowsBefore) == 0 {
+		t.Fatalf("premise: the seeded store's reserved rows = %v, %v", rowsBefore, err)
+	}
+	before := storeFileNames(t, dbPath)
+
+	if err := runReservedPrefs(context.Background(), dbPath, "", "", false, false, nil); err != nil {
+		t.Fatalf("a listing as a non-owner: %v", err)
+	}
+	for flag, args := range map[string][2]string{"--delete": {"storage_format", ""}, "--set": {"", "db_version=3"}} {
+		asked := false
+		confirm := func(string) (bool, error) { asked = true; return true, nil }
+		err := runReservedPrefs(context.Background(), dbPath, args[0], args[1], false, false, confirm)
+		if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "diagnostics reserved-prefs "+flag) ||
+			!strings.Contains(err.Error(), "sudo -u ") {
+			t.Errorf("%s as a non-owner = %v, want storage.ErrNotStateDirOwner naming it, with sudo -u", flag, err)
+		}
+		if asked {
+			t.Errorf("%s asked for confirmation of a change it then refused", flag)
+		}
+	}
+	if after := storeFileNames(t, dbPath); !slices.Equal(before, after) {
+		t.Fatalf("a listing or a refused change changed the store directory:\nbefore %v\nafter  %v", before, after)
+	}
+	if rows, _, _, err := database.ListReservedPreferences(dbPath); err != nil || !slices.Equal(rows, rowsBefore) {
+		t.Fatalf("the reserved rows after = %v, %v; want %v", rows, err, rowsBefore)
+	}
+}
+
 // TestRawPebbleQuery_DoesNotRatchetPebbleFormat: raw inspection must leave
 // the on-disk format of a store below the pin exactly where it was.
 func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
@@ -428,13 +545,13 @@ func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 	}
 
 	// Listing is read-only and works on the refused store.
-	if err := runReservedPrefs(dbPath, "", "", false, false, nil); err != nil {
+	if err := runReservedPrefs(context.Background(), dbPath, "", "", false, false, nil); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 
 	asked := ""
 	decline := func(q string) (bool, error) { asked = q; return false, nil }
-	if err := runReservedPrefs(dbPath, "storage_format", "", false, false, decline); err != nil {
+	if err := runReservedPrefs(context.Background(), dbPath, "storage_format", "", false, false, decline); err != nil {
 		t.Fatalf("declined delete: %v", err)
 	}
 	if !strings.Contains(asked, "storage_format") {
@@ -445,7 +562,7 @@ func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 		t.Fatal("a declined confirmation changed the store")
 	}
 
-	if err := runReservedPrefs(dbPath, "storage_format", "", true, false, nil); err != nil {
+	if err := runReservedPrefs(context.Background(), dbPath, "storage_format", "", true, false, nil); err != nil {
 		t.Fatalf("delete --yes: %v", err)
 	}
 	s, err = database.NewPebbleStore(dbPath)
@@ -456,10 +573,10 @@ func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runReservedPrefs(dbPath, "theme", "", true, false, nil); err == nil {
+	if err := runReservedPrefs(context.Background(), dbPath, "theme", "", true, false, nil); err == nil {
 		t.Fatal("a non-reserved key must be rejected")
 	}
-	if err := runReservedPrefs(dbPath, "", "storage_format=abc", true, false, nil); err == nil {
+	if err := runReservedPrefs(context.Background(), dbPath, "", "storage_format=abc", true, false, nil); err == nil {
 		t.Fatal("--set with a non-integer must be rejected")
 	}
 }
@@ -511,7 +628,7 @@ func TestRunReservedPrefs_ReportsCommittedChangeOnError(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = runReservedPrefs("/srv/x.pebble", "storage_format", "", true, false, nil)
+		err = runReservedPrefs(context.Background(), "/srv/x.pebble", "storage_format", "", true, false, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "WAS committed") {
 		t.Fatalf("want an error saying the change was committed, got %v", err)
@@ -526,7 +643,7 @@ func TestRunReservedPrefs_ReportsCommittedChangeOnError(t *testing.T) {
 func TestRunReservedPrefs_ClosedStdinAsksForYes(t *testing.T) {
 	isolateStateDir(t)
 	eof := func(string) (bool, error) { return false, io.EOF }
-	err := runReservedPrefs("/srv/x.pebble", "storage_migration", "", false, false, eof)
+	err := runReservedPrefs(context.Background(), "/srv/x.pebble", "storage_migration", "", false, false, eof)
 	if err == nil || err.Error() != "confirmation needed: pass --yes or run interactively" {
 		t.Fatalf("got %v", err)
 	}

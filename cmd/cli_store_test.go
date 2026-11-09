@@ -1,5 +1,5 @@
 // file: cmd/cli_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c0b5a54-1d2f-4a49-9a8e-7e6a3f1b2c40
 // last-edited: 2026-11-09
 
@@ -91,7 +91,7 @@ func TestRefuseBusySwapSlot_ReadsTheResolvedStateDirectory(t *testing.T) {
 	dbDir := fallbackStateDir(t)
 	stageSwap(t, dbDir, config.AppConfig.DatabasePath)
 
-	if err := refuseBusySwapSlot(); !errors.Is(err, restorejournal.ErrSwapPending) {
+	if _, err := refuseBusySwapSlot(); !errors.Is(err, restorejournal.ErrSwapPending) {
 		t.Fatalf("refuseBusySwapSlot = %v, want restorejournal.ErrSwapPending from the slot under the resolved directory %s", err, dbDir)
 	}
 }
@@ -300,11 +300,11 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 				"the serving parent re-execs it over the live store, which app.OpenOffline refuses; it keeps the standalone " +
 				"opener and passes StateDir so the opener reads the swap slot first",
 			"diagnostics.go|runRawPebbleQuery|pebble.Open": "diagnostics query --raw inspects a store the guard refuses, by design; " +
-				"it probes the swap slot first (refuseBusySwapSlot)",
+				"it probes the swap slot first (refuseBusySwapSlot) and opens read-only, so it adds nothing to the store directory",
 			"diagnostics.go|runReservedPrefs|database.ListReservedPreferences": "reserved-prefs is a recovery tool that bypasses the guard by design; " +
-				"it probes the swap slot first, in every mode (refuseBusySwapSlot)",
-			"diagnostics.go|repairReservedPreference|database.RepairReservedPreference": "the same recovery tool's --set and --delete; " +
-				"a var only so a test can fail it after a commit",
+				"it probes the swap slot first, in every mode (refuseBusySwapSlot); the listing opens read-only",
+			"diagnostics.go|repairReservedPreference|database.RepairReservedPreference": "the same recovery tool's --set and --delete, which run only as the state directory's owner " +
+				"(storage.RefuseNotStateDirOwner); a var only so a test can fail it after a commit",
 			"pid-census/main.go|main|database.NewPebbleStore": "pid-census opens a COPY of the store, never the live one",
 		}
 
@@ -384,12 +384,12 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 			"diagnostics cleanup":       func() error { return runCleanupInvalidBooks(true, false) },
 			"diagnostics query":         func() error { return runDiagnosticsQuery(1, "book:", false) },
 			"diagnostics query --raw":   func() error { return runDiagnosticsQuery(1, "book:", true) },
-			"diagnostics reserved list": func() error { return runReservedPrefs(dbPath, "", "", false, false, nil) },
+			"diagnostics reserved list": func() error { return runReservedPrefs(context.Background(), dbPath, "", "", false, false, nil) },
 			"diagnostics reserved set": func() error {
-				return runReservedPrefs(dbPath, "", "storage_format=2", true, false, nil)
+				return runReservedPrefs(context.Background(), dbPath, "", "storage_format=2", true, false, nil)
 			},
 			"diagnostics reserved delete": func() error {
-				return runReservedPrefs(dbPath, "storage_format", "", true, false, nil)
+				return runReservedPrefs(context.Background(), dbPath, "storage_format", "", true, false, nil)
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -605,9 +605,9 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 
 		for name, err := range map[string]error{
 			"raw":             runRawPebbleQuery(1, "book:"),
-			"reserved list":   runReservedPrefs(dbPath, "", "", false, false, nil),
-			"reserved set":    runReservedPrefs(dbPath, "", "db_version=3", true, false, nil),
-			"reserved delete": runReservedPrefs(dbPath, "storage_format", "", true, false, nil),
+			"reserved list":   runReservedPrefs(context.Background(), dbPath, "", "", false, false, nil),
+			"reserved set":    runReservedPrefs(context.Background(), dbPath, "", "db_version=3", true, false, nil),
+			"reserved delete": runReservedPrefs(context.Background(), dbPath, "storage_format", "", true, false, nil),
 		} {
 			if !errors.Is(err, restorejournal.ErrSwapPending) {
 				t.Errorf("%s: err = %v, want restorejournal.ErrSwapPending", name, err)
