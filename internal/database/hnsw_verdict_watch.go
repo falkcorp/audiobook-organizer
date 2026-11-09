@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_verdict_watch.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4da46f59-ef13-459d-b8e5-3336484abafe
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -37,8 +37,8 @@ import (
 // boot compares it.
 //
 // Every write to Pebble goes through a GatedDB or one of its batches, so the
-// watch sits there and needs no list of callers: a Set, Delete or Merge of one
-// of those keys, a DeleteRange that reaches either family, or a batch that
+// watch sits there and needs no list of callers: a Set or Delete of one of
+// those keys, a DeleteRange that reaches either family, or a batch that
 // staged one, counts as a verdict write. The count is taken before the write
 // reaches the engine, so a crash between the two leaves the count (and with
 // it the refusal) ahead of Pebble, never behind it. A caller that knows a

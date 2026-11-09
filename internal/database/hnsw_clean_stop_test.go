@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-09
 
@@ -677,23 +677,56 @@ func TestOpenStandalone_TakesTheMarkerBeforePrepare(t *testing.T) {
 			}
 		})
 	}
+
+	// R1-25 review S-1: a marker that may still vouch fails the open, which
+	// closes the database it opened, so the next open, once the marker is
+	// gone, takes the lock.
+	t.Run("a marker that may still vouch fails the open", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		first, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dir := HNSWSnapshotDir(dbPath)
+		if err := os.MkdirAll(filepath.Join(cleanStopPath(dir), "riddle"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if ps, err := NewPebbleStore(dbPath); !errors.Is(err, ErrCleanStopNotDiscarded) {
+			if err == nil {
+				_ = ps.Close()
+			}
+			t.Fatalf("NewPebbleStore = %v; want ErrCleanStopNotDiscarded", err)
+		}
+		if err := os.RemoveAll(cleanStopPath(dir)); err != nil {
+			t.Fatal(err)
+		}
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatalf("the open after the marker was cleared: %v; the failed open kept the database", err)
+		}
+		_ = ps.Close()
+	})
 }
 
-// TestClaimHNSWCleanStop is the served app's take, before app.New, and the
-// hand-over to the store Register builds: the marker leaves the disk at the
-// take, the store's import gets it for the snapshot directory however the
-// database path was spelled, a migration in between voids it, and with
-// claims off nothing is taken.
+// TestClaimHNSWCleanStop is the served app's take, in books' Register: the
+// marker leaves the disk at the take, the store's import gets it for the
+// snapshot directory however the database path was spelled, a void reason
+// (a migration, a swap) still takes it off the disk but leaves the import
+// nothing that vouches, and with claims off nothing is taken. A marker that
+// may still vouch fails the take, voided or not, and the store holds no
+// claim (R1-25 review S-1): Register fails the boot on it.
 func TestClaimHNSWCleanStop(t *testing.T) {
-	adopted := func(t *testing.T, c *HNSWCleanStopClaim, migrated bool) *GatedDB {
+	store := func(t *testing.T) *PebbleStore {
 		t.Helper()
 		ps, err := NewPebbleStoreInMemory("served")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = ps.Close() })
-		ps.AdoptHNSWCleanStopClaim(c, migrated)
-		return ps.DB()
+		return ps
 	}
 
 	// The opener resolves the database path; the server derives the import's
@@ -710,45 +743,74 @@ func TestClaimHNSWCleanStop(t *testing.T) {
 			t.Chdir(wd)
 			in := func(p string) string { return strings.ReplaceAll(p, "{wd}", wd) }
 			writeMarker(t, filepath.Join(wd, "hnsw"))
-			c := ClaimHNSWCleanStop(in(tc.claim))
-			if c == nil {
-				t.Fatal("no claim")
+			ps := store(t)
+			if err := ps.ClaimHNSWCleanStop(in(tc.claim), ""); err != nil {
+				t.Fatal(err)
 			}
 			if markerExists(t, filepath.Join(wd, "hnsw")) {
 				t.Fatal("the take left the marker on disk")
 			}
-			rec, ok := adopted(t, c, false).popCleanStop(in(tc.pop))
+			rec, ok := ps.DB().popCleanStop(in(tc.pop))
 			if !ok || rec == nil || rec.Model != "bge-m3" {
 				t.Errorf("the import got %+v, %v; want the marker the take found", rec, ok)
 			}
 		})
 	}
 
-	t.Run("a migration after the take", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
-		writeMarker(t, HNSWSnapshotDir(dbPath))
-		rec, ok := adopted(t, ClaimHNSWCleanStop(dbPath), true).popCleanStop(HNSWSnapshotDir(dbPath))
-		if !ok || rec != nil {
-			t.Errorf("after a migration the import got %+v, %v; want a claim that does not vouch", rec, ok)
-		}
-	})
+	for _, void := range []string{HNSWCleanStopVoidMigrated, "the pre-boot swap replaced the store"} {
+		t.Run("voided: "+void, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+			dir := HNSWSnapshotDir(dbPath)
+			writeMarker(t, dir)
+			ps := store(t)
+			if err := ps.ClaimHNSWCleanStop(dbPath, void); err != nil {
+				t.Fatal(err)
+			}
+			if markerExists(t, dir) {
+				t.Error("a voided take left the marker on disk")
+			}
+			rec, ok := ps.DB().popCleanStop(dir)
+			if !ok || rec != nil {
+				t.Errorf("after a void the import got %+v, %v; want a claim that does not vouch", rec, ok)
+			}
+		})
+	}
 
 	t.Run("claims turned off", func(t *testing.T) {
 		t.Cleanup(DisableHNSWCleanStopClaim())
 		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
 		dir := HNSWSnapshotDir(dbPath)
 		writeMarker(t, dir)
-		c := ClaimHNSWCleanStop(dbPath)
-		if c != nil {
-			t.Error("a take with claims off returned a claim")
+		ps := store(t)
+		if err := ps.ClaimHNSWCleanStop(dbPath, ""); err != nil {
+			t.Fatal(err)
 		}
 		if !markerExists(t, dir) {
 			t.Error("a take with claims off removed the marker")
 		}
-		if _, ok := adopted(t, c, false).popCleanStop(dir); ok {
-			t.Error("adopting no claim left the store holding one")
+		if _, ok := ps.DB().popCleanStop(dir); ok {
+			t.Error("a take with claims off left the store holding a claim")
 		}
 	})
+
+	// A non-empty directory in the marker's place can be neither removed nor
+	// emptied: it stays on disk, so it may still vouch.
+	for name, void := range map[string]string{"not voided": "", "voided": HNSWCleanStopVoidMigrated} {
+		t.Run("a marker that may still vouch, "+name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+			dir := HNSWSnapshotDir(dbPath)
+			if err := os.MkdirAll(filepath.Join(cleanStopPath(dir), "riddle"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ps := store(t)
+			if err := ps.ClaimHNSWCleanStop(dbPath, void); !errors.Is(err, ErrCleanStopNotDiscarded) {
+				t.Fatalf("ClaimHNSWCleanStop = %v; want ErrCleanStopNotDiscarded", err)
+			}
+			if _, ok := ps.DB().popCleanStop(dir); ok {
+				t.Error("a take that failed left the store holding a claim")
+			}
+		})
+	}
 }
 
 // TestDisableHNSWCleanStopClaim_RestoreTurnsClaimsBackOn (R1-15 round-2
