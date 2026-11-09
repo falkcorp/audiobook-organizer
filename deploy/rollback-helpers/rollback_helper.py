@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -186,7 +186,7 @@ def load_config() -> dict[str, str]:
             raise RefusedError(
                 f"{CONFIG} or its directory is not root-owned, or is group or world writable"
             )
-        text = os.read(fd, 65537).decode("utf-8", "strict")
+        text = _read_all(fd, 65537).decode("utf-8", "strict")
     finally:
         os.close(fd)
     cfg: dict[str, str] = {}
@@ -280,7 +280,7 @@ def op_record(args: list[str]) -> int:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > RECORD_LIMIT:
             raise RefusedError(f"{path} is not a regular file under {RECORD_LIMIT} bytes")
-        data = os.read(fd, RECORD_LIMIT + 1)
+        data = _read_all(fd, RECORD_LIMIT + 1)
     finally:
         os.close(fd)
     try:
@@ -696,6 +696,21 @@ def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
                 )
 
 
+def _read_all(fd: int, limit: int) -> bytes:
+    """Read fd to its end or to limit bytes: one read(2) may return less
+    than asked (a network-mounted home), and a short read must never install
+    a truncated file."""
+    chunks: list[bytes] = []
+    total = 0
+    while total < limit:
+        chunk = os.read(fd, limit - total)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
 def _deploy_uid() -> int:
     """The user who ran sudo (SUDO_UID, which sudo sets and the caller cannot
     override), or this process's user when run without sudo."""
@@ -742,7 +757,7 @@ def op_install(args: list[str]) -> int:
         return _install_binary(cfg["bin"], src)
     fd, _ = _read_staged(src, UNIT_LIMIT)
     try:
-        data = os.read(fd, UNIT_LIMIT + 1)
+        data = _read_all(fd, UNIT_LIMIT + 1)
     finally:
         os.close(fd)
     if len(data) > UNIT_LIMIT:
