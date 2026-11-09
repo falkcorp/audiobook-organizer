@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -458,6 +458,20 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 				return target, snap
 			},
 			entries: []entry{{name: "wayne-manor/batcave/", dir: true}},
+			landed:  "batcave",
+		},
+		{
+			// The walk includes the destination itself: a directory entry
+			// that is a symlink to the snapshot directory is refused, not
+			// accepted as an existing directory by MkdirAll.
+			name: "a directory entry that is a symlink to the snapshot directory",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, snap := filepath.Join(base, "gotham"), filepath.Join(base, "hnsw")
+				mustMkdir(t, target, snap)
+				mustSymlink(t, snap, filepath.Join(target, "wayne-manor"))
+				return target, snap
+			},
+			entries: []entry{{name: "wayne-manor/", dir: true}},
 			landed:  "batcave",
 		},
 	}
