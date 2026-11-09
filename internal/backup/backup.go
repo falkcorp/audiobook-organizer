@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.15
+// version: 1.22.16
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -989,6 +989,16 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 	if scanErr != nil {
 		return nil, scanErr
 	}
+	// The root is the first component of an entry name the scan cleaned and
+	// cleared (entryPath, entryRefusal), so it is a single local name, never
+	// "", "." or "..". Checked anyway with filepath.IsLocal before it leaves
+	// here: a caller joins it to a target (the restore handler, for the
+	// restored database's snapshot directory), and CodeQL's go/zipslip and
+	// go/path-injection credit this check where they cannot follow the
+	// scan's (R1-15 round-6 verification review, SF2).
+	if !filepath.IsLocal(root) {
+		return nil, fmt.Errorf("%w: the archive's root %q is not a local name", ErrArchiveEntryEscapes, root)
+	}
 
 	return &PreparedRestore{archivePath: archivePath, root: root}, nil
 }
@@ -1215,6 +1225,12 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 	// Create tar reader
 	tarReader := tar.NewReader(compReader)
 	extracted := 0
+	// within is the prefix every entry's destination has: the target with a
+	// trailing separator.
+	within := filepath.Clean(targetPath)
+	if !strings.HasSuffix(within, string(filepath.Separator)) {
+		within += string(filepath.Separator)
+	}
 
 	// Extract files
 	for {
@@ -1243,12 +1259,22 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			return err
 		}
 		// library.Join validates that the entry stays within targetPath and
-		// returns a clean path value — breaking the CodeQL taint chain.
+		// returns the cleaned path.
 		targetSP, err := library.Join(targetPath, entryName)
 		if err != nil {
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
 		target := targetSP.String()
+		// The same containment, as a prefix check on target itself, which
+		// is the form CodeQL's go/zipslip and go/path-injection credit.
+		// library.Join's own check does not cut their flow: it lets the
+		// root itself through before its prefix check, so that check does
+		// not guard the path it returns (R1-15 round-6 verification review,
+		// SF2). entryPath never yields the target itself, so a destination
+		// always lies strictly under it.
+		if !strings.HasPrefix(target, within) {
+			return fmt.Errorf("%w: %q", ErrArchiveEntryEscapes, header.Name)
+		}
 		// Where the entry lands decides, by directory identity, checked
 		// before anything is created for it, its parent directories
 		// included. The snapshot directories are looked up again for each
