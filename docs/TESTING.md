@@ -1,7 +1,7 @@
 <!-- file: docs/TESTING.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4e5f6a7b-8c9d-0e1f-2a3b-4c5d6e7f8a9b -->
-<!-- last-edited: 2026-02-04 -->
+<!-- last-edited: 2026-11-08 -->
 
 # Two-Phase E2E Testing Guide
 
@@ -21,10 +21,9 @@ The two-phase approach enables comprehensive testing across multiple dimensions:
 | **Use Case** | Integration testing, API validation | UI/UX testing, isolation, CI/CD |
 | **Speed** | Slower (real I/O) | Faster (in-memory mocks) |
 | **Prerequisites** | Running server instance | None |
-| **Data Setup** | Via factory reset endpoint | Via mock configuration |
+| **Data Setup** | Start the server on a known store | Via mock configuration |
 
 Both phases share a common setup utility system that handles:
-- Factory reset to known state
 - Welcome wizard skipping
 - EventSource mocking (SSE prevention)
 - Mock API configuration
@@ -52,7 +51,7 @@ import {
 
 test.describe('Library Operations - Phase 1 (API-Driven)', () => {
   test.beforeEach(async ({ page }) => {
-    // Phase 1 setup: Reset to factory defaults with real API
+    // Phase 1 setup: real API, welcome wizard skipped
     await setupPhase1ApiDriven(page);
 
     // Prevent EventSource SSE connections (optional)
@@ -155,7 +154,7 @@ import {
 
 test.describe('Settings Configuration - Phase 2 (Interactive)', () => {
   test.beforeEach(async ({ page }) => {
-    // Phase 2 setup: Reset and use mocked APIs
+    // Phase 2 setup: mocked APIs
     await setupPhase2Interactive(page);
 
     // Prevent EventSource SSE connections
@@ -226,92 +225,23 @@ npm run test:e2e settings-configuration.spec.ts
 npm run test:e2e -- --workers=1  # Single worker for stability
 ```
 
-## Factory Reset Endpoint
+## Resetting to a Known State
 
-The factory reset endpoint is the foundation of repeatable testing. It resets the system to a known state.
-
-### Endpoint
-
-```
-POST /api/v1/system/reset
-```
-
-### Request
+There is no reset endpoint. A factory reset is staged from the command line
+with the service stopped and applies at the next start of the service:
 
 ```bash
-curl -X POST http://localhost:8888/api/v1/system/reset \
-  -H "Content-Type: application/json" \
-  -d '{}'
+# Stop the server first; the command refuses while the store is open.
+audiobook-organizer storage reset --confirm RESET            # factory reset
+audiobook-organizer storage reset --confirm RESET --kind store  # database and settings only
 ```
 
-### Response (Success)
+The database and its settings are set aside, not deleted, so moving them back
+undoes the reset. `config.yaml` beside the database is left unchanged. Run
+`audiobook-organizer storage reset --help` for the library-file wipe options.
 
-```json
-{
-  "success": true,
-  "data": {
-    "message": "System reset successfully"
-  }
-}
-```
-
-### Response (Error)
-
-```json
-{
-  "success": false,
-  "error": "database reset failed: permission denied",
-  "status": "error"
-}
-```
-
-### What Gets Reset
-
-- Database cleared (all audiobooks, metadata, settings)
-- Configuration reset to factory defaults
-- Blocked hashes cleared
-- Import paths reset
-- All operation logs cleared
-- Welcome wizard state reset (not shown on next launch)
-- Temporary files cleaned up
-
-### What Doesn't Get Reset
-
-- Application binary (not reinstalled)
-- Installation directory structure
-- Environment variables
-- System-level settings
-- File system (only database cleared)
-
-### Example: Using Reset in Tests
-
-```typescript
-// Manually reset if needed
-async function resetApp(page: Page) {
-  await page.evaluate(async () => {
-    const res = await fetch('/api/v1/system/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    return res.ok;
-  });
-}
-
-// In test
-test('reset clears all data', async ({ page }) => {
-  await resetApp(page);
-
-  // Verify data is cleared
-  const booksCount = await page.evaluate(async () => {
-    const res = await fetch('/api/v1/audiobooks');
-    const data = await res.json();
-    return data.total;
-  });
-
-  expect(booksCount).toBe(0);
-});
-```
+For repeatable Phase 1 runs it is usually simpler to start the server on a
+fresh, empty database directory for each run.
 
 ## Environment Variables
 
@@ -507,10 +437,9 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 100));
 });
 
-// Reset state between tests
+// Per-test setup (the server's data persists between tests)
 test.beforeEach(async ({ page }) => {
   await setupPhase1ApiDriven(page);
-  // Fresh state for each test
 });
 ```
 
@@ -571,20 +500,6 @@ DEBUG=pw:api npm run test:e2e -- --debug
 make run
 # or
 make run-api
-```
-
-### Reset Endpoint Not Available
-
-**Error**: `Factory reset endpoint returned status 404`
-
-**Solution**:
-```typescript
-// Gracefully handle missing reset endpoint
-const resetSuccess = await resetToFactoryDefaults(page);
-if (!resetSuccess) {
-  console.warn('Reset not available, using manual setup');
-  await skipWelcomeWizard(page);
-}
 ```
 
 ### Tests Timing Out
@@ -681,7 +596,7 @@ web/tests/e2e/
 - **Backend tests**: `/internal/server/` - Go handler tests with mocks
 - **Frontend tests**: `web/src/` - TypeScript component tests
 - **E2E tests**: `web/tests/e2e/` - Playwright tests
-- **Factory reset**: `internal/server/reset_handler.go` - Reset endpoint implementation
+- **Factory reset**: `core/app/offline_reset.go` - the offline `storage reset` command
 - **Makefile**: Root `Makefile` - Test commands and targets
 
 ## Contributing Tests

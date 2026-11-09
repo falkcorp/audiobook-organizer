@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache_summaries_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b4e1f73-0c28-4d6a-a5e9-3f7d2c8b6e10
-// last-edited: 2026-10-10
+// last-edited: 2026-11-08
 
 package database
 
@@ -127,13 +127,6 @@ func TestMetadataCacheSummaries_TracksEveryWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSummariesMatchScan(t, p, "after DeleteRaw")
-
-	if err := p.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	assertSummariesMatchScan(t, p, "after Reset")
-	putCache(t, p, "post", 2, base)
-	assertSummariesMatchScan(t, p, "after Put following Reset")
 }
 
 // TestMetadataCacheSummaries_RandomWrites: random Put/Delete sequences,

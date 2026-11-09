@@ -1,7 +1,7 @@
 // file: internal/config/chapter_consolidation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a48766bd-8d5c-496e-b7f9-1cddea31517e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 // A 0 in chapter_consolidation_threshold_min used to switch chapter
 // consolidation off, and 0 is also the zero value every partially-populated
@@ -67,7 +67,7 @@ func TestValidateNormalizesZeroChapterThreshold(t *testing.T) {
 // viper's default on every boot.
 func TestLoadedBlobWithZeroChapterThresholdUsesDefault(t *testing.T) {
 	restoreAppConfig(t)
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	require.NoError(t, LoadConfigFromDatabase(storeWithBlob(t, `{"chapter_consolidation_threshold_min":0}`)))
 
@@ -78,7 +78,7 @@ func TestLoadedBlobWithZeroChapterThresholdUsesDefault(t *testing.T) {
 // normalization must not clobber an operator's real value.
 func TestLoadedBlobKeepsARealChapterThreshold(t *testing.T) {
 	restoreAppConfig(t)
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	require.NoError(t, LoadConfigFromDatabase(storeWithBlob(t, `{"chapter_consolidation_threshold_min":4}`)))
 
@@ -90,7 +90,7 @@ func TestLoadedBlobKeepsARealChapterThreshold(t *testing.T) {
 // struct literal) must be written as the default, not reloaded forever.
 func TestSaveNeverPersistsZeroChapterThreshold(t *testing.T) {
 	restoreAppConfig(t)
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	Mutate(func(c *Config) { c.ChapterConsolidationThresholdMin = 0 })
 
 	store := newMockSettingsStore()

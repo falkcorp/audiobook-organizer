@@ -1,12 +1,11 @@
 // file: web/tests/e2e/demo-full-workflow.spec.ts
-// version: 4.1.0
+// version: 4.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-02-05
+// last-edited: 2026-11-08
 
 import { test } from '@playwright/test';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { resetToFactoryDefaults } from './utils/setup-modes';
 import {
   setupDemoDirectories,
   cleanupDemoDirectories,
@@ -31,8 +30,10 @@ test.describe('Full End-to-End Demo Workflow', () => {
     console.log(`📁 Demo directories created: ${tempDir}`);
 
     try {
-      // Reset to factory defaults (uses correct port 8484)
-      await resetToFactoryDefaults(page);
+      // The demo starts at the welcome wizard, so the server must start on
+      // an empty store. There is no reset endpoint: stage one with the
+      // service stopped (`audiobook-organizer storage reset --confirm RESET`)
+      // or point the server at a fresh database directory.
 
       // ==============================================
       // PHASE 1: Welcome Wizard Setup

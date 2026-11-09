@@ -1,7 +1,7 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -30,22 +30,8 @@ func (s *Server) wireSystemRoutes(
 	protected.GET("/system/storage", s.perm(auth.PermSettingsManage), systemH.GetSystemStorage)
 	protected.GET("/system/logs", s.perm(auth.PermSettingsManage), systemH.GetSystemLogs)
 	protected.GET("/system/activity-log", s.perm(auth.PermSettingsManage), systemH.GetSystemActivityLog)
-	// Destructive full-wipe endpoints: gate on RequireAdmin() rather than the
-	// weaker PermSettingsManage — a custom non-admin role granted
-	// settings.manage must not be able to reset the whole store. They keep
-	// RequireAdmin with authentication off too (401): an unauthenticated
-	// caller must not be able to wipe (wire_admin_role.go).
-	//
-	// s.credRoute: both wipe the store, users included, after which the
-	// public POST /auth/setup creates a fresh admin with a password. An
-	// API key must not be able to take that path to a signed-in admin.
-	// Both also clear owner_email, so while an owner is set only the
-	// owner may run them (ownerGateWhenOwnerSet; plan D15). The admin gate
-	// runs before the credential guard.
-	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/reset"),
-		http.MethodPost, "/system/reset", systemH.ResetSystem)
-	s.ownerCredRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/system/factory-reset"),
-		http.MethodPost, "/system/factory-reset", systemH.FactoryReset)
+	// POST /system/reset and /system/factory-reset are gone: the reset runs only
+	// offline, through `audiobook-organizer storage reset`, with the service stopped.
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
 	// Setup-wizard OpenAI key check (SEC-9). Registered next to /config because

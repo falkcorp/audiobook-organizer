@@ -1,7 +1,7 @@
 // file: internal/scheduler/ai_journal_prune_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b599be4-5f4a-43b0-923b-4f443d3a4e78
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -18,7 +18,7 @@ import (
 func TestAIJournalPruneTask_RegisteredInWindowWithRetention(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	assert.Equal(t, 30, config.AppConfig.AIJournalRetentionDays, "default retention is 30 days")
 

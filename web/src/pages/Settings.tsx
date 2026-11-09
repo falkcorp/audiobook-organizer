@@ -1,9 +1,9 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.68.1
+// version: 1.68.2
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
-import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router';
 import { applyOwnedParams, parseEnum } from '../hooks/useUrlState';
 import { useUnsavedChangesBlocker } from '../hooks/useUnsavedChangesBlocker';
@@ -167,9 +167,12 @@ export function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabValue = TAB_KEYS.indexOf(tabFromLocation(searchParams, location.hash));
   const setTabValue = (index: number) =>
-    setSearchParams((prev) => applyOwnedParams(prev, { tab: TAB_KEYS[index] }, { tab: 'library' }), {
-      replace: true,
-    });
+    setSearchParams(
+      (prev) => applyOwnedParams(prev, { tab: TAB_KEYS[index] }, { tab: 'library' }),
+      {
+        replace: true,
+      }
+    );
   const { showAdvanced, setShowAdvanced } = useAdvancedSettings();
   const [browserOpen, setBrowserOpen] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -228,11 +231,6 @@ export function Settings() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
-
-  // Factory reset state
-  const [factoryResetStep, setFactoryResetStep] = useState<0 | 1 | 2>(0);
-  const [factoryResetConfirmText, setFactoryResetConfirmText] = useState('');
-  const [factoryResetInProgress, setFactoryResetInProgress] = useState(false);
 
   const initialSettings: SettingsState = {
     // Library settings
@@ -987,88 +985,12 @@ export function Settings() {
               variant="body2"
               sx={{
                 color: 'text.secondary',
-                mb: 2,
               }}
             >
-              Permanently delete all data including audiobooks, authors, series, settings, and
-              metadata cache. This cannot be undone.
+              Factory reset now runs from the command line with the service stopped. Stop the
+              service, then run <code>audiobook-organizer storage reset</code>.
             </Typography>
-            <Button
-              variant="outlined"
-              color="error"
-              onClick={() => setFactoryResetStep(1)}
-              disabled={factoryResetInProgress}
-            >
-              Factory Reset
-            </Button>
           </Paper>
-
-          {/* Factory Reset Dialog 1: Warning */}
-          <Dialog open={factoryResetStep === 1} onClose={() => setFactoryResetStep(0)}>
-            <DialogTitle>Factory Reset</DialogTitle>
-            <DialogContent>
-              <Typography>
-                This will permanently delete <strong>ALL</strong> data — audiobooks, authors,
-                series, settings, and metadata cache. This action cannot be undone.
-              </Typography>
-              <Typography sx={{ mt: 1 }}>Continue?</Typography>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setFactoryResetStep(0)}>Cancel</Button>
-              <Button
-                color="error"
-                onClick={() => {
-                  setFactoryResetConfirmText('');
-                  setFactoryResetStep(2);
-                }}
-              >
-                Continue
-              </Button>
-            </DialogActions>
-          </Dialog>
-
-          {/* Factory Reset Dialog 2: Type RESET */}
-          <Dialog open={factoryResetStep === 2} onClose={() => setFactoryResetStep(0)}>
-            <DialogTitle>Confirm Factory Reset</DialogTitle>
-            <DialogContent>
-              <Typography sx={{ mb: 2 }}>
-                Type <strong>RESET</strong> to confirm.
-              </Typography>
-              <TextField
-                autoFocus
-                fullWidth
-                value={factoryResetConfirmText}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setFactoryResetConfirmText(e.target.value)
-                }
-                placeholder="Type RESET"
-              />
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setFactoryResetStep(0)}>Cancel</Button>
-              <Button
-                color="error"
-                variant="contained"
-                disabled={factoryResetConfirmText !== 'RESET' || factoryResetInProgress}
-                onClick={async () => {
-                  setFactoryResetInProgress(true);
-                  try {
-                    await api.factoryReset('RESET');
-                    localStorage.clear();
-                    window.location.href = '/';
-                  } catch (err) {
-                    setFactoryResetInProgress(false);
-                    setFactoryResetStep(0);
-                    alert(
-                      `Factory reset failed: ${err instanceof Error ? err.message : 'Unknown error'}`
-                    );
-                  }
-                }}
-              >
-                {factoryResetInProgress ? 'Resetting...' : 'Reset Everything'}
-              </Button>
-            </DialogActions>
-          </Dialog>
         </TabPanel>
 
         <TabPanel value={tabValue} index={11}>

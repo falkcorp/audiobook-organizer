@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package database
 
@@ -738,24 +738,6 @@ func TestRebuild_RecomputesUndecodableMarkers(t *testing.T) {
 	}
 	if rep.StaleMarkers != 0 || rep.UnmarkedUndecodable != 0 {
 		t.Fatalf("verify after rebuild = stale %d unmarked %d, want 0 and 0", rep.StaleMarkers, rep.UnmarkedUndecodable)
-	}
-}
-
-// TestReset_ClearsBuiltCache: Reset wipes the sentinel (reachable in prod via
-// FactoryReset/ResetSystem). A cached "built" would keep LiveBookIDsAtPath on
-// an index the next startup backfill has not rebuilt.
-func TestReset_ClearsBuiltCache(t *testing.T) {
-	s := newAtPathStore(t)
-	defer s.Close()
-	mustBackfill(t, s)
-	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
-		t.Fatalf("precondition: sentinel not set: %v %v", built, err)
-	}
-	if err := s.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	if built, err := s.bookAtPathIndexBuilt(); err != nil || built {
-		t.Fatalf("bookAtPathIndexBuilt after Reset = %v %v, want false", built, err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/scheduler/integrity_checks_registered_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8a1c52-7b94-4d06-a1f3-5c2d9e60b718
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -77,7 +77,7 @@ func TestIntegrityChecks_AreWindowOnly(t *testing.T) {
 func TestIntegrityChecks_EnqueueEmptyParams(t *testing.T) {
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row

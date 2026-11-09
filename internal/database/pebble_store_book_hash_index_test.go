@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_hash_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8b2d63-9a17-4c50-b3f6-1d7a0c5e9b82
-// last-edited: 2026-10-26
+// last-edited: 2026-11-08
 
 package database
 
@@ -467,22 +467,6 @@ func TestBookHashIndex_UpdateBookKeysFollowTheIDArgument(t *testing.T) {
 	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H", "a")))
 	assert.False(t, rawKeyExists(t, s, bookHashKey(bookHashKindFile, "H2", "")), "no key under an empty id")
 	assert.Equal(t, "a", hashOwners(t, s, "H2")[0])
-}
-
-// Reset wipes the sentinel with everything else, so it must drop the cached
-// trust too: a stale true would make lookups ignore the legacy keys.
-func TestBookHashIndex_ResetClearsTheCachedTrust(t *testing.T) {
-	s := setupTestPebbleStore(t)
-	_, err := s.RepairBookHashIndex(context.Background(), nil)
-	require.NoError(t, err)
-	trusted, err := s.bookHashIndexTrusted()
-	require.NoError(t, err)
-	require.True(t, trusted)
-
-	require.NoError(t, s.Reset())
-	trusted, err = s.bookHashIndexTrusted()
-	require.NoError(t, err)
-	assert.False(t, trusted)
 }
 
 // A lookup reads the candidate keys, the sentinel, the legacy key and the rows

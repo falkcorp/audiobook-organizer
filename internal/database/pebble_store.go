@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.239.1
+// version: 1.239.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-09
 
@@ -5818,117 +5818,6 @@ func (p *PebbleStore) GetBookAlternativeTitles(bookID string) ([]BookAlternative
 		return nil, err
 	}
 	return alts, nil
-}
-
-// Reset clears all data from the store and resets all counters to initial state
-func (p *PebbleStore) Reset() error {
-	// The wipe below removes the book_atpath: backfill sentinel, so drop the
-	// cached positive read of it FIRST: a LiveBookIDsAtPath that starts after
-	// this line takes the full-scan path instead of trusting a wiped index.
-	// This narrows the window but does not close it. A reader already inside
-	// bookIDsAtPathIndex can snapshot after the wipe and return an empty
-	// set. Reset is a factory-reset path with no concurrent library work.
-	p.bookAtPathBuilt.Store(false)
-	// The wiped keyspace took the narrator_fold: keys; trust the index again
-	// only after the next reconcile has checked it.
-	p.nameIdx.narratorFoldTrusted.Store(false)
-	// Same for the file-hash index sentinel: a wiped store has no index, and a
-	// cached true would make lookups ignore the legacy keys of whatever is
-	// written back.
-	p.bookHashTrusted.Store(false)
-	p.authorBooksVerifiedThisBoot.Store(false)
-
-	// Use DeleteRange to wipe the entire keyspace in one operation.
-	// The range ["\x00", "\xff\xff") covers all possible keys.
-	batch := p.db.NewBatch()
-	if err := batch.DeleteRange([]byte{0x00}, []byte{0xff, 0xff}, pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("failed to delete all keys: %w", err)
-	}
-
-	// Reinitialize counters to their initial state
-	counters := []string{"author", "author_alias", "series", "book", "import_path", "operationlog", "playlist", "playlistitem", "preference"}
-	for _, counter := range counters {
-		key := fmt.Sprintf("counter:%s", counter)
-		if err := batch.Set([]byte(key), []byte("1"), pebble.NoSync); err != nil {
-			batch.Close()
-			return fmt.Errorf("failed to initialize counter %s: %w", counter, err)
-		}
-	}
-	// The wipe deletes books' legacy projection rows (the storage format
-	// stamp and migration marker) with everything else, and writes none back:
-	// those rows are written only through books' LegacyGuard.Stage, by a
-	// level step (05-storage §5S.3.7), and no level is raised at R1, so the
-	// projection stays 1, which HEAD reads from a store with data and no
-	// stamp. The level stamps and sidecars are core's (c/), outside books'
-	// claims, and survive the wipe.
-	// The wipe removed every ident: row with the books and cache rows they
-	// described, so the identification index of the reset store is the empty
-	// one: stamped built in the same batch, with every counter zero (absent).
-	if err := batch.Set([]byte(identBuiltKey), []byte(fmt.Sprint(identIndexVersion)), pebble.NoSync); err != nil {
-		batch.Close()
-		return fmt.Errorf("reset: stage identification index marker: %w", err)
-	}
-
-	// Commit with sync for durability. identMu (for write) spans the commit
-	// so no identification write can interleave with the zeroing of the
-	// counters; the generation bump makes a rebuild already running end
-	// without overwriting them (errIdentRebuildSuperseded). reviewMu spans it
-	// too: every review write is a read-modify-write under that lock, and one
-	// that read before the wipe and committed after it would resurrect a
-	// review record (or an apply claim) into the reset store. Lock order is
-	// reviewMu then identMu; no review write takes identMu.
-	p.reviewMu.Lock()
-	defer p.reviewMu.Unlock()
-	p.ident.mu.Lock()
-	if err := batch.Commit(pebble.Sync); err != nil {
-		p.ident.mu.Unlock()
-		return fmt.Errorf("failed to commit reset batch: %w", err)
-	}
-	p.ident.gen.Add(1)
-	p.ident.setCounts([2][numIdentStates]int64{})
-	p.ident.ready.Store(true)
-	p.ident.mu.Unlock()
-	// The wipe removed the opchange_by_book: sentinel. Bump the generation
-	// now that the DeleteRange is durable: that drops both the cached
-	// sentinel read and this boot's trust, so GetBookChanges uses the full
-	// scan until the next boot's EnsureOpChangeByBookIndex. A reader that
-	// used the index between the commit and this bump read a wiped index
-	// over a wiped journal, which is the same empty answer the scan gives.
-	p.opChangeByBookGen.Add(1)
-	p.publishOpChangeTrust()
-	// The wipe removed every book: and metadata_cache: row; no record can
-	// name them, so a reader behind either generation rebuilds (the review
-	// snapshot would otherwise keep serving the wiped books as live rows
-	// until its age net fired).
-	p.bookChanges.bumpAll(&p.libGen)
-	p.cacheChanges.bumpAll(&p.cacheGen)
-	// The wipe removed every work: row; invalidate any works cache.
-	p.bumpWorksGeneration()
-
-	// Force flush to ensure deletes are persisted to disk
-	if err := p.db.Flush(); err != nil {
-		return fmt.Errorf("failed to flush after reset: %w", err)
-	}
-
-	// Clear the in-memory query layer so it no longer returns stale rows
-	// that were wiped from Pebble. Reads check `p.mem() != nil`, so swapping
-	// in a fresh empty MemStore (or nil-ing the pointer if construction
-	// fails) immediately bypasses the stale snapshot. Without this, reads
-	// from memdb-backed paths (e.g. GetAllAuthors) would continue to return
-	// entries that were just deleted from Pebble.
-	//
-	// replaceMemStoreAfterReset also cancels any warmup still in flight: it
-	// holds a snapshot taken BEFORE the wipe above, and letting it publish would
-	// put rows back that no longer exist in Pebble.
-	fresh, err := NewMemStore()
-	if err != nil {
-		slog.Warn("Reset: memdb re-init failed, falling back to Pebble-only reads", "error", err)
-		fresh = nil
-	}
-	p.replaceMemStoreAfterReset(fresh)
-
-	return nil
 }
 
 // Optimize compacts the PebbleDB database to reclaim space.

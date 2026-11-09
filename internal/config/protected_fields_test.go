@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package config
 
@@ -427,7 +427,7 @@ func TestOwnerTrustRootFields_AreSignInRules(t *testing.T) {
 	}
 }
 
-// A system or factory reset (config.ResetToDefaults) keeps the host-set
+// A system or factory reset (config.ResetToDefaultsForTest) keeps the host-set
 // owner and Access settings: they are environment-authoritative, as at load.
 // It used to clear them in memory until the next restart.
 func TestResetToDefaults_KeepsHostOwner(t *testing.T) {
@@ -442,7 +442,7 @@ func TestResetToDefaults_KeepsHostOwner(t *testing.T) {
 		}
 	}
 	AppConfig = Config{OwnerEmail: "host-owner@example.test", CFAccessTeamDomain: "host-team.example.test", CFAccessAUD: "host-aud"}
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	got := Snapshot()
 	if got.OwnerEmail != "host-owner@example.test" || got.CFAccessTeamDomain != "host-team.example.test" || got.CFAccessAUD != "host-aud" {
 		t.Errorf("reset dropped host values: owner=%q team=%q aud=%q", got.OwnerEmail, got.CFAccessTeamDomain, got.CFAccessAUD)

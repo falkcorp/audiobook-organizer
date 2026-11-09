@@ -1,7 +1,7 @@
 // file: internal/config/blob_preserves_defaults_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9e14c7b2-58fa-4d63-8071-2ab6f5cd913e
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // Regression tests for the stored config blob wiping every default.
 //
@@ -51,7 +51,7 @@ import (
 // produced. That made the package order-dependent: TestDefaultInheritanceIsLogged
 // inherits however many non-zero keys the PREVIOUS test happened to leave behind,
 // which under -shuffle ranged from ~2 (after a test that zeroed the struct) to
-// 122 (after one that called ResetToDefaults). Measured on 2026-08-30: 20 of 24
+// 122 (after one that called ResetToDefaultsForTest). Measured on 2026-08-30: 20 of 24
 // shuffle seeds failed.
 func restoreAppConfig(t *testing.T) {
 	t.Helper()
@@ -171,7 +171,7 @@ func TestBlobPartialOverrideLeavesSiblingsAlone(t *testing.T) {
 // behaviour on every existing install, so the inheritance has to be visible at
 // boot rather than discovered later from symptoms.
 //
-// The baseline is deliberately ResetToDefaults(), i.e. a FULL config, because
+// The baseline is deliberately ResetToDefaultsForTest(), i.e. a FULL config, because
 // that is the production shape: 122 keys inherit from a one-key blob. The
 // original version of this test asserted that the rendered log line contained
 // "scheduled.library_scan.interval", which is an assertion on presentation — the
@@ -185,7 +185,7 @@ func TestBlobPartialOverrideLeavesSiblingsAlone(t *testing.T) {
 // accessor-only test would go green if someone deleted the slog.Info call.
 func TestDefaultInheritanceIsLogged(t *testing.T) {
 	restoreAppConfig(t)
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	buf := &bytes.Buffer{}
 	prev := slog.Default()
@@ -276,7 +276,7 @@ func parseAuditLine(t *testing.T, out string) (count int, keys []string, omitted
 // count by eye. It must now say so as a number.
 func TestTruncatedAuditLineReportsHowManyKeysItHid(t *testing.T) {
 	restoreAppConfig(t)
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	buf := &bytes.Buffer{}
 	prev := slog.Default()
