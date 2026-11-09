@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.115.3
+// version: 2.115.4
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -952,7 +952,10 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		lifecycleLog.Error("ops registry: %v", err)
 		os.Exit(1)
 	}
-	appUpdater := updater.NewService(appVersion)
+	// The state directory is the one the kernel was given (books.Options
+	// checked core's against EnsureSecureStateDir's): the updater reads the
+	// swap slot under it and refuses an apply while a swap is staged.
+	appUpdater := updater.NewService(appVersion, updater.WithStateDir(config.SecureStateDir()))
 	// The activity defs (`activity` + `activitystore`) are in the list only
 	// when DatabasePath is set: the activitystore Build errors on an empty one.
 	regContainer := serviceregistry.NewContainerFrom(serviceDefs(config.AppConfig.DatabasePath != "")...).
