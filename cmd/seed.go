@@ -1,7 +1,7 @@
 // file: cmd/seed.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 //
 // `seed` populates a fresh database with synthetic books for local
 // development. Use it after `make build` so a dev can hit `make run`
@@ -10,6 +10,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/oklog/ulid/v2"
 	"github.com/spf13/cobra"
 )
@@ -78,6 +80,18 @@ var seedTitleNouns = []string{
 
 var seedFormats = []string{"m4b", "mp3", "flac"}
 
+// seedOpenHint names the fix when the offline open refused a store the
+// service has never started (no store at the path, an empty store, or one
+// with migration steps pending): seed no longer creates or migrates the
+// store itself, so a fresh install needs one start of the service first.
+// Any other refusal (a staged swap, a held store) already says what to do.
+func seedOpenHint(err error) error {
+	if errors.Is(err, storage.ErrNoStore) || errors.Is(err, storage.ErrOfflinePendingSteps) {
+		return fmt.Errorf("seed fills a store the service has started at least once: start the service once (audiobook-organizer serve), stop it, then run seed again: %w", err)
+	}
+	return err
+}
+
 func runSeed(cmd *cobra.Command, _ []string) error {
 	if config.AppConfig.RootDir == "" {
 		return fmt.Errorf("root directory not specified — pass --dir or set ROOT_DIR")
@@ -92,11 +106,11 @@ func runSeed(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--series must be > 0")
 	}
 
-	store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
+	store, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
 	if err != nil {
-		return fmt.Errorf("failed to initialize database: %w", err)
+		return fmt.Errorf("failed to initialize database: %w", seedOpenHint(err))
 	}
-	defer closeStore()
+	defer closeCLIStore()
 
 	if store == nil {
 		return fmt.Errorf("database not initialized")
@@ -229,14 +243,40 @@ func pickTitle(rng *rand.Rand) string {
 	return fmt.Sprintf("The %s %s", adj, noun)
 }
 
-func upsertAuthor(store database.AuthorStore, name string) (*database.Author, error) {
+// authorUpserter is what upsertAuthor needs: an author by name, or a new
+// one. It took database.AuthorStore (the whole author surface) until the
+// R1-25 review narrowed cliStore.
+type authorUpserter interface {
+	GetAuthorByName(name string) (*database.Author, error)
+	CreateAuthor(name string) (*database.Author, error)
+}
+
+// seriesUpserter is what upsertSeries needs. It took database.SeriesStore
+// until the R1-25 review narrowed cliStore.
+type seriesUpserter interface {
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+}
+
+// seedStore is what the seed command does with the store: find or create
+// each author and series, read an author back for a book's path, create the
+// books, and purge an earlier seed (purgeStore).
+type seedStore interface {
+	authorUpserter
+	seriesUpserter
+	purgeStore
+	GetAuthorByID(id int) (*database.Author, error)
+	CreateBook(book *database.Book) (*database.Book, error)
+}
+
+func upsertAuthor(store authorUpserter, name string) (*database.Author, error) {
 	if existing, err := store.GetAuthorByName(name); err == nil && existing != nil {
 		return existing, nil
 	}
 	return store.CreateAuthor(name)
 }
 
-func upsertSeries(store database.SeriesStore, name string, authorID *int) (*database.Series, error) {
+func upsertSeries(store seriesUpserter, name string, authorID *int) (*database.Series, error) {
 	if existing, err := store.GetSeriesByName(name, authorID); err == nil && existing != nil {
 		return existing, nil
 	}

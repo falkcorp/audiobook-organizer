@@ -1,12 +1,13 @@
 // file: cmd/diagnostics.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
-// last-edited: 2026-10-04
+// last-edited: 2026-11-08
 
 package cmd
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -117,23 +118,19 @@ type diagnosticsCLIStore interface {
 	DeleteBook(id string) error
 }
 
-func ensureDiagnosticsStore() (diagnosticsCLIStore, func(), error) {
-	store, err := database.InitializeStore(
-		config.AppConfig.DatabaseType,
-		config.AppConfig.DatabasePath,
-	)
+// ensureDiagnosticsStore opens the store through openCLIStore: read-only for
+// the commands that only read (query), read-write for the one that deletes
+// (cleanup-invalid).
+func ensureDiagnosticsStore(readOnly bool) (diagnosticsCLIStore, func(), error) {
+	store, closer, err := openCLIStore(context.Background(), readOnly)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
-
-	cleanup := func() {
-		database.CloseStore()
-	}
-	return store, cleanup, nil
+	return store, closer, nil
 }
 
 func runCleanupInvalidBooks(force, dryRun bool) error {
-	store, closer, err := ensureDiagnosticsStore()
+	store, closer, err := ensureDiagnosticsStore(false)
 	if err != nil {
 		return err
 	}
@@ -218,7 +215,7 @@ func runDiagnosticsQuery(limit int, prefix string, raw bool) error {
 		return runRawPebbleQuery(limit, prefix)
 	}
 
-	store, closer, err := ensureDiagnosticsStore()
+	store, closer, err := ensureDiagnosticsStore(true)
 	if err != nil {
 		return err
 	}
@@ -253,6 +250,12 @@ func runDiagnosticsQuery(limit int, prefix string, raw bool) error {
 }
 
 func runRawPebbleQuery(limit int, prefix string) error {
+	// Exempt from the guard, not from the swap slot: a store a staged or
+	// in-flight restore or reset is about to replace, or has half replaced,
+	// is not inspected (refuseBusySwapSlot).
+	if err := refuseBusySwapSlot(); err != nil {
+		return err
+	}
 	// Raw mode is exempt from the storage-format guard by design (storage
 	// efficiency design, section 9): it only reads, and it must work on a
 	// store the guard refuses. It passes no FormatMajorVersion, which Pebble
@@ -328,6 +331,13 @@ func runReservedPrefs(dbPath, del, set string, yes, all bool, confirm func(strin
 	}
 	if del != "" && set != "" {
 		return errors.New("use --delete or --set, not both")
+	}
+	// This recovery tool bypasses the guard on purpose, but not the swap
+	// slot: a --set or --delete on a half-swapped directory would write to
+	// the wrong store, and a listing would show it as if it were the live
+	// one. Every mode refuses on a busy slot before any Pebble open.
+	if err := refuseBusySwapSlot(); err != nil {
+		return err
 	}
 	if del == "" && set == "" {
 		rows, sidecar, sidecarPresent, err := database.ListReservedPreferences(dbPath)
