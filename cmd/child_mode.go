@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -17,6 +17,21 @@ import (
 
 // newServer is already defined in root.go as a package-level var pointing
 // to server.NewServer; we use it here to share the test override.
+
+// initializeChildStore and closeChildStore are how the op-runner child opens
+// and closes the live store. The child is not an offline CLI subcommand: the
+// serving parent re-execs it while the store is open under the parent's
+// process, so it keeps the standalone opener (app.OpenOffline refuses a
+// store a running service holds). It passes the resolved state directory so
+// the opener reads the swap slot first, and refuses while a swap is staged
+// or in flight (R1-25; TestCLISubcommandsUseOfflineOpen,
+// TestRunOperationRunner_StagedSwapRefusesTheOpen,
+// TestRunOperationRunner_ResolvesTheStateDirectory). Vars so a test can stub
+// them.
+var (
+	initializeChildStore = database.InitializeStoreWith
+	closeChildStore      = database.CloseStore
+)
 
 // init registers the parent-side environment provider for
 // registry.runSubprocess. When the parent re-execs the binary as a child,
@@ -75,10 +90,23 @@ func RunOperationRunner() {
 	// outliving the run.
 	restoreClaim := database.DisableHNSWCleanStopClaim()
 	defer restoreClaim()
-	snap := config.Snapshot()
-	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath)
+	// The state directory, resolved as the parent resolved it
+	// (config.EnsureSecureStateDir, from the same ABK_STATE_DIR and database
+	// path): nothing in this fresh process has, so SecureStateDir would be
+	// the unresolved default, and where that cannot be created the parent
+	// fell back to the database directory, where the swap slot and the swap
+	// lock are. Everything later in the child (the updater's slot check
+	// among them) reads the resolved directory too.
+	stateDir, err := config.EnsureSecureStateDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "child mode: initializeStore: %v\n", err)
+		fmt.Fprintf(os.Stderr, "child mode: resolve the state directory %s: %v\n", stateDir, err)
+		os.Exit(2)
+	}
+	snap := config.Snapshot()
+	store, err := initializeChildStore(snap.DatabaseType, snap.DatabasePath,
+		database.StandaloneOptions{StateDir: stateDir})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
 		os.Exit(2)
 	}
 	// Load persisted config so plugin registration sees the same AppConfig as
@@ -94,7 +122,7 @@ func RunOperationRunner() {
 	// install) is not an error: LoadConfigFromDatabase returns nil for it.
 	if err := loadConfigFromDB(store); err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: failed to load config from database: %v\n", err)
-		if cerr := closeStore(); cerr != nil {
+		if cerr := closeChildStore(); cerr != nil {
 			fmt.Fprintf(os.Stderr, "child mode: close store: %v\n", cerr)
 		}
 		os.Exit(2)

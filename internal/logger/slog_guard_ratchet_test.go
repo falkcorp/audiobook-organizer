@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.6
+// version: 1.35.7
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package logger
 
@@ -30,7 +30,6 @@ var slogRatchet = map[string]int{
 	"cmd/dedup_bench_pass2.go":                                   6,
 	"cmd/dedup_bench_runner.go":                                  5,
 	"cmd/dedup_bench_status.go":                                  1,
-	"cmd/pebble-inject-skip/main.go":                             4,
 	"internal/activity/changelog.go":                             3,
 	"internal/activity/register.go":                              2,
 	"internal/ai/dedup_review.go":                                2,

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_reconcile.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 65cdda3b-c2ec-4866-88fa-c58559c39f59
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // The boot reconcile of opv3: against opv2: (05-PR4 roll-forward safety).
 //
@@ -77,7 +77,7 @@ type OpsV3ReconcileReport struct {
 // the lock and skips a record a live write has synced since detection, so
 // the reconcile is correct alongside live writers, not only before them.
 //
-// WHEN. InitializeStore runs it synchronously after the migrations, before
+// WHEN. InitializeStoreWith runs it synchronously after the migrations, before
 // the server and the operations registry exist, because the registry's boot
 // resume acts on opv3 records (bootSweepV3 and retireForRequeue read
 // GetRunV3 and compare-and-set the stored state), so they must be current
@@ -95,9 +95,9 @@ type OpsV3ReconcileReport struct {
 // it only removes a run that was synced with an opv2 row, and a run created
 // with the mirror off never was.) The guard below returns early when the
 // switch is off, but the switch is in-memory, not persisted, and reads "on"
-// at every process start, so at InitializeStore it is ALWAYS on: the guard
+// at every process start, so at InitializeStoreWith it is ALWAYS on: the guard
 // only covers a caller that flipped it earlier in the same process. 05-PR16
-// MUST therefore delete the InitializeStore call (and this reconcile) in the
+// MUST therefore delete the InitializeStoreWith call (and this reconcile) in the
 // same change that turns the mirror off; leaving the call in place would run
 // it with the mirror "on" against a store whose opv2 rows have gone stale.
 func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3ReconcileReport, err error) {

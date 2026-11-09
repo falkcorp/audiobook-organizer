@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench_types.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 //go:build bench
 
@@ -58,7 +58,9 @@ type AuthorData struct {
 }
 
 // extractAuthorData loads all authors, book counts, and sample titles from the local DB.
-func extractAuthorData(store database.AuthorReader) (*AuthorData, error) {
+// It reads three methods (benchAuthorReader, beside cliStore), not the whole
+// database.AuthorReader.
+func extractAuthorData(store benchAuthorReader) (*AuthorData, error) {
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return nil, fmt.Errorf("GetAllAuthors: %w", err)

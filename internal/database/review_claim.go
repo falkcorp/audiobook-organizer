@@ -1,7 +1,7 @@
 // file: internal/database/review_claim.go
-// version: 3.3.0
+// version: 3.3.1
 // guid: 793a733c-f28c-4b2d-ba41-4170b8a43a07
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package database
 
@@ -40,7 +40,7 @@ import (
 // left by a process that has since exited (a crash, or a restart while an apply was
 // unrecorded), so nothing can still be running it and the next approve of the SAME
 // action takes it over at once. Production opens the store once per process
-// (InitializeStore), so "this handle" and "this process" are the same thing. If the
+// (InitializeStoreWith), so "this handle" and "this process" are the same thing. If the
 // store is ever reopened inside a running server, drain in-flight review applies first:
 // the new handle would treat the old handle's claims as dead.
 type ReviewItemApplyClaimer interface {
