@@ -1,5 +1,5 @@
 // file: core/kernel/offline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 299eb4da-a345-4039-9962-8ce819af3f0f
 // last-edited: 2026-11-09
 
@@ -65,7 +65,7 @@ type Offline struct {
 // running service is refused. The offline restore and reset do not come
 // here: they use the kernel's own swap path (RestoreOffline,
 // StageResetOffline). A read-write open refuses, before anything else,
-// unless this process is the state directory's owner (ErrNotStateDirOwner,
+// unless this process is the state directory's owner (storage.ErrNotStateDirOwner,
 // R1-25 review B-1): the files Pebble writes would otherwise belong to
 // another user, and the service could not replace them. A read-only open
 // writes nothing and may run as any user that can read the store; the swap
@@ -73,7 +73,7 @@ type Offline struct {
 // or changes it.
 func OpenOffline(ctx context.Context, c Config, readOnly bool) (_ *Offline, err error) {
 	if !readOnly {
-		if err := refuseNotOwner(ctx, c.StateDir, "a read-write offline open"); err != nil {
+		if err := storage.RefuseNotStateDirOwner(ctx, c.StateDir, "a read-write offline open"); err != nil {
 			return nil, err
 		}
 	}

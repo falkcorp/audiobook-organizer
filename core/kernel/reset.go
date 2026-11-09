@@ -1,5 +1,5 @@
 // file: core/kernel/reset.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7ac5a55b-45c3-44d5-81f4-746d3c88d1cf
 // last-edited: 2026-11-09
 
@@ -50,7 +50,7 @@ func (k *Kernel) resetEntry() *entry {
 // step refuses:
 //
 //  1. the request's own checks (storage.ResetRequest.Validate), then this
-//     process must be the state directory's owner (ErrNotStateDirOwner,
+//     process must be the state directory's owner (storage.ErrNotStateDirOwner,
 //     R1-25 review B-1): the intent and journal it writes, and the hook's
 //     run at the next boot, must be the service's to read and replace;
 //  2. the swap lock, taken exclusively and held until the reset is staged
@@ -81,7 +81,7 @@ func StageResetOffline(ctx context.Context, c Config, requestedBy string, req st
 	if err := req.Validate(); err != nil {
 		return storage.ResetStaged{}, err
 	}
-	if err := refuseNotOwner(ctx, c.StateDir, "storage reset"); err != nil {
+	if err := storage.RefuseNotStateDirOwner(ctx, c.StateDir, "storage reset"); err != nil {
 		return storage.ResetStaged{}, err
 	}
 	k, err := offlineKernel(c)

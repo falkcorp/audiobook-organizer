@@ -1,5 +1,5 @@
 // file: core/storage/swaplock_other.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c5f9d64a-f6c3-4e7c-bbda-57e2346da787
 // last-edited: 2026-11-09
 
@@ -28,7 +28,7 @@ func osSwapLock(stateDir string, _ bool, _ int) (ExclusiveSwapLock, error) {
 }
 
 // StateDirOwner has no owner to read here: ok is false, so no owner check
-// refuses (kernel.ErrNotStateDirOwner is a check of file ownership, which
+// refuses (ErrNotStateDirOwner is a check of file ownership, which
 // these platforms do not have in the same form).
 func StateDirOwner(vfs.FS, string) (uid uint32, ok bool, err error) { return 0, false, nil }
 
