@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.5.0
+# version: 1.6.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -639,6 +639,96 @@ def render_local_conf(text: str, source: str) -> str:
     )
 
 
+HOST_CONF = "host.conf"
+# Exec lines and settings host.conf may not carry. Every Environment= line
+# local.conf deploys reaches the processes the unit runs; that is safe only
+# while those are the service user's own ExecStart (whose code the deploy
+# user already controls through the binary). A second command, a `+`/`!`
+# prefix, PermissionsStartOnly=, another User=/Group= or ambient
+# capabilities would hand those variables (LD_PRELOAD=, ...) to something
+# with more privilege.
+_HOST_REFUSED = ("PermissionsStartOnly", "AmbientCapabilities")
+
+
+def _check_host_conf(cfg: dict[str, str]) -> None:
+    """local.conf carries only Environment= lines, so the ExecStart=
+    override and the host's other settings live in host.conf beside it,
+    which the owner writes as root. Without it the service would restart on
+    the base unit's ExecStart (no TLS, the wrong store), so local-conf
+    refuses unless host.conf is a root-owned regular file, not writable by
+    group or others, that runs nothing but the service user's ExecStart.
+    A refusal names the line, never its text."""
+    path = f"{SYSTEMD_DIR}/{cfg['unit']}.d/{HOST_CONF}"
+    why = (
+        "it holds the ExecStart= override and the host's other settings, which local.conf no "
+        "longer carries; without it the service would restart on the base unit's ExecStart"
+    )
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as e:
+        raise RefusedError(
+            f"{path} is missing: {why}. The owner writes it as root "
+            "(docs/system/deploy-and-gpu-ops.md, host.conf); nothing installed"
+        ) from e
+    except OSError as e:
+        raise RefusedError(
+            f"cannot open {path} ({e.strerror}; a symlink is refused); nothing installed"
+        ) from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or not _owner_ok(st) or st.st_size > UNIT_LIMIT:
+            raise RefusedError(
+                f"{path} must be a regular file of at most {UNIT_LIMIT} bytes, owned by root and "
+                f"not writable by group or others ({why}); nothing installed"
+            )
+        data = _read_all(fd, UNIT_LIMIT + 1)
+    finally:
+        os.close(fd)
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        raise RefusedError(f"{path} is not UTF-8; nothing installed") from e
+    if "\r" in text or "\0" in text:
+        raise RefusedError(f"{path}: carriage returns and NUL bytes are refused; nothing installed")
+    want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
+    continued = False
+    for n, raw in enumerate(text.split("\n"), 1):
+        s = raw.strip(_WS)
+        if continued:
+            continued = s.endswith("\\")
+            continue
+        if not s or s[0] in "#;":
+            continue
+        if not _DIRECTIVE_CHARS.fullmatch(raw):
+            raise RefusedError(
+                f"{path} line {n}: only printable ASCII and tabs are allowed outside comments; "
+                "nothing installed"
+            )
+        continued = s.endswith("\\")
+        key, sep, value = s.partition("=")
+        key, value = key.strip(_WS), value.strip(_WS)
+        if not sep:
+            continue
+        problem = ""
+        if key.startswith("Exec") and key != "ExecStart":
+            problem = "runs a command other than ExecStart="
+        elif key == "ExecStart" and set(value[: len(value) - len(value.lstrip("@-:+!"))]) & {
+            "+",
+            "!",
+        }:
+            problem = "runs ExecStart= with a + or ! prefix (with privileges)"
+        elif key in _HOST_REFUSED:
+            problem = f"sets {key}="
+        elif key in want and value != want[key]:
+            problem = f"sets {key}= to something other than service_{key.lower()} in {CONFIG}"
+        if problem:
+            raise RefusedError(
+                f"{path} line {n} {problem}; host.conf may run only the service user's ExecStart, "
+                "because every Environment= line local.conf deploys reaches what it runs; "
+                "nothing installed"
+            )
+
+
 def _check_template(text: str, cfg: dict[str, str]) -> None:
     """The owner's unit template must name this config's binary, user and
     group: a template from another install would start the wrong thing."""
@@ -780,6 +870,7 @@ def op_install(args: list[str]) -> int:
         raise RefusedError(f"{key} is not set in {CONFIG}: nothing to install from")
     if what == "binary":
         return _install_binary(cfg["bin"], src)
+    _check_host_conf(cfg)
     fd, _ = _read_staged(src, UNIT_LIMIT)
     try:
         data = _read_all(fd, UNIT_LIMIT + 1)
