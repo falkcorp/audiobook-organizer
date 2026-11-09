@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package system_test
 
@@ -856,6 +856,105 @@ func TestRestoreBackup_TriesEveryDirectoryBeforeTheFirstWrite(t *testing.T) {
 	assert.False(t, got.present, "the restored directory's marker was still there when the extraction began: the removal stopped at the live directory's error")
 	assert.False(t, markerPresent(t, liveDir), "the live marker that did not parse was not removed")
 	assert.False(t, markerPresent(t, restoredDir), "no marker may vouch for the restored database's snapshot")
+}
+
+// TestRestoreBackup_RemovesADanglingMarkerSymlinkBeforeTheFirstWrite (R1-15
+// round-7 verification review, B1-r7): a dangling symlink at the live
+// marker name points into the database directory, at a file an ordinary
+// archive entry writes. The removal before the first write must unlink it,
+// so the entry lands as a plain file in the database directory and nothing
+// at the marker name vouches, at the extraction's start or after it.
+func TestRestoreBackup_RemovesADanglingMarkerSymlinkBeforeTheFirstWrite(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "audiobooks.pebble")
+	require.NoError(t, os.MkdirAll(dbPath, 0o755))
+	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = filepath.Join(root, "backups")
+	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+
+	liveDir := database.HNSWSnapshotDir(dbPath)
+	require.NoError(t, os.MkdirAll(liveDir, 0o755))
+	marker := filepath.Join(liveDir, "hnsw.clean-stop")
+	if err := os.Symlink(filepath.Join("..", "audiobooks.pebble", "OPTIONS-000099"), marker); err != nil {
+		t.Skipf("the filesystem does not make symlinks: %v", err)
+	}
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "joker.tar"), []tarEntry{
+		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+		{"audiobooks.pebble/OPTIONS-000099", testCleanStopMarker},
+	})
+
+	var atStart error
+	reached := false
+	t.Cleanup(system.SetBeforeRestoreExtractHook(func() {
+		reached = true
+		_, atStart = os.Lstat(marker)
+	}))
+
+	h, _ := newTestHandler(t)
+	h.WithANNSnapshotDivergence(func(string) {})
+	body, err := json.Marshal(map[string]any{"backup_filename": "joker.tar"})
+	require.NoError(t, err)
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.True(t, reached, "the restore never reached the extraction")
+	assert.ErrorIs(t, atStart, os.ErrNotExist, "the dangling symlink was still at the marker name when the extraction began")
+	fi, err := os.Lstat(filepath.Join(dbPath, "OPTIONS-000099"))
+	require.NoError(t, err)
+	assert.True(t, fi.Mode().IsRegular(), "the entry did not land as a plain file in the database directory")
+	vouched, _ := database.TakeHNSWCleanStop(liveDir)
+	assert.False(t, vouched, "a marker vouches after the restore")
+}
+
+// TestRestoreBackup_ThroughASymlinkedDataDirectory: the round-7 checks
+// refuse symlinks that do not resolve and never write through a symlink at
+// a destination or the marker name, but a data directory reached through
+// symlinks (a mount point linked into place, a database directory on
+// another disk) is an ordinary deployment and restores as before, over the
+// live database and to a custom target beside it.
+func TestRestoreBackup_ThroughASymlinkedDataDirectory(t *testing.T) {
+	disk := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(disk, "wayne-manor"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(disk, "batcave-db"), 0o755))
+	if err := os.Symlink(filepath.Join(disk, "batcave-db"), filepath.Join(disk, "wayne-manor", "audiobooks.pebble")); err != nil {
+		t.Skipf("the filesystem does not make symlinks: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "wayne-manor")
+	require.NoError(t, os.Symlink(filepath.Join(disk, "wayne-manor"), link))
+	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = filepath.Join(link, "audiobooks.pebble")
+	config.AppConfig.BackupDir = filepath.Join(disk, "backups")
+	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+	liveDir := filepath.Join(link, "hnsw")
+	plantMarker(t, liveDir)
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "year-one.tar"), []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+
+	h, _ := newTestHandler(t)
+	h.WithANNSnapshotDivergence(func(string) {})
+	for _, target := range []string{"", filepath.Join(disk, "restore-test")} {
+		req := map[string]any{"backup_filename": "year-one.tar"}
+		if target != "" {
+			req["target_path"] = target
+		}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+		w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+			r.POST("/backup/restore", h.RestoreBackup)
+		})
+		require.Equal(t, http.StatusOK, w.Code, "target %q: %s", target, w.Body.String())
+	}
+	got, err := os.ReadFile(filepath.Join(disk, "batcave-db", "MANIFEST-000001"))
+	require.NoError(t, err)
+	assert.Equal(t, "batcave", string(got))
+	got, err = os.ReadFile(filepath.Join(disk, "restore-test", "audiobooks.pebble", "MANIFEST-000001"))
+	require.NoError(t, err)
+	assert.Equal(t, "batcave", string(got))
+	assert.False(t, markerPresent(t, liveDir), "no marker may vouch after a restore")
 }
 
 // TestRestoreBackup_RefusesASnapshotDirectoryThatStopsResolving (B1-r6):

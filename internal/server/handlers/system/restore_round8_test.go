@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_round8_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 46c7f994-13e9-42cc-afa7-78f58699cb26
 // last-edited: 2026-11-09
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -22,7 +23,8 @@ import (
 
 // The R1-15 round-8 verification review's restore findings, through the
 // handler: B1-r8 (a symlink into a subdirectory of the snapshot directory),
-// N1 (the status and body of a refusal inside the extraction) and N4 (the
+// N1 (the status and body of a refusal inside the extraction), SF1 (the
+// marker's removal made durable before the first write) and N4 (the
 // backstop removal after the extraction).
 
 // liveRestore points the configuration at a database directory under a new
@@ -162,6 +164,30 @@ func TestRestoreBackup_AnExtractionRefusalIsABadRequest(t *testing.T) {
 			assert.True(t, os.IsNotExist(err), "an entry climbed out of the target (lstat: %v)", err)
 		})
 	}
+}
+
+// TestRestoreBackup_SyncsTheSnapshotDirectoryBeforeTheFirstWrite (SF1): the
+// first removal is durable only once the snapshot directory is synced, and
+// that must happen before the extraction's first write, or a crash during
+// the extraction can bring the marker back, vouching for a graph the
+// half-restored database does not match. Mutation M13 (the removal's sync
+// dropped) survived every test before this one.
+func TestRestoreBackup_SyncsTheSnapshotDirectoryBeforeTheFirstWrite(t *testing.T) {
+	_, dbPath := liveRestore(t)
+	live := database.HNSWSnapshotDir(dbPath)
+	plantMarker(t, live)
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "hush.tar"), []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+	var synced, atExtract []string
+	t.Cleanup(database.SetDirSyncHookForTest(func(dir string) error {
+		synced = append(synced, dir)
+		return nil
+	}))
+	t.Cleanup(system.SetBeforeRestoreExtractHook(func() { atExtract = slices.Clone(synced) }))
+
+	status, body, _ := postRestore(t, "hush.tar", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, atExtract, live, "the live snapshot directory was not synced before the extraction (synced by then: %q)", atExtract)
+	assert.False(t, markerPresent(t, live))
 }
 
 // TestRestoreBackup_EveryExtractionFailureSaysWhatItLeft (N1): the 409 for

@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.10
+// version: 1.8.11
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -50,6 +50,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"math"
@@ -749,16 +750,36 @@ func syncDir(dir string) {
 	}
 }
 
-// writeFileSynced writes data to path and fsyncs it before closing.
+// writeFileSynced writes data to path as a new file and fsyncs it before
+// closing. A regular file already at the name is removed first, and the new
+// one is made with O_CREATE|O_EXCL: writing into the file there wrote every
+// other name it has too, so a hard link at an export's temporary name to a
+// Pebble file had the graph written into the Pebble file (R1-15 round-8
+// verification review, N3). Anything else at the name is refused
+// (errNotRegularFile): a symlink is not followed, where an O_TRUNC open
+// wrote into whatever it pointed at (round 7, B1-r7), and a directory is
+// not removed. A name made between the removal and the create fails the
+// create. The callers sync the directory once the name is in place.
 func writeFileSynced(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	fi, err := os.Lstat(path)
+	switch {
+	case err == nil && !fi.Mode().IsRegular():
+		return fmt.Errorf("%s: %w", path, errNotRegularFile)
+	case err == nil:
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
 		return errors.Join(err, f.Close())
 	}
-	if err := f.Sync(); err != nil {
+	if err := syncFile(f); err != nil {
 		return errors.Join(err, f.Close())
 	}
 	return f.Close()

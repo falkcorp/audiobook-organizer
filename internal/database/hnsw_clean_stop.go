@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -199,6 +200,11 @@ func cleanStopPath(dir string) string { return filepath.Join(dir, hnswCleanStopF
 // fsyncDir fsyncs a directory, so a file created in it, renamed into it or
 // removed from it stays that way after a crash.
 func fsyncDir(dir string) error {
+	if h := dirSyncHook.Load(); h != nil {
+		if err := (*h)(dir); err != nil {
+			return err
+		}
+	}
 	d, err := os.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open %s for fsync: %w", dir, err)
@@ -210,6 +216,120 @@ func fsyncDir(dir string) error {
 		return fmt.Errorf("close %s after fsync: %w", dir, err)
 	}
 	return nil
+}
+
+// dirSyncHook, unset outside tests, runs at the start of fsyncDir with the
+// directory it was given. An error it returns is fsyncDir's, and the
+// directory is not synced. It is an atomic pointer so a test can install it
+// while stores and handlers run (SetDirSyncHookForTest).
+var dirSyncHook atomic.Pointer[func(dir string) error]
+
+// SetDirSyncHookForTest installs h to run at the start of every directory
+// fsync this package makes, with the directory as the caller named it, and
+// returns a function that puts back the hook from before. An error h
+// returns fails that fsync. It lets a test see when a marker's removal is
+// made durable (R1-15 round-8 verification review, SF1) and what a failed
+// sync does. The hook is process-global, so a test that installs one must
+// not run in parallel with tests that sync directories.
+func SetDirSyncHookForTest(h func(dir string) error) (restore func()) {
+	var p *func(dir string) error
+	if h != nil {
+		p = &h
+	}
+	prev := dirSyncHook.Swap(p)
+	return func() { dirSyncHook.Store(prev) }
+}
+
+// fileSyncHook, unset outside tests, runs at the start of syncFile with the
+// file's name. An error it returns is syncFile's, and the file is not
+// synced. The tests set it to see that a file is synced (R1-15 round-8
+// mutation run), the file counterpart of dirSyncHook.
+var fileSyncHook atomic.Pointer[func(path string) error]
+
+// syncFile fsyncs f, so what was written to it survives a crash: a marker's
+// body, the emptying that makes a marker vouch for nothing, a snapshot
+// file's bytes.
+func syncFile(f *os.File) error {
+	if h := fileSyncHook.Load(); h != nil {
+		if err := (*h)(f.Name()); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+// errNotRegularFile: the name is not a regular file (a symlink, a
+// directory), so nothing is read through it or written to it.
+var errNotRegularFile = errors.New("not a regular file")
+
+// openRegular opens path for reading only when it names a regular file. It
+// looks at the name with os.Lstat, so a symlink is refused rather than
+// followed, and the file it opens must be the one Lstat saw (os.SameFile),
+// so a symlink put at the name in between is refused too. The marker and
+// the snapshot's files are read through it: a symlink in the snapshot
+// directory can point at a file a restore writes, outside that directory
+// (R1-15 round-7 verification review, B1-r7 and S1-r7). A regular file with
+// other names (hard links) is read like any other, on purpose: cp -al and
+// rsnapshot copies of the data directory are made of them (round 8, N3).
+func openRegular(path string) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: %w", path, errNotRegularFile)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if ofi, serr := f.Stat(); serr != nil || !os.SameFile(fi, ofi) {
+		return nil, errors.Join(fmt.Errorf("%s changed while it was opened: %w", path, errNotRegularFile), serr, f.Close())
+	}
+	return f, nil
+}
+
+// readRegularFile is os.ReadFile through openRegular.
+func readRegularFile(path string) ([]byte, error) {
+	f, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(f)
+	return b, errors.Join(err, f.Close())
+}
+
+// createRegular opens path for writing, emptied, only when it names a
+// regular file or nothing. A new file is made with O_CREATE|O_EXCL, which
+// fails on any name made since, a symlink included, and never follows one.
+// An existing one must be a regular file by os.Lstat and the file opened
+// (os.SameFile), and is truncated through the open file, not by name. That
+// covers symlinks, not hard links: a regular file with other names passes,
+// and emptying it empties every name (R1-15 round-8 verification review,
+// N3). writeFileSynced does not write through it for that reason; only the
+// discard fallback, which runs because the name could not be removed,
+// empties a file in place (emptyFileSynced).
+func createRegular(path string) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	case err != nil:
+		return nil, err
+	case !fi.Mode().IsRegular():
+		return nil, fmt.Errorf("%s: %w", path, errNotRegularFile)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if ofi, serr := f.Stat(); serr != nil || !os.SameFile(fi, ofi) {
+		return nil, errors.Join(fmt.Errorf("%s changed while it was opened: %w", path, errNotRegularFile), serr, f.Close())
+	}
+	if err := f.Truncate(0); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return f, nil
 }
 
 // markerRemove removes a clean-stop marker file. A test replaces it to make a
@@ -231,11 +351,26 @@ func discardCleanStop(path string) error {
 	if second == nil {
 		return fsyncDir(filepath.Dir(path))
 	}
-	if err := writeFileSynced(path, nil); err != nil {
+	if err := emptyFileSynced(path); err != nil {
 		return fmt.Errorf("clean-stop marker %s could be neither removed (%w) nor emptied (%w)", path, errors.Join(first, second), err)
 	}
 	hnswLog.Warn("hnsw: clean-stop marker %s could not be removed (%v), so it was emptied; an empty marker vouches for nothing", path, second)
 	return nil
+}
+
+// emptyFileSynced empties the regular file at path in place and fsyncs it:
+// discardCleanStop's fallback for a marker whose name could not be removed,
+// which writeFileSynced, removing the name first, cannot write. It refuses
+// anything but a regular file or nothing (createRegular).
+func emptyFileSynced(path string) error {
+	f, err := createRegular(path)
+	if err != nil {
+		return err
+	}
+	if err := syncFile(f); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	return f.Close()
 }
 
 // removeMarker removes path with markerRemove; a path already gone is not an
@@ -261,10 +396,16 @@ const cleanStopVersion = 1
 // error when there is none, and nil with an error when one is there but
 // cannot be read or does not vouch.
 func readCleanStop(path string) (*cleanStopRecord, error) {
-	b, err := os.ReadFile(path)
+	// Only a regular file vouches (openRegular). A symlink at the marker
+	// name was not written by MarkCleanStop, and what it points at may be a
+	// file a restore wrote (B1-r7).
+	b, err := readRegularFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
+		}
+		if errors.Is(err, errNotRegularFile) {
+			return nil, fmt.Errorf("clean-stop marker %s is not a regular file, so it vouches for nothing: %w", path, err)
 		}
 		return nil, fmt.Errorf("read clean-stop marker %s: %w", path, err)
 	}
@@ -463,8 +604,23 @@ func TakeHNSWCleanStop(dir string) (bool, error) {
 // there was none, when it did not vouch, or when it could not be removed.
 func takeCleanStop(dir string) (*cleanStopRecord, error) {
 	p := cleanStopPath(dir)
-	if _, err := os.Stat(p); err != nil {
+	// os.Lstat, not os.Stat: a symlink at the marker name, dangling or not,
+	// is discarded like a marker (os.Remove unlinks the link itself). Stat
+	// took a dangling one for no marker and left it, and an archive entry
+	// could then write its target (R1-15 round-7 verification review,
+	// B1-r7).
+	if _, err := os.Lstat(p); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			// No marker. One that another process removed is gone for
+			// good only once the directory is synced, and that process may
+			// not have got that far: a crash could bring it back, vouching,
+			// after the caller wrote what it relies on the marker's absence
+			// for (a restore's first entry). So the absence is made durable
+			// too (R1-15 round-8 verification review, SF2). A directory
+			// that does not exist holds no marker.
+			if err := fsyncDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: clean-stop marker %s: the directory could not be synced, so a marker removed without a sync could come back: %w", ErrCleanStopNotDiscarded, p, err)
+			}
 			return nil, nil
 		}
 		return nil, fmt.Errorf("%w: clean-stop marker %s: %w", ErrCleanStopNotDiscarded, p, err)
