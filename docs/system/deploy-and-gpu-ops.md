@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -339,9 +339,22 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    the `restore-offline` helper: as the service user (`systemd-run --uid`),
    never as root, so every file keeps the service's ownership, in the
    transient unit `audiobook-organizer-rollback-restore.service`. Its output
-   goes to `/run/audiobook-organizer-rollback/restore.log` and is relayed, so
-   a dropped ssh connection neither kills the restore nor loses its output,
-   and systemd refuses a second restore while one runs. The command takes the
+   is appended (never truncated) to
+   `/run/audiobook-organizer-rollback/restore.log` after a `=== ... started
+   <UTC time> ===` line, and relayed, so a dropped ssh connection neither
+   kills the restore nor loses its output. The unit ends the log with
+   `rollback helper: restore-offline finished: exit N` (or `signal N`) itself,
+   so the result is on the host even when the connection, and the helper
+   relaying it, are gone. The directory (0750) and the log (0640) stay
+   root-owned, since systemd opens the log as root, and belong to the deploy
+   user's primary group, so the deploy user reads them without `sudo`:
+   `systemctl is-active audiobook-organizer-rollback-restore` and
+   `tail -n 5 /run/audiobook-organizer-rollback/restore.log`, the two checks
+   the recipe prints when the connection drops. A failed unit is not
+   collected, so `systemctl status` keeps its result until the next restore
+   resets it. A second restore refuses while the unit is in any state but
+   `inactive` or `failed`: the recipe checks before it stops anything, and the
+   helper again before it opens the log. The command takes the
    store's swap lock itself (an flock on `<state dir>/swap.lock` that never
    waits) and refuses while a service is running or starting. The recipe does not retry. Afterwards it checks again that the
    unit stayed stopped.
