@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.2
+// version: 4.67.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -291,13 +291,6 @@ func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
 	return steps
 }
 
-// startupDegradedSource is /health's lazy provider for its fixed degraded
-// tokens, called once per probe: the degraded startup-step tokens of the
-// runner Start stored, plus basic_gate_no_password while the Basic gate is
-// enabled with no effective password. The gate is read here, once per probe
-// from one config snapshot, so saving a password clears the token on the next
-// probe without a restart. With no runner yet and no gate token it returns
-// nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 // SetPostureTokens installs the provider of GET /system/status's posture
 // tokens (05-health §5H.10 R1; 05-storage §5S.3.12): internal/books hands
 // it the App's checkpoint health once New has returned. They are reported
@@ -315,6 +308,13 @@ func (s *Server) currentPostureTokens() []systemhandlers.PostureToken {
 	return nil
 }
 
+// startupDegradedSource is /health's lazy provider for its fixed degraded
+// tokens, called once per probe: the degraded startup-step tokens of the
+// runner Start stored, plus basic_gate_no_password while the Basic gate is
+// enabled with no effective password. The gate is read here, once per probe
+// from one config snapshot, so saving a password clears the token on the next
+// probe without a restart. With no runner yet and no gate token it returns
+// nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
 	st := s.startupSteps.Load()
 	noPassword := servermiddleware.BasicGateNoPassword()
