@@ -1,5 +1,5 @@
 # file: deploy/rollback-helpers/rollback.conf.example
-# version: 1.2.0
+# version: 1.3.0
 # guid: 8bafb640-d659-4122-8365-282864483ab6
 # last-edited: 2026-11-09
 #
@@ -13,6 +13,8 @@ bin = /usr/local/bin/audiobook-organizer
 db = /path/to/audiobooks.pebble
 state_dir = /var/lib/audiobook-organizer
 unit = audiobook-organizer.service
+# The unit's User=. It must own state_dir: storage restore-offline refuses
+# every write, --into included, under any other user.
 service_user = audiobook
 # The directory make rollback-restore ROLLBACK_ARCHIVE=<name> reads archives from.
 archive_dir = /path/to/archives
