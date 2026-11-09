@@ -1,5 +1,5 @@
 # file: scripts/tests/test_deploy_wait_ready.py
-# version: 1.0.0
+# version: 1.2.0
 # guid: f22657cf-f7bf-4b6c-a942-2799f4bd4890
 # last-edited: 2026-11-09
 
@@ -31,10 +31,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "deploy-wait-ready.sh"
 HOST = "wayne-manor.invalid"
 UNIT = "audiobook-organizer.service"
-SHOW = r"^systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus audiobook-organizer\.service$"
+SHOW = r"^systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus\S* audiobook-organizer\.service$"
 
-READY = (200, '{"status":"ok","ready":true}')
-WARMING = (200, '{"status":"ok","ready":false}')
+# What the real server answers: every API route wraps its body in {"data": ...}
+# (httputil.RespondWithOK), /health included. A fixture with a bare body is
+# how a wait that required a top-level "ready" passed its tests and exited 2
+# against every real server.
+READY = (200, '{"data":{"status":"ok","ready":true,"memdb_ready":true,"degraded":[]}}')
+WARMING = (200, '{"data":{"status":"ok","ready":false,"memdb_ready":false,"degraded":[]}}')
 
 
 class WaitReadyTest(unittest.TestCase):
@@ -48,7 +52,9 @@ class WaitReadyTest(unittest.TestCase):
             self.server.close()
         self._tmp.cleanup()
 
-    def run_wait(self, shows, health, timeout="2", ssh=True, extra_env=None, rules=None):
+    def run_wait(
+        self, shows, health, timeout="2", ssh=True, extra_env=None, rules=None, invocation=None
+    ):
         """Run the script; return (completed process, ssh invocations, seconds)."""
         self.server = fake_ssh.HealthServer(health)
         all_rules = list(rules or [])
@@ -61,6 +67,8 @@ class WaitReadyTest(unittest.TestCase):
         args = ["bash", str(SCRIPT), self.server.url, timeout]
         if ssh:
             args += [HOST, UNIT]
+        if invocation is not None:
+            args.append(invocation)
         start = time.monotonic()
         proc = subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
         took = time.monotonic() - start
@@ -156,11 +164,31 @@ class WaitReadyTest(unittest.TestCase):
         self.assertIn("not ready", proc.stderr)
 
     def test_answer_without_ready_field_fails_with_2(self) -> None:
+        for body in ('{"data":{"status":"ok"}}', '{"status":"ok"}', '{"data":"ready"}', "[]"):
+            with self.subTest(body=body):
+                proc, _, _ = self.run_wait([fake_ssh.show("active")], [(200, body)], timeout="30")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("no ready field", proc.stderr)
+
+    def test_ready_inside_the_data_envelope_is_read(self) -> None:
+        """Warming keeps polling and ready passes, read from data.ready."""
+        proc, _, _ = self.run_wait([fake_ssh.show("active")], [WARMING, WARMING, READY])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertGreaterEqual(self.server.requests, 3)
+
+    def test_a_bare_body_is_read_too(self) -> None:
+        """A body without the envelope (a proxy's own health shim) still works."""
         proc, _, _ = self.run_wait(
-            [fake_ssh.show("active")], [(200, '{"status":"ok"}')], timeout="30"
+            [fake_ssh.show("active")], [(200, '{"status":"ok","ready":true}')]
         )
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("no ready field", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_ready_must_be_the_boolean_true(self) -> None:
+        for body in ('{"data":{"ready":"true"}}', '{"data":{"ready":1}}'):
+            with self.subTest(body=body):
+                proc, _, _ = self.run_wait([fake_ssh.show("active")], [(200, body)], timeout="1")
+                self.assertEqual(proc.returncode, 1, proc.stderr)
+                self.assertIn("not ready", proc.stderr)
 
     def test_unparseable_unit_answer_fails_with_2(self) -> None:
         shows = [{"stdout": "Failed to parse bus message\n", "exit": 0}]
@@ -195,6 +223,53 @@ class WaitReadyTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertGreaterEqual(took, 2.0)
         self.assertIn("limit 2s", proc.stderr)
+
+    def test_unchanged_invocation_is_not_ready(self) -> None:
+        """The restart never ran (sudo refused it, or ssh dropped before it
+        reached systemd): the old process is still active and ready. With
+        the InvocationID read before the restart, ready needs a new one."""
+        shows = [fake_ssh.show("active", invocation="0a0a")]
+        proc, _, took = self.run_wait(
+            shows,
+            [READY],
+            timeout="30",
+            invocation="0a0a",
+            extra_env={"DEPLOY_RESTART_GRACE": "0.3"},
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertLess(took, 10)
+        self.assertIn("not restarted", proc.stderr)
+        self.assertIn("InvocationID", proc.stderr)
+
+    def test_new_invocation_is_ready(self) -> None:
+        shows = [fake_ssh.show("active", invocation="0a0a")] * 2 + [
+            fake_ssh.show("active", invocation="0b0b")
+        ]
+        proc, _, _ = self.run_wait(
+            shows,
+            [READY],
+            timeout="30",
+            invocation="0a0a",
+            extra_env={"DEPLOY_RESTART_GRACE": "30"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_empty_baseline_accepts_any_new_invocation(self) -> None:
+        """A unit that was stopped before the start has no invocation to
+        compare against; any non-empty one is the new process."""
+        proc, _, _ = self.run_wait(
+            [fake_ssh.show("active", invocation="0b0b")], [READY], invocation=""
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_requested_restart_needs_exactly_one_more_restart(self) -> None:
+        shows = [
+            fake_ssh.show("active", restarts=0),
+            fake_ssh.show("activating", "auto-restart", restarts=2, status=75),
+        ]
+        proc, _, _ = self.run_wait(shows, [WARMING], timeout="30")
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("NRestarts", proc.stderr)
 
     def test_usage_errors_exit_2(self) -> None:
         for args in (

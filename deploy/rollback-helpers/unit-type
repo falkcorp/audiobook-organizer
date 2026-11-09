@@ -1,0 +1,12 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/unit-type
+# version: 1.0.0
+# guid: 94013008-d822-424b-97e5-b0767bdb36ce
+# last-edited: 2026-11-09
+#
+# Match the unit type (simple | notify), as root.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py unit-type "$@"
