@@ -1,12 +1,12 @@
 <!-- file: docs/executive-summaries/2026-11-08-hnsw-clean-stop-executive-summary.md -->
-<!-- version: 1.1.12 -->
+<!-- version: 1.1.13 -->
 <!-- guid: 42dae9c5-6b36-4000-91ca-af79a8cacdbf -->
 <!-- last-edited: 2026-11-09 -->
 
 # The duplicate finder's index no longer stays wrong after a crash
 
 **Date:** 8 November 2026
-**Pull request:** [#4506](https://github.com/falkcorp/audiobook-organizer/pull/4506) (merge commit: pending), which supersedes #4496 and #4476 (the same change, rebased onto main each time); a follow-up to [#4467](https://github.com/falkcorp/audiobook-organizer/pull/4467)
+**Pull request:** [#4512](https://github.com/falkcorp/audiobook-organizer/pull/4512) (merge commit: pending), which supersedes #4506, #4496 and #4476 (the same change, rebased onto main each time, this time onto the platform core's storage); a follow-up to [#4467](https://github.com/falkcorp/audiobook-organizer/pull/4467)
 
 ## Executive Summary
 
