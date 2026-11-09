@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.10
+// version: 1.8.11
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // HNSW-graph vector store (coder/hnsw) — a sub-linear ANN index alternative to
 // the brute-force chromem store. Selected via config.VectorIndexBackend="hnsw".
@@ -749,9 +749,12 @@ func syncDir(dir string) {
 	}
 }
 
-// writeFileSynced writes data to path and fsyncs it before closing.
+// writeFileSynced writes data to path and fsyncs it before closing. It
+// refuses a name that is not a regular file (createRegular): an O_TRUNC
+// open wrote through a symlink at the marker name, into whatever it pointed
+// at (R1-15 round-7 verification review, B1-r7).
 func writeFileSynced(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := createRegular(path)
 	if err != nil {
 		return err
 	}

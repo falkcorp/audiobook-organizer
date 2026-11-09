@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -141,6 +142,73 @@ func fsyncDir(dir string) error {
 	return nil
 }
 
+// errNotRegularFile: the name is not a regular file (a symlink, a
+// directory), so nothing is read through it or written to it.
+var errNotRegularFile = errors.New("not a regular file")
+
+// openRegular opens path for reading only when it names a regular file. It
+// looks at the name with os.Lstat, so a symlink is refused rather than
+// followed, and the file it opens must be the one Lstat saw (os.SameFile),
+// so a symlink put at the name in between is refused too. The marker and
+// the snapshot's files are read through it: a symlink in the snapshot
+// directory can point at a file a restore writes, outside that directory
+// (R1-15 round-7 verification review, B1-r7 and S1-r7).
+func openRegular(path string) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: %w", path, errNotRegularFile)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if ofi, serr := f.Stat(); serr != nil || !os.SameFile(fi, ofi) {
+		return nil, errors.Join(fmt.Errorf("%s changed while it was opened: %w", path, errNotRegularFile), serr, f.Close())
+	}
+	return f, nil
+}
+
+// readRegularFile is os.ReadFile through openRegular.
+func readRegularFile(path string) ([]byte, error) {
+	f, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(f)
+	return b, errors.Join(err, f.Close())
+}
+
+// createRegular opens path for writing, emptied, only when it names a
+// regular file or nothing. A new file is made with O_CREATE|O_EXCL, which
+// fails on any name made since, a symlink included, and never follows one.
+// An existing one must be a regular file by os.Lstat and the file opened
+// (os.SameFile), and is truncated through the open file, not by name.
+func createRegular(path string) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	case err != nil:
+		return nil, err
+	case !fi.Mode().IsRegular():
+		return nil, fmt.Errorf("%s: %w", path, errNotRegularFile)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	if ofi, serr := f.Stat(); serr != nil || !os.SameFile(fi, ofi) {
+		return nil, errors.Join(fmt.Errorf("%s changed while it was opened: %w", path, errNotRegularFile), serr, f.Close())
+	}
+	if err := f.Truncate(0); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return f, nil
+}
+
 // markerRemove removes a clean-stop marker file. A test replaces it to make a
 // removal fail.
 var markerRemove = os.Remove
@@ -190,10 +258,16 @@ const cleanStopVersion = 1
 // error when there is none, and nil with an error when one is there but
 // cannot be read or does not vouch.
 func readCleanStop(path string) (*cleanStopRecord, error) {
-	b, err := os.ReadFile(path)
+	// Only a regular file vouches (openRegular). A symlink at the marker
+	// name was not written by MarkCleanStop, and what it points at may be a
+	// file a restore wrote (B1-r7).
+	b, err := readRegularFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
+		}
+		if errors.Is(err, errNotRegularFile) {
+			return nil, fmt.Errorf("clean-stop marker %s is not a regular file, so it vouches for nothing: %w", path, err)
 		}
 		return nil, fmt.Errorf("read clean-stop marker %s: %w", path, err)
 	}
@@ -392,7 +466,12 @@ func TakeHNSWCleanStop(dir string) (bool, error) {
 // there was none, when it did not vouch, or when it could not be removed.
 func takeCleanStop(dir string) (*cleanStopRecord, error) {
 	p := cleanStopPath(dir)
-	if _, err := os.Stat(p); err != nil {
+	// os.Lstat, not os.Stat: a symlink at the marker name, dangling or not,
+	// is discarded like a marker (os.Remove unlinks the link itself). Stat
+	// took a dangling one for no marker and left it, and an archive entry
+	// could then write its target (R1-15 round-7 verification review,
+	// B1-r7).
+	if _, err := os.Lstat(p); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
