@@ -1,7 +1,7 @@
 // file: internal/database/settings.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package database
 
@@ -350,8 +350,8 @@ func (s *PebbleStore) SetSetting(key, value, typ string, isSecret bool) error {
 // encrypted secret exists before generating a new key, so a dropped secret
 // row there means a new key and the loss of every stored secret.
 //
-// Every writer under the prefix (SetSetting, EmbeddingStore's index flag,
-// cmd/pebble-inject-skip) stores the JSON Setting envelope, so a row that does
+// Every writer under the prefix (SetSetting, EmbeddingStore's index flag)
+// stores the JSON Setting envelope, so a row that does
 // not unmarshal is corruption, not another format. All such keys are reported
 // together as an *UnreadableSettingsError; the error names keys only, never
 // stored values (a value may be a secret). An iterator or close error is

@@ -1,7 +1,7 @@
 // file: internal/database/storage_format.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 9a2abfc6-3471-4cb1-8ed7-2efe634af689
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -44,8 +44,9 @@ import (
 // (storage_format_repair.go's recovery command uses both).
 //
 // Exempt by design: the raw mode of cmd/diagnostics (read-only) and
-// cmd/pebble-inject-skip. Both open Pebble directly and never reach the
-// guard, so they keep working on a store the guard refuses.
+// diagnostics reserved-prefs. Both open Pebble directly and never reach the
+// guard, so they keep working on a store the guard refuses; both refuse a
+// busy swap slot first (R1-25).
 
 // SupportedStorageFormat is the storage format this build reads and writes.
 //
@@ -68,7 +69,7 @@ const legacyStorageFormat = 1
 // ratcheted to. Core storage pins the same format (core/internal/pebble) and
 // opens with no format version, so a refused open never ratchets anything,
 // and ratchets only after the boot's checkpoint (05-storage §5S.4). The read-only recovery opens (diagnostics query --raw,
-// diagnostics reserved-prefs, cmd/pebble-inject-skip) pass no format version
+// diagnostics reserved-prefs) pass no format version
 // at all, so they never ratchet. The AI-scan and
 // OpenLibrary stores (ai_scan_store.go, internal/openlibrary/store.go) still
 // pass pebble.FormatNewest until TASK-A7 moves them onto this constant.

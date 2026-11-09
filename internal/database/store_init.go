@@ -1,7 +1,7 @@
 // file: internal/database/store_init.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7ffff60d-2915-4c59-a775-321f8367f69b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -29,12 +29,6 @@ func SetGlobalStore(s Store) {
 	globalStoreMu.Lock()
 	globalStore = s
 	globalStoreMu.Unlock()
-}
-
-// InitializeStore opens the store for a standalone command (InitializeStoreWith
-// with no state files).
-func InitializeStore(dbType, path string) (Store, error) {
-	return InitializeStoreWith(dbType, path, StandaloneOptions{})
 }
 
 // InitializeStoreWith opens the store for a standalone command and returns

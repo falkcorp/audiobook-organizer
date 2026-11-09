@@ -1,11 +1,11 @@
 // file: cmd/diagnostics_test.go
-// version: 2.3.2
+// version: 2.3.3
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
 // last-edited: 2026-11-08
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
-// InitializeStore rejects SQLite with an error (it was removed in T022).
+// the store open rejects SQLite with an error (it was removed in T022).
 
 package cmd
 
@@ -88,6 +88,7 @@ func TestRunDiagnosticsQueryErrors(t *testing.T) {
 }
 
 func TestRunDiagnosticsQuerySuccess(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -116,6 +117,7 @@ func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 }
 
 func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -137,6 +139,7 @@ func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 }
 
 func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -171,6 +174,7 @@ func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 }
 
 func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -199,6 +203,7 @@ func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 }
 
 func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -240,6 +245,7 @@ func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 }
 
 func TestRunCleanupInvalidBooksDelete(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -281,6 +287,7 @@ func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 }
 
 func TestRunRawPebbleQuery(t *testing.T) {
+	isolateStateDir(t)
 	tempDir := t.TempDir()
 	store, err := database.NewPebbleStore(tempDir)
 	if err != nil {
@@ -305,6 +312,7 @@ func TestRunRawPebbleQuery(t *testing.T) {
 // exempt from the storage-format guard by design, so it must still read a
 // store whose stamp is newer than this build supports.
 func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
+	isolateStateDir(t)
 	dbPath := filepath.Join(t.TempDir(), "too-new.pebble")
 	versionJSON, err := json.Marshal(database.DatabaseVersion{Version: database.SupportedStorageFormat + 1, UpdatedAt: time.Now()})
 	if err != nil {
@@ -351,6 +359,7 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 // TestRawPebbleQuery_DoesNotRatchetPebbleFormat: raw inspection must leave
 // the on-disk format of a store below the pin exactly where it was.
 func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
+	isolateStateDir(t)
 	dbPath := filepath.Join(t.TempDir(), "min-format.pebble")
 	db, err := pebble.Open(dbPath, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
 	if err != nil {
@@ -391,6 +400,7 @@ func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
 // stamp row and removes the sidecar. Declining the prompt changes nothing;
 // confirming repairs both and the store opens again.
 func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
+	isolateStateDir(t)
 	dbPath := filepath.Join(t.TempDir(), "bad-stamp.pebble")
 	s, err := database.NewPebbleStore(dbPath)
 	if err != nil {
@@ -487,6 +497,7 @@ func captureStdout(t *testing.T, fn func()) string {
 // A repair that committed and THEN failed (sidecar removal, store close) must
 // still print every key it changed before returning the error.
 func TestRunReservedPrefs_ReportsCommittedChangeOnError(t *testing.T) {
+	isolateStateDir(t)
 	prev := repairReservedPreference
 	t.Cleanup(func() { repairReservedPreference = prev })
 	repairReservedPreference = func(dbPath, key string, v int) (database.ReservedPreferenceChange, error) {
@@ -513,6 +524,7 @@ func TestRunReservedPrefs_ReportsCommittedChangeOnError(t *testing.T) {
 }
 
 func TestRunReservedPrefs_ClosedStdinAsksForYes(t *testing.T) {
+	isolateStateDir(t)
 	eof := func(string) (bool, error) { return false, io.EOF }
 	err := runReservedPrefs("/srv/x.pebble", "storage_migration", "", false, false, eof)
 	if err == nil || err.Error() != "confirmation needed: pass --yes or run interactively" {
@@ -585,13 +597,14 @@ func TestEnsureDiagnosticsStoreError(t *testing.T) {
 	// Set invalid database type
 	config.AppConfig.DatabaseType = "invalid"
 
-	_, _, err := ensureDiagnosticsStore()
+	_, _, err := ensureDiagnosticsStore(false)
 	if err == nil {
 		t.Fatal("expected error for invalid database type")
 	}
 }
 
 func TestEnsureDiagnosticsStorePebble(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -601,16 +614,24 @@ func TestEnsureDiagnosticsStorePebble(t *testing.T) {
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
 
-	_, cleanup, err := ensureDiagnosticsStore()
-	if err != nil {
-		t.Fatalf("expected pebble store creation to succeed: %v", err)
+	// The offline open never creates a store: an empty directory is a
+	// store the service has not started yet.
+	if _, _, err := ensureDiagnosticsStore(false); err == nil {
+		t.Fatal("expected the offline open to refuse a store the service never started")
 	}
-	if cleanup != nil {
+
+	seedStarted(t, tempDir)
+	for _, readOnly := range []bool{false, true} {
+		_, cleanup, err := ensureDiagnosticsStore(readOnly)
+		if err != nil {
+			t.Fatalf("readOnly=%v: expected the store the service started to open: %v", readOnly, err)
+		}
 		cleanup()
 	}
 }
 
 func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig
@@ -640,6 +661,7 @@ func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 }
 
 func TestRunDiagnosticsQueryPebble(t *testing.T) {
+	isolateStateDir(t)
 	origConfig := config.AppConfig
 	defer func() {
 		config.AppConfig = origConfig

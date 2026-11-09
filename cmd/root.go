@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -90,8 +90,6 @@ const removedSQLiteFlagMessage = "it was removed and does nothing: SQLite is no 
 	"PebbleDB is the only database backend; remove it from your command line"
 
 var (
-	initializeStore        = database.InitializeStore
-	closeStore             = database.CloseStore
 	scanDirectory          = scanner.ScanDirectory // func(context.Context, string, logger.Logger) ([]Book, error)
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
@@ -125,11 +123,12 @@ var scanCmd = &cobra.Command{
 		}
 		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
-		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
+		// Open the store through the guard-aware offline open (openCLIStore).
+		_, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
+		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
-		defer closeStore()
+		defer closeCLIStore()
 
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 		fmt.Printf("Scanning directory: %s\n", config.AppConfig.RootDir)
@@ -157,11 +156,12 @@ var playlistCmd = &cobra.Command{
 	Short: "Generate playlists for audiobook series",
 	Long:  `Generate iTunes-compatible playlists for each audiobook series.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
+		// Open the store through the guard-aware offline open (openCLIStore).
+		_, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
+		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
-		defer closeStore()
+		defer closeCLIStore()
 
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 		fmt.Println("Generating playlists for audiobook series...")
@@ -182,11 +182,12 @@ var tagCmd = &cobra.Command{
 	Short: "Update audio file tags with series information",
 	Long:  `Update the metadata tags of audio files to include series information.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
+		// Open the store through the guard-aware offline open (openCLIStore).
+		_, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
+		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
-		defer closeStore()
+		defer closeCLIStore()
 
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
 		fmt.Println("Updating audio file tags with series information...")
@@ -211,11 +212,12 @@ var organizeCmd = &cobra.Command{
 		}
 		defer logger.InstallStdoutDefault(config.AppConfig.LogLevel, os.Stderr)()
 
-		// Initialize database
-		if _, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath); err != nil {
+		// Open the store through the guard-aware offline open (openCLIStore).
+		_, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
+		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
-		defer closeStore()
+		defer closeCLIStore()
 
 		// Step 1: Scan files
 		fmt.Printf("Using database: %s (%s)\n", config.AppConfig.DatabasePath, config.AppConfig.DatabaseType)
@@ -525,7 +527,7 @@ func initConfig() {
 	// happen before any store is opened: memdbSchema() reads the enabled set
 	// once, when NewMemStore builds the schema. Doing it here — right after
 	// config load, in the single cobra.OnInitialize hook — covers every
-	// command that later calls initializeStore, rather than being repeated
+	// command that later calls openCLIStore, rather than being repeated
 	// at each of the four call sites and eventually missed at one.
 	//
 	// Unknown names are warned about rather than ignored: a typo in config
