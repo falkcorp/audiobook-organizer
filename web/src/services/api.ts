@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.207.2
+// version: 2.207.3
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4663,7 +4663,22 @@ export async function listBackups(): Promise<BackupListResponse> {
   return body.data;
 }
 
-export async function restoreBackup(filename: string, verify = true): Promise<{ message: string }> {
+/**
+ * POST /backup/restore's answer (202). The server does not restore in place:
+ * it stages the archive in its one restore slot and restarts, and the swap
+ * runs at the next boot, before the database opens. `verified` is whether
+ * the archive was checked against its checksum file; a requested check that
+ * cannot run (no checksum file) or fails is refused instead (400 or 409).
+ */
+export interface RestoreStagedResponse {
+  message: string;
+  restart_required: boolean;
+  restore_id: string;
+  verified: boolean;
+  verify_requested: boolean;
+}
+
+export async function restoreBackup(filename: string, verify = true): Promise<RestoreStagedResponse> {
   const response = await apiFetch(`${API_BASE}/backup/restore`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

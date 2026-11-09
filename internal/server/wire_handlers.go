@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.6
+// version: 2.64.7
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -389,7 +389,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.startupDegradedSource,
 	).WithRepairsOpAccess(s.repairsOpAccess()).
 		// Lazy: books installs the provider after wiring (SetPostureTokens).
-		WithPostureTokens(s.currentPostureTokens)
+		WithPostureTokens(s.currentPostureTokens).
+		// Lazy: books installs the stager after wiring (SetRestoreStager).
+		WithRestoreStager(s.currentRestoreStager)
 	s.systemHandler = systemH
 
 	// Dedup domain handler (candidate / cluster / series listing, merge /

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -27,11 +27,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -539,160 +536,6 @@ func TestListBackups_EmptyDir(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(0), resp["data"].(map[string]any)["count"])
-}
-
-// --- RestoreBackup ---
-
-func TestRestoreBackup_RequiresFilename(t *testing.T) {
-	h, _ := newTestHandler(t)
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", []byte(`{}`), func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestRestoreBackup_NotFound(t *testing.T) {
-	h, _ := newTestHandler(t)
-	prev := config.AppConfig.DatabasePath
-	config.AppConfig.DatabasePath = t.TempDir() + "/audiobooks.db"
-	defer func() { config.AppConfig.DatabasePath = prev }()
-
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", []byte(`{"backup_filename":"missing.tar.gz"}`), func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-// restoreBackupTestSetup seeds a real DB file and a real backup archive (with
-// its checksum sidecar, written by CreateBackup) in the directory the handler
-// resolves via backup.ResolveDir, and returns the seeded backup.BackupInfo
-// plus a restore-target directory the test can assert against. Callers get a
-// fresh t.TempDir() each time via config.AppConfig.DatabasePath/BackupDir,
-// restored by t.Cleanup.
-func restoreBackupTestSetup(t *testing.T) (info *backup.BackupInfo, restoreDir string) {
-	t.Helper()
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "audiobooks.db")
-	prevDBPath := config.AppConfig.DatabasePath
-	prevBackupDir := config.AppConfig.BackupDir
-	config.AppConfig.DatabasePath = dbPath
-	config.AppConfig.BackupDir = ""
-	t.Cleanup(func() {
-		config.AppConfig.DatabasePath = prevDBPath
-		config.AppConfig.BackupDir = prevBackupDir
-	})
-
-	require.NoError(t, os.WriteFile(dbPath, []byte("test database"), 0644))
-
-	backupConfig := backup.DefaultBackupConfig()
-	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
-	created, err := backup.CreateBackup(dbPath, "sqlite", backupConfig)
-	require.NoError(t, err)
-
-	return created, filepath.Join(tempDir, "restored")
-}
-
-// TestRestoreBackup_VerifyTrue_Succeeds is the TASK-306 regression test for
-// the happy path: a fresh backup carries a checksum sidecar (written by
-// CreateBackup), so POST /backup/restore with "verify":true must actually
-// verify and succeed -- 200, restored, "verified": true. A prior version of
-// this fix failed closed on every verify=true request regardless of whether a
-// checksum existed, which broke the Settings UI: it defaults restoreVerify to
-// true, so every restore from that page would have 400'd.
-func TestRestoreBackup_VerifyTrue_Succeeds(t *testing.T) {
-	h, _ := newTestHandler(t)
-	info, restoreDir := restoreBackupTestSetup(t)
-
-	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":true}`, info.Filename, restoreDir))
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	data := resp["data"].(map[string]any)
-	assert.Equal(t, true, data["verified"])
-	assert.Equal(t, true, data["verify_requested"])
-
-	restoredFile := filepath.Join(restoreDir, "audiobooks.db")
-	_, statErr := os.Stat(restoredFile)
-	assert.NoError(t, statErr)
-}
-
-// TestRestoreBackup_VerifyTrue_ChecksumMismatch proves the handler surfaces a
-// tampered/corrupted archive as 409 with the mismatch reason in the response
-// body, and performs no restore.
-func TestRestoreBackup_VerifyTrue_ChecksumMismatch(t *testing.T) {
-	h, _ := newTestHandler(t)
-	info, restoreDir := restoreBackupTestSetup(t)
-
-	raw, err := os.ReadFile(info.Path)
-	require.NoError(t, err)
-	require.NotEmpty(t, raw)
-	raw[0] ^= 0xFF
-	require.NoError(t, os.WriteFile(info.Path, raw, 0644))
-
-	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":true}`, info.Filename, restoreDir))
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-
-	assert.Equal(t, http.StatusConflict, w.Code)
-	assert.Contains(t, w.Body.String(), "checksum")
-
-	_, statErr := os.Stat(restoreDir)
-	assert.True(t, os.IsNotExist(statErr), "restore target should not exist after a checksum-mismatch failure")
-}
-
-// TestRestoreBackup_VerifyRequested_FailsClosed is the TASK-306 regression
-// test for the legacy-backup case: a backup with no checksum sidecar (created
-// before this feature, or one whose sidecar was lost) must fail closed on
-// "verify":true -- 400, no restore performed, reason visible in the response
-// body rather than only in the server log -- instead of the pre-fix behavior
-// of logging a warning server-side and restoring anyway.
-func TestRestoreBackup_VerifyRequested_FailsClosed(t *testing.T) {
-	h, _ := newTestHandler(t)
-	info, restoreDir := restoreBackupTestSetup(t)
-
-	// Simulate a legacy backup: no checksum sidecar on disk.
-	require.NoError(t, os.Remove(info.Path+".sha256"))
-
-	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":true}`, info.Filename, restoreDir))
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "checksum")
-
-	// Nothing was extracted -- the request failed before any restore happened.
-	_, statErr := os.Stat(restoreDir)
-	assert.True(t, os.IsNotExist(statErr), "restore target should not exist after a failed-closed verify request")
-}
-
-// TestRestoreBackup_VerifyFalse_ReflectsStatus proves the unchanged
-// verify=false path still succeeds and reports its verification status
-// explicitly in the response body per TASK-306's Goal.
-func TestRestoreBackup_VerifyFalse_ReflectsStatus(t *testing.T) {
-	h, _ := newTestHandler(t)
-	info, restoreDir := restoreBackupTestSetup(t)
-
-	body := []byte(fmt.Sprintf(`{"backup_filename":%q,"target_path":%q,"verify":false}`, info.Filename, restoreDir))
-	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
-		r.POST("/backup/restore", h.RestoreBackup)
-	})
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	data := resp["data"].(map[string]any)
-	assert.Equal(t, false, data["verified"])
-	assert.Equal(t, false, data["verify_requested"])
-
-	restoredFile := filepath.Join(restoreDir, "audiobooks.db")
-	_, statErr := os.Stat(restoredFile)
-	assert.NoError(t, statErr)
 }
 
 // --- DeleteBackup ---

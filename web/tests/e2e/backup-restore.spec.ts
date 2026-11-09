@@ -1,7 +1,7 @@
 // file: web/tests/e2e/backup-restore.spec.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 467b5537-3e41-4190-938c-e2f2ccb2e127
-// last-edited: 2026-02-07
+// last-edited: 2026-11-09
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
@@ -89,8 +89,11 @@ test.describe('Backup and Restore', () => {
     await expect(page.getByText('Restore Backup')).toBeVisible();
     await page.getByRole('button', { name: 'Restore' }).last().click();
 
-    // Assert
-    await page.waitForLoadState('load');
+    // Assert: the restore is staged and the server restarts to apply it;
+    // the page does not reload itself (the reconnect overlay does, once
+    // the server is back).
+    await expect(page.getByText('Restore 20261109T010203Z-0a1b2c3d staged.')).toBeVisible();
+    await expect(page.getByText('The server is restarting to apply it')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backups' })).toBeVisible();
   });
 

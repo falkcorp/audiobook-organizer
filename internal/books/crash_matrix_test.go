@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -11,18 +11,19 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/crashmatrix"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // TestBootCrashMatrix_ABO is ABO's instance of the boot crash matrix
@@ -32,7 +33,12 @@ import (
 // readiness with the kit's invariants checked. The scenarios are ABO's R1
 // starting states: a fresh install, and a HEAD (R0) store at LegacyCap
 // (books' core-era steps pending, so the first-boot checkpoint and its
-// state files) and at books v58 (legacy steps 59..LegacyCap first).
+// state files) and at books v58 (legacy steps 59..LegacyCap first); and
+// R1-25's swaps, a booted store with an archive restore staged by books'
+// live restore stager (under this build's ID, so the boot swaps it in, and
+// under another build's, so the boot rejects it) and one with `storage
+// reset --kind store` staged (the boot sets the store aside and installs
+// fresh).
 //
 // What books writes before readiness is its storage declaration's: the
 // claims' bookkeeping, the legacy steps, the core-era steps, the version
@@ -92,7 +98,10 @@ func TestBootCrashMatrix_ABOCoversEveryWriter(t *testing.T) {
 // (an expired completed checkpoint, another install's open one, a
 // record-less directory); and a HEAD store holding core keys without an
 // install marker, which every boot refuses after P2 (the failed boot's
-// storage close).
+// storage close); and the swap fixtures (aboRestoreFixture,
+// aboResetStoreFixture): a booted store with an archive restore staged
+// under the kit's binary ID and under another build's, and one with a
+// store reset staged.
 func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 	t.Helper()
 	mk := func(name string, write func(dbPath string)) crashmatrix.Fixture {
@@ -131,7 +140,57 @@ func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 		mk("head-at-legacycap", atCap),
 		mk("head-at-v58", func(p string) { headStoreAtVersion(t, p, 58, nil) }),
 		garbage, reused, stranded, foreign, sweep,
+		aboRestoreFixture(t, mk, "restore-archive", crashmatrix.BuildID),
+		aboRestoreFixture(t, mk, "restore-other-build", "an-older-abo-build"),
+		aboResetStoreFixture(t, mk),
 	}
+}
+
+// aboRestoreFixture is a booted ABO store with an archive restore staged by
+// books' live restore stager (backup.StageRestore, as POST /backup/restore
+// stages it; R1-25): the archive is HEAD's backup of another booted ABO
+// store, and the intent is staged under buildID on the kit's clock, with
+// no staged record (the stager writes none; P0a writes it first). Under the
+// kit's binary ID the next boot swaps it in (TestInflightBeforeFirstRename's
+// ABO case: the matrix kills between every rename of the swap); under
+// another binary's it rejects it and the live store stays.
+func aboRestoreFixture(t *testing.T, mk func(string, func(string)) crashmatrix.Fixture, name, buildID string) crashmatrix.Fixture {
+	t.Helper()
+	f := mk(name, nil)
+	require.NoError(t, crashmatrix.Boot(t, aboStorageBuild(f), f))
+	src := mk(name+"-source", nil)
+	require.NoError(t, crashmatrix.Boot(t, aboStorageBuild(src), src))
+	backups := filepath.Join(filepath.Dir(src.DBDir), "backups")
+	info, err := backup.CreateBackup(src.DBDir, "pebble", backup.BackupConfig{BackupDir: backups, MaxBackups: 5})
+	require.NoError(t, err)
+	_, err = backup.StageRestore(context.Background(), backup.StageRestoreOptions{
+		BackupDir: backups, Filename: info.Filename, Verify: true,
+		StateDir: f.StateDir, DBPath: f.DBDir, BuildID: buildID, RequestedBy: "user:alfred",
+		LegacySuffixes: legacySidecarSuffixes(), VerifyStore: database.VerifyStoreOpens, BeforeStage: removeHNSWCleanStop,
+		Now: crashmatrix.Now,
+	})
+	require.NoError(t, err, "fixture %s: stage", name)
+	return f
+}
+
+// aboResetStoreFixture is a booted ABO store with `storage reset --kind
+// store` staged (KindReset, ResetStore: the store and every sidecar beside
+// it set aside, no reset hook), as the kernel's offline stager stages it,
+// under the kit's binary ID: the next boot sets them aside and installs
+// fresh.
+func aboResetStoreFixture(t *testing.T, mk func(string, func(string)) crashmatrix.Fixture) crashmatrix.Fixture {
+	t.Helper()
+	f := mk("reset-store", nil)
+	require.NoError(t, crashmatrix.Boot(t, aboStorageBuild(f), f))
+	const id = "20260314T150926Z-0a1b2c3d"
+	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindReset, Reset: restorejournal.ResetStore, DBPath: f.DBDir}
+	for _, s := range append([]string{""}, append(restorejournal.CoreSidecarSuffixes(), legacySidecarSuffixes()...)...) {
+		if p := f.DBDir + s; exists(p) {
+			in.Targets = append(in.Targets, restorejournal.Target{From: p, To: restorejournal.SetAsideDest(f.StateDir, f.DBDir, id, p)})
+		}
+	}
+	require.NoError(t, crashmatrix.Stage(f, in), "fixture reset-store: stage")
+	return f
 }
 
 // addCheckpointsToSweep puts beside the store at dbPath, which a first boot
@@ -199,8 +258,13 @@ func (booksStorage) Register(*module.Registrar) error { return nil }
 // R1, each with the reason. Core's own matrix (core/examples/hello) breaks
 // every one of them over hello.
 func aboUnreachedLabels() map[string]string {
-	const noSwap = "ABO stages no restore or reset at R1 (R1-25 moves books' resets onto the KindReset swap and adds its fixtures)"
-	out := map[string]string{
+	const (
+		noLocation = "ABO keeps no backup.location.json at R1 (05-backup §5B.3.6 lands with F8), so the swap has none to copy or put back"
+		swapBack   = "ABO's restore stager opens the extracted store with this build's guard before it stages (database.VerifyStoreOpens), " +
+			"so no ABO-staged restore holds a store the next boot refuses after the swap; hello's restore-refused fixture breaks the swap-back"
+		badSlot = "an unusable pending.json (moved aside at P0a); no ABO stager writes one, every one links a complete intent (restorejournal.CreateIntent)"
+	)
+	return map[string]string{
 		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback": "books declares no level step at R1",
 		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
@@ -208,14 +272,19 @@ func aboUnreachedLabels() map[string]string {
 		// are copied into memory with the host's current time as their
 		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
 		// TestDryRunScratchModeAndSweep deletes one on a fake clock.
-		"storage.sweeper.scratch": "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
+		"storage.sweeper.scratch":   "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
+		"swap.location.copy":        noLocation,
+		"swap.back.location":        noLocation,
+		"swap.back.mark":            swapBack,
+		"swap.back.mv":              swapBack,
+		"swap.back.sidecars":        swapBack,
+		"swap.journal.swapped_back": swapBack,
+		"swap.slot.invalid":         badSlot,
+		"swap.slot.cleanup":         badSlot,
+		"swap.journal.failed": "a KindCheckpoint restore whose migrations fail (DATA7-12) needs a books step that fails on a store HEAD wrote; " +
+			"no books step does (the same reason as storage.checkpoint.ready)",
+		"swap.delete.remove": "a factory reset's delete entries lie off the store's filesystem (05-storage §5S.3.15) and run books' reset hook; " +
+			"the matrix boots books' storage declaration without its hooks (booksStorage) on a one-filesystem host, and the hook's own tests " +
+			"(reset_hook_test.go) cover its removals",
 	}
-	for _, r := range crashmatrix.Rows() {
-		for _, l := range r.Labels {
-			if strings.HasPrefix(l, "swap.") {
-				out[l] = noSwap
-			}
-		}
-	}
-	return out
 }

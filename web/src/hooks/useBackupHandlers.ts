@@ -1,7 +1,7 @@
 // file: web/src/hooks/useBackupHandlers.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-06-23
+// last-edited: 2026-11-09
 
 import type { Dispatch, SetStateAction } from 'react';
 import * as api from '../services/api';
@@ -32,6 +32,27 @@ export interface UseBackupHandlersReturn {
   handleRequestDeleteBackup: (backup: api.BackupInfo) => void;
   handleConfirmDeleteBackup: () => Promise<void>;
   handleFolderBrowserSelect: (path: string, isDir: boolean) => void;
+}
+
+/** The notice for a staged restore (POST /backup/restore's 202). */
+export function restoreStagedMessage(staged: api.RestoreStagedResponse): string {
+  const checked = staged.verified ? ' The backup matched its checksum.' : '';
+  return (
+    `Restore ${staged.restore_id} staged.${checked} The server is restarting to apply it; ` +
+    'this page reloads when it is back.'
+  );
+}
+
+/**
+ * The notice for a refused restore: the server's own reason (a restore or
+ * reset already staged, a checksum mismatch, no checksum file to verify
+ * against, a backup no longer listed), which says what to do next.
+ */
+export function restoreFailedMessage(error: unknown): string {
+  if (error instanceof api.ApiError && error.message) {
+    return `Restore refused: ${error.message}`;
+  }
+  return 'Failed to restore backup.';
 }
 
 export function useBackupHandlers(
@@ -104,18 +125,22 @@ export function useBackupHandlers(
     setRestoreInProgress(true);
     setBackupNotice(null);
     try {
-      await api.restoreBackup(restoreTarget.filename, restoreVerify);
+      // The server stages the restore and restarts to apply it (202). No
+      // reload here: the page would race the restart. The server tells
+      // every connected page it is going down (system.shutdown), and the
+      // App's reconnect overlay reloads once it answers again, now over the
+      // restored database.
+      const staged = await api.restoreBackup(restoreTarget.filename, restoreVerify);
       setBackupNotice({
-        severity: 'success',
-        message: 'Backup restored successfully.',
+        severity: 'info',
+        message: restoreStagedMessage(staged),
       });
       setRestoreDialogOpen(false);
-      window.location.reload();
     } catch (error) {
       console.error('Failed to restore backup:', error);
       setBackupNotice({
         severity: 'error',
-        message: 'Backup file is corrupt.',
+        message: restoreFailedMessage(error),
       });
     } finally {
       setRestoreInProgress(false);
