@@ -1,5 +1,5 @@
 # file: .errcheck-baseline
-# version: 1.9.1
+# version: 1.9.2
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
 # last-edited: 2026-11-08
 
@@ -94,4 +94,8 @@
 # `scripts/ci/run_gates.py --lower --only errcheck` (this script's linux pin).
 # Measured on R1-15's branch plus this follow-up, whose own changes add and
 # remove no finding; the drop came in with merges that did not lower this file.
-685
+# 2026-11-08 (R1-15 follow-up, round 7): 685 -> 683, written the same way.
+# Both are the follow-up's own: its round-6 head (262b37546) measured 684,
+# and round 7's writeEntry discards one Close error on its failure path
+# where the extraction it replaced discarded two (`_ = outFile.Close()`).
+683
