@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -35,20 +35,22 @@ $EDITOR deploy/local.conf       # set real TLS cert/key paths, DB path, WHISPER_
 
 ## 2. Rollback flow
 
-`Makefile.local.example`'s `deploy:` recipe now preserves the previously
-deployed binary before overwriting it:
+`Makefile.local.example`'s `deploy:` recipe installs the uploaded binary
+through the `install-staged` helper (see
+[Rollback helpers](#rollback-helpers-owner-action)), which keeps the
+previously deployed binary as `$(DEPLOY_BIN).prev` before it replaces it:
 
 ```
-ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
-  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && ...'
+ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary'
 ```
 
-Once your real `Makefile.local`'s `deploy` target includes this same
-`.prev`-preserving line, the flow is:
+Once your real `Makefile.local`'s `deploy` target installs the binary the
+same way, the flow is:
 
 1. `make deploy` — builds, ships, and (via the line above) copies the
    currently-running binary to `$(DEPLOY_BIN).prev` on the server before
-   installing the new one and restarting the service.
+   installing the new one (atomically: a copy beside it, then a rename) and
+   restarting the service.
 2. If the new deploy is bad, run the committed rollback target:
    ```bash
    make rollback DEPLOY_HOST=192.0.2.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer DEPLOY_DB=/path/to/audiobooks.pebble DEPLOY_URL=https://192.0.2.10:8484
@@ -198,7 +200,7 @@ The drop-in is written or removed by the root-owned `unit-type` helper
 then runs `systemctl daemon-reload`. The rollbacks make the same decision
 themselves on `$(DEPLOY_BIN).prev` before the swap (`make rollback-restore`
 before it stops the service), and the `deploy` in
-`Makefile.local.example` runs it on the uploaded binary before the `mv`.
+`Makefile.local.example` runs it on the uploaded binary before installing it.
 Being wrong in the fail-safe direction costs nothing. The drop-in keeps the
 unit's `NotifyAccess=main`, so `NOTIFY_SOCKET` is still set, and a
 notify-capable binary still sends `READY=1` and `STATUS=`. Under
@@ -212,6 +214,16 @@ write any unit setting (`User=root`, `ExecStartPre=`) and so be root.
 #### Your own `Makefile.local`
 
 `Makefile.local` is gitignored, so it does not pick any of this up by itself.
+Every `sudo` in it must become `sudo -n` with a command the drop-in below
+grants: the binary, the unit and `local.conf` go through `install-staged`
+(`binary`, `unit`, `local-conf`), the pprof drop-in through `pprof on|off`,
+and the restart is `/usr/bin/systemctl restart <unit>`.
+`Makefile.local.example`'s `deploy`, `deploy-debug` and `pprof-off` show each
+line. A `sudo cp` of the unit or of `local.conf` into
+`/etc/systemd/system` is not granted, and must not be: systemd reads those
+files as root, so whoever can write them can write `User=root` or
+`ExecStartPre=` and is root.
+
 Paste these two lines into its `deploy` (and `deploy-debug`) recipe. Put the
 first after the binary is copied to the host and before the `ssh` that moves
 it into place and restarts. Put the second after that `ssh`, in place of any
@@ -236,9 +248,11 @@ restart` no longer waits for the server's `READY=1`.
 #### Installing the unit
 
 **The owner installs the unit.** `deploy/audiobook-organizer.service` sets
-`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`. No committed
-target copies it to a host, but a local `deploy` recipe that copies it on
-every deploy installs it on the next deploy. To install it by hand:
+`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`.
+`Makefile.local.example`'s `deploy` uploads it, and `deploy/local.conf` when
+present, and installs both through `install-staged`, which refuses either
+file unless every directive in it is on the helper's allowlist (below), so
+the next deploy installs it. To install it by hand:
 
 1. Deploy a binary that sends `READY=1` first (or run
    `scripts/deploy-match-unit-type.sh` before restarting). A new binary under
@@ -359,15 +373,19 @@ the service stopped: run the **previous** binary's `storage restore-offline
 
 ### Rollback helpers (owner action)
 
-`make rollback` and `make rollback-restore` run every privileged step over a
-plain `ssh HOST 'cmd'`, which has no tty, so `sudo` cannot prompt for a
+`make deploy`, `make deploy-debug`, `make pprof-off`, `make rollback` and
+`make rollback-restore` run every privileged step over a plain `ssh HOST 'cmd'`, which has no tty, so `sudo` cannot prompt for a
 password: every step uses `sudo -n` and needs a passwordless rule. Those
 rules must not hand the deploy user root. In sudoers, a `*` in a command's
 arguments also matches spaces and `/`, so a rule like `find <dir> -path
 <dir>/restore/*/inflight.json -print` admits `find <dir> -path <dir>/restore/
 -o -exec /bin/sh -c '...' ; -o -path /inflight.json -print`, a root shell, and
 a wildcard on `cat` or on `restore-offline` lets the caller read any file or
-restore from any archive. Regular expressions in sudoers need sudo 1.9.10,
+restore from any archive. A rule without a wildcard can still be root: `sudo
+cp <your file> /etc/systemd/system/<unit>` (or into `<unit>.d/`, or `sudo
+tee` there) lets the caller write `User=root`, `ExecStartPre=+/bin/sh` or
+`StandardOutput=file:/etc/sudoers.d/x` into a file systemd reads as root.
+Regular expressions in sudoers need sudo 1.9.10,
 newer than Ubuntu 22.04's. So every step that takes a variable argument goes
 through a small root-owned helper that validates its own arguments, and the
 drop-in grants each helper with no argument list and no wildcard.
@@ -385,6 +403,23 @@ root-owned config:
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
+| `install-staged` | root | `binary`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`), or `stage_unit` / `stage_local_conf` as the unit / its `local.conf` drop-in after checking every directive, then `daemon-reload` |
+| `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
+
+`install-staged unit` and `install-staged local-conf` read the staged file
+once (no symlink, at most 256 KiB), check it, and install the bytes they
+checked. Every directive must be on the allowlist in `rollback_helper.py`
+(`ALLOWED`): the ones the committed unit and `local.conf.example` use, with
+`User=` and `Group=` equal to the config's `service_user` and
+`service_group` (the unit must set both: a unit without `User=` runs as
+root), `ExecStart=` absolute with no `+` or `!` prefix, `StandardOutput=` and
+`StandardError=` to the journal only, and `Wants=` limited to the network and
+filesystem targets. Anything else (`ExecStartPre=`, `SupplementaryGroups=`,
+`AmbientCapabilities=`, `EnvironmentFile=`, ...) is refused by name; add a
+directive to `ALLOWED` only after checking it cannot run, write or grant
+anything as root. A comment or blank line inside a continued value, and a
+backslash followed by spaces, are refused, because systemd versions read them
+differently.
 
 Install them on the deploy host (as root):
 
@@ -393,15 +428,19 @@ install -d -o root -g root -m 0755 /usr/local/libexec/audiobook-organizer/rollba
 install -o root -g root -m 0755 deploy/rollback-helpers/rollback_helper.py \
   deploy/rollback-helpers/inflight-probe deploy/rollback-helpers/checkpoint-record \
   deploy/rollback-helpers/restore-offline deploy/rollback-helpers/unit-type \
-  deploy/rollback-helpers/swap-prev /usr/local/libexec/audiobook-organizer/rollback/
+  deploy/rollback-helpers/swap-prev deploy/rollback-helpers/install-staged \
+  deploy/rollback-helpers/pprof /usr/local/libexec/audiobook-organizer/rollback/
 install -o root -g root -m 0644 deploy/rollback-helpers/rollback.conf.example /etc/audiobook-organizer/rollback.conf
 ```
 
 Then edit `/etc/audiobook-organizer/rollback.conf` (`bin`, `db`, `state_dir`,
-`unit`, `service_user`, `archive_dir`, and `checkpoint_dir` if
-`core.storage.checkpoint_dir` is set). The helpers refuse to run unless the
-file and its directory are root-owned and not writable by group or others,
-and `service_user` may not be `root`. The recipes read the file (it holds no
+`unit`, `service_user`, `archive_dir`, `checkpoint_dir` if
+`core.storage.checkpoint_dir` is set, `service_group` if it differs from
+`service_user`, and the deploy's staging paths `stage_bin`, `stage_unit` and
+`stage_local_conf`, the files your `deploy` uploads with `scp`). The helpers
+refuse to run unless the file and its directory are root-owned and not
+writable by group or others, and neither `service_user` nor `service_group`
+may be `root`. The recipes read the file (it holds no
 secret) and refuse when it names another binary, store or unit than
 `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT`.
 
@@ -409,7 +448,9 @@ Add the drop-in with `sudo visudo -f /etc/sudoers.d/audiobook-organizer-rollback
 `python3 scripts/storage_format_guard.py sudoers --deploy-user <ssh user> --db
 <DEPLOY_DB> [--bin <DEPLOY_BIN>] [--unit <unit>] [--service-user <user>]`
 prints it with your values; it renders the same table of commands the recipes
-run, and a test checks every `sudo` command they run against it. With the
+run, and tests check against it every `sudo` command the rollback recipes run
+and every `sudo` in `Makefile.local.example`'s `deploy`, `deploy-debug`,
+`pprof-dropin` and `pprof-off` and in `scripts/deploy-match-unit-type.sh`. With the
 placeholder values:
 
 <!-- sudoers:begin -->
@@ -423,7 +464,9 @@ deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-leve
     /usr/local/libexec/audiobook-organizer/rollback/inflight-probe "", \
     /usr/local/libexec/audiobook-organizer/rollback/swap-prev "", \
     /usr/local/libexec/audiobook-organizer/rollback/restore-offline, \
-    /usr/local/libexec/audiobook-organizer/rollback/unit-type
+    /usr/local/libexec/audiobook-organizer/rollback/unit-type, \
+    /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
+    /usr/local/libexec/audiobook-organizer/rollback/pprof
 deploy ALL=(audiobook) NOPASSWD: /usr/local/libexec/audiobook-organizer/rollback/checkpoint-record
 ```
 <!-- sudoers:end -->
