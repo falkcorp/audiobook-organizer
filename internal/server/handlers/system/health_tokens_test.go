@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/health_tokens_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 06a9de9e-cc8c-4b3d-ae81-fafb45892f6f
 // last-edited: 2026-11-08
 
@@ -154,7 +154,7 @@ func statusHandler(t *testing.T, raised tokenRaise) *Handler {
 	svc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{Status: "ok"}, nil).Maybe()
 	return New(
 		func() SystemStore { return raised.store },
-		svc, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		svc, nil, nil, nil, nil, nil, nil, nil,
 		raised.getDegraded,
 	).WithPostureTokens(raised.posture)
 }

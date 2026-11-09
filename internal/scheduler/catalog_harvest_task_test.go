@@ -1,7 +1,7 @@
 // file: internal/scheduler/catalog_harvest_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 191cfdce-5898-40bb-901c-6fb9d408282e
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -28,7 +28,7 @@ func catalogHarvestTaskFixture(t *testing.T, active ...database.OperationV2Row) 
 	t.Helper()
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 	config.AppConfig.Catalog.Enabled = true
 
 	store := dbmocks.NewMockStore(t)

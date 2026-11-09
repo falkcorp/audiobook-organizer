@@ -1,7 +1,7 @@
 // file: internal/config/initconfig_reads_every_key_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9d3f6a21-5c87-4e0b-b2d4-8f1a7c6e0b39
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // InitConfig builds AppConfig from a hand-written struct literal, and that
 // literal is the ONLY place a viper value (shipped default, config file, env)
@@ -422,11 +422,11 @@ func TestEveryViperDefaultHasAConfigField(t *testing.T) {
 }
 
 // resetZeroExemptions are keys whose shipped default is non-zero but whose
-// value after ResetToDefaults is deliberately something else, with the reason.
+// value after ResetToDefaultsForTest is deliberately something else, with the reason.
 var resetZeroExemptions = map[string]string{}
 
 // TestResetToDefaultsRestoresEveryDefaultedKey is the reset-side twin of the
-// tests above. ResetToDefaults used to be a second hand-written Config literal
+// tests above. ResetToDefaultsForTest used to be a second hand-written Config literal
 // that omitted 131 leaves, and FactoryReset persisted the result, so the stored
 // blob carried zero for every default it forgot. It now derives from the viper
 // defaults; this test enumerates every key that has a non-zero default and
@@ -444,11 +444,11 @@ func TestResetToDefaultsRestoresEveryDefaultedKey(t *testing.T) {
 	// the reset carries them over rather than restoring the default.
 	Mutate(func(c *Config) { c.EnabledSortIndexes = []string{"year"} })
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	got := reflect.ValueOf(Snapshot())
 
 	v := viper.New()
-	registerConfigDefaults(noEnvRegistrar{v})
+	registerConfigDefaults(noEnvRegistrarForTest{v})
 	leaves, _ := configLeaves()
 	byKey := make(map[string]configLeaf, len(leaves))
 	for _, l := range leaves {
@@ -479,7 +479,7 @@ func TestResetToDefaultsRestoresEveryDefaultedKey(t *testing.T) {
 	}
 	sort.Strings(zero)
 	if len(zero) > 0 {
-		t.Errorf("%d key(s) have a non-zero default but are zero after ResetToDefaults:\n  %s",
+		t.Errorf("%d key(s) have a non-zero default but are zero after ResetToDefaultsForTest:\n  %s",
 			len(zero), strings.Join(zero, "\n  "))
 	}
 	for k := range resetZeroExemptions {
@@ -498,7 +498,7 @@ func TestResetToDefaultsIgnoresEnvironment(t *testing.T) {
 	restoreAppConfig(t)
 	t.Setenv("FP_PARALLEL_WORKERS", "77")
 	t.Setenv("SCHEDULED_ASIN_BACKFILL_INTERVAL", "999")
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	c := Snapshot()
 	if c.FPParallelWorkers != 4 {
 		t.Errorf("FPParallelWorkers = %d, want the default 4 (environment must not apply)", c.FPParallelWorkers)

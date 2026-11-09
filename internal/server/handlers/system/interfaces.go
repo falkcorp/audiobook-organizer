@@ -1,10 +1,10 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
-// announcements, storage, logs, activity-log, reset/factory-reset, config
+// announcements, storage, logs, activity-log, config
 // get/update, SSE events, backups CRUD, dashboard, blocked-hashes CRUD,
 // user-preferences CRUD, policy-tags, quick-queries). Each interface lists only
 // what the handlers actually call so package system stays decoupled from the
@@ -32,7 +32,7 @@ type SystemStatsStore interface {
 	GetDashboardStats() (*database.DashboardStats, error) // StatsStore
 }
 
-// SystemBookStore reads books for the system dashboard and factory-reset paths.
+// SystemBookStore reads books for the system dashboard.
 type SystemBookStore interface {
 	// health metrics
 	CountPrimaryBooks() (int, error)                                // BookStore
@@ -60,12 +60,6 @@ type SystemAuditReader interface {
 	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) // OpV2QueryStore
 }
 
-// SystemLifecycleStore resets the store — the factory-reset path.
-type SystemLifecycleStore interface {
-	// reset / factory-reset
-	Reset() error // LifecycleStore
-}
-
 // SystemHashBlocklistStore manages the do-not-import hash blocklist.
 type SystemHashBlocklistStore interface {
 	// blocked hashes
@@ -90,32 +84,22 @@ type SystemUserPreferenceStore interface {
 // individually (rather than embedding the composed sub-interfaces) because the
 // system domain pulls only a handful of methods from each of several small
 // interfaces (StatsStore, HashBlocklistStore, UserPreferenceStore,
-// LifecycleStore, OperationStore, AuthorStore, BookStore, SystemActivityStore).
+// OperationStore, AuthorStore, BookStore, SystemActivityStore).
 //
 // healthCheck / getDashboard / getQuickQueries additionally perform dynamic
 // type-assertions on the live store value (GetBrokenFileCount, Unwrap,
 // GetQuickQueryCounts) — those hit the dynamic type behind this interface, not
 // the static method set here, so they are intentionally NOT listed.
 //
-// database.SettingsStore is embedded (rather than method-listed) because
-// factoryReset passes the store opaquely to config.SaveConfigToDatabase, whose
-// param is a database.SettingsStore — structural satisfaction requires the full
-// SettingsStore method set, not a hand-list.
-//
-// Split into the 7 interfaces above on 2026-08-18. This name is retained as
-// their composition so the method set is byte-identical and no consumer moves; the
-// type checker proves it.
+// Split into the interfaces above on 2026-08-18. This name is retained as
+// their composition so no consumer moves; the type checker proves the method set.
 type SystemStore interface {
 	SystemStatsStore
 	SystemBookStore
 	SystemAuthorStore
 	SystemAuditReader
-	SystemLifecycleStore
 	SystemHashBlocklistStore
 	SystemUserPreferenceStore
-
-	// Embedded interfaces carried through from the original declaration.
-	database.SettingsStore // factoryReset -> config.SaveConfigToDatabase
 }
 
 // SystemService is the narrow *sysinfo.SystemService subset used by

@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-10-25
+// last-edited: 2026-11-08
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -21,7 +21,6 @@ import (
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -502,72 +501,6 @@ func TestHandler_GetSystemActivityLog_WithSourceAndLimit(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-// =============== resetSystem ===============
-
-func TestHandler_ResetSystem_Success(t *testing.T) {
-	origCfg := config.AppConfig
-	defer func() { config.AppConfig = origCfg }()
-
-	srv, mockStore, router := setupHandlerTest(t)
-
-	mockStore.EXPECT().Reset().Return(nil)
-	mockStore.EXPECT().InvalidateLibraryStats().Return()
-
-	router.POST("/system/reset", newSystemHandler(srv).ResetSystem)
-
-	req := httptest.NewRequest("POST", "/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestHandler_ResetSystem_StoreError(t *testing.T) {
-	srv, mockStore, router := setupHandlerTest(t)
-
-	mockStore.EXPECT().Reset().Return(errors.New("reset failed"))
-
-	router.POST("/system/reset", newSystemHandler(srv).ResetSystem)
-
-	req := httptest.NewRequest("POST", "/system/reset", bytes.NewReader([]byte(`{"confirm":"RESET"}`)))
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-// =============== factoryReset ===============
-
-func TestHandler_FactoryReset_MissingConfirm(t *testing.T) {
-	srv, _, router := setupHandlerTest(t)
-
-	router.POST("/system/factory-reset", newSystemHandler(srv).FactoryReset)
-
-	body, _ := json.Marshal(map[string]string{"confirm": "wrong"})
-	req := httptest.NewRequest("POST", "/system/factory-reset", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"].(string), "RESET")
-}
-
-func TestHandler_FactoryReset_NoBody(t *testing.T) {
-	srv, _, router := setupHandlerTest(t)
-
-	router.POST("/system/factory-reset", newSystemHandler(srv).FactoryReset)
-
-	req := httptest.NewRequest("POST", "/system/factory-reset", nil)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // =============== handleGetPosition (now ReadingHandler.GetPosition) ===============

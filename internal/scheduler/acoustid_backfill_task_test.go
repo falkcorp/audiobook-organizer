@@ -1,7 +1,7 @@
 // file: internal/scheduler/acoustid_backfill_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 971b1c48-1a95-46b2-967f-21acd54eb8ec
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -23,7 +23,7 @@ import (
 func TestAcoustIDBackfillTask_RegisteredAndDisabledByDefault(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("acoustid_backfill")

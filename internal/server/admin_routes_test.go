@@ -1,7 +1,7 @@
 // file: internal/server/admin_routes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 77227bb9-356c-49c7-bb9b-98245ccb7bed
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -44,8 +44,6 @@ var adminAlwaysAuthenticatedRoutes = map[string]string{
 	"GET /api/v1/admin/guest-service-tokens/plan":             "credential surface: reads the real books policy",
 	"POST /api/v1/admin/guest-service-tokens/:userId/revoke":  "revokes a guest's phone-app access",
 	"POST /api/v1/admin/guest-service-tokens/:userId/reissue": "revokes a guest's phone-app key and mints and emails a new (or first) one",
-	"POST /api/v1/system/reset":                               "wipes the store, users included",
-	"POST /api/v1/system/factory-reset":                       "wipes the store and the settings",
 	"PATCH /api/v1/admin/debug/books/:id":                     "raw book row edit (preview and apply share the route)",
 	"PATCH /api/v1/admin/debug/book-files/:id":                "raw book_file row edit (preview and apply share the route)",
 	"POST /api/v1/admin/debug/edits/:edit_id/undo":            "rewrites a row back from an undo image",
@@ -223,9 +221,9 @@ func TestAdminRoutes_AuthOffOpensReadOnlyKeepsDestructive401(t *testing.T) {
 
 	// ...and a named destructive one still answers 401 and wipes nothing: the
 	// store is intact, so the gate refused it, not the handler.
-	w = f.do(t, "", http.MethodPost, "/api/v1/system/reset", map[string]any{"confirm": "RESET"})
+	w = f.do(t, "", http.MethodPost, "/api/v1/maintenance/wipe", map[string]any{})
 	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 	u, err := f.store.GetUserByID(f.adminID)
 	require.NoError(t, err)
-	require.NotNil(t, u, "an unauthenticated reset must not have wiped the users")
+	require.NotNil(t, u, "an unauthenticated wipe must not have touched the users")
 }

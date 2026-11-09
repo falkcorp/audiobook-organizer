@@ -1,7 +1,7 @@
 // file: internal/scheduler/full_sweep_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a8eab374-460f-4ba3-816a-4e5d365ca8f6
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -60,7 +60,7 @@ func TestFullSweepDue(t *testing.T) {
 func TestLibraryScanFullIsScheduledUnderDefaultConfig(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("library_scan_full")
@@ -87,7 +87,7 @@ func TestLibraryScanFullIsScheduledUnderDefaultConfig(t *testing.T) {
 func TestLibraryScanFullTickerIsNotTheSweepPeriod(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
 	require.Equal(t, testWeek, period, "default sweep period should be weekly (168h)")
@@ -109,7 +109,7 @@ func TestLibraryScanFullTickerIsNotTheSweepPeriod(t *testing.T) {
 func TestLibraryScanFullIntervalIsConfigurable(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("library_scan_full")
@@ -179,7 +179,7 @@ func pastSweepSetting(age time.Duration) *database.Setting {
 func TestFullSweepEnqueuesForceUpdateParams(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().GetSetting(fullSweepLastRunSetting).Return(pastSweepSetting(2*testWeek), nil).Maybe()
@@ -209,7 +209,7 @@ func TestFullSweepEnqueuesForceUpdateParams(t *testing.T) {
 func TestFullSweepStoreErrorDoesNotReseed(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().GetSetting(fullSweepLastRunSetting).
@@ -232,7 +232,7 @@ func TestFullSweepStoreErrorDoesNotReseed(t *testing.T) {
 func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	// Swept one minute ago: nowhere near due.
@@ -268,7 +268,7 @@ func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
 func TestFullSweepSeedsOnErrSettingNotFound(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().GetSetting(fullSweepLastRunSetting).
@@ -305,7 +305,7 @@ func TestFullSweepSeedsOnErrSettingNotFound(t *testing.T) {
 func TestFullSweepRefusesToEnqueueWhenTheClockCannotBePersisted(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().GetSetting(fullSweepLastRunSetting).Return(pastSweepSetting(2*testWeek), nil).Maybe()
