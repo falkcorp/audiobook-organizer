@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.7
+// version: 1.22.8
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -656,6 +656,16 @@ var ErrBackupNotFound = errors.New("backup not found")
 // restore says so instead of restoring the rest of it.
 var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in the HNSW snapshot directory")
 
+// ErrArchiveEntryEscapes is returned by PrepareRestoreIn, and by Extract, for
+// an archive with an entry whose cleaned name climbs out of the restore
+// target ("..", "../x", "x/../../y"). No backup this program wrote has one
+// (addToArchive names every entry under the database directory). Such a name
+// is refused even when joining it to the target lands back inside: whether
+// it does depends on the target's own name, so "x/../../<base>/hnsw/..."
+// reaches the snapshot directory of a target named <base> while its bare
+// name looks like it leaves (R1-15 round 4, B1-r4).
+var ErrArchiveEntryEscapes = errors.New("backup archive has an entry that climbs out of the restore target")
+
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
 // TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
@@ -663,16 +673,32 @@ var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in t
 // drift apart unnoticed).
 const hnswSnapshotDirName = "hnsw"
 
-// hnswSnapshotEntry reports whether the archive entry name extracts into the
-// HNSW snapshot directory beside the restored database, or is that directory.
-// It cleans the name the way the extraction resolves it, so "./hnsw/x" and
-// "db/../hnsw/x" count, and compares without case, for case-insensitive
-// filesystems. A name that escapes the target ("../hnsw/x") does not count:
-// the extraction refuses it as an escape.
-func hnswSnapshotEntry(name string) bool {
+// entryRefusal says why the archive entry named name may not be extracted,
+// wherever the restore goes, or nil. It cleans the name the way the
+// extraction does (a leading "/" dropped, then path.Clean), and refuses a
+// name that climbs out of the target (ErrArchiveEntryEscapes), checked first,
+// then one with the HNSW snapshot directory's name as any of its components
+// (ErrArchiveCarriesHNSWSnapshot), compared without case for case-insensitive
+// filesystems: "./hnsw/x", "db/../hnsw/x" and "a/HNSW/x" count. Any depth,
+// not only beside the archive's root: an archive whose database sits deeper
+// than its root (a/b/CURRENT) has its snapshot directory beside the
+// database (a/hnsw), and a database later opened there would find a marker
+// that entry planted vouching (R1-15 round-8 verification review, N2). No
+// real backup has such a component: it holds the database directory, whose
+// entries are Pebble's flat file names and its archive directory. Extract
+// also checks where each entry actually lands, which names alone cannot
+// settle.
+func entryRefusal(name string) error {
 	clean := path.Clean(strings.TrimLeft(filepath.ToSlash(name), "/"))
-	first, _, _ := strings.Cut(clean, "/")
-	return strings.EqualFold(first, hnswSnapshotDirName)
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("%w: %q", ErrArchiveEntryEscapes, name)
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if strings.EqualFold(part, hnswSnapshotDirName) {
+			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, name)
+		}
+	}
+	return nil
 }
 
 // checksumSidecarPath returns the path of the sidecar file CreateBackup writes
@@ -745,8 +771,8 @@ func sidecarDigest(sidecarPath, name string) (string, error) {
 }
 
 // scanArchive reads the archive at archivePath once, first byte to last, and
-// returns its SHA-256 with what the entries scan found: nil, or
-// ErrArchiveCarriesHNSWSnapshot, or an error for an archive it could not read
+// returns its SHA-256 with what the entries scan found: nil, an entryRefusal
+// error, or an error for an archive it could not read
 // to the end of its entries (a truncated or corrupt one). The digest is ""
 // only when the file itself could not be read; after a scan error it still
 // covers every byte, so a caller verifying the archive can let a checksum
@@ -788,7 +814,7 @@ func scanArchive(archivePath string) (sum string, err error) {
 }
 
 // scanEntries reads every tar header in the archive stream r, written by
-// codec, and refuses an entry in the HNSW snapshot directory. It closes the
+// codec, and refuses an entry entryRefusal refuses. It closes the
 // decompressor before it returns (scanArchive depends on that).
 func scanEntries(codec Codec, r io.Reader) error {
 	compReader, err := codec.NewReader(r)
@@ -805,8 +831,8 @@ func scanEntries(codec Codec, r io.Reader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
-		if hnswSnapshotEntry(header.Name) {
-			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, header.Name)
+		if err := entryRefusal(header.Name); err != nil {
+			return err
 		}
 	}
 }
@@ -823,7 +849,8 @@ type PreparedRestore struct {
 // with verify, checks the same read against the checksum sidecar. It takes no
 // target and writes nothing, so every error it returns (ErrBackupNotFound,
 // ErrVerificationUnsupported, ErrChecksumMismatch,
-// ErrArchiveCarriesHNSWSnapshot, an unreadable backup directory or archive)
+// ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes, an unreadable backup
+// directory or archive)
 // leaves the target as it was. Extract is the step that writes, and the
 // restore handler marks the HNSW snapshot diverged between the two (R1-15
 // round-3 review, B1-r3).
@@ -954,8 +981,8 @@ func extractArchive(archivePath, targetPath string) error {
 		// PrepareRestoreIn refused an archive with such an entry before
 		// anything was written; this catches one that changed between the
 		// two reads, and the entry is never written either way.
-		if hnswSnapshotEntry(entryName) {
-			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, header.Name)
+		if err := entryRefusal(header.Name); err != nil {
+			return err
 		}
 		// library.Join validates that the entry stays within targetPath and
 		// returns a clean path value — breaking the CodeQL taint chain.

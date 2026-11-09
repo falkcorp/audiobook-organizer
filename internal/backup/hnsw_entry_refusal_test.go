@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -76,30 +76,68 @@ func sealArchive(t *testing.T, path string) {
 	}
 }
 
-func TestHNSWSnapshotEntry(t *testing.T) {
-	cases := map[string]bool{
-		"hnsw/hnsw.clean-stop":                  true,
-		"hnsw/graph.bin":                        true,
-		"hnsw":                                  true,
-		"hnsw/":                                 true,
-		"/hnsw/hnsw.clean-stop":                 true,
-		"./hnsw/hnsw.clean-stop":                true,
-		"audiobooks.pebble/../hnsw/x":           true,
-		"HNSW/hnsw.clean-stop":                  true,
-		"audiobooks.pebble/MANIFEST-000001":     false,
-		"audiobooks.pebble/hnsw/x":              false,
-		"hnsw-old/hnsw.clean-stop":              false,
-		"hnswx":                                 false,
-		"":                                      false,
-		"../hnsw/hnsw.clean-stop":               false, // escapes the target: library.Join refuses it
-		"audiobooks.pebble/hnsw.clean-stop":     false,
-		"audiobooks.pebble/../../hnsw/x":        false, // escapes too
-		"audiobooks.pebble/./../hnsw/graph.bin": true,
+func TestEntryRefusal(t *testing.T) {
+	cases := map[string]error{
+		"hnsw/hnsw.clean-stop":                  ErrArchiveCarriesHNSWSnapshot,
+		"hnsw/graph.bin":                        ErrArchiveCarriesHNSWSnapshot,
+		"hnsw":                                  ErrArchiveCarriesHNSWSnapshot,
+		"hnsw/":                                 ErrArchiveCarriesHNSWSnapshot,
+		"/hnsw/hnsw.clean-stop":                 ErrArchiveCarriesHNSWSnapshot,
+		"./hnsw/hnsw.clean-stop":                ErrArchiveCarriesHNSWSnapshot,
+		"audiobooks.pebble/../hnsw/x":           ErrArchiveCarriesHNSWSnapshot,
+		"audiobooks.pebble/./../hnsw/graph.bin": ErrArchiveCarriesHNSWSnapshot,
+		"HNSW/hnsw.clean-stop":                  ErrArchiveCarriesHNSWSnapshot,
+		"audiobooks.pebble/hnsw/x":              ErrArchiveCarriesHNSWSnapshot, // any depth (round 8, N2)
+		// Climbing out is refused before the snapshot check, and whatever
+		// joining the name to the target would give: the round-4 review's
+		// probe lands in the snapshot directory of a target named arkham.
+		"../hnsw/hnsw.clean-stop":             ErrArchiveEntryEscapes,
+		"audiobooks.pebble/../../hnsw/x":      ErrArchiveEntryEscapes,
+		"x/../../arkham/hnsw/hnsw.clean-stop": ErrArchiveEntryEscapes,
+		"..":                                  ErrArchiveEntryEscapes,
+		"../":                                 ErrArchiveEntryEscapes,
+		"/../joker":                           ErrArchiveEntryEscapes,
+		"audiobooks.pebble/MANIFEST-000001":   nil,
+		"audiobooks.pebble/hnsw.clean-stop":   nil,
+		"hnsw-old/hnsw.clean-stop":            nil,
+		"hnswx":                               nil,
+		"..batcave/x":                         nil,
+		"...":                                 nil,
+		"audiobooks.pebble/..":                nil,
+		"":                                    nil,
 	}
 	for name, want := range cases {
-		if got := hnswSnapshotEntry(name); got != want {
-			t.Errorf("hnswSnapshotEntry(%q) = %v, want %v", name, got, want)
+		err := entryRefusal(name)
+		if want == nil {
+			if err != nil {
+				t.Errorf("entryRefusal(%q) = %v, want nil", name, err)
+			}
+			continue
 		}
+		if !errors.Is(err, want) {
+			t.Errorf("entryRefusal(%q) = %v, want %v", name, err, want)
+		}
+	}
+}
+
+// TestPrepareRestoreIn_RefusesAClimbingEntry: an entry that climbs out of the
+// target is refused before anything is written, including the round-4
+// review's probe, which joins back into the snapshot directory of a target
+// named arkham.
+func TestPrepareRestoreIn_RefusesAClimbingEntry(t *testing.T) {
+	for _, name := range []string{"../bane", "x/../../arkham/hnsw/hnsw.clean-stop"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, "no-mans-land.tar")
+			writePlainTar(t, archive, [][2]string{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{name, "venom"},
+			})
+			r, err := PrepareRestoreIn(dir, "no-mans-land.tar", false)
+			if !errors.Is(err, ErrArchiveEntryEscapes) || r != nil {
+				t.Fatalf("PrepareRestoreIn = %v, %v; want ErrArchiveEntryEscapes and no prepared restore", r, err)
+			}
+		})
 	}
 }
 
@@ -200,6 +238,28 @@ func TestPrepareRestoreIn_VerifiesInTheScanRead(t *testing.T) {
 				t.Errorf("verified prepare of a cut archive with the whole one's checksum = %v; want ErrChecksumMismatch", err)
 			}
 		})
+	}
+}
+
+// TestExtractArchive_RefusesAClimbingEntryUnwritten: the round-4 review's
+// probe, extracted without the prepare (an archive that changed after it):
+// the target is named arkham, so the entry would land in arkham/hnsw.
+func TestExtractArchive_RefusesAClimbingEntryUnwritten(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "no-mans-land.tar")
+	writePlainTar(t, archive, [][2]string{
+		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+		{"x/../../arkham/hnsw/hnsw.clean-stop", `{"version":1,"model":"bge-m3"}`},
+	})
+	target := filepath.Join(t.TempDir(), "arkham")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractArchive(archive, target); !errors.Is(err, ErrArchiveEntryEscapes) {
+		t.Fatalf("extractArchive = %v; want ErrArchiveEntryEscapes", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "hnsw")); !os.IsNotExist(err) {
+		t.Errorf("the HNSW snapshot directory exists after the refusal (%v); the entry must not be written", err)
 	}
 }
 

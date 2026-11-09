@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -104,15 +104,27 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 		},
 		{
 			// The extraction writes a database file, then fails on an entry
-			// that escapes the target: files are on disk although the restore
-			// failed.
+			// whose parent is that file: files are on disk although the
+			// restore failed.
 			name: "the extraction fails partway",
+			entries: []tarEntry{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{"audiobooks.pebble/MANIFEST-000001/joker", "hahaha"},
+			},
+			plantLive:  true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			// Round 4 (B1-r4): an entry that climbs out of the target is
+			// refused before anything is written, wherever it lands.
+			name: "refused: an entry climbs out of the target",
 			entries: []tarEntry{
 				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
 				{"../joker", "hahaha"},
 			},
 			plantLive:  true,
-			wantStatus: http.StatusInternalServerError,
+			refused:    true,
+			wantStatus: http.StatusBadRequest,
 		},
 		{
 			// The snapshot-directory refusal reads entry names, so a symlink
@@ -320,18 +332,25 @@ func TestRestoreBackup_MarksTheStoreBeforeTheFirstWrite(t *testing.T) {
 	})
 }
 
-// TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot (R1-15 round 4,
-// the archive residual): a backup holds only the database directory, and the
-// HNSW snapshot directory sits beside it, so an archive with an entry there
-// is not a real backup. Extracting it could plant a clean-stop marker that a
-// crash mid-restore leaves vouching for a graph the restored database does
-// not match. The restore refuses it before writing anything, so the refusal
-// costs nothing: no file, no divergence mark.
-func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
+// restoreProbe is a restore that must be refused before it writes anything
+// into, or marks, the live database's HNSW snapshot directory.
+type restoreProbe struct {
+	name string
+	// entries builds the archive; root is the live database's directory.
+	entries func(root string) []tarEntry
+	// target returns the request's target_path; nil means the default.
+	target     func(root string) string
+	wantStatus int
+}
+
+// runRestoreProbe runs p, verified and not, and checks the refusal: the
+// status, no divergence mark, no marker in the live snapshot directory, and
+// no entry written where it would have landed.
+func runRestoreProbe(t *testing.T, p restoreProbe) {
 	for _, verify := range []bool{false, true} {
-		name := "unverified"
+		name := p.name + "/unverified"
 		if verify {
-			name = "verified"
+			name = p.name + "/verified"
 		}
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -341,15 +360,11 @@ func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
 			config.AppConfig.BackupDir = filepath.Join(root, "backups")
 			t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
 			require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
-
-			// The entry is named from database.HNSWSnapshotDir, which pins the
-			// backup package's copy of the directory name to the real one.
+			// The live server persists its graph here, so it exists.
 			snapshotDir := database.HNSWSnapshotDir(dbPath)
-			entries := []tarEntry{
-				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
-				{filepath.Base(snapshotDir) + "/hnsw.clean-stop", testCleanStopMarker},
-				{"audiobooks.pebble/OPTIONS-000002", "alfred"},
-			}
+			require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+
+			entries := p.entries(root)
 			archive := filepath.Join(config.AppConfig.BackupDir, "hush.tar")
 			writeTar(t, archive, entries)
 			if verify {
@@ -358,25 +373,73 @@ func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
 				sum := sha256.Sum256(raw)
 				require.NoError(t, os.WriteFile(archive+".sha256", []byte(hex.EncodeToString(sum[:])+"  hush.tar\n"), 0o644))
 			}
+			req := map[string]any{"backup_filename": "hush.tar", "verify": verify}
+			target := root
+			if p.target != nil {
+				target = p.target(root)
+				req["target_path"] = target
+			}
 
 			h, _ := newTestHandler(t)
 			var reasons []string
 			h.WithANNSnapshotDivergence(func(reason string) { reasons = append(reasons, reason) })
-			body, err := json.Marshal(map[string]any{"backup_filename": "hush.tar", "verify": verify})
+			body, err := json.Marshal(req)
 			require.NoError(t, err)
 			w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
 				r.POST("/backup/restore", h.RestoreBackup)
 			})
 
-			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), "HNSW")
+			require.Equal(t, p.wantStatus, w.Code, w.Body.String())
 			assert.Empty(t, reasons, "a refused restore must not mark the store diverged")
+			assert.False(t, markerPresent(t, snapshotDir), "a refused restore wrote a marker into the live snapshot directory")
 			for _, e := range entries {
-				_, err := os.Stat(filepath.Join(root, e.name))
+				_, err := os.Stat(filepath.Join(target, e.name))
 				assert.True(t, os.IsNotExist(err), "%s was written by a refused restore (stat: %v)", e.name, err)
 			}
-			_, err = os.Stat(snapshotDir)
-			assert.True(t, os.IsNotExist(err), "the refused restore created the snapshot directory (stat: %v)", err)
 		})
+	}
+}
+
+// TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot (R1-15 round 4):
+// a backup holds only the database directory, and the HNSW snapshot directory
+// sits beside it, so an archive with an entry there is not a real backup.
+// Extracting it could plant a clean-stop marker that a crash mid-restore
+// leaves vouching for a graph the restored database does not match. The
+// restore refuses it before writing anything, so the refusal costs nothing:
+// no file, no divergence mark. Each probe below is one the round-4
+// verification review reproduced or named.
+func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
+	probes := []restoreProbe{
+		{
+			// The entry is named from database.HNSWSnapshotDir, which pins the
+			// backup package's copy of the directory name to the real one.
+			name: "by name",
+			entries: func(root string) []tarEntry {
+				snap := filepath.Base(database.HNSWSnapshotDir(filepath.Join(root, "audiobooks.pebble")))
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+					{snap + "/hnsw.clean-stop", testCleanStopMarker},
+					{"audiobooks.pebble/OPTIONS-000002", "alfred"},
+				}
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			// B1-r4: the bare name cleans to "../<base>/hnsw/...", which the
+			// round-4 check did not count as the snapshot directory, while
+			// the extraction joins it to the target and lands in it.
+			name: "climbing out of the target and back in",
+			entries: func(root string) []tarEntry {
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+					{"x/../../" + filepath.Base(root) + "/hnsw/hnsw.clean-stop", testCleanStopMarker},
+					{"audiobooks.pebble/OPTIONS-000002", "alfred"},
+				}
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+	for _, p := range probes {
+		runRestoreProbe(t, p)
 	}
 }
