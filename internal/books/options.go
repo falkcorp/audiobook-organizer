@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -122,6 +122,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	if err != nil {
 		return app.Options{}, err
 	}
+	m.dbPath, m.version = dbPath, telemetry.Version()
 	snap := config.Snapshot()
 	// ABO's log file lives under the state directory (core.log.file.path,
 	// 05-logging section 11 item 1).
@@ -134,7 +135,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		MetricNamespace:       metricNamespace,
 		ServiceName:           serviceName,
 		DisplayName:           displayName,
-		Version:               telemetry.Version(),
+		Version:               m.version,
 		ReservedAPINamespaces: reservedAPINamespaces(),
 		LegacyAuthGinUntil:    ID,
 		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot(), in.ShutdownBudget) },
@@ -360,7 +361,8 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 // serves (05-metrics §6, §13 item 2), the activity feed becomes a tap on
 // the App's log pipeline, and GET /system/status's posture tokens read the
 // App's checkpoint health (the storage_checkpoint_* tokens, 05-health
-// §5H.10 R1). A disabled books (no store or server built) has
+// §5H.10 R1), and POST /backup/restore gets its stager (restoreStager: the
+// restore staged in the journaled swap, then a restart). A disabled books (no store or server built) has
 // nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
@@ -387,5 +389,18 @@ func Attach(mod module.Module, a *app.App) error {
 		h, err := a.CheckpointHealth()
 		return checkpointPosture(h, err, time.Now())
 	})
+	// POST /backup/restore stages through the swap (R1-25). The binary ID is
+	// the one the kernel computed from the same Options.Version, so the next
+	// boot's P0a accepts the intent as this binary's.
+	buildID, err := app.BinaryID(app.Options{Version: m.version})
+	if err != nil {
+		return fmt.Errorf("books: the binary ID for the restore stager: %w", err)
+	}
+	if admin := a.StorageAdmin(); admin != nil && m.requestRestart != nil && m.dbPath != "" {
+		srv.SetRestoreStager(restoreStager{
+			stateDir: m.stateDir, dbPath: m.dbPath, buildID: buildID,
+			installID: admin.InstallID(), restart: m.requestRestart,
+		})
+	}
 	return nil
 }

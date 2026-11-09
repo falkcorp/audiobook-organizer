@@ -1,7 +1,7 @@
 // file: internal/backup/backup_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package backup
 
@@ -28,7 +28,7 @@ import (
 // not the containment guard existed. Listing the parent catches every escape
 // name, including ones the test did not predict.
 //
-// restoreDir itself is allowed but not required: RestoreBackup does not
+// restoreDir itself is allowed but not required: extractBackup does not
 // pre-create the target, so an archive whose only entry is malicious leaves no
 // directory behind.
 func assertNothingEscaped(t *testing.T, parentDir string, allowed ...string) {
@@ -100,7 +100,7 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 	backupFile.Close()
 
 	// Act - Try to restore the malicious backup
-	err = RestoreBackup(backupPath, restoreDir, false)
+	err = extractBackup(backupPath, restoreDir)
 
 	// Assert the filesystem FIRST and with t.Error, not t.Fatal. The error
 	// return is secondary evidence; the property that actually matters is that
@@ -110,7 +110,7 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 
 	// Then the error contract.
 	if err == nil {
-		t.Error("Expected RestoreBackup to fail with traversal attempt, but it succeeded")
+		t.Error("Expected extractBackup to fail with traversal attempt, but it succeeded")
 	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
@@ -173,11 +173,11 @@ func TestRestoreBackupAllowsNormalExtraction(t *testing.T) {
 	backupFile.Close()
 
 	// Act - Restore the legitimate backup
-	err = RestoreBackup(backupPath, restoreDir, false)
+	err = extractBackup(backupPath, restoreDir)
 
 	// Assert
 	if err != nil {
-		t.Fatalf("RestoreBackup failed: %v", err)
+		t.Fatalf("extractBackup failed: %v", err)
 	}
 
 	// Verify files were extracted correctly
@@ -204,7 +204,7 @@ func TestRestoreBackupAllowsNormalExtraction(t *testing.T) {
 // TestRestoreBackupHandlesAbsolutePathInArchive verifies that absolute paths in archive
 // entries are safely redirected inside the target directory rather than escaping to the
 // filesystem root. filepath.Join(restoreDir, "/etc/passwd") → restoreDir+"/etc/passwd",
-// so RestoreBackup succeeds and places the file safely within the restore directory.
+// so extractBackup succeeds and places the file safely within the restore directory.
 func TestRestoreBackupHandlesAbsolutePathInArchive(t *testing.T) {
 	// Arrange - Create tar archive with absolute path entry
 	tempDir := t.TempDir()
@@ -237,12 +237,12 @@ func TestRestoreBackupHandlesAbsolutePathInArchive(t *testing.T) {
 	backupFile.Close()
 
 	// Act
-	err = RestoreBackup(backupPath, restoreDir, false)
+	err = extractBackup(backupPath, restoreDir)
 
 	// Assert: restore should succeed because filepath.Join keeps the base directory,
 	// so the absolute entry "/etc/passwd" is safely placed at restoreDir+"/etc/passwd".
 	if err != nil {
-		t.Fatalf("Expected RestoreBackup to succeed for absolute path (redirected inside target), got: %v", err)
+		t.Fatalf("Expected extractBackup to succeed for absolute path (redirected inside target), got: %v", err)
 	}
 
 	// Verify the file was created inside the restore directory, not at the filesystem root
@@ -288,13 +288,13 @@ func TestRestoreBackupRejectsDotDotInPath(t *testing.T) {
 	backupFile.Close()
 
 	// Act
-	err = RestoreBackup(backupPath, restoreDir, false)
+	err = extractBackup(backupPath, restoreDir)
 
 	// Assert the filesystem first — see TestRestoreBackupRejectsZipslipAttack.
 	assertNothingEscaped(t, tempDir, "dotdot.tar.gz", "extract")
 
 	if err == nil {
-		t.Error("Expected RestoreBackup to fail with .. traversal, but it succeeded")
+		t.Error("Expected extractBackup to fail with .. traversal, but it succeeded")
 	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 	backupFile.Close()
 
 	// Act
-	err = RestoreBackup(backupPath, restoreDir, false)
+	err = extractBackup(backupPath, restoreDir)
 
 	// Assert the filesystem first. The previous version of this assertion
 	// stat'ed tempDir/extract/escape — a path INSIDE the restore directory,
@@ -355,7 +355,7 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 
 	// Then the error contract - should fail because second entry is malicious.
 	if err == nil {
-		t.Error("Expected RestoreBackup to fail on second malicious entry")
+		t.Error("Expected extractBackup to fail on second malicious entry")
 	} else if !strings.Contains(err.Error(), "escapes target directory") {
 		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 
 // TestRestoreBackupIgnoresSymlinkEntries pins the fact that this restore path
 // does not materialise link entries at all. tar.TypeSymlink and tar.TypeLink
-// fall through to the default branch in RestoreBackup, which logs and skips —
+// fall through to the default branch in extractBackup, which logs and skips —
 // so an archive cannot plant a symlink pointing outside the restore directory
 // and then write through it on a later entry. If someone adds link support,
 // this test fails and the containment check must be extended to Linkname.
@@ -426,14 +426,14 @@ func TestRestoreBackupIgnoresSymlinkEntries(t *testing.T) {
 	gzipWriter.Close()
 	backupFile.Close()
 
-	if err := RestoreBackup(backupPath, restoreDir, false); err != nil {
-		t.Fatalf("RestoreBackup failed: %v", err)
+	if err := extractBackup(backupPath, restoreDir); err != nil {
+		t.Fatalf("extractBackup failed: %v", err)
 	}
 
 	// Neither link may exist on disk, as a link or as anything else.
 	for _, name := range []string{"escape-link", "escape-hardlink"} {
 		if _, statErr := os.Lstat(filepath.Join(restoreDir, name)); !os.IsNotExist(statErr) {
-			t.Errorf("Link entry %q was materialised in the restore directory; RestoreBackup must skip link entries", name)
+			t.Errorf("Link entry %q was materialised in the restore directory; extractBackup must skip link entries", name)
 		}
 	}
 
@@ -643,7 +643,7 @@ func TestRestoreBackupInvalidPath(t *testing.T) {
 	targetPath := tempDir
 
 	// Act
-	err := RestoreBackup(nonExistentBackup, targetPath, false)
+	err := extractBackup(nonExistentBackup, targetPath)
 
 	// Assert
 	if err == nil {
@@ -984,7 +984,7 @@ func TestCleanupOldBackups(t *testing.T) {
 }
 
 // TestRestoreBackup tests backup restoration
-func TestRestoreBackup(t *testing.T) {
+func TestExtractBackup(t *testing.T) {
 	// Arrange
 	tempDir := t.TempDir()
 	backupDir := filepath.Join(tempDir, "backups")
@@ -1009,11 +1009,11 @@ func TestRestoreBackup(t *testing.T) {
 	}
 
 	// Act - Restore the backup
-	err = RestoreBackup(info.Path, restoreDir, false)
+	err = extractBackup(info.Path, restoreDir)
 
 	// Assert
 	if err != nil {
-		t.Fatalf("RestoreBackup failed: %v", err)
+		t.Fatalf("extractBackup failed: %v", err)
 	}
 
 	// Verify restored file exists and has same content
@@ -1115,7 +1115,7 @@ func TestBackupDifferentCompressionLevels(t *testing.T) {
 // TestCreateBackupWritesChecksumSidecar is the TASK-306 regression test for
 // CreateBackup's half of the fix: every archive it writes must get a
 // "<archive>.sha256" sidecar next to it, in sha256sum(1) format, so a later
-// RestoreBackup(verify=true) has something durable to check against.
+// extractBackup(verify=true) has something durable to check against.
 func TestCreateBackupWritesChecksumSidecar(t *testing.T) {
 	tempDir := t.TempDir()
 	backupDir := filepath.Join(tempDir, "backups")
@@ -1158,148 +1158,6 @@ func TestCreateBackupWritesChecksumSidecar(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("ListBackups returned %d entries, want 1 (just the archive)", len(backups))
-	}
-}
-
-// TestRestoreBackupWithVerification is the TASK-306 regression test for the
-// happy path: a fresh backup carries a checksum sidecar, so verify=true must
-// now actually verify and succeed -- not fail closed. (A prior version of
-// this fix failed closed unconditionally on verify=true, which broke the
-// Settings UI's default of verify=true on every restore; see the coordinator
-// review that requested this rework.)
-func TestRestoreBackupWithVerification(t *testing.T) {
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
-
-	testData := []byte("test database for verification")
-	if err := os.WriteFile(dbPath, testData, 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
-
-	config := BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}
-	info, err := CreateBackup(dbPath, "sqlite", config)
-	if err != nil {
-		t.Fatalf("Failed to create backup: %v", err)
-	}
-
-	if err := RestoreBackup(info.Path, restoreDir, true); err != nil {
-		t.Fatalf("RestoreBackup with verify=true failed on a freshly created (unmodified) backup: %v", err)
-	}
-
-	restoredFile := filepath.Join(restoreDir, "test.db")
-	if _, err := os.Stat(restoredFile); os.IsNotExist(err) {
-		t.Error("Restored file does not exist")
-	}
-}
-
-// TestRestoreBackupVerifyTrueTamperedArchive proves verify=true fails closed
-// -- ErrChecksumMismatch, no extraction -- when the archive bytes no longer
-// match the checksum recorded at creation time.
-func TestRestoreBackupVerifyTrueTamperedArchive(t *testing.T) {
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
-
-	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
-
-	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
-	if err != nil {
-		t.Fatalf("CreateBackup failed: %v", err)
-	}
-
-	// Flip one byte in the archive, after the checksum sidecar was already
-	// written, to simulate corruption/tampering since creation.
-	raw, err := os.ReadFile(info.Path)
-	if err != nil {
-		t.Fatalf("failed to read archive: %v", err)
-	}
-	if len(raw) == 0 {
-		t.Fatal("archive is empty, cannot tamper")
-	}
-	raw[0] ^= 0xFF
-	if err := os.WriteFile(info.Path, raw, 0644); err != nil {
-		t.Fatalf("failed to tamper archive: %v", err)
-	}
-
-	err = RestoreBackup(info.Path, restoreDir, true)
-	if err == nil {
-		t.Fatal("RestoreBackup with verify=true succeeded on a tampered archive; expected ErrChecksumMismatch")
-	}
-	if !errors.Is(err, ErrChecksumMismatch) {
-		t.Fatalf("RestoreBackup returned %v, want an error wrapping ErrChecksumMismatch", err)
-	}
-	if _, statErr := os.Stat(restoreDir); !os.IsNotExist(statErr) {
-		t.Errorf("restore target %q should not exist after a checksum-mismatch failure", restoreDir)
-	}
-}
-
-// TestRestoreBackupVerifyTrueMissingSidecar proves verify=true still fails
-// closed -- ErrVerificationUnsupported, no extraction -- for a legacy backup
-// that predates the checksum-sidecar feature (no "<archive>.sha256" file).
-func TestRestoreBackupVerifyTrueMissingSidecar(t *testing.T) {
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
-
-	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
-
-	info, err := CreateBackup(dbPath, "sqlite", BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1})
-	if err != nil {
-		t.Fatalf("CreateBackup failed: %v", err)
-	}
-
-	// Simulate a pre-existing backup from before this feature: delete the
-	// sidecar CreateBackup just wrote.
-	if err := os.Remove(checksumSidecarPath(info.Path)); err != nil {
-		t.Fatalf("failed to remove sidecar for test setup: %v", err)
-	}
-
-	err = RestoreBackup(info.Path, restoreDir, true)
-	if err == nil {
-		t.Fatal("RestoreBackup with verify=true succeeded with no checksum sidecar; expected ErrVerificationUnsupported")
-	}
-	if !errors.Is(err, ErrVerificationUnsupported) {
-		t.Fatalf("RestoreBackup returned %v, want an error wrapping ErrVerificationUnsupported", err)
-	}
-	if _, statErr := os.Stat(restoreDir); !os.IsNotExist(statErr) {
-		t.Errorf("restore target %q should not exist after a failed-closed verify request", restoreDir)
-	}
-}
-
-// TestRestoreBackupVerifyFalseStillRestores proves verify=false (the default,
-// unchanged behavior) still performs a normal restore -- the fail-closed
-// change above must be scoped to verify=true only.
-func TestRestoreBackupVerifyFalseStillRestores(t *testing.T) {
-	tempDir := t.TempDir()
-	backupDir := filepath.Join(tempDir, "backups")
-	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
-
-	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
-		t.Fatalf("Failed to create test database: %v", err)
-	}
-
-	config := BackupConfig{BackupDir: backupDir, MaxBackups: 10, CompressionLevel: 1}
-	info, err := CreateBackup(dbPath, "sqlite", config)
-	if err != nil {
-		t.Fatalf("Failed to create backup: %v", err)
-	}
-
-	if err := RestoreBackup(info.Path, restoreDir, false); err != nil {
-		t.Fatalf("RestoreBackup with verify=false failed: %v", err)
-	}
-
-	restoredFile := filepath.Join(restoreDir, "test.db")
-	if _, err := os.Stat(restoredFile); os.IsNotExist(err) {
-		t.Error("Restored file does not exist")
 	}
 }
 
@@ -1348,17 +1206,16 @@ func TestDeleteBackupRemovesChecksumSidecar(t *testing.T) {
 	}
 }
 
-// TestRestoreBackupIn_RejectsPathSeparatorFilename is the CodeQL-followup
-// regression test: RestoreBackupIn must resolve filename only against
-// os.ReadDir's own entries, so a filename smuggling a path separator or ".."
-// can never match a directory entry (ReadDir never returns entries containing
-// either) and must fall through to a not-found error rather than escaping
-// backupDir.
-func TestRestoreBackupIn_RejectsPathSeparatorFilename(t *testing.T) {
+// TestLookupArchive_RejectsPathSeparatorFilename is the CodeQL-followup
+// regression test, now on the live restore's lookup (StageRestore's
+// lookupArchive): the filename is resolved only against os.ReadDir's own
+// entries, so one smuggling a path separator or ".." can never match a
+// directory entry (ReadDir never returns entries containing either) and
+// falls through to a not-found error rather than escaping backupDir.
+func TestLookupArchive_RejectsPathSeparatorFilename(t *testing.T) {
 	tempDir := t.TempDir()
 	backupDir := filepath.Join(tempDir, "backups")
 	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
 
 	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
@@ -1379,13 +1236,13 @@ func TestRestoreBackupIn_RejectsPathSeparatorFilename(t *testing.T) {
 		"..%2Foutside.txt",
 		"sub/dir.tar.gz",
 	} {
-		err := RestoreBackupIn(backupDir, filename, restoreDir, false)
+		got, _, err := lookupArchive(backupDir, filename)
 		if err == nil {
-			t.Errorf("RestoreBackupIn(%q) succeeded; want a not-found error", filename)
+			t.Errorf("lookupArchive(%q) = %q; want a not-found error", filename, got)
 			continue
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("RestoreBackupIn(%q) error = %v, want one wrapping os.ErrNotExist", filename, err)
+			t.Errorf("lookupArchive(%q) error = %v, want one wrapping os.ErrNotExist", filename, err)
 		}
 	}
 }
@@ -1421,14 +1278,13 @@ func TestDeleteBackupIn_RejectsPathSeparatorFilename(t *testing.T) {
 	}
 }
 
-// TestRestoreBackupIn_MatchingFilenameWorks proves the ordinary case: a
-// filename that DOES match a real directory entry still restores normally
-// through the new entry-resolution path.
-func TestRestoreBackupIn_MatchingFilenameWorks(t *testing.T) {
+// TestLookupArchive_MatchingFilenameWorks proves the ordinary case: a
+// filename that DOES match a real directory entry resolves to that entry's
+// absolute path, and its checksum sidecar is reported.
+func TestLookupArchive_MatchingFilenameWorks(t *testing.T) {
 	tempDir := t.TempDir()
 	backupDir := filepath.Join(tempDir, "backups")
 	dbPath := filepath.Join(tempDir, "test.db")
-	restoreDir := filepath.Join(tempDir, "restored")
 
 	if err := os.WriteFile(dbPath, []byte("test database"), 0644); err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
@@ -1438,11 +1294,19 @@ func TestRestoreBackupIn_MatchingFilenameWorks(t *testing.T) {
 		t.Fatalf("CreateBackup failed: %v", err)
 	}
 
-	if err := RestoreBackupIn(backupDir, info.Filename, restoreDir, true); err != nil {
-		t.Fatalf("RestoreBackupIn(%q) failed: %v", info.Filename, err)
+	got, sidecar, err := lookupArchive(backupDir, info.Filename)
+	if err != nil {
+		t.Fatalf("lookupArchive(%q) failed: %v", info.Filename, err)
 	}
-	if _, statErr := os.Stat(filepath.Join(restoreDir, "test.db")); statErr != nil {
-		t.Errorf("restored file missing: %v", statErr)
+	want, _ := filepath.Abs(info.Path)
+	if got != want || !sidecar {
+		t.Fatalf("lookupArchive(%q) = %q, sidecar %v; want %q with its sidecar", info.Filename, got, sidecar, want)
+	}
+	if err := os.Remove(checksumSidecarPath(info.Path)); err != nil {
+		t.Fatal(err)
+	}
+	if _, sidecar, err := lookupArchive(backupDir, info.Filename); err != nil || sidecar {
+		t.Fatalf("after removing the sidecar: sidecar %v, %v; want false, nil", sidecar, err)
 	}
 }
 
@@ -1552,7 +1416,7 @@ func TestRestoreBackupCorruptedGzip(t *testing.T) {
 	}
 
 	// Act
-	err := RestoreBackup(backupPath, restoreDir, false)
+	err := extractBackup(backupPath, restoreDir)
 
 	// Assert - Should fail
 	if err == nil {
@@ -1780,9 +1644,9 @@ func TestRestoreBackupPreservesPermissions(t *testing.T) {
 	}
 
 	// Act - Restore the backup
-	err = RestoreBackup(info.Path, restoreDir, false)
+	err = extractBackup(info.Path, restoreDir)
 	if err != nil {
-		t.Fatalf("RestoreBackup failed: %v", err)
+		t.Fatalf("extractBackup failed: %v", err)
 	}
 
 	// Assert - Check that file was restored
@@ -1967,11 +1831,11 @@ func TestRestoreBackupDirectory(t *testing.T) {
 	}
 
 	// Act - Restore backup
-	err = RestoreBackup(info.Path, restoreDir, false)
+	err = extractBackup(info.Path, restoreDir)
 
 	// Assert
 	if err != nil {
-		t.Fatalf("RestoreBackup failed: %v", err)
+		t.Fatalf("extractBackup failed: %v", err)
 	}
 
 	// Verify restored directory structure
@@ -2024,11 +1888,11 @@ func TestRestoreBackupIOCopyError(t *testing.T) {
 	}
 
 	// Act - Restore to valid directory
-	err = RestoreBackup(info.Path, restoreDir, false)
+	err = extractBackup(info.Path, restoreDir)
 
 	// Assert - Should succeed with valid restore path
 	if err != nil {
-		t.Errorf("RestoreBackup failed: %v", err)
+		t.Errorf("extractBackup failed: %v", err)
 	}
 
 	// Verify file was restored
@@ -2179,7 +2043,7 @@ func TestRestoreBackupCreateFileError(t *testing.T) {
 	defer os.Chmod(restoreDir, 0755) // Restore permissions for cleanup
 
 	// Act
-	err = RestoreBackup(info.Path, restoreDir, false)
+	err = extractBackup(info.Path, restoreDir)
 
 	// Assert - Should fail to create file in read-only directory
 	if err == nil {

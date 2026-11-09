@@ -1,7 +1,7 @@
 // file: internal/backup/extract_store.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: c3e71b58-2a94-4d6f-8b10-5e9f2d4a7c63
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package backup
 
@@ -46,34 +46,44 @@ var extractLog = logger.New("backup.extract-store")
 //
 // Release R1 only: F8's backup extractor replaces it.
 func ExtractStore(ctx context.Context, archivePath, storeDir string) (string, error) {
+	sum, _, err := extractStore(ctx, archivePath, storeDir)
+	return sum, err
+}
+
+// extractStore is ExtractStore, also reporting whether the archive was
+// checked against its sidecar. It reads the sidecar once, so a caller that
+// requires verification (StageRestore) learns what the extraction checked
+// rather than reading the sidecar again after it.
+func extractStore(ctx context.Context, archivePath, storeDir string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !filepath.IsAbs(archivePath) || !filepath.IsAbs(storeDir) {
-		return "", fmt.Errorf("backup: extract store: %q and %q must be absolute", archivePath, storeDir)
+		return "", false, fmt.Errorf("backup: extract store: %q and %q must be absolute", archivePath, storeDir)
 	}
 	fi, err := os.Stat(archivePath)
 	if err != nil {
-		return "", fmt.Errorf("backup: extract store: %w", err)
+		return "", false, fmt.Errorf("backup: extract store: %w", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("backup: extract store: %s is not a regular file", archivePath)
+		return "", false, fmt.Errorf("backup: extract store: %s is not a regular file", archivePath)
 	}
 	if entries, err := os.ReadDir(storeDir); err != nil {
-		return "", fmt.Errorf("backup: extract store: %w", err)
+		return "", false, fmt.Errorf("backup: extract store: %w", err)
 	} else if len(entries) > 0 {
-		return "", fmt.Errorf("backup: extract store: %s is not empty", storeDir)
+		return "", false, fmt.Errorf("backup: extract store: %s is not empty", storeDir)
 	}
 	sum, err := calculateFileChecksum(archivePath, nil)
 	if err != nil {
-		return "", fmt.Errorf("backup: extract store: checksum %s: %w", archivePath, err)
+		return "", false, fmt.Errorf("backup: extract store: checksum %s: %w", archivePath, err)
 	}
-	if err := checkSidecar(archivePath, sum); err != nil {
-		return "", err
+	verified, err := checkSidecar(archivePath, sum)
+	if err != nil {
+		return "", false, err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(storeDir), ".extract-")
 	if err != nil {
-		return "", fmt.Errorf("backup: extract store: %w", err)
+		return "", false, fmt.Errorf("backup: extract store: %w", err)
 	}
 	defer func() {
 		if rerr := os.RemoveAll(tmp); rerr != nil {
@@ -81,50 +91,65 @@ func ExtractStore(ctx context.Context, archivePath, storeDir string) (string, er
 		}
 	}()
 	if err := extractArchive(archivePath, tmp); err != nil {
-		return "", fmt.Errorf("backup: extract store: %w", err)
+		return "", false, fmt.Errorf("backup: extract store: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", false, err
 	}
 	root, err := archiveRoot(tmp)
 	if err != nil {
-		return "", fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), err)
+		return "", false, fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", fmt.Errorf("backup: extract store: %w", err)
+		return "", false, fmt.Errorf("backup: extract store: %w", err)
 	}
 	for _, e := range entries {
 		if err := os.Rename(filepath.Join(root, e.Name()), filepath.Join(storeDir, e.Name())); err != nil {
-			return "", fmt.Errorf("backup: extract store: %w", err)
+			return "", false, fmt.Errorf("backup: extract store: %w", err)
 		}
 	}
 	if err := syncTree(storeDir); err != nil {
-		return "", fmt.Errorf("backup: extract store: sync %s: %w", storeDir, err)
+		return "", false, fmt.Errorf("backup: extract store: sync %s: %w", storeDir, err)
 	}
-	return sum, nil
+	return sum, verified, nil
 }
 
 // checkSidecar compares sum with the digest the sidecar beside archivePath
-// records (ErrChecksumMismatch); no sidecar is no check.
-func checkSidecar(archivePath, sum string) error {
+// records (ErrChecksumMismatch) and reports whether it checked: no sidecar
+// is no check (false).
+func checkSidecar(archivePath, sum string) (bool, error) {
+	digest, present, err := sidecarDigest(archivePath)
+	if err != nil {
+		return false, err
+	}
+	if !present {
+		extractLog.Warn("%s has no checksum sidecar; it is extracted unverified", archivePath)
+		return false, nil
+	}
+	if !strings.EqualFold(digest, sum) {
+		return false, fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, filepath.Base(archivePath), digest, sum)
+	}
+	return true, nil
+}
+
+// sidecarDigest is the digest the checksum sidecar beside archivePath
+// records, and whether the sidecar exists. A sidecar that exists but holds
+// no digest is an error.
+func sidecarDigest(archivePath string) (digest string, present bool, err error) {
 	sidecar := checksumSidecarPath(archivePath)
 	raw, err := os.ReadFile(sidecar)
 	if errors.Is(err, os.ErrNotExist) {
-		extractLog.Warn("%s has no checksum sidecar; it is extracted unverified", archivePath)
-		return nil
+		return "", false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("backup: extract store: read %s: %w", sidecar, err)
+		return "", false, fmt.Errorf("backup: read %s: %w", sidecar, err)
 	}
 	fields := strings.Fields(string(raw))
 	if len(fields) == 0 {
-		return fmt.Errorf("backup: extract store: checksum sidecar %s is empty or malformed", sidecar)
+		return "", false, fmt.Errorf("backup: checksum sidecar %s is empty or malformed", sidecar)
 	}
-	if !strings.EqualFold(fields[0], sum) {
-		return fmt.Errorf("%w: %s: recorded %s, computed %s", ErrChecksumMismatch, filepath.Base(archivePath), fields[0], sum)
-	}
-	return nil
+	return fields[0], true, nil
 }
 
 // archiveRoot is the one top-level directory extracted into dir.

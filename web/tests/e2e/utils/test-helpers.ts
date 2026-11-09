@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.25.2
+// version: 2.25.3
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 import { expect, Page } from '@playwright/test';
 
@@ -744,7 +744,19 @@ export async function setupMockApiRoutes(
       if (mockState.failures.restoreBackup) {
         return route.fulfill(jsonResponse({ error: 'Backup file is corrupt.' }, mockState.failures.restoreBackup as number));
       }
-      return route.fulfill(jsonResponse({ message: 'Restored' }));
+      // The server stages the restore and restarts to apply it (202).
+      return route.fulfill(
+        jsonResponse(
+          {
+            message: 'restore staged; the service restarts now to apply it',
+            restart_required: true,
+            restore_id: '20261109T010203Z-0a1b2c3d',
+            verified: true,
+            verify_requested: true,
+          },
+          202
+        )
+      );
     }
 
     if (pathname.startsWith('/api/v1/backup/') && method === 'DELETE') {

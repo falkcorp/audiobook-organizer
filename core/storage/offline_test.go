@@ -1,7 +1,7 @@
 // file: core/storage/offline_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c1e8a37-2b9d-4f05-a6e3-91d7b05c2f48
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -230,6 +230,9 @@ func TestOfflineReadWriteCommits(t *testing.T) {
 	}
 	if op.InstallID() == "" {
 		t.Fatal("InstallID is empty on a served store")
+	}
+	if got := db.Admin().InstallID(); got != op.InstallID() {
+		t.Fatalf("Admin.InstallID = %q, want the opened store's %q", got, op.InstallID())
 	}
 	if _, err := op.Prepare(context.Background()); err == nil {
 		t.Fatal("Prepare after Offline succeeded")
