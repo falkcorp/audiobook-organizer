@@ -1,7 +1,7 @@
 // file: core/module/manifest.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: f5448853-c265-4559-bf8c-4cb61f16fa24
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package module
 
@@ -9,8 +9,8 @@ import "github.com/falkcorp/mediacore/storage"
 
 // Manifest is everything the kernel validates before any storage is opened,
 // and everything that must stay known while the module is disabled (06
-// §6.4.2). These are the R1 fields; Settings (config) and ResetHook arrive
-// with their packages (06 §6.4.10).
+// §6.4.2). These are the R1 fields; Settings arrives with config (06
+// §6.4.10).
 type Manifest struct {
 	ID          ID
 	Version     string // semver, e.g. "1.12.0"; reported by GET /api/core/v1/modules
@@ -58,6 +58,15 @@ type Manifest struct {
 	// rows (03 R1). The zero value declares nothing; a module that declares
 	// anything boots only with core.storage.path set.
 	Storage storage.Spec
+
+	// ResetHook is the module's part of a factory reset (05-storage
+	// §5S.3.15 "The app's reset hook"): Plan runs when a reset is staged,
+	// Run on the reset boot at 06 §6.5.2 Run step 2, after the fresh
+	// install and before any listener, until it calls ResetRun.Done. At most
+	// one module of an App declares one (P1, ProblemResetHook); nil
+	// declares none, and a reset then deletes no file and refuses
+	// DeleteLibraryFiles. A ResetStore reset runs no hook.
+	ResetHook *storage.ResetHook
 }
 
 // UIDescriptor lists the IDs of client-side contributions (07 §7.4.2).
