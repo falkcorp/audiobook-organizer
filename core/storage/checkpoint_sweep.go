@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint_sweep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b0f3c7e-6a1d-4f0e-9a52-2d8f61c4b7a3
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -81,6 +81,16 @@ const maxLooseReported = 20
 // directory's lock. The sweeper tries again at its next period; prune
 // reports it after waiting pruneLockWait.
 var ErrCheckpointSweepBusy = errors.New("storage: another checkpoint sweep or prune is running")
+
+// ErrCheckpointSweepLockForeign: the checkpoint directory's sweep lock file
+// is not a regular file owned by the directory's owner, the user the
+// service runs as (checkSweepLock). A command run as another user, root
+// most often, created it; the service cannot open it, so its sweeps,
+// storage prune-checkpoints and storage restore-offline would each stop on
+// it, and before this refusal the open's failure read as
+// ErrCheckpointSweepBusy: the sweeper skipped at INFO every period, and the
+// others waited pruneLockWait first (R1-25 follow-up SF-1). Not retried.
+var ErrCheckpointSweepLockForeign = errors.New("storage: the checkpoint sweep lock is not the checkpoint directory owner's")
 
 // ErrPruneSwapInFlight: storage prune-checkpoints refuses while an offline
 // restore or any other swap is staged or in flight (restore/pending.json
@@ -405,7 +415,10 @@ func (a *cpArea) failedDirs() ([]string, error) {
 
 // lock takes the checkpoint directory's sweep lock. ok is false when the
 // directory does not exist (nothing to sweep or prune). A lock another
-// process or another sweep in this one holds is ErrCheckpointSweepBusy.
+// process or another sweep in this one holds is ErrCheckpointSweepBusy. A
+// lock file that is not a regular file owned by the directory's owner is
+// refused first, as ErrCheckpointSweepLockForeign (checkSweepLock), so a
+// file another user created reads as what it is, not as a busy lock.
 //
 // The lock is the OS's (vfs.Default's fcntl lock, which also excludes a
 // second holder in this process), so a non-OS filesystem takes none, as the
@@ -425,8 +438,19 @@ func (a *cpArea) lock() (unlock func(), ok bool, err error) {
 		return func() {}, true, nil
 	}
 	p := filepath.Join(a.cpDir, sweepLockName)
+	if err := checkSweepLock(a.cpDir, p); err != nil {
+		return nil, false, err
+	}
 	l, err := a.fs.Lock(p)
 	if err != nil {
+		// pebble's lock opens (creates) the file, then fcntl-locks it: a
+		// failed open is a *PathError (a directory or file this process may
+		// not write, such as one another user created), and only a failed
+		// lock, a bare errno or pebble's own in-process refusal, is another
+		// sweep holding it. The open's failure is not retried as busy.
+		if pe := (*iofs.PathError)(nil); errors.As(err, &pe) {
+			return nil, false, fmt.Errorf("storage: the checkpoint sweep lock %s could not be opened: %w", p, err)
+		}
 		return nil, false, fmt.Errorf("%w (%s: %v)", ErrCheckpointSweepBusy, p, err)
 	}
 	// The lock file holds nothing, but it sits in a 0700 directory of
@@ -930,6 +954,26 @@ func swapProbe(fs vfs.FS, stateDir string) error {
 	}
 	if len(ids) > 0 {
 		return fmt.Errorf("%w (restore/%s/%s)", ErrPruneSwapInFlight, ids[0], restorejournal.InflightName)
+	}
+	return nil
+}
+
+// planSweepLock is checkSweepLock's verdict on the file at the sweep lock's
+// name (path), from Lstat: whether it is a regular file, and its owner's
+// uid against the checkpoint directory's. The lock is taken by the service
+// (the sweeper) and by the commands that run only as the state directory's
+// owner (storage prune-checkpoints, storage restore-offline), so a file
+// another uid owns is one none of them may rely on: the service cannot
+// open it if it is 0600, as the lock's creator leaves it.
+func planSweepLock(path string, regular bool, fileUID, dirUID uint32) error {
+	switch {
+	case !regular:
+		return fmt.Errorf("%w: %s is not a regular file; remove it while no sweep, prune or restore runs", ErrCheckpointSweepLockForeign, path)
+	case fileUID != dirUID:
+		return fmt.Errorf("%w: %s is owned by uid %d, not by the checkpoint directory's owner (uid %d), the user the service runs as, "+
+			"so the service cannot take it, and its checkpoint sweeps, storage prune-checkpoints and storage restore-offline stop on it; "+
+			"a command run as another user created it: chown it to uid %d, or remove it while no sweep, prune or restore runs",
+			ErrCheckpointSweepLockForeign, path, fileUID, dirUID, dirUID)
 	}
 	return nil
 }
