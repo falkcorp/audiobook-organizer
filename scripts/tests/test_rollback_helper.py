@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -113,7 +113,10 @@ class Host:
         self.mod.SYSTEMD_DIR = str(self.systemd)
         self.mod.RUN_DIR = str(self.run_dir)
         self.mod.TOOLS = {
-            "find": self.tool("find", "import subprocess; sys.exit(subprocess.run(['/usr/bin/find', *sys.argv[1:]]).returncode)"),
+            "find": self.tool(
+                "find",
+                "import subprocess; sys.exit(subprocess.run(['/usr/bin/find', *sys.argv[1:]]).returncode)",
+            ),
             "systemctl": self.tool("systemctl", "sys.exit(0)"),
             "systemd-run": self.tool("systemd-run", _SYSTEMD_RUN_BODY),
             "python3": sys.executable,
@@ -133,7 +136,9 @@ class Host:
     def tool(self, name: str, body: str) -> str:
         p = self.root / "tools" / name
         p.parent.mkdir(exist_ok=True)
-        p.write_text(_FAKE_TOOL.format(python=sys.executable, log=str(self.log), name=name, body=body))
+        p.write_text(
+            _FAKE_TOOL.format(python=sys.executable, log=str(self.log), name=name, body=body)
+        )
         p.chmod(0o755)
         return str(p)
 
@@ -256,7 +261,19 @@ class Probe(unittest.TestCase):
         sd = str(h.state)
         self.assertEqual(
             h.tools(),
-            [{"tool": "find", "argv": [sd, "-maxdepth", "3", "-path", f"{sd}/restore/*/inflight.json", "-print"]}],
+            [
+                {
+                    "tool": "find",
+                    "argv": [
+                        sd,
+                        "-maxdepth",
+                        "3",
+                        "-path",
+                        f"{sd}/restore/*/inflight.json",
+                        "-print",
+                    ],
+                }
+            ],
         )
 
     def test_reports_inflight(self):
@@ -268,7 +285,15 @@ class Probe(unittest.TestCase):
         import subprocess
 
         proc = subprocess.run(
-            [sys.executable, "-c", _RUN_MODULE, str(HELPER), h.mod.CONFIG, json.dumps(h.mod.TOOLS), "probe"],
+            [
+                sys.executable,
+                "-c",
+                _RUN_MODULE,
+                str(HELPER),
+                h.mod.CONFIG,
+                json.dumps(h.mod.TOOLS),
+                "probe",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -375,7 +400,16 @@ class Restore(unittest.TestCase):
         self.assertEqual(
             runs[0]["argv"],
             h.prefix()
-            + [str(h.bin), "storage", "restore-offline", "--db", str(h.db), "--checkpoint", NAME, "--accept-loss"],
+            + [
+                str(h.bin),
+                "storage",
+                "restore-offline",
+                "--db",
+                str(h.db),
+                "--checkpoint",
+                NAME,
+                "--accept-loss",
+            ],
         )
         self.assertIn(f"restored {h.state}", out, "the restore's output is relayed")
 
@@ -401,7 +435,9 @@ class Restore(unittest.TestCase):
 
     def test_restore_failure_passes_the_status_through(self):
         h = Host(self)
-        self.fake_bin(h, "sys.stderr.write('Error: a service is running or starting\\n'); sys.exit(1)")
+        self.fake_bin(
+            h, "sys.stderr.write('Error: a service is running or starting\\n'); sys.exit(1)"
+        )
         code, out, _ = h.run("restore", "checkpoint", NAME)
         self.assertEqual(code, 1)
         self.assertIn("running or starting", out)
@@ -546,6 +582,315 @@ class SwapPrev(unittest.TestCase):
             h = self.setup_host()
             self.assertEqual(h.run("swap-prev", *extra)[0], 2, extra)
             self.assertEqual(h.bin.read_text(), "current")
+
+
+# A drop-in shaped like a real host's local.conf: an ExecStart reset and an
+# override continued over several lines, a JSON value in single quotes, a
+# memory cap and a working directory. Values are made up.
+REAL_SHAPED_LOCAL_CONF = """[Service]
+MemoryMax=30G
+TimeoutStopSec=90
+Environment='WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]'
+Environment=OWNER_EMAIL=alfred@wayne-manor.invalid
+WorkingDirectory=/srv/batcave/.appdata
+Environment=HOME=/srv/batcave/.appdata
+ExecStart=
+ExecStart=/usr/local/bin/audiobook-organizer serve \\
+      --host 0.0.0.0 \\
+      --port 8484 \\
+      --db /srv/batcave/.appdata/audiobooks.pebble
+"""
+
+# Each of these, alone in an otherwise good file, must be refused: every one
+# lets whoever writes the file run something as root, write a file as root,
+# gain a privilege, or reboot the host.
+ROOT_FORMS = [
+    "User=root",
+    "User=",
+    "User=0",
+    "Group=root",
+    "Group=",
+    "ExecStartPre=/bin/sh -c 'id'",
+    "ExecStartPost=/bin/true",
+    "ExecStopPost=/bin/true",
+    "ExecStart=+/bin/sh -c 'id'",
+    "ExecStart=!/bin/sh",
+    "ExecStart=!!/bin/sh",
+    "ExecStart=-+/bin/sh",
+    "ExecStart=sh -c id",
+    "StandardOutput=file:/etc/sudoers.d/batman",
+    "StandardError=append:/etc/passwd",
+    "AmbientCapabilities=CAP_SYS_ADMIN",
+    "CapabilityBoundingSet=~",
+    "SupplementaryGroups=root",
+    "DynamicUser=yes",
+    "RootDirectory=/",
+    "EnvironmentFile=/etc/shadow",
+    "PermissionsStartOnly=yes",
+    "Wants=reboot.target",
+    "OnFailure=reboot.target",
+    "WorkingDirectory=relative",
+    ".include /etc/evil.conf",
+    "not a directive",
+]
+
+
+def committed_unit(user: str = "alfred") -> str:
+    text = (REPO_ROOT / "deploy" / "audiobook-organizer.service").read_text()
+    return text.replace("User=audiobook", f"User={user}").replace(
+        "Group=audiobook", f"Group={user}"
+    )
+
+
+class InstallStaged(unittest.TestCase):
+    """install-staged installs the deploy user's staged binary, unit and
+    local.conf. The unit and the drop-in are files systemd reads as root,
+    so a free copy (`sudo cp`) would let the deploy user write User=root or
+    ExecStartPre=: each is checked against an allowlist of directives first,
+    from the bytes read once, and those same bytes are installed."""
+
+    def host(self, **extra) -> Host:
+        h = Host(self)
+        self.stage = h.root / "home"
+        self.stage.mkdir()
+        values = {
+            "bin": str(h.bin),
+            "db": str(h.db),
+            "state_dir": str(h.state),
+            "unit": "audiobook-organizer.service",
+            "service_user": "alfred",
+            "archive_dir": str(h.archives),
+            "stage_bin": str(self.stage / "audiobook-organizer"),
+            "stage_unit": str(self.stage / "audiobook-organizer.service"),
+            "stage_local_conf": str(self.stage / "audiobook-organizer-local.conf"),
+        }
+        values.update(extra)
+        h.write_config(values)
+        return h
+
+    def unit_path(self, h: Host) -> Path:
+        return h.systemd / "audiobook-organizer.service"
+
+    def conf_path(self, h: Host) -> Path:
+        return h.systemd / "audiobook-organizer.service.d" / "local.conf"
+
+    def test_the_committed_unit_installs_and_reloads(self):
+        h = self.host()
+        text = committed_unit()
+        (self.stage / "audiobook-organizer.service").write_text(text)
+        code, out, err = h.run("install", "unit")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.unit_path(h).read_text(), text)
+        self.assertEqual(stat.S_IMODE(os.stat(self.unit_path(h)).st_mode), 0o644)
+        self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
+
+    def test_the_committed_local_conf_example_installs(self):
+        h = self.host()
+        text = (REPO_ROOT / "deploy" / "local.conf.example").read_text()
+        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.conf_path(h).read_text(), text)
+
+    def test_a_real_shaped_local_conf_installs(self):
+        h = self.host()
+        (self.stage / "audiobook-organizer-local.conf").write_text(REAL_SHAPED_LOCAL_CONF)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.conf_path(h).read_text(), REAL_SHAPED_LOCAL_CONF)
+
+    def test_root_forms_are_refused_in_the_unit(self):
+        for line in ROOT_FORMS:
+            with self.subTest(line=line):
+                h = self.host()
+                section = "[Unit]" if line.startswith(("Wants", "OnFailure")) else "[Service]"
+                text = committed_unit().replace(section + "\n", f"{section}\n{line}\n", 1)
+                self.assertIn(line, text)
+                (self.stage / "audiobook-organizer.service").write_text(text)
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, (line, err))
+                self.assertFalse(self.unit_path(h).exists(), line)
+                self.assertEqual(h.tools(), [], line)
+
+    def test_root_forms_are_refused_in_the_dropin(self):
+        for line in ROOT_FORMS:
+            with self.subTest(line=line):
+                h = self.host()
+                section = "[Unit]" if line.startswith(("Wants", "OnFailure")) else "[Service]"
+                text = f"{section}\n{line}\n"
+                (self.stage / "audiobook-organizer-local.conf").write_text(text)
+                code, _, err = h.run("install", "local-conf")
+                self.assertEqual(code, 1, (line, err))
+                self.assertFalse(self.conf_path(h).exists(), line)
+
+    def test_a_root_form_hidden_in_a_continuation_is_refused(self):
+        h = self.host()
+        text = "[Service]\nEnvironment=A=1 \\\nUser=root\n"
+        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        # The continuation makes `User=root` part of the Environment value,
+        # which is harmless; a lone `User=root` after a comment is not.
+        self.assertEqual(h.run("install", "local-conf")[0], 0)
+        # A comment never continues (systemd skips it whole), so this
+        # User=root is a directive.
+        text = "[Service]\n# a comment \\\nUser=root\n"
+        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        self.assertEqual(h.run("install", "local-conf")[0], 1)
+        # systemd versions differ on a comment or blank line inside a
+        # continuation (one ends the value there, so User=root would be a
+        # directive), and on a backslash followed by spaces: all refused.
+        for text in (
+            "[Service]\nEnvironment=A=1 \\\n# x\nUser=root\n",
+            "[Service]\nEnvironment=A=1 \\\n\nUser=root\n",
+            "[Service]\nEnvironment=A=1 \\ \nUser=root\n",
+            "[Service]\nEnvironment=A=1 \\",
+            "[Service]\r\nUser=root\r\n",
+        ):
+            with self.subTest(text=text):
+                (self.stage / "audiobook-organizer-local.conf").write_text(text)
+                self.assertEqual(h.run("install", "local-conf")[0], 1, text)
+
+    def test_the_unit_must_name_the_service_user(self):
+        for drop in ("User=alfred\n", "Group=alfred\n"):
+            with self.subTest(drop=drop):
+                h = self.host()
+                (self.stage / "audiobook-organizer.service").write_text(
+                    committed_unit().replace(drop, "")
+                )
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, err)
+                self.assertIn("alfred", err)
+
+    def test_a_service_group_other_than_the_user(self):
+        h = self.host(service_group="batfamily")
+        text = committed_unit().replace("Group=alfred", "Group=batfamily")
+        (self.stage / "audiobook-organizer.service").write_text(text)
+        self.assertEqual(h.run("install", "unit")[0], 0)
+
+    def test_an_unknown_directive_is_named(self):
+        h = self.host()
+        (self.stage / "audiobook-organizer-local.conf").write_text("[Service]\nBatSignal=on\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1)
+        self.assertIn("BatSignal", err)
+
+    def test_a_symlinked_or_oversize_or_missing_source_is_refused(self):
+        h = self.host()
+        conf = self.stage / "audiobook-organizer-local.conf"
+        os.symlink("/etc/hosts", conf)
+        self.assertEqual(h.run("install", "local-conf")[0], 1)
+        conf.unlink()
+        conf.write_text("[Service]\n" + "Environment=A=" + "x" * (300 << 10) + "\n")
+        self.assertEqual(h.run("install", "local-conf")[0], 1)
+        conf.unlink()
+        self.assertEqual(h.run("install", "local-conf")[0], 1)
+        self.assertFalse(self.conf_path(h).exists())
+
+    def test_an_unset_stage_key_refuses(self):
+        h = self.host(stage_unit=None)
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 1)
+        self.assertIn("stage_unit", err)
+
+    def test_binary_is_installed_atomically_and_the_old_one_kept_as_prev(self):
+        h = self.host()
+        h.bin.write_text("current")
+        h.bin.chmod(0o755)
+        (self.stage / "audiobook-organizer").write_text("new")
+        code, out, err = h.run("install", "binary")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(h.bin.read_text(), "new")
+        self.assertEqual(Path(f"{h.bin}.prev").read_text(), "current")
+        self.assertEqual(stat.S_IMODE(os.stat(h.bin).st_mode), 0o755)
+        self.assertFalse(Path(f"{h.bin}.new").exists())
+        self.assertEqual(h.tools(), [], "installing the binary reloads nothing")
+
+    def test_first_binary_install_has_no_prev(self):
+        h = self.host()
+        (self.stage / "audiobook-organizer").write_text("new")
+        self.assertEqual(h.run("install", "binary")[0], 0)
+        self.assertEqual(h.bin.read_text(), "new")
+        self.assertFalse(Path(f"{h.bin}.prev").exists())
+
+    def test_symlinked_staged_binary_is_refused(self):
+        h = self.host()
+        h.bin.write_text("current")
+        os.symlink("/bin/sh", self.stage / "audiobook-organizer")
+        self.assertEqual(h.run("install", "binary")[0], 1)
+        self.assertEqual(h.bin.read_text(), "current")
+
+    def test_bad_arguments(self):
+        for argv in (
+            [],
+            ["Unit"],
+            ["unit", "x"],
+            ["unit\n"],
+            ["../unit"],
+            ["binary", "--force"],
+            *([a] for a in INJECTIONS),
+        ):
+            with self.subTest(argv=argv):
+                h = self.host()
+                self.assertEqual(h.run("install", *argv)[0], 2, argv)
+                self.assertEqual(h.tools(), [], argv)
+                self.assertFalse(h.systemd.exists(), argv)
+
+    def test_stage_paths_are_validated_like_the_others(self):
+        for bad in ("relative/path", "/a/../etc/shadow", "/a b", "/x/"):
+            with self.subTest(bad=bad):
+                h = self.host(stage_unit=bad)
+                self.assertEqual(h.run("install", "unit")[0], 1, bad)
+
+    def test_the_committed_config_example_loads(self):
+        h = Host(self)
+        Path(h.mod.CONFIG).write_text(
+            (REPO_ROOT / "deploy" / "rollback-helpers" / "rollback.conf.example").read_text()
+        )
+        cfg = h.mod.load_config()
+        self.assertEqual(cfg["service_group"], cfg["service_user"])
+        for key in ("stage_bin", "stage_unit", "stage_local_conf"):
+            self.assertTrue(cfg[key].startswith("/"), key)
+
+    def test_service_group_root_is_refused(self):
+        h = self.host(service_group="root")
+        (self.stage / "audiobook-organizer.service").write_text(committed_unit())
+        self.assertEqual(h.run("install", "unit")[0], 1)
+
+
+class Pprof(unittest.TestCase):
+    def dropin(self, h: Host) -> Path:
+        return h.systemd / "audiobook-organizer.service.d" / "pprof.conf"
+
+    def test_on_writes_the_fixed_dropin_and_reloads(self):
+        h = Host(self)
+        code, _, err = h.run("pprof", "on")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            self.dropin(h).read_text(), "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n"
+        )
+        self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
+
+    def test_off_removes_it_and_reloads(self):
+        h = Host(self)
+        h.run("pprof", "on")
+        code, _, err = h.run("pprof", "off")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(self.dropin(h).exists())
+        self.assertEqual(h.run("pprof", "off")[0], 0, "already absent is fine")
+
+    def test_anything_else_is_refused(self):
+        for argv in (
+            [],
+            ["On"],
+            ["on\n"],
+            ["on", "0.0.0.0:6060"],
+            ["0.0.0.0:6060"],
+            *([a] for a in INJECTIONS),
+        ):
+            with self.subTest(argv=argv):
+                h = Host(self)
+                self.assertEqual(h.run("pprof", *argv)[0], 2, argv)
+                self.assertEqual(h.tools(), [], argv)
+                self.assertFalse(h.systemd.exists(), argv)
 
 
 class Stubs(unittest.TestCase):

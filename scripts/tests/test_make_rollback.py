@@ -1,5 +1,5 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
 # last-edited: 2026-11-09
 
@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -916,6 +917,21 @@ def granted(entries, command: str) -> bool:
     return False
 
 
+def recipe(makefile: str, target: str) -> str:
+    """The recipe of `target` in makefile text, continuation lines joined."""
+    m = re.search(rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n|\n(?=\t))*)", makefile, re.M)
+    assert m is not None, f"no target {target}"
+    return m.group(1).replace("\\\n", " ")
+
+
+def sudo_commands(shell: str) -> list[str]:
+    """Each `sudo ...` in a shell command line, up to its terminator."""
+    out = []
+    for m in re.finditer(r"(?<![\w-])sudo(?=\s)([^;&|<>()\n]*)", shell):
+        out.append(" ".join(("sudo" + m.group(1)).split()))
+    return out
+
+
 class SudoersDrift(unittest.TestCase):
     """The drop-in is rendered from the commands the recipes run; this
     checks it grants every one of them, has no `*`, and that the doc's
@@ -951,6 +967,55 @@ class SudoersDrift(unittest.TestCase):
         for c in sorted(commands):
             self.assertTrue(granted(entries, c), f"not granted by the drop-in: {c}\n{text}")
         self.assertGreaterEqual(len(commands), 10, sorted(commands))
+
+    def test_every_sudo_command_deploy_runs_is_granted(self) -> None:
+        """make deploy, make deploy-debug (pprof-dropin, then deploy) and
+        make pprof-off are Makefile.local.example's recipes, and
+        deploy-match-unit-type.sh runs inside deploy. Running them needs a
+        build, so this reads every `sudo` they send over ssh from the text,
+        with the make variables filled in, and checks each against the
+        drop-in: `sudo -n`, granted, no `*`."""
+        o = guard.Opts(
+            host="h",
+            db="/path/to/audiobooks.pebble",
+            bin="/usr/local/bin/audiobook-organizer",
+            user=USER,
+        )
+        text = guard.sudoers(o, "deploy")
+        entries = parse_sudoers(text)
+        local = (REPO_ROOT / "Makefile.local.example").read_text()
+        helpers = re.search(r"^DEPLOY_HELPERS := (\S+)$", local, re.M)
+        self.assertIsNotNone(helpers, "Makefile.local.example defines DEPLOY_HELPERS")
+        self.assertEqual(helpers.group(1), guard.HELPER_DIR)
+        values = {
+            "$(DEPLOY_BIN)": o.bin,
+            "$(DEPLOY_UNIT)": o.unit,
+            "$(DEPLOY_HELPERS)": guard.HELPER_DIR,
+        }
+        commands: list[tuple[str, str]] = []
+        for target in ("deploy", "deploy-debug", "pprof-dropin", "pprof-off"):
+            body = recipe(local, target)
+            for remote in re.findall(r"ssh \$\(DEPLOY_HOST\) '([^']*)'", body):
+                for k, v in values.items():
+                    remote = remote.replace(k, v)
+                commands += [(target, c) for c in sudo_commands(remote)]
+        script = (REPO_ROOT / "scripts" / "deploy-match-unit-type.sh").read_text()
+        helper = re.search(r"^helper=(\S+)$", script, re.M).group(1)
+        for remote in re.findall(r'"(sudo [^"]*)"', script):
+            commands += [
+                ("deploy-match-unit-type.sh", c)
+                for c in sudo_commands(remote.replace("$helper", helper))
+            ]
+        self.assertGreaterEqual(len(commands), 7, commands)
+        for where, c in commands:
+            self.assertNotIn("*", c, where)
+            self.assertNotIn("$", c, f"{where}: a variable the test does not fill in: {c}")
+            self.assertTrue(
+                c.startswith("sudo -n "), f"{where}: sudo without -n prompts over ssh: {c}"
+            )
+            self.assertTrue(
+                granted(entries, c), f"{where}: not granted by the drop-in: {c}\n{text}"
+            )
 
     def test_the_doc_block_is_the_rendered_drop_in(self) -> None:
         doc = (REPO_ROOT / "docs" / "system" / "deploy-and-gpu-ops.md").read_text()
