@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -83,6 +83,8 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 		// link names a symlink beside the live database that points at its
 		// snapshot directory, made before the restore.
 		link string
+		// wantAbsent lists paths under root no entry may have written.
+		wantAbsent []string
 		// refused: the restore wrote nothing, so the snapshot keeps its trust
 		// and a marker planted beside the live database stays.
 		refused    bool
@@ -127,17 +129,19 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			// The snapshot-directory refusal reads entry names, so a symlink
-			// already in the target can still route an entry into the
-			// directory. Only the removal after the extraction catches the
-			// marker that lands there, which is why it stays deferred.
+			// Entry names cannot see a symlink already in the target, so the
+			// extraction also checks where each entry lands and refuses one
+			// inside a snapshot directory, unwritten. The entry is not the
+			// marker, so the deferred marker removal cannot be what keeps
+			// the directory clean.
 			name: "a symlink in the target routes an entry into the snapshot directory",
 			entries: []tarEntry{
 				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
-				{"wayne-manor/hnsw.clean-stop", testCleanStopMarker},
+				{"wayne-manor/hnsw.graph", "a graph from somewhere else"},
 			},
 			link:       "wayne-manor",
-			wantStatus: http.StatusOK,
+			wantAbsent: []string{"hnsw/hnsw.graph"},
+			wantStatus: http.StatusInternalServerError,
 		},
 		{
 			// Round 4: a real backup never holds the snapshot directory, so
@@ -235,6 +239,10 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			})
 
 			require.Equal(t, tc.wantStatus, w.Code, w.Body.String())
+			for _, rel := range tc.wantAbsent {
+				_, err := os.Stat(filepath.Join(root, rel))
+				assert.True(t, os.IsNotExist(err), "%s was written (stat: %v)", rel, err)
+			}
 			if tc.refused {
 				assert.Empty(t, reasons, "a restore that wrote nothing must not mark the store diverged")
 				assert.True(t, markerPresent(t, liveDir), "a restore that wrote nothing must leave the marker")
@@ -435,6 +443,39 @@ func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
 					{"x/../../" + filepath.Base(root) + "/hnsw/hnsw.clean-stop", testCleanStopMarker},
 					{"audiobooks.pebble/OPTIONS-000002", "alfred"},
 				}
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			// SHOULD-FIX 1: a target_path above the live snapshot directory
+			// reaches it with an ordinary name, no "..".
+			name: "a target above the snapshot directory",
+			entries: func(root string) []tarEntry {
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+					{filepath.Base(root) + "/hnsw/hnsw.clean-stop", testCleanStopMarker},
+				}
+			},
+			target:     func(root string) string { return filepath.Dir(root) },
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "the snapshot directory as the target",
+			entries: func(string) []tarEntry {
+				return []tarEntry{{"hnsw.clean-stop", testCleanStopMarker}}
+			},
+			target: func(root string) string {
+				return database.HNSWSnapshotDir(filepath.Join(root, "audiobooks.pebble"))
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "a target inside the snapshot directory",
+			entries: func(string) []tarEntry {
+				return []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}}
+			},
+			target: func(root string) string {
+				return filepath.Join(database.HNSWSnapshotDir(filepath.Join(root, "audiobooks.pebble")), "gotham")
 			},
 			wantStatus: http.StatusBadRequest,
 		},

@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.8
+// version: 1.22.9
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -925,8 +925,61 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 // Extract extracts the prepared backup into targetPath. It can fail after
 // writing some files, so a caller that reacts to a restore's writes treats
 // any call as a restore, whatever it returns.
-func (r *PreparedRestore) Extract(targetPath string) error {
-	return extractArchive(r.archivePath, targetPath)
+//
+// snapshotDirs are the HNSW snapshot directories no entry may be written
+// into: the restore handler passes the live database's and the restored
+// one's. Entry names alone cannot keep an entry out of them (a symlink
+// already in the target, or a target above one), so Extract resolves where
+// each entry would land, symlinks included, and refuses one inside any of
+// them (ErrArchiveCarriesHNSWSnapshot) before writing it. nil checks names
+// only.
+func (r *PreparedRestore) Extract(targetPath string, snapshotDirs []string) error {
+	return extractArchive(r.archivePath, targetPath, snapshotDirs)
+}
+
+// resolvePath returns where a write to p lands as the filesystem stands now:
+// every symlink in p resolved, a dangling one included (a write through it
+// creates its target), and the part of p that does not exist yet appended
+// as it is. p need not exist.
+func resolvePath(p string) string {
+	return resolvePathDepth(filepath.Clean(p), 0)
+}
+
+func resolvePathDepth(p string, links int) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	// More links than any real chain means a loop; a write to it fails.
+	if links < 40 {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if dest, err := os.Readlink(p); err == nil {
+				if !filepath.IsAbs(dest) {
+					dest = filepath.Join(filepath.Dir(p), dest)
+				}
+				return resolvePathDepth(filepath.Clean(dest), links+1)
+			}
+		}
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(resolvePathDepth(parent, links), filepath.Base(p))
+}
+
+// pathWithin reports whether p is dir or lies under it. Both must already be
+// resolved (resolvePath).
+func pathWithin(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// PathsOverlap reports whether a and b, symlinks resolved, are the same
+// directory or one lies under the other. The restore handler refuses a
+// target_path that overlaps the live HNSW snapshot directory this way.
+func PathsOverlap(a, b string) bool {
+	ra, rb := resolvePath(a), resolvePath(b)
+	return pathWithin(ra, rb) || pathWithin(rb, ra)
 }
 
 // extractArchive opens archivePath and extracts it into targetPath. It is
@@ -934,7 +987,12 @@ func (r *PreparedRestore) Extract(targetPath string) error {
 // directory-listing/verification logic above (which must run first and can
 // return before any file is opened) stays separate from the extraction
 // mechanics below.
-func extractArchive(archivePath, targetPath string) error {
+func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
+	keepOut := make([]string, 0, len(snapshotDirs))
+	for _, d := range snapshotDirs {
+		keepOut = append(keepOut, resolvePath(d))
+	}
+
 	// Open backup file
 	backupFile, err := os.Open(archivePath)
 	if err != nil {
@@ -991,6 +1049,14 @@ func extractArchive(archivePath, targetPath string) error {
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
 		target := targetSP.String()
+		// Where the entry lands, symlinks resolved, decides; checked before
+		// anything is created for it, its parent directories included.
+		dest := resolvePath(target)
+		for _, dir := range keepOut {
+			if pathWithin(dest, dir) {
+				return fmt.Errorf("%w: %q would be written at %s", ErrArchiveCarriesHNSWSnapshot, header.Name, dest)
+			}
+		}
 
 		// Handle directories and files
 		switch header.Typeflag {
