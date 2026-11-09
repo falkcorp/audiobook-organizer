@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.115.5
+// version: 2.115.6
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-09
 
@@ -263,7 +263,12 @@ type Server struct {
 	// Attach once the App exists, after the handlers are wired: atomic for
 	// the same reason as startupSteps. Nil reports none. See
 	// SetPostureTokens.
-	postureTokens      atomic.Pointer[func() []systemhandlers.PostureToken]
+	postureTokens atomic.Pointer[func() []systemhandlers.PostureToken]
+	// restoreStager is POST /backup/restore's stager (backup.StageRestore
+	// and the restart request), installed by books' Attach once the App
+	// exists, after the handlers are wired: atomic for the same reason as
+	// postureTokens. Nil answers the route 503. See SetRestoreStager.
+	restoreStager      atomic.Pointer[systemhandlers.RestoreStager]
 	batchPoller        *BatchPoller
 	mergeService       *merge.Service
 	diagnosticsService *diagnostics.Service

@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.68.2
+// version: 1.68.3
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router';
@@ -1237,7 +1237,8 @@ export function Settings() {
         <DialogTitle>Restore Backup</DialogTitle>
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            This will replace the current database with the selected backup.
+            The server restarts to replace the current database with the selected backup. The
+            current database is moved aside, not deleted.
           </Alert>
           <Typography variant="body2" gutterBottom>
             Restore from <strong>{restoreTarget?.filename || 'selected backup'}</strong>?
