@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -478,6 +478,15 @@ func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
 				return filepath.Join(database.HNSWSnapshotDir(filepath.Join(root, "audiobooks.pebble")), "gotham")
 			},
 			wantStatus: http.StatusBadRequest,
+		},
+		{
+			// SHOULD-FIX 2: an archive with no entries restores nothing, so
+			// it is refused before the mark rather than marked for nothing.
+			// A 500, like a truncated archive: the file is damaged, not
+			// crafted.
+			name:       "an empty archive",
+			entries:    func(string) []tarEntry { return nil },
+			wantStatus: http.StatusInternalServerError,
 		},
 	}
 	for _, p := range probes {
