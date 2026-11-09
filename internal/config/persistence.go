@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.62.1
+// version: 1.62.2
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-11-06
+// last-edited: 2026-11-08
 
 package config
 
@@ -2016,6 +2016,19 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 	return nil
 }
 
+// RootDirOverride is the root_dir SyncConfigFromEnv applies over the stored
+// settings: viper's root_dir (the environment or the config file) when set
+// and not empty. A reader that resolves the library root the service runs
+// with from the stored settings alone (books' reset hook, with the service
+// stopped) applies it the same way.
+func RootDirOverride() (string, bool) {
+	if !viper.IsSet("root_dir") {
+		return "", false
+	}
+	val := viper.GetString("root_dir")
+	return val, val != ""
+}
+
 // SyncConfigFromEnv loads env vars from viper and overrides AppConfig (without saving to DB).
 // Only non-empty env values override DB-loaded values. This prevents empty env vars or
 // viper defaults from wiping out API keys that were loaded from the database.
@@ -2023,10 +2036,8 @@ func SaveConfigToDatabase(store database.SettingsStore) error {
 // so callers of Snapshot() see a consistent post-sync view.
 func SyncConfigFromEnv() {
 	Mutate(func(c *Config) {
-		if viper.IsSet("root_dir") {
-			if val := viper.GetString("root_dir"); val != "" {
-				c.RootDir = val
-			}
+		if val, ok := RootDirOverride(); ok {
+			c.RootDir = val
 		}
 		if viper.IsSet("openai_api_key") {
 			if val := viper.GetString("openai_api_key"); val != "" {
