@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
 // last-edited: 2026-11-08
 
@@ -24,8 +24,9 @@ import (
 // The journal steps (05-backup §5B.3.4, 05-storage §5S.3.15, §5S.3.16
 // machine 1). Restore kinds: staged, rejected, rechecked, previous_moved,
 // staged_moved, sidecars, swapped, opened, marker_written, applied, failed,
-// swapped_back. KindReset: staged, set_aside_started, moved, set_aside,
-// applied, hook_done, rejected.
+// swapped_back, and the offline restore's applied_offline (offline.go).
+// KindReset: staged, set_aside_started, moved, set_aside, applied,
+// hook_done, rejected.
 const (
 	StepStaged          = "staged"
 	StepRejected        = "rejected"

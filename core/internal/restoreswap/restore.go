@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
 // last-edited: 2026-11-08
 
@@ -138,6 +138,14 @@ func (s *Swapper) resumeRestore(ctx context.Context, in restorejournal.Intent, r
 	case StepSwapped, StepOpened:
 		return s.restoreBoot(in, last), nil
 	case StepFailed:
+		// An offline escape that started may have moved the failed store
+		// out and not yet placed the source: no build boots that path
+		// (§5S.3.12 "In place"); the same command finishes it.
+		if esc, err := s.escapeOf(in.ID); err != nil {
+			return Outcome{}, err
+		} else if esc {
+			return Outcome{}, fmt.Errorf("%w (journal %s)", ErrEscapeInterrupted, in.ID)
+		}
 		if in.Kind == restorejournal.KindCheckpoint && recs[len(recs)-1].Note == s.o.BuildID {
 			return Outcome{}, fmt.Errorf("%w (journal %s)", ErrCheckpointRestoreFailedHere, in.ID)
 		}
@@ -150,7 +158,7 @@ func (s *Swapper) resumeRestore(ctx context.Context, in restorejournal.Intent, r
 			return Outcome{}, err
 		}
 		return Outcome{ID: in.ID, Intent: in, Last: StepApplied}, nil
-	case StepApplied, StepSwappedBack:
+	case StepApplied, StepSwappedBack, StepAppliedOffline:
 		// Terminal; the kill fell before the in-flight file was deleted.
 		if err := s.removeInflight(ctx, in.ID); err != nil {
 			return Outcome{}, err

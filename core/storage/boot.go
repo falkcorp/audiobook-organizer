@@ -1,5 +1,5 @@
 // file: core/storage/boot.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
 // last-edited: 2026-11-09
 
@@ -16,6 +16,7 @@ import (
 	iofs "io/fs"
 	"log/slog"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -310,6 +311,15 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.MustExist || opts.ReadOnly {
+		// Pebble creates the directory before it finds no store in it, so an
+		// absent store would be left as an empty directory.
+		if _, err := opts.fs.Stat(opts.Path); errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: no store at %s", ErrNoStore, opts.Path)
+		} else if err != nil {
+			return nil, fmt.Errorf("storage: %s: %w", opts.Path, err)
+		}
+	}
 	opts.ExtendStart("storage.open")
 	eng, err := ipebble.Open(opts.Path, ipebble.Options{
 		FS: opts.fs, CacheBytes: opts.CacheBytes, MemtableBytes: opts.MemtableBytes, Logger: opts.Logger,
@@ -358,6 +368,11 @@ func (o *Opened) InstallID() string {
 	}
 	return o.db.boot.installID
 }
+
+// ErrNoStore: OpenOptions.MustExist or ReadOnly, and there is no store at
+// the path (an offline command before the service's first start, or a
+// mistyped path); nothing was created.
+var ErrNoStore = errors.New("storage: there is no store to open (start the service once first)")
 
 // ErrOfflinePendingSteps: an offline open found a store that only serve may
 // open, because P4 would write to it (§5S.4 "Offline open" rule 2,
