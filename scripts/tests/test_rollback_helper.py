@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.5.0
+# version: 1.6.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -850,6 +850,22 @@ def committed_unit(user: str = "alfred") -> str:
     )
 
 
+# The owner's root-written host.conf: the ExecStart= override and the
+# host's other settings, which local.conf no longer carries.
+HOST_CONF = (
+    "# host settings, written by the owner as root\n"
+    "[Service]\n"
+    "ExecStart=\n"
+    "ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \\\n"
+    "      --db /srv/batcave/audiobooks.pebble \\\n"
+    "      --tls-cert /srv/batcave/server.crt --tls-key /srv/batcave/server.key\n"
+    "WorkingDirectory=/srv/batcave\n"
+    "MemoryMax=12G\n"
+    "TimeoutStopSec=60\n"
+    "User=alfred\n"
+)
+
+
 class InstallStaged(unittest.TestCase):
     """install-staged installs the deploy's binary, the unit and local.conf.
 
@@ -879,6 +895,10 @@ class InstallStaged(unittest.TestCase):
         }
         values.update(extra)
         h.write_config(values)
+        self.host_conf_path = h.systemd / f"{values['unit']}.d" / "host.conf"
+        self.host_conf_path.parent.mkdir(parents=True)
+        self.host_conf_path.write_text(HOST_CONF)
+        self.host_conf_path.chmod(0o644)
         return h
 
     def template(self, text: str | None = None, mode: int = 0o644) -> Path:
@@ -1154,6 +1174,136 @@ class InstallStaged(unittest.TestCase):
 
     # -- the binary -----------------------------------------------------------
 
+    # -- host.conf: local.conf is deployed only beside the owner's host.conf
+
+    def assert_local_conf_refused(self, h: Host, needle: str = "host.conf") -> str:
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn(needle, err)
+        self.assertFalse(self.conf_path(h).exists(), "nothing installed")
+        self.assertEqual(h.tools(), [], "no daemon-reload")
+        return err
+
+    def test_local_conf_needs_host_conf(self):
+        h = self.host()
+        self.host_conf_path.unlink()
+        err = self.assert_local_conf_refused(h)
+        self.assertIn("ExecStart", err, "it says why: the base unit's ExecStart would run")
+
+    def test_a_symlinked_host_conf_is_refused(self):
+        h = self.host()
+        real = h.root / "real-host.conf"
+        real.write_text(HOST_CONF)
+        self.host_conf_path.unlink()
+        self.host_conf_path.symlink_to(real)
+        self.assert_local_conf_refused(h)
+
+    def test_a_host_conf_that_is_not_a_regular_file_is_refused(self):
+        h = self.host()
+        self.host_conf_path.unlink()
+        self.host_conf_path.mkdir()
+        self.assert_local_conf_refused(h)
+
+    def test_a_group_or_world_writable_host_conf_is_refused(self):
+        for mode in (0o664, 0o646, 0o666):
+            with self.subTest(mode=oct(mode)):
+                h = self.host()
+                self.host_conf_path.chmod(mode)
+                self.assert_local_conf_refused(h)
+
+    def test_a_host_conf_not_owned_by_root_is_refused(self):
+        h = self.host()
+        ino = os.stat(self.host_conf_path).st_ino
+        owner_ok = h.mod._owner_ok
+        with unittest.mock.patch.object(
+            h.mod, "_owner_ok", lambda st: st.st_ino != ino and owner_ok(st)
+        ):
+            self.assert_local_conf_refused(h)
+
+    def test_a_good_host_conf_lets_local_conf_install(self):
+        h = self.host()
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.host_conf_path.read_text(), HOST_CONF, "host.conf is never written")
+
+    def test_host_conf_may_not_run_anything_as_root(self):
+        """The LD_PRELOAD trust argument: every Environment= line reaches
+        only the service user. That holds only while host.conf runs nothing
+        else and nothing as root, so the helper checks it."""
+        for line in (
+            "ExecStartPre=/usr/bin/true",
+            "ExecStartPost=/usr/bin/true",
+            "ExecStopPost=/usr/bin/true",
+            "ExecStop=/usr/bin/true",
+            "ExecReload=/usr/bin/true",
+            "ExecCondition=/usr/bin/true",
+            "ExecStart=+/usr/local/bin/audiobook-organizer serve",
+            "ExecStart=!/usr/local/bin/audiobook-organizer serve",
+            "ExecStart=!!/usr/local/bin/audiobook-organizer serve",
+            "ExecStart=-+/usr/local/bin/audiobook-organizer serve",
+            "ExecStart=@:!/usr/local/bin/audiobook-organizer serve",
+            "  ExecStartPre = /usr/bin/true",
+            "PermissionsStartOnly=true",
+            "User=root",
+            "Group=root",
+            "User=joker",
+            "AmbientCapabilities=CAP_SYS_ADMIN",
+        ):
+            with self.subTest(line=line):
+                h = self.host()
+                self.host_conf_path.write_text(HOST_CONF + line + "\n")
+                err = self.assert_local_conf_refused(h, "line 11")
+                self.assertNotIn("/usr/bin/true", err, "a refusal never echoes host.conf")
+                self.assertNotIn("joker", err)
+
+    def test_host_conf_text_inside_a_continuation_is_not_a_directive(self):
+        h = self.host()
+        self.host_conf_path.write_text(
+            HOST_CONF + "ExecStart=\nExecStart=/usr/local/bin/audiobook-organizer serve \\\n"
+            "      --label ExecStartPre=nothing\n"
+        )
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_host_conf_comments_and_the_service_group_pass(self):
+        h = self.host(service_group="batfamily")
+        self.host_conf_path.write_text(
+            HOST_CONF + "# ExecStartPre= is not allowed here \u2014 comment only\n"
+            "; User=root (a comment)\nGroup=batfamily\n"
+        )
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_host_conf_control_characters_are_refused(self):
+        for text in (
+            HOST_CONF + "ExecStartPre\x0b=/usr/bin/true\n",
+            HOST_CONF + "User=alfred\x1c\n",
+            HOST_CONF + "MemoryMax=12G\r\n",
+            HOST_CONF + "MemoryMax=12G\x00\n",
+        ):
+            with self.subTest(text=repr(text[-30:])):
+                h = self.host()
+                self.host_conf_path.write_bytes(text.encode())
+                self.assert_local_conf_refused(h)
+
+    def test_the_committed_example_host_conf_block_passes(self):
+        """deploy/local.conf.example shows host.conf in comments; with the
+        comment marks removed it must pass the helper's check."""
+        text = (REPO_ROOT / "deploy" / "local.conf.example").read_text()
+        block = text.split("# --- host.conf, NOT this file", 1)[1].split("# -----", 1)[0]
+        lines = block.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln == "# [Service]")
+        body = "".join(ln[2:] + "\n" if ln.startswith("# ") else "\n" for ln in lines[start:])
+        h = self.host(service_user="audiobook")
+        self.host_conf_path.write_text(body)
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
     def bin_host(self) -> tuple[Host, Path]:
         bindir = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, bindir, True)
@@ -1226,7 +1376,8 @@ class InstallStaged(unittest.TestCase):
                 h = self.host()
                 self.assertEqual(h.run("install", *argv)[0], 2, argv)
                 self.assertEqual(h.tools(), [], argv)
-                self.assertFalse(h.systemd.exists(), argv)
+                written = sorted(p for p in h.systemd.rglob("*") if p.is_file())
+                self.assertEqual(written, [self.host_conf_path], "only the owner's host.conf")
 
 
 class Pprof(unittest.TestCase):
