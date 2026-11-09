@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -8,13 +8,20 @@ package server
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -240,5 +247,238 @@ func TestImportHNSWSnapshot_ParentReconcilesAfterAChildWithoutAMarker(t *testing
 	}
 	if cleanStopMarkerExists(t, f.dir) {
 		t.Error("a marker appeared on disk although no process stopped cleanly")
+	}
+}
+
+// pebbleCleanStopFixture is a real Pebble store seeded with primary Batman
+// storylines and their embedding rows, and the snapshot directory the server
+// derives beside it. Each open is one process: the store, the embedding store
+// sharing its database, a dedup engine reading both, and a fresh HNSW store,
+// wired into a container the way NewServer wires them.
+type pebbleCleanStopFixture struct {
+	dbPath  string
+	hnswDir string
+	vecs    map[string][]float32
+}
+
+// pebbleCleanStopProcess is one process over the fixture's store.
+type pebbleCleanStopProcess struct {
+	ps     *database.PebbleStore
+	es     *database.EmbeddingStore
+	engine *dedup.Engine
+	hnsw   *database.HNSWEmbeddingStore
+	c      *serviceregistry.Container
+}
+
+const pebbleCleanStopDims = 8
+
+var pebbleCleanStopStorylines = []string{
+	"year-one", "the-long-halloween", "dark-victory", "the-killing-joke",
+	"hush", "knightfall", "no-mans-land", "the-court-of-owls",
+	"a-death-in-the-family", "a-lonely-place-of-dying", "the-dark-knight-returns", "arkham-asylum",
+	"gothic", "venom", "the-cult", "son-of-the-demon",
+	"batman-rip", "war-games", "cataclysm", "contagion",
+}
+
+// newPebbleCleanStopFixture seeds the store in a process of its own, so the
+// processes the test models start from a store nobody has written to since it
+// opened.
+func newPebbleCleanStopFixture(t *testing.T) *pebbleCleanStopFixture {
+	t.Helper()
+	root := t.TempDir()
+	f := &pebbleCleanStopFixture{
+		dbPath:  filepath.Join(root, "audiobooks.pebble"),
+		hnswDir: filepath.Join(root, "hnsw"),
+		vecs:    map[string][]float32{},
+	}
+	ps, err := database.NewPebbleStore(f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	es := database.NewEmbeddingStore(ps.DB())
+	rng := rand.New(rand.NewSource(7))
+	for _, id := range pebbleCleanStopStorylines {
+		primary := true
+		if _, err := ps.CreateBook(&database.Book{ID: id, Title: id, IsPrimaryVersion: &primary}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		v := make([]float32, pebbleCleanStopDims)
+		for i := range v {
+			v[i] = rng.Float32() + 0.01
+		}
+		f.vecs[id] = v
+		if err := es.Upsert(database.Embedding{EntityType: "book", EntityID: id, Vector: v, Model: "bge-m3"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ps.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// open starts a process whose dedup engine classifies rows against model.
+func (f *pebbleCleanStopFixture) open(t *testing.T, model string) *pebbleCleanStopProcess {
+	t.Helper()
+	ps, err := database.NewPebbleStore(f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pebbleCleanStopProcess{ps: ps, es: database.NewEmbeddingStore(ps.DB())}
+	p.engine, err = dedup.NewEngine(p.es, ps, ai.NewEmbeddingClientWithOptions("k", model, ""), nil, merge.NewService(ps), unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.hnsw = database.NewHNSWEmbeddingStore(pebbleCleanStopDims)
+	p.c = serviceregistry.NewContainerFrom().
+		Override("chromemstore", p.hnsw).
+		Override(serviceregistry.KeyEmbeddingStore, p.es).
+		Override(serviceregistry.KeyDedup, p.engine)
+	if err := p.c.Build(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// close ends the process: the engine's background work, then the store.
+func (p *pebbleCleanStopProcess) close(t *testing.T) {
+	t.Helper()
+	if err := p.engine.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ps.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// buildGraph gives the HNSW store the graph a hydrate of the seeded rows
+// builds: every storyline, primary.
+func (p *pebbleCleanStopProcess) buildGraph(t *testing.T, f *pebbleCleanStopFixture) {
+	t.Helper()
+	for _, id := range pebbleCleanStopStorylines {
+		if err := p.hnsw.Upsert(context.Background(), "book", id, f.vecs[id], map[string]string{"is_primary_version": "true"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.hnsw.SetComplete(true)
+}
+
+// postInit runs the dedup engine's PostInit and waits for a reconcile it
+// started to finish.
+func (p *pebbleCleanStopProcess) postInit(t *testing.T) {
+	t.Helper()
+	if err := p.engine.PostInit(context.Background(), p.c); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for p.hnsw.NeedsReconcile() {
+		if time.Now().After(deadline) {
+			t.Fatal("the reconcile did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func primaryNearest(t *testing.T, s *database.HNSWEmbeddingStore, q []float32) []string {
+	t.Helper()
+	res, err := s.FindSimilar(context.Background(), "book", q, 5, map[string]string{"is_primary_version": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, len(res))
+	for i, r := range res {
+		ids[i] = r.EntityID
+	}
+	return ids
+}
+
+// TestHNSWCleanStop_APebbleOnlyMerge (R1-15 follow-up review, MAJOR-1): a
+// merge that makes a book non-primary in Pebble after the last snapshot, and
+// is never mirrored into the graph, must not leave a clean-stop marker that
+// lets the next boot load the snapshot as fresh and serve the merged book as
+// a primary match. It runs through the server's own import and stop helpers
+// over a real PebbleStore, so the merge reaches Pebble the way production
+// writes it (UpdateBook). The first case is the control: with no write after
+// the snapshot, the same setup leaves a marker the next boot trusts.
+func TestHNSWCleanStop_APebbleOnlyMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		merged bool
+	}{
+		{"no write after the snapshot", false},
+		{"merge in Pebble after the snapshot", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPebbleCleanStopFixture(t)
+
+			// The previous process: the boot path (no snapshot yet), a
+			// complete graph, a periodic snapshot, the merge, and its stop.
+			prev := f.open(t, "bge-m3")
+			s := &Server{hnswPersistDir: f.hnswDir, container: prev.c}
+			importHNSWSnapshot(prev.c, f.hnswDir)
+			prev.buildGraph(t, f)
+			s.exportHNSWSnapshot("periodic")
+			if tc.merged {
+				venom, err := prev.ps.GetBookByID("venom")
+				if err != nil || venom == nil {
+					t.Fatalf("GetBookByID(venom) = %v, %v", venom, err)
+				}
+				notPrimary := false
+				venom.IsPrimaryVersion = &notPrimary
+				if _, err := prev.ps.UpdateBook("venom", venom); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.stopHNSWSnapshot(context.Background())
+			s.markHNSWCleanStop()
+			prev.close(t)
+
+			next := f.open(t, "bge-m3")
+			t.Cleanup(func() { next.close(t) })
+			importHNSWSnapshot(next.c, f.hnswDir)
+			if got := next.hnsw.NeedsReconcile(); got != tc.merged {
+				t.Errorf("the next boot's NeedsReconcile = %v, want %v", got, tc.merged)
+			}
+			next.postInit(t)
+			if got := primaryNearest(t, next.hnsw, f.vecs["venom"]); slices.Contains(got, "venom") == tc.merged {
+				t.Errorf("primary matches for venom's vector after the boot = %v; merged=%v", got, tc.merged)
+			}
+		})
+	}
+}
+
+// TestHNSWCleanStop_AnotherEmbeddingModelAfterTheRestart: the stop vouched for
+// a graph classified against one embedding model, and the next boot
+// classifies against another, so every row's stale-model verdict moved
+// although nothing was written. The marker records the model; the boot
+// reconciles.
+func TestHNSWCleanStop_AnotherEmbeddingModelAfterTheRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name, next string
+		stale      bool
+	}{
+		{"same model", "bge-m3", false},
+		{"another model", "text-embedding-3-large", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPebbleCleanStopFixture(t)
+			prev := f.open(t, "bge-m3")
+			s := &Server{hnswPersistDir: f.hnswDir, container: prev.c}
+			importHNSWSnapshot(prev.c, f.hnswDir)
+			prev.buildGraph(t, f)
+			s.stopHNSWSnapshot(context.Background())
+			s.markHNSWCleanStop()
+			prev.close(t)
+			if !cleanStopMarkerExists(t, f.hnswDir) {
+				t.Fatal("the clean stop wrote no marker; the setup is wrong")
+			}
+
+			next := f.open(t, tc.next)
+			t.Cleanup(func() { next.close(t) })
+			importHNSWSnapshot(next.c, f.hnswDir)
+			if got := next.hnsw.NeedsReconcile(); got != tc.stale {
+				t.Errorf("the boot's NeedsReconcile = %v, want %v", got, tc.stale)
+			}
+		})
 	}
 }
