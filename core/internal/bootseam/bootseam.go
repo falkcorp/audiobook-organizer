@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package bootseam is the per-boot seam of the crash-matrix kit
 // (coretest/crashmatrix, 05-storage §5S.3.16; 06 §6.4.8): a context value
@@ -19,6 +19,8 @@ package bootseam
 
 import (
 	"context"
+	"io"
+	"os"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -44,6 +46,29 @@ type Seams struct {
 	Probe restorejournal.Probe
 	// Labels names each durable operation; nil = no labels (production).
 	Labels Labeler
+	// Euid replaces os.Geteuid for the offline commands' owner check
+	// (kernel.ErrNotStateDirOwner), so a test runs a non-owner's refusal
+	// unprivileged; nil = os.Geteuid.
+	Euid func() int
+	// SwapLock wraps the hold a serve boot's P0a takes on the swap lock, so
+	// a test can make its Downgrade fail; nil = the hold as taken.
+	SwapLock func(SwapLock) SwapLock
+}
+
+// SwapLock is the swap lock held exclusively, as storage.ExclusiveSwapLock
+// (bootseam cannot import storage, which imports it).
+type SwapLock interface {
+	io.Closer
+	Downgrade() error
+}
+
+// Euid is the effective uid the owner checks compare: Seams.Euid, else
+// os.Geteuid().
+func Euid(ctx context.Context) int {
+	if s := From(ctx); s != nil && s.Euid != nil {
+		return s.Euid()
+	}
+	return os.Geteuid()
 }
 
 // Labeler is the crash-matrix kit's view of a boot: Enter opens a region

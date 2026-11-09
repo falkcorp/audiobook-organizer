@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -203,8 +203,10 @@ func (k *Kernel) Run(ctx context.Context) error {
 	}
 	// (1) Core background services: the metrics Provider has served since
 	// P5; the realtime hub lands with realtime.
-	// (2) Module hooks, modules in ID order, each module's in registration
-	// order (the reset hook arrives with storage).
+	// (2) The reset hook first, on a factory reset boot (it never fails
+	// boot: reset.go), then the module hooks, modules in ID order, each
+	// module's in registration order.
+	k.runResetHook(ctx)
 	started, late, err := k.startHooks(ctx)
 	if err != nil {
 		// R1Values (and core.shutdown.budget with it) is read at start step

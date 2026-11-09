@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/createfs.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 69d7e9b2-f1ed-433f-bf6d-12935c2dd31e
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package restorejournal
 
@@ -32,6 +32,15 @@ const (
 
 // Dir is <stateDir>/restore, the directory of the slot and every journal.
 func Dir(stateDir string) string { return filepath.Join(stateDir, restoreDir) }
+
+// SwapLockName is the swap lock's file, directly under the state directory:
+// outside restore/, so the slot's probe never reads it, and kept by every
+// reset (Kept), so no swap moves or deletes it. storage.LockSwapShared and
+// LockSwapExclusive take it (R1-25 review B1).
+const SwapLockName = "swap.lock"
+
+// SwapLockPath is <stateDir>/swap.lock, the swap lock's one path.
+func SwapLockPath(stateDir string) string { return filepath.Join(stateDir, SwapLockName) }
 
 // PendingPath is the one intent slot, <stateDir>/restore/pending.json.
 func PendingPath(stateDir string) string { return filepath.Join(Dir(stateDir), pendingName) }

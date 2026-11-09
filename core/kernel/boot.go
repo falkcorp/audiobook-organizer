@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package kernel
 
@@ -397,15 +397,22 @@ func (k *Kernel) extendStart(id module.ID) func(string) {
 		if !k.startWin.extend(id, sdnotify.StartupStepBudget) && k.ran.Load() {
 			return
 		}
-		send := k.cfg.ExtendStart
-		if send == nil {
-			send = func(string) {
-				if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
-					k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
-				}
-			}
-		}
+		k.sendExtend(id, step)
+	}
+}
+
+// sendExtend asks the service manager for sdnotify.StartupStepBudget more
+// start time (Config.ExtendStart in tests); a failure is logged, never
+// returned. extendStart decides when a module's request is a start-up one;
+// the reset hook, which runs at Run step (2) before READY=1, calls it
+// directly (reset.go).
+func (k *Kernel) sendExtend(id module.ID, step string) {
+	if send := k.cfg.ExtendStart; send != nil {
 		send(step)
+		return
+	}
+	if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
+		k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
 	}
 }
 
@@ -424,9 +431,18 @@ func listenHTTP(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (Server
 // it, closes regardless), with at least lateStopFloor to finish. Before the
 // store closes it waits, within that floor, for the hook Stops still
 // running in the background (awaitLateStops); without a store there is
-// nothing for them to lose, so it does not wait.
+// nothing for them to lose, so it does not wait. The swap lock is released
+// last, deferred so a panic while closing still releases it: an offline
+// swap may move the store only once nothing here can touch it.
 func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 	k.closeOnce.Do(func() {
+		defer func() {
+			if k.swapLock != nil {
+				if err := k.swapLock.Close(); err != nil {
+					k.closeErr = errors.Join(k.closeErr, fmt.Errorf("kernel: release the swap lock: %w", err))
+				}
+			}
+		}()
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
 		defer cancel()
 		var errs []error
