@@ -1,13 +1,12 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.25.1
+// version: 2.25.2
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 import { expect, Page } from '@playwright/test';
 
 // Re-export setup mode helpers for convenience
 export {
-  resetToFactoryDefaults,
   setupPhase1ApiDriven,
   setupPhase2Interactive,
 } from './setup-modes';
@@ -629,11 +628,6 @@ export async function setupMockApiRoutes(
         (session) => session.id !== sessionId
       );
       return route.fulfill(jsonResponse({}, 204));
-    }
-
-    // System reset
-    if (pathname === '/api/v1/system/reset' && method === 'POST') {
-      return route.fulfill(jsonResponse({ message: 'Reset complete' }));
     }
 
     // System status

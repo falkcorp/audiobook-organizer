@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package metafetch
 
@@ -122,8 +122,8 @@ func (svc *OpenLibraryService) LiveStore() *openlibrary.OLStore {
 }
 
 // CompactionStats samples the OL store's Pebble counters under Mu, the lock
-// the delete-OL-data and factory-reset handlers hold while they close the
-// store and nil it. Reading svc.olStore without it raced those handlers, and
+// the delete-OL-data handler holds while it closes the store and nils it.
+// Reading svc.olStore without it raced that handler, and
 // sampling a closed *pebble.DB is not safe. ok is false when there is no
 // store; the returned stats are then marked Absent so storage.Moved
 // never reads the store disappearing as "debt fell".
@@ -137,8 +137,8 @@ func (svc *OpenLibraryService) CompactionStats() (stats database.CompactionStats
 }
 
 // PebbleMetricsSample samples the OL store's Pebble metrics under Mu, for the
-// same reason CompactionStats does: the delete and factory-reset handlers
-// close the store and nil it while holding that lock. ok is false when there
+// same reason CompactionStats does: the delete-OL-data handler closes the
+// store and nils it while holding that lock. ok is false when there
 // is no store.
 //
 // It uses TryLock, not Lock: deleteOLData (os.RemoveAll) and EnsureStore

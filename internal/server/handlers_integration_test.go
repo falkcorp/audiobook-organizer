@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.14.4
+// version: 1.14.5
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-29
+// last-edited: 2026-11-08
 
 package server
 
@@ -78,7 +78,7 @@ func newEntitiesHandler(s *Server) *entities.Handler {
 // handlers/system sub-package; the whitebox handler tests in
 // handlers_unit_test.go still exercise the real store → JSON-envelope path
 // through this constructor. systemService/configUpdateService/pluginRegistry/
-// olService and the func deps are wired from the real Server fields; the hub is
+// and the func deps are wired from the real Server fields; the hub is
 // passed as a lazy provider closure (mirroring wireHandlers) so the
 // handleEvents nil-guard test, which nils s.hub after construction, still
 // resolves nil and 503s. filterReviewedAuthorGroups is the bound *Server method.
@@ -114,9 +114,7 @@ func newSystemHandler(s *Server) *system.Handler {
 			return s.hub
 		},
 		opLogs,
-		s.olService,
 		getDiskStats,
-		resetLibrarySizeCache,
 		func() string { return appVersion },
 		s.filterReviewedAuthorGroups,
 		// Lazy: the startup runner is stored in Start, after wiring.

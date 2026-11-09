@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,13 +14,14 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
-// ownerGateWhenOwnerSet is the owner gate for routes that can UNSET the
-// owner: system reset and factory reset (config.ResetToDefaults clears
-// owner_email) and backup restore (the restored database can predate it).
-// Unset, the first owner_email may be claimed by whoever signs in through
-// Access as that email (plan D15), so letting a non-owner reach these would
-// hand ownership to the next Access user. While owner_email is set they need
-// the owner; before any owner exists they keep their ordinary guards. Not
+// ownerGateWhenOwnerSet is the owner gate for routes that can UNSET the owner:
+// backup restore (the restored database can predate it). HEAD's system and
+// factory reset routes, which cleared owner_email too, are gone (R1-25: a
+// reset runs offline only); F4's core reset route takes the gate back when it
+// lands. Unset, the first owner_email may be claimed by whoever signs in
+// through Access as that email (plan D15), so letting a non-owner reach these
+// would hand ownership to the next Access user. While owner_email is set they
+// need the owner; before any owner exists they keep their ordinary guards. Not
 // skipped with local auth off. The permission leg is left to the route's own
 // s.perm / RequireAdmin.
 func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {

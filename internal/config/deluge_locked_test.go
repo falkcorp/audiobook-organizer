@@ -1,7 +1,7 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 // The five Deluge connection settings are config/env-authoritative (owner
 // decision 2026-10-11): a value the environment (DELUGE_*) or the server's config
@@ -302,7 +302,7 @@ func TestDelugeLock_PasswordIsNeverEchoedOrLogged(t *testing.T) {
 		t.Fatal("precondition: the environment password should have been applied")
 	}
 	// Exercise the reset path too, which re-applies the same overrides.
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	masked := NewUpdateService(newMockSettingsStore()).MaskSecrets(Snapshot())
 	body, err := json.Marshal(masked)

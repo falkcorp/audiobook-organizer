@@ -1,7 +1,7 @@
 // file: internal/scheduler/periodic_library_scan_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8c5b1e74-2d06-4f39-a7b8-0e93c5d18a42
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -29,7 +29,7 @@ func TestLibraryScanIsScheduledUnderDefaultConfig(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
 
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	// Guard rail: the fix must not be sneaking through the legacy flags. Under
 	// defaults both of these are off, which is precisely why the old code was

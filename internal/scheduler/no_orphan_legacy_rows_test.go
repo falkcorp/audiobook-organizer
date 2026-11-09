@@ -1,7 +1,7 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -51,7 +51,7 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 			// task correctly declines to enqueue.
 			restoreCfg := config.Snapshot()
 			t.Cleanup(func() { config.AppConfig = restoreCfg })
-			config.ResetToDefaults()
+			config.ResetToDefaultsForTest()
 
 			store := dbmocks.NewMockStore(t)
 			// Deliberately NO CreateOperation expectation: that absence IS the

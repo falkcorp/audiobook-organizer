@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_file_intro_stats_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c58e1f07-3a94-4d62-b0e7-94f2d6a8b315
-// last-edited: 2026-10-23
+// last-edited: 2026-11-08
 
 package system_test
 
@@ -35,7 +35,7 @@ func (s *fileIntroStatsStore) GetFileIntroStats() (*database.FileIntroStats, err
 func serveFileIntroStats(t *testing.T, store system.SystemStore) (map[string]json.RawMessage, int) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := system.New(func() system.SystemStore { return store }, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := system.New(func() system.SystemStore { return store }, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	w := run(http.MethodGet, "/stats", "/stats", nil, func(r *gin.Engine) {
 		r.GET("/stats", h.GetFileIntroStats)
 	})

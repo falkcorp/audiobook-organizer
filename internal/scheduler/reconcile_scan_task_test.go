@@ -1,7 +1,7 @@
 // file: internal/scheduler/reconcile_scan_task_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d9c6b18-2e57-4f03-a8b1-7c3e5d0f9a26
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -28,7 +28,7 @@ import (
 func TestReconcileScanTask_EnqueuesSurvivorWithEmptyParams(t *testing.T) {
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row

@@ -1,7 +1,7 @@
 // file: internal/config/vector_backend_default_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f6a1c02-9b4e-4d71-8c2a-5e0d7b91a4c6
-// last-edited: 2026-08-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -18,24 +18,24 @@ import (
 //
 // There are two independent places a fresh vector backend gets chosen:
 // viper.SetDefault("embedding.vector_backend", ...) in InitConfig, and the
-// hardcoded struct literal in ResetToDefaults. TestInitConfig_EmbeddingDefaults
+// hardcoded struct literal in ResetToDefaultsForTest. TestInitConfig_EmbeddingDefaults
 // covers the first; it goes through viper and would stay green if only the
-// literal were wrong. This test never touches viper — it calls ResetToDefaults
+// literal were wrong. This test never touches viper — it calls ResetToDefaultsForTest
 // and reads the resulting AppConfig — so the two are genuinely separate
 // instruments and each mutation reddens exactly one of them.
 func TestResetToDefaults_VectorBackendIsHNSW(t *testing.T) {
-	// ResetToDefaults overwrites the package-global AppConfig wholesale. Several
+	// ResetToDefaultsForTest overwrites the package-global AppConfig wholesale. Several
 	// existing tests in this package call it without restoring, so nothing here
 	// depends on the current value — but leaving factory defaults behind couples
 	// this test to whatever runs after it, so restore explicitly.
 	before := Snapshot()
 	t.Cleanup(func() { Mutate(func(c *Config) { *c = before }) })
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	snap := Snapshot()
 
 	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend,
-		"ResetToDefaults must not hand out the brute-force chromem scan")
+		"ResetToDefaultsForTest must not hand out the brute-force chromem scan")
 }
 
 // TestValidate_VectorBackendEmptyNormalizesToHNSW covers the upgrade path,
@@ -105,7 +105,7 @@ func TestValidate_VectorBackendEnum(t *testing.T) {
 }
 
 // TestInitConfig_VectorBackendDefaultViaViper is the viper-path twin of the
-// ResetToDefaults test above, kept here next to it so the pair is obvious.
+// ResetToDefaultsForTest test above, kept here next to it so the pair is obvious.
 // TestInitConfig_EmbeddingDefaults asserts the same thing among the other
 // embedding fields; this one isolates the backend so a mutation of
 // viper.SetDefault reddens a test that names the failure.
