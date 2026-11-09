@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -174,7 +174,8 @@ type moduleWorker struct {
 
 // Run starts the app in the order of 06 §6.5.2 that exists at R1 (the served
 // write on open checkpoint records, core background services, module hooks,
-// module workers, R1Values then the listener, readiness), blocks until ctx is
+// module workers, R1Values then the listener, readiness, then the checkpoint
+// sweeper of 05-storage §5S.4 step 15), blocks until ctx is
 // done, a StopAppOnExit worker
 // exits, the listener fails or a restart is requested, and then stops in the
 // reverse order within core.shutdown.budget (05-health §5H.4).
@@ -258,6 +259,9 @@ func (k *Kernel) Run(ctx context.Context) error {
 	k.signal(ctx, "status", k.notifier.Status(statusServing))
 	k.log.InfoContext(ctx, "kernel: ready")
 	k.lifecycle.ready.Store(true)
+	// 05-storage §5S.4 step 15, after readiness: the checkpoint sweeper's
+	// first sweep, then hourly until the stop order stops it.
+	k.startSweeper(ctx)
 
 	var cause error
 	serveDone, restart := false, false
@@ -284,7 +288,8 @@ func (k *Kernel) Run(ctx context.Context) error {
 }
 
 // stop is the stop order of 06 §6.5.2 that exists at R1: readiness false
-// (STOPPING=1, 05-health §5H.3.4 step 3), the listener's drain within
+// (STOPPING=1, 05-health §5H.3.4 step 3), the checkpoint sweeper (it started
+// last, after readiness), the listener's drain within
 // min(core.shutdown.http_drain, remaining), workers cancelled and awaited,
 // module hooks' Stop in exact reverse start order, then metrics and logging,
 // which close regardless of the budget. The scheduler, the task drain,
@@ -296,6 +301,11 @@ func (k *Kernel) stop(ctx context.Context, deadline time.Time, srv Server, serve
 	k.signal(ctx, "stopping", k.notifier.Stopping())
 	k.signal(ctx, "status", k.notifier.Status(statusStopping))
 	k.log.InfoContext(ctx, "kernel: stopping", "budget", time.Until(deadline).Round(time.Millisecond).String())
+	// The checkpoint sweeper started last (after readiness), so it stops
+	// first; a deletion in progress finishes.
+	if err := k.stopSweeper(deadline); err != nil {
+		errs = append(errs, err)
+	}
 
 	drain := time.Now().Add(httpDrain)
 	if deadline.Before(drain) {

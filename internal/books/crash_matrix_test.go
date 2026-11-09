@@ -1,5 +1,5 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
 // last-edited: 2026-11-08
 
@@ -7,11 +7,13 @@ package books
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -85,8 +87,12 @@ func TestBootCrashMatrix_ABOCoversEveryWriter(t *testing.T) {
 // those with a record-less checkpoint directory (P4a's sweep), killed before
 // its first step's batch (the next boot reuses the open checkpoint) and
 // before its checkpoint's completion (the next boot completes the stranded
-// attempt); and a HEAD store holding core keys without an install marker,
-// which every boot refuses after P2 (the failed boot's storage close).
+// attempt); a store a first boot already took through its checkpoint, beside
+// three things the checkpoint sweeper's first sweep after readiness handles
+// (an expired completed checkpoint, another install's open one, a
+// record-less directory); and a HEAD store holding core keys without an
+// install marker, which every boot refuses after P2 (the failed boot's
+// storage close).
 func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 	t.Helper()
 	mk := func(name string, write func(dbPath string)) crashmatrix.Fixture {
@@ -117,11 +123,47 @@ func aboCrashFixtures(t *testing.T) []crashmatrix.Fixture {
 		require.NoError(t, db.Close())
 	})
 	foreign.Refusal = storage.ErrForeignKeys
+	sweep := mk("checkpoints-to-sweep", atCap)
+	require.NoError(t, crashmatrix.Boot(t, aboStorageBuild(sweep), sweep))
+	addCheckpointsToSweep(t, sweep.DBDir)
 	return []crashmatrix.Fixture{
 		mk("fresh", nil),
 		mk("head-at-legacycap", atCap),
 		mk("head-at-v58", func(p string) { headStoreAtVersion(t, p, 58, nil) }),
-		garbage, reused, stranded, foreign,
+		garbage, reused, stranded, foreign, sweep,
+	}
+}
+
+// addCheckpointsToSweep puts beside the store at dbPath, which a first boot
+// already took through its checkpoint (so the next boot takes none and P4a
+// runs no garbage sweep), three entries the checkpoint sweeper's first sweep
+// after readiness handles (05-storage §5S.3.12 "Retention"; §5S.4 step 15):
+// a completed checkpoint past its delete_after (deleted, record then copy),
+// another install's open checkpoint (released: delete_after = now + 7 days)
+// and a checkpoint directory without a record (garbage). Each copy is an
+// empty store, so it opens and holds no module row.
+func addCheckpointsToSweep(t *testing.T, dbPath string) {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(dbPath), ".mediacore-checkpoints")
+	const (
+		expired  = "20260301T000000Z-e9b1e001"
+		orphaned = "20260302T000000Z-0b1e0002"
+		garbage  = "20260303T000000Z-6a7b0003"
+	)
+	for _, n := range []string{expired, orphaned, garbage} {
+		db, err := pebble.Open(filepath.Join(dir, n, "db"), &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+	}
+	day := 24 * time.Hour
+	completed, due := crashmatrix.Now().Add(-14*day), crashmatrix.Now().Add(-7*day)
+	records := map[string]string{
+		expired: fmt.Sprintf(`{"install_id":"wayne-install","epoch":1,"taken_at":%q,"completed_at":%q,"delete_after":%q,"status":"completed"}`,
+			completed.Format(time.RFC3339), completed.Format(time.RFC3339), due.Format(time.RFC3339)),
+		orphaned: fmt.Sprintf(`{"install_id":"joker-install","epoch":1,"taken_at":%q,"status":"open"}`, completed.Format(time.RFC3339)),
+	}
+	for n, rec := range records {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, n+".json"), []byte(rec+"\n"), 0o600))
 	}
 }
 
@@ -162,6 +204,11 @@ func aboUnreachedLabels() map[string]string {
 		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback": "books declares no level step at R1",
 		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
+		// The kit's clock is fixed (crashmatrix.Now) and a fixture's files
+		// are copied into memory with the host's current time as their
+		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
+		// TestDryRunScratchModeAndSweep deletes one on a fake clock.
+		"storage.sweeper.scratch": "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
 	}
 	for _, r := range crashmatrix.Rows() {
 		for _, l := range r.Labels {

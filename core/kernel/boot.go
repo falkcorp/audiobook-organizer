@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -101,6 +101,9 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	if err := k.storageMetrics(ctx); err != nil {
 		return nil, err
 	}
+	// The checkpoint sweeper (05-storage §5S.4 step 15): registered on the
+	// open store once its gauge exists; Run starts it after readiness.
+	k.newSweeper()
 	if err := k.phase(phaseP6, func() error { return k.register(ctx) }); err != nil {
 		return nil, err
 	}

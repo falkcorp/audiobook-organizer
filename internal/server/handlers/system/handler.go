@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.4
+// version: 1.29.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -49,6 +49,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/gin-gonic/gin"
@@ -111,6 +112,12 @@ type Handler struct {
 	// wired. Nil, or a provider yielding nil, means no step is degraded.
 	getDegraded func() DegradedSource
 
+	// postureTokens yields, at request time, the authenticated-only posture
+	// tokens raised now with their subjects (the storage_checkpoint_* tokens
+	// from R1). Nil, or a provider yielding nil, raises none. See
+	// WithPostureTokens.
+	postureTokens func() []PostureToken
+
 	// repairsAccess decides which Repairs operations (repairs.plan,
 	// repairs.apply) the caller may see in GET /dashboard's recent_operations.
 	// Unset (nil) hides every Repairs operation: see WithRepairsOpAccess.
@@ -126,6 +133,29 @@ type Handler struct {
 // pins the server's wiring.
 func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
 	h.repairsAccess = a
+	return h
+}
+
+// PostureToken is one raised posture token with what it is about
+// (05-health §5H.3.1): carried only by GET /system/status's authenticated
+// `degraded` (its Token) and `degraded_details` (the whole value), never by
+// /health. Subject names the checkpoint, scratch entry or path; DeleteAfter
+// is when a retained checkpoint goes (storage_checkpoint_retained);
+// AgeSeconds is how old an open one is (storage_checkpoint_open).
+type PostureToken struct {
+	Token       string     `json:"token"`
+	Subject     string     `json:"subject,omitempty"`
+	DeleteAfter *time.Time `json:"delete_after,omitempty"`
+	AgeSeconds  int64      `json:"age_seconds,omitempty"`
+}
+
+// WithPostureTokens installs the provider of the posture tokens GET
+// /system/status reports (05-health §5H.10 R1: the authenticated degraded
+// field grows the storage_checkpoint_* tokens). A setter, as
+// WithRepairsOpAccess is, because New already has twelve parameters; unset
+// reports none.
+func (h *Handler) WithPostureTokens(f func() []PostureToken) *Handler {
+	h.postureTokens = f
 	return h
 }
 
@@ -198,6 +228,54 @@ type readinessSource interface {
 // list while the in-memory read layer is still warming.
 const DegradedMemdbWarming = "memdb_warming"
 
+// unauthenticatedToken reports whether tok is in 05-health §5H.3.1's fixed
+// set, the only tokens /health may carry: memdb_warming, the token of a
+// startup step classified Degraded (startup.Table) and
+// basic_gate_no_password. Every other token is a posture token, reported on
+// GET /system/status only. Pinned by TestHealth_UnauthenticatedTokenSetGolden.
+func unauthenticatedToken(tok string) bool {
+	if tok == DegradedMemdbWarming || tok == servermiddleware.BasicGateNoPasswordToken {
+		return true
+	}
+	return slices.ContainsFunc(startup.Table, func(st startup.Step) bool {
+		return st.Class == startup.Degraded && st.Token != "" && st.Token == tok
+	})
+}
+
+// readiness is the store's warmup state: ready once the in-memory read
+// layer is published or warmup fell back (done); a store with no warmup to
+// report on is ready.
+func readiness(store SystemStore) (ready, memReady, done bool, ms int64) {
+	ready, memReady = true, true
+	if store == nil {
+		return ready, memReady, false, 0
+	}
+	// AsCapability sees through decorators (search index, audit).
+	if src, ok := database.AsCapability[readinessSource](store); ok {
+		memReady, done, ms = src.WarmupStatus()
+		ready = done
+	}
+	return ready, memReady, done, ms
+}
+
+// fixedTokens is HEAD's fixed-token source: memdb_warming while the read
+// layer warms, and the tokens getDegraded yields (failed Degraded startup
+// steps, basic_gate_no_password). R1 splits it in two (05-health §5H.10):
+// /health carries the tokens of the unauthenticated set, and GET
+// /system/status's degraded carries every token.
+func (h *Handler) fixedTokens(ready bool) []string {
+	tokens := []string{}
+	if !ready {
+		tokens = append(tokens, DegradedMemdbWarming)
+	}
+	if h.getDegraded != nil {
+		if src := h.getDegraded(); src != nil {
+			tokens = append(tokens, src.Tokens()...)
+		}
+	}
+	return tokens
+}
+
 // HealthCheck implements GET /health (and /api/health, /api/v1/health).
 //
 // LIVENESS PLUS READINESS — it deliberately says nothing about what this server
@@ -226,22 +304,13 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 	// know whether reads are on the fast path read `ready`. Every value below is a
 	// bool, a number of milliseconds or a fixed machine token -- never an error
 	// string, path, version or count.
-	ready, memReady := true, true
-	var warmupMS int64
-	warmupDone := false
-	degraded := []string{}
-
 	resp := gin.H{
 		"status":    "ok",
 		"timestamp": time.Now().Unix(),
 	}
-	if store := h.resolveStore(); store != nil {
-		// A store with no warmup to report on has nothing to wait for, so it is
-		// ready. AsCapability sees through decorators (search index, audit).
-		if src, ok := database.AsCapability[readinessSource](store); ok {
-			memReady, warmupDone, warmupMS = src.WarmupStatus()
-			ready = warmupDone
-		}
+	store := h.resolveStore()
+	ready, memReady, warmupDone, warmupMS := readiness(store)
+	if store != nil {
 		// CountAuthors is the cheapest of the aggregates and, like the others,
 		// fails when the store is unreachable — which is the whole signal. The
 		// value is read and discarded on purpose.
@@ -252,17 +321,11 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 			resp["status"] = "degraded"
 		}
 	}
-	if !ready {
-		degraded = append(degraded, DegradedMemdbWarming)
-	}
-	// Startup steps classified Degraded that failed (startup.Table): fixed
-	// tokens such as "search_index", never error text. Merged with
-	// memdb_warming and sorted so the list is stable across probes.
-	if h.getDegraded != nil {
-		if src := h.getDegraded(); src != nil {
-			degraded = append(degraded, src.Tokens()...)
-		}
-	}
+	// The unauthenticated set only (05-health §5H.3.1): fixed machine
+	// tokens, never error text, sorted so the list is stable across probes.
+	// A token outside the set is left out here and reported on GET
+	// /system/status, which carries every token.
+	degraded := slices.DeleteFunc(h.fixedTokens(ready), func(tok string) bool { return !unauthenticatedToken(tok) })
 	slices.Sort(degraded)
 	degraded = slices.Compact(degraded)
 	resp["ready"] = ready
@@ -282,24 +345,47 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 // TestHealth_UnauthenticatedTokenSetGolden.
 const DegradedAutoUpdatePaused = "auto_update_paused"
 
+// The storage_checkpoint_* posture tokens (05-storage §5S.3.12; 05-health
+// §5H.3.1), reported from R1 on GET /system/status only, each with its
+// subject in degraded_details: a checkpoint is retained (with its
+// delete_after), an open checkpoint or scratch entry exists (with its age),
+// a checkpoint directory or file is group- or world-accessible (naming it).
+const (
+	DegradedStorageCheckpointRetained = "storage_checkpoint_retained"
+	DegradedStorageCheckpointOpen     = "storage_checkpoint_open"
+	DegradedStorageCheckpointMode     = "storage_checkpoint_mode"
+)
+
 // systemStatusResponse is GET /system/status's body: the collected status plus
-// `degraded`, the authenticated list of posture tokens. R0 adds the field with
-// one token, auto_update_paused; R1 extends the same field with the other
-// posture tokens (05-health 5H.10).
+// `degraded`, the authenticated list of every token raised now. R0 added the
+// field with one posture token, auto_update_paused; R1 makes it every token,
+// /health's fixed set included, and extends it with the storage_checkpoint_*
+// posture tokens, whose subjects travel `degraded_details` (05-health
+// 5H.10).
 type systemStatusResponse struct {
 	*sysinfo.SystemStatus
-	Degraded []string `json:"degraded"`
+	Degraded        []string       `json:"degraded"`
+	DegradedDetails []PostureToken `json:"degraded_details"`
 }
 
-// authenticatedDegraded returns the posture tokens raised now, sorted. Never
-// nil, so an empty list encodes as [].
-func authenticatedDegraded() []string {
-	degraded := []string{}
+// authenticatedDegraded returns every token raised now, sorted and
+// de-duplicated, and the posture tokens' details. Neither is nil, so an
+// empty list encodes as [].
+func (h *Handler) authenticatedDegraded() ([]string, []PostureToken) {
+	ready, _, _, _ := readiness(h.resolveStore())
+	degraded := h.fixedTokens(ready)
 	if config.Snapshot().AutoUpdate.Enabled {
 		degraded = append(degraded, DegradedAutoUpdatePaused)
 	}
+	details := []PostureToken{}
+	if h.postureTokens != nil {
+		for _, p := range h.postureTokens() {
+			degraded = append(degraded, p.Token)
+			details = append(details, p)
+		}
+	}
 	slices.Sort(degraded)
-	return degraded
+	return slices.Compact(degraded), details
 }
 
 // GetSystemStatus implements GET /system/status.
@@ -328,7 +414,8 @@ func (h *Handler) GetSystemStatus(c *gin.Context) {
 	// BrokenFileCount is now populated by CollectSystemStatus via LibraryStats.BrokenFiles
 	// (cached in the stats:library PebbleDB entry). No per-request scan needed.
 
-	httputil.RespondWithOK(c, systemStatusResponse{SystemStatus: status, Degraded: authenticatedDegraded()})
+	degraded, details := h.authenticatedDegraded()
+	httputil.RespondWithOK(c, systemStatusResponse{SystemStatus: status, Degraded: degraded, DegradedDetails: details})
 }
 
 // GetSystemAnnouncements implements GET /system/announcements.
