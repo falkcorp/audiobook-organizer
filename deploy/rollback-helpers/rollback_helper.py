@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.8.0
+# version: 1.10.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -614,6 +614,9 @@ _ENV_DENIED = frozenset(
         "TZDIR",
         "GLIBC_TUNABLES",
         "BASH_ENV",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "LOCPATH",
     }
 )
 _ENV_DENIED_PREFIXES = ("LD_", "MALLOC_", "PYTHON", "PERL5")
@@ -691,6 +694,16 @@ UNIT_DIRS = (
     "/lib/systemd/system",
     "/run/systemd/generator.late",
 )
+# Where the unit's main file (its fragment) may live besides SYSTEMD_DIR:
+# the unit directories the owner or a package writes. A copy in a generator,
+# transient, .control or .attached directory was made by something else and
+# refuses.
+FRAGMENT_DIRS = (
+    "/run/systemd/system",
+    "/usr/local/lib/systemd/system",
+    "/usr/lib/systemd/system",
+    "/lib/systemd/system",
+)
 # Settings no drop-in may carry. Every Environment= line local.conf deploys
 # reaches the processes the unit runs; that is safe only while those are the
 # service user's own ExecStart (whose code the deploy user already controls
@@ -736,40 +749,66 @@ def _read_root_conf(path: str) -> str:
     return text
 
 
-def _check_rules(text: str, cfg: dict[str, str], path: str) -> None:
-    """Refuse a unit file or drop-in that runs anything but the service
-    user's ExecStart: another Exec*= line, a + or ! prefix,
-    PermissionsStartOnly=, AmbientCapabilities=, or a User=/Group= other
-    than the config's. Continuation lines are not directives; directive
-    lines must be printable ASCII. A refusal names the line, never its
-    text."""
-    want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
-    continued = False
+def _logical_lines(text: str, path: str) -> list[tuple[int, str]]:
+    """The directive lines systemd reads, joined the way its parser joins
+    them (src/shared/conf-parser.c): leading whitespace is skipped; a line
+    continues only when it ends in an ODD number of backslashes, the last
+    of which becomes a space; comment lines inside a continuation are
+    skipped; a continuation still open at the end of the file is a line.
+    Returns (first physical line number, joined text). Every physical line
+    that is not a comment must be printable ASCII and tabs."""
+    out: list[tuple[int, str]] = []
+    cont: str | None = None
+    start = 0
     for n, raw in enumerate(text.split("\n"), 1):
-        s = raw.strip(_WS)
-        if continued:
-            continued = s.endswith("\\")
-            continue
-        if not s or s[0] in "#;":
+        line = raw.lstrip(_WS)
+        if line[:1] in ("#", ";"):
+            continue  # a comment, inside a continuation or not
+        if cont is None and not line:
             continue
         if not _DIRECTIVE_CHARS.fullmatch(raw):
             raise RefusedError(
                 f"{path} line {n}: only printable ASCII and tabs are allowed outside comments; "
                 "nothing installed"
             )
-        continued = s.endswith("\\")
-        key, sep, value = s.partition("=")
-        key, value = key.strip(_WS), value.strip(_WS)
+        backslashes = len(line) - len(line.rstrip("\\"))
+        if backslashes % 2 == 1:
+            if cont is None:
+                cont, start = "", n
+            cont += line[:-1] + " "
+            continue
+        if cont is None:
+            out.append((n, line))
+        else:
+            out.append((start, cont + line))
+            cont = None
+    if cont is not None:
+        out.append((start, cont))
+    return out
+
+
+def _check_rules(text: str, cfg: dict[str, str], path: str) -> None:
+    """Refuse a unit file or drop-in that runs anything but the service
+    user's ExecStart: another Exec*= line, an ExecStart= whose command does
+    not start with an absolute path after only the @, - and : prefixes (so
+    no + ! | or anything unknown), PermissionsStartOnly=,
+    AmbientCapabilities=, or a User=/Group= other than the config's. Lines
+    are checked as systemd joins them (_logical_lines). A refusal names the
+    line, never its text."""
+    want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
+    for n, line in _logical_lines(text, path):
+        key, sep, value = line.partition("=")
+        key, value = key.strip(_WS), value.strip(_WS + "\n\r")
         if not sep:
             continue
         problem = ""
         if key.startswith("Exec") and key != "ExecStart":
             problem = "runs a command other than ExecStart="
-        elif key == "ExecStart" and set(value[: len(value) - len(value.lstrip("@-:+!"))]) & {
-            "+",
-            "!",
-        }:
-            problem = "runs ExecStart= with a + or ! prefix (with privileges)"
+        elif key == "ExecStart" and value and not value.lstrip("@-:").startswith("/"):
+            problem = (
+                "runs ExecStart= with a prefix other than @, - or : (+ and ! run it with "
+                "privileges) or without an absolute path"
+            )
         elif key in _HOST_REFUSED:
             problem = f"sets {key}="
         elif key in want and value != want[key]:
@@ -810,6 +849,44 @@ def _dropin_dir_names(unit: str) -> list[str]:
     return [*names, "service.d"]
 
 
+def _unit_names(cfg: dict[str, str]) -> list[str]:
+    """The unit's name and its aliases: what `systemctl show -p Names`
+    reports (parsed strictly) and every symlink in a unit directory that
+    points at a file named after the unit (an alias not loaded yet)."""
+    unit = cfg["unit"]
+    names = {unit}
+    p = subprocess.run(  # noqa: S603 (fixed argv)
+        [TOOLS["systemctl"], "show", "-p", "Names", "--value", unit],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if p.returncode == 0:
+        for tok in p.stdout.strip("\n").split(" "):
+            if not tok:
+                continue
+            if not _UNIT.fullmatch(tok):
+                raise RefusedError(
+                    f"systemctl show -p Names for {unit} gave a name the helper cannot parse; "
+                    "nothing installed"
+                )
+            names.add(tok)
+    for root in (SYSTEMD_DIR, *UNIT_DIRS):
+        try:
+            entries = os.listdir(root)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        for e in entries:
+            path = f"{root}/{e}"
+            if (
+                _UNIT.fullmatch(e)
+                and os.path.islink(path)
+                and os.path.basename(os.readlink(path)) == unit
+            ):
+                names.add(e)
+    return sorted(names)
+
+
 def _unit_dropins(cfg: dict[str, str]) -> list[str]:
     """Every drop-in systemd applies to the unit: the ones it reports
     loaded (`systemctl show -p DropInPaths`, parsed strictly) together with
@@ -836,8 +913,9 @@ def _unit_dropins(cfg: dict[str, str]) -> list[str]:
                 )
             found.add(tok)
     dirs = {os.path.dirname(f) for f in found}
+    dir_names = sorted({d for n in _unit_names(cfg) for d in _dropin_dir_names(n)})
     for root in (SYSTEMD_DIR, *UNIT_DIRS):
-        for name in _dropin_dir_names(cfg["unit"]):
+        for name in dir_names:
             d = f"{root}/{name}"
             try:
                 dst = os.lstat(d)
@@ -855,6 +933,84 @@ def _unit_dropins(cfg: dict[str, str]) -> list[str]:
                 "nothing installed"
             )
     return sorted(found)
+
+
+def _check_unit_fragment(cfg: dict[str, str], installing_unit: bool) -> None:
+    """The unit's main file must pass the same rules as its drop-ins and set
+    the config's User=/Group= (a unit without User= runs as root).
+
+    The candidates are what `systemctl show -p FragmentPath -p SourcePath`
+    reports (parsed strictly) and every copy of the unit file in the unit
+    directories (an /etc copy shadows /usr/lib, but each is checked). A
+    generated unit (SourcePath set), a FragmentPath outside SYSTEMD_DIR and
+    FRAGMENT_DIRS, or a copy in any other directory refuses. With none at
+    all it refuses, except for install-staged unit, which is about to write
+    the checked template to SYSTEMD_DIR."""
+    unit = cfg["unit"]
+    allowed = {SYSTEMD_DIR, *FRAGMENT_DIRS}
+    p = subprocess.run(  # noqa: S603 (fixed argv)
+        [TOOLS["systemctl"], "show", "-p", "FragmentPath", "-p", "SourcePath", unit],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    found: set[str] = set()
+    if p.returncode == 0:
+        props: dict[str, str] = {}
+        for line in p.stdout.split("\n"):
+            if not line:
+                continue
+            key, sep, value = line.partition("=")
+            if not sep or key not in ("FragmentPath", "SourcePath") or key in props:
+                raise RefusedError(
+                    f"systemctl show -p FragmentPath -p SourcePath for {unit} gave an answer the helper "
+                    "cannot parse; nothing installed"
+                )
+            if value and not _PATH.fullmatch(value):
+                raise RefusedError(
+                    f"systemctl show gave a {key} for {unit} the helper cannot parse; nothing installed"
+                )
+            props[key] = value
+        if props.get("SourcePath"):
+            raise RefusedError(
+                f"{unit} is generated from another file (SourcePath is set): only a unit file the owner "
+                "installed is accepted; nothing installed"
+            )
+        frag = props.get("FragmentPath", "")
+        if frag:
+            if os.path.dirname(frag) not in allowed or os.path.basename(frag) != unit:
+                raise RefusedError(
+                    f"systemctl reports {unit}'s FragmentPath outside the unit directories "
+                    f"({', '.join(sorted(allowed))}); nothing installed"
+                )
+            found.add(frag)
+    for root in (SYSTEMD_DIR, *UNIT_DIRS):
+        path = f"{root}/{unit}"
+        if os.path.lexists(path):
+            if root not in allowed:
+                raise RefusedError(
+                    f"{path} is a copy of the unit in a directory systemd fills itself (a generator, "
+                    "transient or attached unit); nothing installed"
+                )
+            found.add(path)
+    etc = f"{SYSTEMD_DIR}/{unit}"
+    if not found and not installing_unit:
+        raise RefusedError(
+            f"no unit file for {unit} was found ({etc} or the other unit directories): install the "
+            "unit first (install-staged unit); nothing installed"
+        )
+    for path in sorted(found):
+        try:
+            text = _read_root_conf(path)
+        except FileNotFoundError as e:
+            if installing_unit and path == etc:
+                continue
+            raise RefusedError(f"{path}, {unit}'s unit file, is missing; nothing installed") from e
+        try:
+            _check_template(text, cfg)
+        except RefusedError as e:
+            raise RefusedError(f"{path}: {e}; nothing installed") from e
+        _check_rules(text, cfg, path)
 
 
 def _check_unit_dropins(cfg: dict[str, str]) -> None:
@@ -1003,6 +1159,7 @@ def op_install(args: list[str]) -> int:
         # neither the unit nor local.conf is installed.
         _check_host_conf(cfg)
         _check_unit_dropins(cfg)
+        _check_unit_fragment(cfg, installing_unit=what == "unit")
     if what == "unit":
         data = _read_template(cfg)
         os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
