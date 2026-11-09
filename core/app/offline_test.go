@@ -1,5 +1,5 @@
 // file: core/app/offline_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cc4eb0c6-a5b7-4c42-ade1-8413517a38ae
 // last-edited: 2026-11-08
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,7 +91,8 @@ func TestPruneCheckpointsCommand(t *testing.T) {
 	}
 
 	cmds := OfflineCommands(opts, mods...)
-	if len(cmds) != 1 || cmds[0].Short == "" || !strings.Contains(cmds[0].Long, "while it serves") {
+	i := slices.IndexFunc(cmds, func(c Command) bool { return c.Name == "storage prune-checkpoints" })
+	if i < 0 || cmds[i].Short == "" || !strings.Contains(cmds[i].Long, "while it serves") {
 		t.Fatalf("OfflineCommands = %+v, want storage prune-checkpoints with its help", cmds)
 	}
 	for _, tc := range []struct {

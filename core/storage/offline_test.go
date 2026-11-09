@@ -1,5 +1,5 @@
 // file: core/storage/offline_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1e8a37-2b9d-4f05-a6e3-91d7b05c2f48
 // last-edited: 2026-11-08
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +77,19 @@ func TestOfflineRefusesEmptyStore(t *testing.T) {
 	}
 	if ok, _ := exists(e.fs, filepath.Join(e.path, "CURRENT")); ok {
 		t.Fatal("the offline open created a store")
+	}
+	// ReadOnly alone, without MustExist, refuses a missing store the same
+	// way: a read-only open cannot make one, and leaves no directory.
+	ro := e.opts
+	ro.ReadOnly = true
+	if op, err := Open(context.Background(), ro); !errors.Is(err, ErrNoStore) {
+		if op != nil {
+			_ = op.Close()
+		}
+		t.Fatalf("read-only open of a path with no store = %v, want ErrNoStore", err)
+	}
+	if ok, _ := exists(e.fs, e.path); ok {
+		t.Fatal("the read-only open left a directory where there was no store")
 	}
 	// An empty Pebble directory (a store created and never written).
 	db, err := cpebble.Open(e.path, &cpebble.Options{FS: e.fs, Logger: quiet{}})
@@ -386,5 +400,42 @@ func TestConsumedRecordNeverPending(t *testing.T) {
 	}
 	if c := checkpointOf("/gotham", "20261108T000000Z-0badc0de", r); c.Restorable() {
 		t.Fatal("a consumed checkpoint is restorable")
+	}
+}
+
+// TestCheckpointsLockIsTheSweepLock (§5S.3.12 "Retention"; R1-24's seam):
+// Checkpoints.Lock is the sweeper's and prune-checkpoints' lock, so while
+// storage restore-offline holds it a prune is ErrCheckpointSweepBusy and
+// deletes nothing, and once it is released the prune runs; with no
+// checkpoint directory there is nothing to lock. Dir and Scratch name the
+// directory and its scratch area.
+func TestCheckpointsLockIsTheSweepLock(t *testing.T) {
+	base := t.TempDir()
+	db := filepath.Join(base, "db", "main.pebble")
+	cps, err := CheckpointsOf(FS{}, db, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(base, "db", checkpointLeaf); cps.Dir() != want || cps.Scratch() != filepath.Join(want, checkpointScratch) {
+		t.Fatalf("Dir %s and Scratch %s, want %s and its scratch area", cps.Dir(), cps.Scratch(), want)
+	}
+	unlock, err := cps.Lock(t.Context())
+	if err != nil {
+		t.Fatalf("Lock with no checkpoint directory = %v", err)
+	}
+	unlock()
+	if err := os.MkdirAll(cps.Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if unlock, err = cps.Lock(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	prune := PruneOptions{Path: db, IncludeOpen: true, lockWait: 200 * time.Millisecond}
+	if res, err := PruneCheckpoints(t.Context(), prune); !errors.Is(err, ErrCheckpointSweepBusy) || len(res.Deleted) != 0 {
+		t.Fatalf("prune while restore-offline holds the lock = %+v, %v; want ErrCheckpointSweepBusy", res, err)
+	}
+	unlock()
+	if _, err := PruneCheckpoints(t.Context(), prune); err != nil {
+		t.Fatalf("prune once the lock is released = %v", err)
 	}
 }
