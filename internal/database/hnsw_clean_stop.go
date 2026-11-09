@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -598,6 +598,24 @@ var ErrCleanStopNotDiscarded = errors.New("clean-stop marker may still vouch")
 func TakeHNSWCleanStop(dir string) (bool, error) {
 	rec, err := takeCleanStop(dir)
 	return rec != nil, err
+}
+
+// DiscardHNSWCleanStop removes the clean-stop marker beside the database at
+// dbPath durably (TakeHNSWCleanStop on HNSWSnapshotDir), for a caller about
+// to change the rows the snapshot projects without the server counting the
+// writes: an offline swap or the live restore before it stages or moves
+// anything (R1-25), a command-line write through the offline open before
+// its first write. It fails only when a marker may still vouch
+// (ErrCleanStopNotDiscarded), and the caller then writes nothing: what
+// TakeHNSWCleanStop reports about a marker that did not parse is not this
+// caller's concern (that marker vouched for nothing and is gone). No marker,
+// or no snapshot directory, is nothing to do.
+func DiscardHNSWCleanStop(dbPath string) error {
+	dir := HNSWSnapshotDir(dbPath)
+	if _, err := TakeHNSWCleanStop(dir); errors.Is(err, ErrCleanStopNotDiscarded) {
+		return fmt.Errorf("the HNSW clean-stop marker in %s, which the next boot must not trust: %w", dir, err)
+	}
+	return nil
 }
 
 // takeCleanStop is TakeHNSWCleanStop returning the marker's content: nil when
