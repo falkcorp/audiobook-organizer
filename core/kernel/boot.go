@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-09
 
@@ -95,6 +95,15 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 			return nil, err
 		}
 	}
+	// The fake migration of the unit-lifecycle job (fakemigration_hook.go):
+	// no step exists in any build without the unitlifecycle tag. It runs
+	// where a migration does, after the store is open and before readiness,
+	// and records no phase, so the phase label set stays 06 §6.9's.
+	if !describe {
+		if err := k.runBootSteps(ctx, fakeMigrationSteps()); err != nil {
+			return nil, err
+		}
+	}
 	if err := k.phase(phaseP5, func() error { return k.services(ctx, describe) }); err != nil {
 		return nil, err
 	}
@@ -127,6 +136,27 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		return nil, err
 	}
 	return k, nil
+}
+
+// bootStep is one step of work that runs during boot, after the storage
+// phases and before readiness (only fakeMigrationSteps returns any). run is
+// handed the step's start-timeout extension (Deps.ExtendStart for core's own
+// owner, extendStart) and its logger, and calls extend itself, immediately
+// before the step does its work: the per-step rule of 05-health §5H.3.4.
+type bootStep struct {
+	name string
+	run  func(ctx context.Context, extend func(step string), l *slog.Logger) error
+}
+
+// runBootSteps runs steps in order and stops at the first error.
+func (k *Kernel) runBootSteps(ctx context.Context, steps []bootStep) error {
+	extend := k.extendStart(coreOwner)
+	for _, s := range steps {
+		if err := s.run(ctx, extend, k.coreLog("boot")); err != nil {
+			return fmt.Errorf("kernel: boot step %q: %w", s.name, err)
+		}
+	}
+	return nil
 }
 
 // phase runs one boot phase and records its duration on

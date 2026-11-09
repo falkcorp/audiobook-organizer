@@ -1,7 +1,7 @@
 // file: core/archtest/tags.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d84b6086-3c43-4dad-a2b5-49dbff0d7005
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package archtest
 
@@ -30,7 +30,8 @@ type TagSet struct {
 // because a default-tag go list reports a build-tagged file only under
 // IgnoredGoFiles, without its imports.
 //
-// R1-28 adds the unitlifecycle tag of the fake-migration hook here.
+// unitlifecycle is the tag of core/kernel/fakemigration_hook.go, the test-only
+// fake migration that 09 §9.2.1's unit-lifecycle job builds into its binary.
 func TagSets() []TagSet {
 	return []TagSet{
 		{Name: "default"},
@@ -39,6 +40,7 @@ func TagSets() []TagSet {
 		{Name: "pprof", Tags: []string{"pprof"}},
 		{Name: "race", Tags: []string{"race"}},
 		{Name: "native_taglib", Tags: []string{"native_taglib"}},
+		{Name: "unitlifecycle", Tags: []string{"unitlifecycle"}},
 		{Name: "image", Tags: []string{"embed_frontend", "fts5", "native_taglib"}},
 		{Name: "darwin", GOOS: "darwin", CGOEnabled: "0", Tags: []string{"embed_frontend"}},
 		{Name: "windows-mtls-bridge", GOOS: "windows", Patterns: []string{"./cmd/mtls-bridge"}},
