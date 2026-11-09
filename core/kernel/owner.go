@@ -1,5 +1,5 @@
 // file: core/kernel/owner.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1fa90151-0c86-437d-9058-cfe25186b53b
 // last-edited: 2026-11-09
 
@@ -22,10 +22,12 @@ import (
 // state directory runs as a user other than the state directory's owner,
 // the user the service runs as. What it would leave behind (the swap's
 // journal directories, created 0700; the state files a restore puts back,
-// 0600; an extracted store; the files Pebble writes) would belong to that
-// other user, root most often, and the service could not read or replace
-// them, so its next boot would fail (R1-25 review B-1). Run the command as
-// the owner: the error names the sudo -u line.
+// 0600; an extracted store; the files Pebble writes; an --into copy, the
+// scratch area and the sweep lock in the checkpoint directory) would belong
+// to that other user, root most often, and the service could not read,
+// replace or sweep them: its next boot would fail, or its checkpoint sweeps
+// would stop (R1-25 review B-1). Run the command as the owner: the error
+// names the sudo -u line.
 var ErrNotStateDirOwner = errors.New("kernel: this process is not the state directory's owner")
 
 // refuseNotOwner refuses an offline command (what names it) whose effective

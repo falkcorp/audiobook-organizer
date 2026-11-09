@@ -1,5 +1,5 @@
 // file: core/kernel/restore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
 // last-edited: 2026-11-09
 
@@ -69,11 +69,13 @@ type RestoreOfflineResult struct {
 //   - --archive restores an archive through Config.ArchiveExtract into the
 //     swap's staging directory, refused when the extracted store does not
 //     open read-only;
-//   - in place, the command refuses, before anything else, unless this
-//     process is the state directory's owner (ErrNotStateDirOwner, R1-25
-//     review B-1): the journal directories, the state files it puts back
-//     and the extracted store must be the service's to read and replace.
-//     Then the swap lock is taken exclusively and held until the restore
+//   - every form, in place or --into, refuses before anything else unless
+//     this process is the state directory's owner (ErrNotStateDirOwner,
+//     R1-25 review B-1): the journal directories, the state files it puts
+//     back and the extracted store, and --into's copy, the scratch area
+//     and the sweep lock in the checkpoint directory, must be the
+//     service's to read, replace and sweep;
+//   - in place, the swap lock is taken exclusively and held until the restore
 //     returns (R1-25 review B1): a service that runs or is starting
 //     holds it shared, so the restore refuses with ErrServiceRunning, and no
 //     service starts while it swaps; then the swap slot is read before
@@ -95,8 +97,11 @@ type RestoreOfflineResult struct {
 //   - --into copies the source into a new directory inside the scratch
 //     area, the state files into <dir>.state/, modes 0700 and 0600, and
 //     touches nothing else: no store lock, no swap lock, no slot read, no
-//     swap, no journal, no intent; it runs beside a serving service, and
-//     as any user.
+//     swap, no journal, no intent; it runs beside a serving service, as
+//     the service's user (R1-27's rollback check runs it that way).
+//     Run as root, it would leave root-owned entries in the checkpoint
+//     directory that the sweeper cannot open or remove: a .sweep.lock
+//     every later sweep skips on, a scratch area and a copy.
 //
 // Every form holds the checkpoint directory's sweep lock throughout
 // (storage.Checkpoints.Lock), so a sweep or storage prune-checkpoints never
@@ -108,10 +113,8 @@ func RestoreOffline(ctx context.Context, c Config, req RestoreOfflineRequest) (r
 	if req.Archive != "" && !filepath.IsAbs(req.Archive) {
 		return res, fmt.Errorf("kernel: --archive %q is not an absolute path", req.Archive)
 	}
-	if req.Into == "" {
-		if err := refuseNotOwner(ctx, c.StateDir, "storage restore-offline in place"); err != nil {
-			return res, err
-		}
+	if err := refuseNotOwner(ctx, c.StateDir, "storage restore-offline"); err != nil {
+		return res, err
 	}
 	k, err := offlineKernel(c)
 	if err != nil {
