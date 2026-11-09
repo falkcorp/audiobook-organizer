@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -696,17 +696,31 @@ func TestCheckSnapshotDirs(t *testing.T) {
 	absent := filepath.Join(base, "gotham", "batcave", "hnsw")
 	mustSymlink(t, "joker", filepath.Join(base, "harley"))
 	mustSymlink(t, "riddler", filepath.Join(base, "riddler"))
+	// A directory the process may not search: a missing name under it and
+	// one it may not see cannot be told apart, so it fails closed too.
+	locked := filepath.Join(base, "arkham")
+	mustMkdir(t, locked)
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	}
 	for name, tc := range map[string]struct {
 		dirs []string
 		want error
 	}{
-		"existing and not made yet": {[]string{live, absent}, nil},
-		"none":                      {nil, nil},
-		"dangling":                  {[]string{live, filepath.Join(base, "harley")}, ErrUnresolvableSymlink},
-		"under a dangling link":     {[]string{filepath.Join(base, "harley", "hnsw"), live}, ErrUnresolvableSymlink},
-		"looping":                   {[]string{filepath.Join(base, "riddler", "hnsw")}, ErrUnresolvableSymlink},
+		"existing and not made yet":           {[]string{live, absent}, nil},
+		"none":                                {nil, nil},
+		"dangling":                            {[]string{live, filepath.Join(base, "harley")}, ErrUnresolvableSymlink},
+		"under a dangling link":               {[]string{filepath.Join(base, "harley", "hnsw"), live}, ErrUnresolvableSymlink},
+		"looping":                             {[]string{filepath.Join(base, "riddler", "hnsw")}, ErrUnresolvableSymlink},
+		"under a directory it may not search": {[]string{filepath.Join(locked, "hnsw")}, ErrUnresolvableSymlink},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if name == "under a directory it may not search" && os.Geteuid() == 0 {
+				t.Skip("root searches any directory")
+			}
 			got := CheckSnapshotDirs(tc.dirs)
 			if !errors.Is(got, tc.want) || (tc.want == nil) != (got == nil) {
 				t.Fatalf("CheckSnapshotDirs = %v; want %v", got, tc.want)
