@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package cmd
 
@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
@@ -67,6 +68,9 @@ func RunOperationRunner() {
 		}
 	})
 
+	// The HNSW clean-stop marker beside the database is the parent's: this
+	// open must not take it (database.DisableHNSWCleanStopClaim).
+	database.DisableHNSWCleanStopClaim()
 	snap := config.Snapshot()
 	store, err := initializeStore(snap.DatabaseType, snap.DatabasePath)
 	if err != nil {
