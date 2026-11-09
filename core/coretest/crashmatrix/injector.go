@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/injector.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 81489850-3e9c-4d6d-a657-d875036d118e
 // last-edited: 2026-11-08
 
@@ -52,6 +52,7 @@ type Injector struct {
 	mu    sync.Mutex
 	apps  []*app.App
 	ready int
+	stop  context.CancelFunc // ends the Run in progress (finish)
 }
 
 // newInjector is a boot over rec, or over fsys with no recorder.
@@ -109,22 +110,29 @@ func (inj *Injector) New(ctx context.Context, opts app.Options, mods ...module.M
 	return a, nil
 }
 
-// markReady is the kernel's readiness record: the recorder stops there.
+// markReady is the kernel's readiness record: the recorder stops there,
+// then the Run in progress is stopped.
 func (inj *Injector) markReady() {
 	inj.mu.Lock()
 	inj.ready++
+	stop := inj.stop
 	inj.mu.Unlock()
 	if inj.rec != nil {
 		inj.rec.Freeze()
+	}
+	if stop != nil {
+		stop()
 	}
 }
 
 // errNoApp: Build returned nil without booting an app through Injector.New.
 var errNoApp = errors.New("crashmatrix: Build booted no app through Injector.New")
 
-// finish runs every app Build made to readiness, then stops it (a
-// cancelled context: Run starts, marks readiness, and shuts down at once).
-// It reports whether every app reached readiness.
+// finish runs every app Build made to readiness, then stops it: Run's
+// context is cancelled when the kernel logs readyMessage, after the first
+// checkpoint sweep, which runs on the sweeper's goroutine while Run already
+// waits for a stop. A Run that ends before that (a failed boot) returns on
+// its own. It reports whether every app reached readiness.
 func (inj *Injector) finish(ctx context.Context) error {
 	inj.mu.Lock()
 	apps := append([]*app.App(nil), inj.apps...)
@@ -132,11 +140,15 @@ func (inj *Injector) finish(ctx context.Context) error {
 	if len(apps) == 0 {
 		return errNoApp
 	}
-	stop, cancel := context.WithCancel(ctx)
-	cancel()
 	var errs []error
 	for _, a := range apps {
-		if err := a.Run(stop); err != nil {
+		run, stop := context.WithCancel(ctx)
+		inj.mu.Lock()
+		inj.stop = stop
+		inj.mu.Unlock()
+		err := a.Run(run)
+		stop()
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
