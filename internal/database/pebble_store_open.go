@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/mediacore/buildid"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -39,12 +41,14 @@ var pebbleOpenLog = logger.New("database.pebble-open")
 //     Register builds the store over its Deps.Storage.Legacy with
 //     NewBooksStore, which writes nothing (§5S.4 step 12). Books' start hook
 //     then runs RunBootRepairs, before the server's hook.
-//   - Every standalone caller (the CLI commands, the offline tools, tests):
+//   - Every standalone caller (child mode, the offline tools, tests):
 //     NewPebbleStore and NewPebbleStoreInMemory open the same store the
 //     same way through storage.Open, Prepare and Migrate with books as the
 //     only owner, build the store over books' LegacyRange, and run HEAD's
 //     open-time repairs (runOpenRepairs). The store owns that core DB and its
-//     Close closes it.
+//     Close closes it. Having no P0a, it refuses while a swap is staged or
+//     in flight under StandaloneOptions.StateDir (refuseSwap). ABO's CLI
+//     write subcommands open through app.OpenOffline instead (R1-25).
 //
 // Either way the first boot of a store HEAD wrote takes the pre-migration
 // checkpoint before it writes anything (core's Prepare), books' migrations
@@ -98,6 +102,15 @@ type StandaloneOptions struct {
 	// purpose, to check strict claims refuse it, sets it. Outside a test
 	// binary it changes nothing.
 	ExpectClaimViolations bool
+	// StateDir is the secure state directory whose swap slot (restore/,
+	// 05-storage §5S.3.15) the open reads first: a restore or reset staged
+	// or in flight refuses the open with restorejournal.ErrSwapPending
+	// before anything is opened, checkpointed or migrated, because only the
+	// app's own boot (its P0a) may finish a swap. A slot that cannot be read
+	// refuses too. A caller that may open the live store passes
+	// config.SecureStateDir(); "" reads no slot, for a store the swap never
+	// touches (a test's temporary store, a copy taken for inspection).
+	StateDir string
 }
 
 // claimGuardedClose is the close a standalone store hands newCoreStore. In a
@@ -144,16 +157,20 @@ func claimViolationReport(counts map[storage.ClaimViolation]uint64, keys map[sto
 var standaloneBuildID = sync.OnceValues(func() (string, error) { return buildid.Binary("standalone") })
 
 // OpenStandalone opens the store at path through core storage with books as
-// the only owner: Open (the guard, the claim and foreign-key checks, which
-// write nothing), Prepare (a fresh install's one batch, or the pre-migration
-// checkpoint and the install marker), Migrate (books' pending steps), then
-// the store over books' LegacyRange and HEAD's open-time repairs. A failure
-// closes what it opened.
+// the only owner: the swap slot under o.StateDir read first (a staged or
+// in-flight swap refuses, refuseSwap), then Open (the guard, the claim and
+// foreign-key checks, which write nothing), Prepare (a fresh install's one
+// batch, or the pre-migration checkpoint and the install marker), Migrate
+// (books' pending steps), then the store over books' LegacyRange and HEAD's
+// open-time repairs. A failure closes what it opened.
 func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	ctx := context.Background()
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("pebble store: resolve %s: %w", path, err)
+	}
+	if err := refuseSwap(vfs.Default, o.StateDir); err != nil {
+		return nil, err
 	}
 	build, err := standaloneBuildID()
 	if err != nil {
@@ -195,6 +212,26 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	}
 	pebbleOpenLog.Info("PebbleDB opened at %s through core storage (books at version %d)", logger.SanitizeLogValue(abs), db.AppliedVersion(BooksOwner))
 	return store, nil
+}
+
+// refuseSwap is the standalone opener's pre-boot swap check (R1-23 review
+// S5; 05-storage §5S.4 "Offline open" rule 1): it has no P0a, so it never
+// finishes a swap; it refuses while one is staged or in flight, naming the
+// swap and the fix (boot the app once), and fails closed on a slot it
+// cannot read. A half-swapped store directory is never opened, checkpointed
+// or migrated. "" is no slot to read.
+func refuseSwap(fs vfs.FS, stateDir string) error {
+	if stateDir == "" {
+		return nil
+	}
+	st, err := restorejournal.ReadSlot(fs, stateDir)
+	if err != nil {
+		return fmt.Errorf("pebble store: read the swap slot under %s, which must be empty before a standalone open: %w", stateDir, err)
+	}
+	if err := st.Err(); err != nil {
+		return fmt.Errorf("pebble store: a standalone open runs no pre-boot swap: %w", err)
+	}
+	return nil
 }
 
 // NewBooksStore is books' constructor in the served app (05-storage §5S.9.3:
