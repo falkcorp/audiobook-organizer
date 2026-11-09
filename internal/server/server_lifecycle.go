@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.1
+// version: 4.67.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-08
 
@@ -298,6 +298,23 @@ func (s *Server) startupStepsFor(cfg ServerConfig) *startup.Steps {
 // from one config snapshot, so saving a password clears the token on the next
 // probe without a restart. With no runner yet and no gate token it returns
 // nil, so a nil *startup.Steps is never boxed into a non-nil interface.
+// SetPostureTokens installs the provider of GET /system/status's posture
+// tokens (05-health §5H.10 R1; 05-storage §5S.3.12): internal/books hands
+// it the App's checkpoint health once New has returned. They are reported
+// on that authenticated route only, never on /health.
+func (s *Server) SetPostureTokens(f func() []systemhandlers.PostureToken) {
+	s.postureTokens.Store(&f)
+}
+
+// currentPostureTokens is the system handler's lazy provider: the tokens of
+// the provider SetPostureTokens installed, none before.
+func (s *Server) currentPostureTokens() []systemhandlers.PostureToken {
+	if f := s.postureTokens.Load(); f != nil && *f != nil {
+		return (*f)()
+	}
+	return nil
+}
+
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
 	st := s.startupSteps.Load()
 	noPassword := servermiddleware.BasicGateNoPassword()

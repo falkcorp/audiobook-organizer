@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/invariants.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: bc10682b-4c38-446d-a7dd-4fb4b2cc676b
 // last-edited: 2026-11-08
 
@@ -322,9 +322,29 @@ func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 	return out, pending, nil
 }
 
+// isCheckpointName reports whether n is in the checkpoint grammar of
+// 05-storage §5S.3.12 "Where", <YYYYMMDD>T<HHMMSS>Z-<8 hex digits>.
+func isCheckpointName(n string) bool {
+	if len(n) != 25 || n[8] != 'T' || n[15] != 'Z' || n[16] != '-' {
+		return false
+	}
+	for i := range len(n) {
+		c := n[i]
+		switch {
+		case i == 8 || i == 15 || i == 16:
+		case i < 16 && (c < '0' || c > '9'):
+			return false
+		case i > 16 && !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f'):
+			return false
+		}
+	}
+	return true
+}
+
 // readCheckpoints reads the checkpoint directory: the module-row digest of
 // each complete checkpoint, the directories with no record, the records
 // with no complete directory, and the checkpoints whose store does not open.
+// Only names in the checkpoint grammar are read.
 func readCheckpoints(fsys vfs.FS, dir string) (complete, partial, orphans, broken []string, err error) {
 	names, err := fsys.List(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -338,6 +358,13 @@ func readCheckpoints(fsys vfs.FS, dir string) (complete, partial, orphans, broke
 		have[n] = true
 	}
 	for _, n := range names {
+		base, _ := strings.CutSuffix(n, ".json")
+		base, _ = strings.CutSuffix(base, ".tmp")
+		if !isCheckpointName(base) {
+			// The scratch area, the sweep's lock file, or a name no writer
+			// makes: not a checkpoint (05-storage §5S.3.12 "Where").
+			continue
+		}
 		switch {
 		case strings.HasSuffix(n, ".json"):
 			if base := strings.TrimSuffix(n, ".json"); !have[base] {
@@ -432,8 +459,26 @@ func (fr *fixtureRun) check(at string, ch chain) {
 	}
 }
 
+// checkStore asserts I2 and I3 on a chain that reached readiness with a
+// Row.Retried writer's failure logged; I6 waits for the retry.
+func (fr *fixtureRun) checkStore(at string, ch chain) {
+	if ch.outcome.err != nil {
+		fr.errorf("%s: reading the result: %v", at, ch.outcome.err)
+		return
+	}
+	for _, msg := range fr.storeViolations(ch.outcome) {
+		fr.errorf("%s: %s", at, msg)
+	}
+}
+
 // violations lists o's breaches of I2, I3 and I6.
 func (fr *fixtureRun) violations(o outcome) []string {
+	return append(fr.storeViolations(o), fr.checkpointViolations(o)...)
+}
+
+// storeViolations lists o's breaches of I2 and I3: the journals, the store
+// at the DB path, and its level sidecar.
+func (fr *fixtureRun) storeViolations(o outcome) []string {
 	var out []string
 	for id, j := range o.journals {
 		done := terminal(j.last)
@@ -478,6 +523,12 @@ func (fr *fixtureRun) violations(o outcome) []string {
 			}
 		}
 	}
+	return out
+}
+
+// checkpointViolations lists o's breaches of I6: the checkpoints.
+func (fr *fixtureRun) checkpointViolations(o outcome) []string {
+	var out []string
 	if len(o.orphans) > 0 {
 		out = append(out, fmt.Sprintf("I6: checkpoint records with no complete directory: %v", o.orphans))
 	}

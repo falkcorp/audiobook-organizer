@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-08
 
@@ -136,6 +136,16 @@ func (a *App) Close(ctx context.Context) error { return a.k.Close(ctx) }
 // with its subsystem (05-storage §5S.9.1: the census mechanism; 05-backup),
 // and the accessor is deleted with the last of them.
 func (a *App) StorageAdmin() *storage.Admin { return a.k.StorageAdmin() }
+
+// CheckpointHealth is what health reports about the store's checkpoints
+// (05-storage §5S.3.12; 05-health §5H.3.1): every checkpoint and scratch
+// entry as it is now, and the last sweep's group- or world-accessible
+// paths. Release R1 only: until F2's health registry and F8's core
+// endpoints, the storage_checkpoint_* tokens travel the authenticated
+// degraded field of ABO's GET /api/v1/system/status, which ABO's books
+// module builds from this; the accessor is deleted when core reports them
+// itself. Zero, with no error, when New opened no store.
+func (a *App) CheckpointHealth() (storage.CheckpointHealth, error) { return a.k.CheckpointHealth() }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New. Embedding still needs Run: Handler alone
