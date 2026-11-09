@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.9.4
+# version: 1.10.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-11-09
 #
@@ -57,8 +57,9 @@ DEPLOY_HOST := 192.168.0.10
 DEPLOY_BIN := /usr/local/bin/audiobook-organizer
 
 # Path of the main Pebble store on DEPLOY_HOST (the --db / DATABASE_PATH
-# value); required by rollback. `make rollback` reads <DEPLOY_DB>.storage-format
-# and refuses to swap in .prev past a storage format change. Replace the
+# value); required by rollback. `make rollback` reads <DEPLOY_DB>.storage-levels
+# and refuses to swap in .prev past a level step; it must equal db in the
+# rollback helpers' config on the host. Replace the
 # placeholder with your own store path. Use `:=`, not `?=`: the committed
 # Makefile already defines DEPLOY_DB (empty) before it includes this file, so
 # a `?=` here would silently leave it empty.
@@ -104,9 +105,15 @@ deploy:
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
 	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN)'
-	@ssh $(DEPLOY_HOST) 'sudo -n systemctl restart $(DEPLOY_UNIT)' || echo "   systemctl restart reported a failure; the wait below reads the unit and names the cause."
-	@echo "→ Waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating; the in-memory warmup takes minutes)..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
+	@# The InvocationID read before the restart: the wait refuses "ready" until
+	@# the unit has a new one, so a restart that never ran (sudo refused it, ssh
+	@# dropped) cannot pass on the old process. A sudo refusal fails at once.
+	@inv=$$(ssh $(DEPLOY_HOST) 'systemctl show -p InvocationID --value $(DEPLOY_UNIT)') || { echo "ERROR: cannot read $(DEPLOY_UNIT)'s InvocationID on $(DEPLOY_HOST); the new binary is installed but not restarted."; exit 1; }; \
+	  err=$$(ssh $(DEPLOY_HOST) 'sudo -n /usr/bin/systemctl restart $(DEPLOY_UNIT)' 2>&1) || { \
+	    case "$$err" in sudo:*) echo "ERROR: sudo refused the restart ($$err): the new binary is installed but the OLD process still serves. Restart it by hand."; exit 1 ;; esac; \
+	    echo "   systemctl restart reported a failure ($$err); the wait below reads the unit and names the cause."; }; \
+	  echo "→ Waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating; the in-memory warmup takes minutes)..."; \
+	  bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT) "$$inv"
 	@echo "→ Post-deploy: verifying the deployed binary's version (--version-json over ssh)..."
 	@expected="$(VERSION)"; \
 	  deployed=$$(ssh $(DEPLOY_HOST) $(DEPLOY_BIN) --version-json 2>/dev/null | \
