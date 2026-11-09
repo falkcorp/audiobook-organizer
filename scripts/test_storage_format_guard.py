@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 2.0.0
+# version: 2.1.0
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
 # last-edited: 2026-11-09
 
@@ -30,6 +30,7 @@ UNKNOWN_LEVELS = R("", "Error: unknown flag: --print-storage-levels\n", 1)
 UNKNOWN_FORMAT = R("", "Error: unknown flag: --print-storage-format\n", 1)
 MISSING = R("", "cat: /data/db.storage-levels: No such file or directory\n", 1)
 SUDO = R("", "sudo: a password is required\n", 1)
+NO_POINTER = R("", "cat: /data/db.migration-checkpoint: No such file or directory\n", 1)
 
 
 def opts(**kw):
@@ -39,6 +40,7 @@ def opts(**kw):
         "bin": "/usr/local/bin/aorg",
         "state_dir": "/state",
         "user": "alfred",
+        "archive_dir": "/archives",
     }
     base.update(kw)
     return guard.Opts(**base)
@@ -118,10 +120,7 @@ class Rollback(unittest.TestCase):
     def test_probe_sudo_refusal_names_the_line(self):
         code, lines = self.decide(probe=SUDO)
         self.assertEqual(code, 1)
-        self.assertIn(
-            "sudo -n /usr/bin/find /state -maxdepth 3 -path '/state/restore/*/inflight.json' -print",
-            "\n".join(lines),
-        )
+        self.assertIn(f"sudo -n {guard.HELPER_DIR}/inflight-probe", "\n".join(lines))
 
     def test_probe_sudo_on_stderr_with_exit_0_refuses(self):
         code, _ = self.decide(probe=R("", "sudo: unable to resolve host\n", 0))
@@ -164,6 +163,7 @@ class LegacyProjection(unittest.TestCase):
 
     def decide(self, ignore=False, **results):
         results.setdefault("levels", MISSING)
+        results.setdefault("pointer", NO_POINTER)
         results.setdefault("prev_levels", UNKNOWN_LEVELS)
         results.setdefault("prev_format", R("1\n"))
         return guard.decide_rollback(opts(), table(**results), ignore)
@@ -210,18 +210,10 @@ class Restore(unittest.TestCase):
     def test_checkpoint_matching_prev_prints_the_restore_command(self):
         code, lines, cmd = self.decide()
         self.assertEqual(code, 0, lines)
-        self.assertEqual(
-            cmd,
-            "sudo -n -u alfred /usr/bin/env /usr/local/bin/aorg storage restore-offline "
-            f"--db /data/db --checkpoint {NAME} --accept-loss",
-        )
+        self.assertEqual(cmd, f"sudo -n {guard.HELPER_DIR}/restore-offline checkpoint {NAME}")
         joined = "\n".join(lines)
         self.assertIn("2026-11-01T02:03:04Z", joined)
         self.assertIn("credential change", joined)
-
-    def test_offline_env_is_passed(self):
-        _, _, cmd = self.decide(o=opts(offline_env="HOME=/state ABK_STATE_DIR=/state"))
-        self.assertIn("/usr/bin/env HOME=/state ABK_STATE_DIR=/state /usr/local/bin/aorg", cmd)
 
     def test_mismatch_refuses_naming_from_release(self):
         code, lines, cmd = self.decide(prev_levels=R('{"books":1,"core":1}'))
@@ -273,42 +265,114 @@ class Restore(unittest.TestCase):
     def test_unreadable_record_names_checkpoint_dir(self):
         code, lines, _ = self.decide(**{"record:" + NAME: SUDO})
         self.assertEqual(code, 1)
-        self.assertIn("DEPLOY_CHECKPOINT_DIR", "\n".join(lines))
+        self.assertIn("checkpoint_dir", "\n".join(lines))
 
-    def test_checkpoint_dir_override(self):
-        o = opts(checkpoint_dir="/cp")
-        self.assertEqual(
-            guard.commands(o, NAME)["record"],
-            f"sudo -n -u alfred cat /cp/.mediacore-checkpoints/{NAME}.json",
-        )
+    def test_record_is_read_through_the_helper_as_the_service_user(self):
         self.assertEqual(
             guard.commands(opts(), NAME)["record"],
-            f"sudo -n -u alfred cat /data/.mediacore-checkpoints/{NAME}.json",
+            f"sudo -n -u alfred {guard.HELPER_DIR}/checkpoint-record {NAME}",
         )
+        self.assertEqual(opts(checkpoint_dir="/cp").cp_area, "/cp/.mediacore-checkpoints")
+        self.assertEqual(opts().cp_area, "/data/.mediacore-checkpoints")
+
+    def into(self, levels):
+        return R(f"rollback helper: running as alfred\nLEVELS-BEGIN\n{levels}LEVELS-END\n")
 
     def test_archive_reads_the_scratch_copy(self):
-        o = opts(archive="/archives/batcave.tar.gz")
-        get = table(into_clean=R(), into=R(), into_levels=R("books 0\ncore 0\n"))
-        code, lines, cmd = guard.decide_restore(o, get)
+        o = opts(archive="batcave.tar.gz")
+        code, lines, cmd = guard.decide_restore(o, table(into=self.into("books 0\ncore 0\n")))
         self.assertEqual(code, 0, lines)
-        self.assertTrue(cmd.endswith("--archive /archives/batcave.tar.gz --accept-loss"), cmd)
-        self.assertIn(
-            "--into /data/.mediacore-checkpoints/scratch/rollback-restore-levels",
+        self.assertEqual(cmd, f"sudo -n {guard.HELPER_DIR}/restore-offline archive batcave.tar.gz")
+        self.assertEqual(
             guard.commands(o)["into"],
+            f"sudo -n {guard.HELPER_DIR}/restore-offline into-check batcave.tar.gz",
         )
 
     def test_archive_mismatch_refuses(self):
-        o = opts(archive="/archives/batcave.tar.gz")
-        get = table(into_clean=R(), into=R(), into_levels=R("books 1\ncore 1\n"))
-        code, lines, _ = guard.decide_restore(o, get)
+        o = opts(archive="batcave.tar.gz")
+        code, lines, _ = guard.decide_restore(o, table(into=self.into("books 1\ncore 1\n")))
         self.assertEqual(code, 1)
         self.assertIn("records no version", "\n".join(lines))
 
     def test_archive_extraction_failure_refuses(self):
-        o = opts(archive="/archives/batcave.tar.gz")
-        get = table(into_clean=R(), into=R("", "backup: extract store: not a tar", 1))
-        code, _, _ = guard.decide_restore(o, get)
-        self.assertEqual(code, 1)
+        o = opts(archive="batcave.tar.gz")
+        for r in (R("", "backup: extract store: not a tar", 1), R("no markers here\n")):
+            code, _, _ = guard.decide_restore(o, table(into=r))
+            self.assertEqual(code, 1, r)
+
+
+class ReviewProbes(unittest.TestCase):
+    """T3 review of #4511: the guard-level probes (G10, P4, P5, P7)."""
+
+    def restore(self, rec):
+        get = table(pointer=POINTER, **{"record:" + NAME: R(json.dumps(rec))})
+        return guard.decide_restore(opts(), get)
+
+    def base(self, **kw):
+        rec = {
+            "from_vector": {"levels": {"books": 0, "core": 0}},
+            "from_release": "v0.41.0",
+            "status": "completed",
+            "taken_at": "2026-11-01T02:03:04Z",
+        }
+        rec.update(kw)
+        return rec
+
+    def test_g10_record_without_levels_refuses(self):
+        for fv in ({}, {"levels": None}, {"versions": {"books": 66}}, None, []):
+            code, lines, cmd = self.restore(self.base(from_vector=fv))
+            self.assertEqual((code, cmd), (1, ""), fv)
+            self.assertIn("from_vector levels", "\n".join(lines), fv)
+
+    def test_p5_released_checkpoint_refuses_before_the_stop(self):
+        """core/storage/checkpoints.go Restorable(): open or served with
+        delete_after set is released; only completed passes regardless."""
+        for status, delete_after, ok in (
+            ("served", "2026-11-08T00:00:00Z", False),
+            ("open", "2026-11-08T00:00:00Z", False),
+            ("served", None, True),
+            ("open", None, True),
+            ("completed", "2026-11-08T00:00:00Z", True),
+            ("consumed", None, False),
+            ("restore_left", None, False),
+            ("riddled", None, False),
+            ("", None, False),
+        ):
+            rec = self.base(status=status)
+            if delete_after:
+                rec["delete_after"] = delete_after
+            code, lines, _ = self.restore(rec)
+            self.assertEqual(code == 0, ok, (status, delete_after, lines))
+
+    def test_p7_pointer_without_levels_sidecar_refuses_rollback(self):
+        """A store with a checkpoint pointer was opened by a core build: a
+        missing .storage-levels is damage, not a pre-core store."""
+        get = table(levels=MISSING, pointer=POINTER, format=R("1\n"))
+        code, lines = guard.decide_rollback(opts(), get, False)
+        self.assertEqual(code, 1, lines)
+        self.assertIn("migration-checkpoint", "\n".join(lines))
+
+    def test_p7_no_pointer_keeps_the_projection_rule(self):
+        missing_pointer = R(
+            "", "cat: /data/db.migration-checkpoint: No such file or directory\n", 1
+        )
+        get = table(levels=MISSING, pointer=missing_pointer, format=R("1\n"))
+        code, lines = guard.decide_rollback(opts(), get, False)
+        self.assertEqual(code, 0, lines)
+
+    def test_p4_stopped_check_ssh_failure_says_state_unknown(self):
+        lines = "\n".join(
+            guard.check_stopped(opts(), table(unit=R("", "ssh: connect: timed out\n", 255)))
+        )
+        self.assertIn("unknown", lines)
+        self.assertNotIn("Something started it", lines)
+
+    def test_control_characters_from_the_host_are_stripped(self):
+        lines = "\n".join(
+            guard.check_inflight(opts(), table(probe=R("/state/restore/x\x1b[2J/inflight.json\n")))
+        )
+        self.assertNotIn("\x1b", lines)
+        self.assertIn("in flight", lines)
 
 
 class Stopped(unittest.TestCase):
@@ -328,35 +392,82 @@ class Stopped(unittest.TestCase):
 
 
 class Arguments(unittest.TestCase):
-    def test_unsafe_paths_are_refused(self):
-        for bad in ("/data/my db", "/data/$(id)", "relative/db", "/data/a;b", "/data/'x'"):
-            with self.subTest(bad):
-                self.assertEqual(
-                    guard.main(
-                        ["rollback", "--host", "h", "--db", bad, "--bin", "/b", "--state-dir", "/s"]
-                    ),
-                    2,
-                )
+    def test_unsafe_values_are_refused(self):
+        for field, bad in (
+            ("db", "/data/my db"),
+            ("db", "/data/$(id)"),
+            ("db", "relative/db"),
+            ("db", "/data/a;b"),
+            ("db", "/data/../etc"),
+            ("bin", "/b/'x'"),
+            ("archive", "../data/db"),
+            ("archive", "/tmp/joker.tar"),
+            ("archive", "x; touch /tmp/pwned-r127"),
+            ("archive", "-rf"),
+            ("archive", "x\n"),
+            ("user", "root"),
+            ("unit", "x.service; id"),
+            ("host", "-oProxyCommand=id"),
+        ):
+            with self.subTest(field=field, bad=bad):
+                self.assertNotEqual(guard._validate(opts(**{field: bad})), "")
+        self.assertEqual(guard._validate(opts(archive="batcave-20261101.tar.gz")), "")
 
-    def test_unsafe_env_is_refused(self):
+    def test_sudoers_cli(self):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = guard.main(
+                ["sudoers", "--deploy-user", "deploy", "--db", "/path/to/audiobooks.pebble"]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("deploy ALL=(audiobook) NOPASSWD:", buf.getvalue())
+        self.assertNotIn("*", buf.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(guard.main(["sudoers", "--deploy-user", "deploy", "--db", "/x y"]), 2)
+
+
+class HostConfig(unittest.TestCase):
+    CONF = (
+        "# rollback helpers\nbin = /usr/local/bin/aorg\ndb = /data/db\nstate_dir = /var/lib/x\n"
+        "unit = audiobook-organizer.service\nservice_user = alfred\narchive_dir = /archives\ncheckpoint_dir =\n"
+    )
+
+    def test_fills_the_host_values(self):
+        o = guard.Opts(host="h", db="/data/db", bin="/usr/local/bin/aorg")
+        self.assertEqual(guard.load_host_config(o, table(host_config=R(self.CONF))), [])
         self.assertEqual(
-            guard.main(
-                [
-                    "restore",
-                    "--host",
-                    "h",
-                    "--db",
-                    "/d",
-                    "--bin",
-                    "/b",
-                    "--state-dir",
-                    "/s",
-                    "--offline-env",
-                    "HOME=/x;id",
-                ]
-            ),
-            2,
+            (o.state_dir, o.user, o.archive_dir), ("/var/lib/x", "alfred", "/archives")
         )
+
+    def test_refuses_a_mismatch_or_a_missing_config(self):
+        o = guard.Opts(host="h", db="/data/other", bin="/usr/local/bin/aorg")
+        lines = guard.load_host_config(o, table(host_config=R(self.CONF)))
+        self.assertIn("DEPLOY_DB", "\n".join(lines))
+        o = guard.Opts(host="h", db="/data/db", bin="/usr/local/bin/aorg")
+        lines = guard.load_host_config(
+            o, table(host_config=R("", "cat: No such file or directory", 1))
+        )
+        self.assertIn("Install the rollback helpers", "\n".join(lines))
+        lines = guard.load_host_config(o, table(host_config=R("bin = /usr/local/bin/aorg\n")))
+        self.assertIn("does not parse", "\n".join(lines))
+
+
+class Sudoers(unittest.TestCase):
+    def test_no_wildcards_and_one_bare_grant_per_validating_helper(self):
+        text = guard.sudoers(opts(), "deploy")
+        self.assertNotIn("*", text)
+        h = guard.HELPER_DIR
+        self.assertIn(f'{h}/inflight-probe ""', text)
+        self.assertIn(f'{h}/swap-prev ""', text)
+        self.assertIn(f"{h}/restore-offline, ", text)
+        self.assertTrue(
+            text.rstrip().endswith(f"deploy ALL=(alfred) NOPASSWD: {h}/checkpoint-record"), text
+        )
+        self.assertNotIn("tee", text)
+        self.assertNotIn("find", text)
 
     def test_parse_vector_and_sidecar(self):
         self.assertEqual(guard.parse_vector('{"core":0,"books":2}'), {"core": 0, "books": 2})

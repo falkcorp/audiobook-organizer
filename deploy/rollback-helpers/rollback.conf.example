@@ -1,0 +1,22 @@
+# file: deploy/rollback-helpers/rollback.conf.example
+# version: 1.0.0
+# guid: 8bafb640-d659-4122-8365-282864483ab6
+# last-edited: 2026-11-09
+#
+# /etc/audiobook-organizer/rollback.conf: the fixed paths the rollback helpers
+# use. Root-owned, mode 0644, in a root-owned directory not writable by group
+# or others. The deploy user cannot change any of these: it can only ask the
+# helpers to act on them. make rollback and make rollback-restore read this
+# file (it holds no secret) and refuse when bin, db or unit differ from
+# DEPLOY_BIN, DEPLOY_DB or DEPLOY_UNIT.
+bin = /usr/local/bin/audiobook-organizer
+db = /path/to/audiobooks.pebble
+state_dir = /var/lib/audiobook-organizer
+unit = audiobook-organizer.service
+service_user = audiobook
+# The directory make rollback-restore ROLLBACK_ARCHIVE=<name> reads archives from.
+archive_dir = /path/to/archives
+# core.storage.checkpoint_dir, if set; empty means the store's parent directory.
+checkpoint_dir =
+# The environment storage restore-offline runs with (the unit's).
+offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer

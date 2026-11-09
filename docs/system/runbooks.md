@@ -1,5 +1,5 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.7.1 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -175,9 +175,11 @@ format 1 means every owner at level 0), and no restore or reset swap is in
 flight. A store no core build has opened has no `.storage-levels`; only then
 does it compare `<db>.storage-format` as above, and only there does
 `ROLLBACK_IGNORE_FORMAT=1` override an unreadable sidecar. Otherwise it
-refuses, swaps nothing, and names `make rollback-restore`. Details and the
-sudoers rules it needs:
-[Rollback flow](deploy-and-gpu-ops.md#2-rollback-flow).
+refuses, swaps nothing, and names `make rollback-restore`. Details:
+[Rollback flow](deploy-and-gpu-ops.md#2-rollback-flow). Every privileged step
+runs through the root-owned rollback helpers, which must be installed on the
+host first:
+[Rollback helpers](deploy-and-gpu-ops.md#rollback-helpers-owner-action).
 
 **Nothing short of a restore goes back past a level change.** A release that
 raises a store level writes a pre-upgrade checkpoint first, and the previous
@@ -190,12 +192,13 @@ since then is live again. Get the owner's approval before running it.
 ### Restore steps
 
 Run `make rollback-restore` from your workstation (the latest pre-upgrade
-checkpoint), or `make rollback-restore ROLLBACK_ARCHIVE=<file on the host>`
-once the checkpoint is gone. It checks that `<bin>.prev` serves exactly the
+checkpoint), or `make rollback-restore ROLLBACK_ARCHIVE=<file name>` once the
+checkpoint is gone (a file name inside the helpers' `archive_dir`, not a
+path). It checks that `<bin>.prev` serves exactly the
 source's levels, stops the service, restores with the current binary's
 `storage restore-offline` as the service user, installs `<bin>.prev`, and waits
-for readiness. The order of operations, what each refusal means and the
-sudoers rules are in
+for readiness. The order of operations, what each refusal means and what to
+run when it stops part way are in
 [`make rollback-restore`](deploy-and-gpu-ops.md#make-rollback-restore-when-a-binary-swap-is-refused).
 
 Do not move store directories or copy checkpoints by hand: `<db>.migration-checkpoint`
