@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
 # last-edited: 2026-11-09
 
@@ -455,6 +455,81 @@ class HostConfig(unittest.TestCase):
         self.assertIn("does not parse", "\n".join(lines))
 
 
+SECRET = "hunter2"
+
+
+class NoEcho(unittest.TestCase):
+    """The sidecars sit in the service's own directory, which the service
+    user can write, so a symlink there could point anywhere. They are read
+    as the service user, never root, and no refusal prints what was read:
+    a length and a hash at most, and only names that match a fixed grammar."""
+
+    def test_sidecars_are_read_as_the_service_user(self):
+        o = opts()
+        c = guard.commands(o)
+        for key, suffix in (
+            ("levels", ".storage-levels"),
+            ("format", ".storage-format"),
+            ("pointer", ".migration-checkpoint"),
+        ):
+            self.assertEqual(c[key], f"sudo -n -u alfred /usr/bin/cat /data/db{suffix}", key)
+        root_line, user_line = guard.sudoers(o, "deploy").split("\ndeploy ALL=(alfred)")
+        self.assertNotIn("/usr/bin/cat", root_line)
+        self.assertIn("/usr/bin/cat /data/db.storage-levels", user_line)
+
+    def assert_quiet(self, lines):
+        joined = "\n".join(lines)
+        self.assertNotIn(SECRET, joined)
+        return joined
+
+    def test_a_bad_levels_sidecar_is_not_echoed(self):
+        for text in (
+            f"{SECRET} x\n",
+            f"books {SECRET}\n",
+            f"Books{SECRET} 1\n",
+            "books 1\nbooks 2\n",
+        ):
+            with self.subTest(text=text):
+                code, lines = guard.decide_rollback(opts(), table(levels=R(text)), False)
+                self.assertEqual(code, 1)
+                self.assert_quiet(lines)
+
+    def test_owner_names_follow_a_grammar(self):
+        self.assertIsNone(guard.parse_sidecar("Books 1\n")[0])
+        self.assertIsNone(guard.parse_sidecar("bo oks 1\n")[0])
+        self.assertIsNone(guard.parse_vector('{"Books": 1}'))
+        self.assertIsNone(guard.parse_vector('{"b\\u0007": 1}'))
+        self.assertEqual(guard.parse_sidecar("abo.books 1\n")[0], {"abo.books": 1})
+
+    def test_a_bad_pointer_is_not_echoed(self):
+        for pointer in (R(f"{SECRET} not json"), R(json.dumps({"name": SECRET}))):
+            with self.subTest(pointer=pointer.stdout):
+                code, lines, _ = guard.decide_restore(opts(), table(pointer=pointer))
+                self.assertEqual(code, 1)
+                joined = self.assert_quiet(lines)
+                if "not json" in pointer.stdout:
+                    self.assertIn("sha256", joined)
+
+    def test_record_fields_are_not_echoed_unless_they_match(self):
+        for rec in (
+            record({"books": 0, "core": 0}, status=SECRET),
+            record({"books": 0}, release=f"{SECRET}; rm -rf"),
+        ):
+            with self.subTest(rec=rec.stdout):
+                results = {"pointer": POINTER, "record:" + NAME: rec}
+                results.setdefault("prev_levels", R('{"books":1,"core":1}'))
+                code, lines, _ = guard.decide_restore(opts(), table(**results))
+                self.assertEqual(code, 1)
+                self.assert_quiet(lines)
+
+    def test_cause_hashes_stdout(self):
+        text = guard._cause(R(f"{SECRET}\n", "cat: oops\n", 1))
+        self.assertNotIn(SECRET, text)
+        self.assertIn("8 bytes", text)
+        self.assertIn("sha256 ", text)
+        self.assertIn("cat: oops", text)
+
+
 class Sudoers(unittest.TestCase):
     def test_no_wildcards_and_one_bare_grant_per_validating_helper(self):
         text = guard.sudoers(opts(), "deploy")
@@ -463,9 +538,7 @@ class Sudoers(unittest.TestCase):
         self.assertIn(f'{h}/inflight-probe ""', text)
         self.assertIn(f'{h}/swap-prev ""', text)
         self.assertIn(f"{h}/restore-offline, ", text)
-        self.assertTrue(
-            text.rstrip().endswith(f"deploy ALL=(alfred) NOPASSWD: {h}/checkpoint-record"), text
-        )
+        self.assertTrue(text.rstrip().endswith(f"{h}/checkpoint-record"), text)
         self.assertNotIn("tee", text)
         self.assertNotIn("find", text)
 

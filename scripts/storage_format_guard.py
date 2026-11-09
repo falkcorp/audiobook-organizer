@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.2.0
+# version: 2.3.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
 # last-edited: 2026-11-09
 
@@ -69,6 +69,7 @@ host).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -104,6 +105,16 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 # core/storage/checkpoints.go Restorable(): the statuses whose copy is still
 # the store the record describes.
 _RESTORABLE = ("open", "served", "completed")
+# The record statuses core writes (core/storage/checkpoints.go), the
+# only ones a refusal prints by name.
+_STATUSES = ("open", "served", "completed", "restore_left", "consumed", "released")
+# Names read from the host that a message may print: an owner (a module
+# name), a release tag and an RFC 3339 time. Anything else is not printed.
+_OWNER = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
+_RELEASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+_TAKEN_AT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})"
+)
 _OLD_LEVELS_FLAG = re.compile(r"unknown flag: --print-storage-levels(\s|$)")
 _OLD_FORMAT_FLAG = re.compile(r"unknown flag: --print-storage-format(\s|$)")
 
@@ -169,9 +180,12 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "host_config": f"cat {HOST_CONFIG}",
         "prev_exists": f"test -f {o.bin}.prev",
         "probe": f"sudo -n {h}/inflight-probe",
-        "levels": f"sudo -n /usr/bin/cat {o.db}.storage-levels",
-        "format": f"sudo -n /usr/bin/cat {o.db}.storage-format",
-        "pointer": f"sudo -n /usr/bin/cat {o.db}.migration-checkpoint",
+        # As the service user, never root: the sidecars sit in the service's
+        # own directory, which it can write, so one could be a symlink to
+        # any file root can read.
+        "levels": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.storage-levels",
+        "format": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.storage-format",
+        "pointer": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.migration-checkpoint",
         "prev_levels": f"{o.bin}.prev --print-storage-levels",
         "prev_format": f"{o.bin}.prev --print-storage-format",
         "prev_caps": f"{o.bin}.prev --print-capabilities",
@@ -297,12 +311,19 @@ def load_host_config(o: Opts, get: Getter) -> list[str]:
     return []
 
 
+def digest(text: str) -> str:
+    """What a refusal says about text it read: its length and a hash, never
+    the text (a read may have followed a link to a file the caller may not
+    see)."""
+    b = text.encode("utf-8", "replace")
+    return f"{len(b)} bytes, sha256 {hashlib.sha256(b).hexdigest()[:12]}"
+
+
 def _cause(r: Result) -> str:
-    lines = [ln.strip() for ln in clean(r.stderr).splitlines() if ln.strip()]
+    lines = [ln.strip()[:200] for ln in clean(r.stderr).splitlines() if ln.strip()]
     parts = [f"exit {r.rc}"]
-    out = clean(r.stdout).strip()
-    if out:
-        parts.append(f"stdout {out[:200]!r}")
+    if r.stdout.strip():
+        parts.append(f"stdout: {digest(r.stdout)}")
     if lines:
         parts.append("stderr: " + " | ".join(lines[-3:]))
     return "; ".join(parts)
@@ -317,7 +338,8 @@ def fmt(levels: dict[str, int]) -> str:
 
 
 def parse_sidecar(text: str) -> tuple[dict[str, int] | None, str]:
-    """Parse `<owner> <level>` lines (core/internal/pebble ReadLevels)."""
+    """Parse `<owner> <level>` lines (core/internal/pebble ReadLevels).
+    Errors name the line, never its text."""
     out: dict[str, int] = {}
     for n, line in enumerate(text.splitlines(), 1):
         line = line.strip()
@@ -325,10 +347,10 @@ def parse_sidecar(text: str) -> tuple[dict[str, int] | None, str]:
             continue
         owner, sep, value = line.partition(" ")
         value = value.strip()
-        if not sep or not owner or not value.isascii() or not value.isdigit():
-            return None, f"line {n} {line!r} is not `<owner> <level>`"
+        if not sep or not _OWNER.fullmatch(owner) or not value.isascii() or not value.isdigit():
+            return None, f"line {n} is not `<owner> <level>` ({digest(text)})"
         if owner in out:
-            return None, f"owner {owner!r} is listed twice"
+            return None, f"line {n} lists owner {owner} a second time"
         out[owner] = int(value)
     return out, ""
 
@@ -343,7 +365,9 @@ def parse_vector(text: str) -> dict[str, int] | None:
         return None
     out = {}
     for k, v in doc.items():
-        if not isinstance(k, str) or isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        if not isinstance(k, str) or not _OWNER.fullmatch(k):
+            return None
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
             return None
         out[k] = v
     return out
@@ -525,7 +549,7 @@ def decide_rollback(o: Opts, get: Getter, ignore: bool) -> tuple[int, list[str]]
         return 1, [
             f"REFUSING: cannot read the store's levels from {sidecar} ({_cause(r)}). Nothing was swapped; "
             "ROLLBACK_IGNORE_FORMAT does not cover levels.",
-            f"If the cause is sudo asking for a password, add `cat {sidecar}` to the sudoers lines in {DOCS}.",
+            f"If the cause is sudo asking for a password, add the `({o.user}) /usr/bin/cat {sidecar}` line from {DOCS}.",
         ]
     store, err = parse_sidecar(r.stdout)
     if store is None:
@@ -565,20 +589,21 @@ def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
     if r.rc != 0 or r.sudo_refused:
         return None, [
             f"REFUSING: cannot read {pointer_path} ({_cause(r)}). Nothing was changed.",
-            f"If the cause is sudo asking for a password, add `/usr/bin/cat {pointer_path}` from {DOCS}.",
+            f"If the cause is sudo asking for a password, add the `({o.user}) /usr/bin/cat {pointer_path}` line from {DOCS}.",
         ]
     try:
         pointer = json.loads(r.stdout)
         name = pointer["name"]
     except (ValueError, TypeError, KeyError):
         return None, [
-            f"REFUSING: {pointer_path} is not a checkpoint pointer ({clean(r.stdout).strip()[:200]!r}); a store "
+            f"REFUSING: {pointer_path} is not a checkpoint pointer ({digest(r.stdout)}); a store "
             "last opened by a pre-core build records no checkpoint. Nothing was changed.",
             f"Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<file name in {o.archive_dir}>.",
         ]
     if not isinstance(name, str) or not _CHECKPOINT_NAME.fullmatch(name):
         return None, [
-            f"REFUSING: {pointer_path} names {clean(repr(name))[:200]}, not a checkpoint name. Nothing was changed."
+            f"REFUSING: {pointer_path} does not name a checkpoint (`<YYYYMMDDTHHMMSSZ>-<8 hex>`; "
+            f"{digest(r.stdout)}). Nothing was changed."
         ]
     rec_path = f"{o.cp_area}/{name}.json"
     rr = get("record:" + name)
@@ -603,20 +628,24 @@ def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
     status = rec.get("status", "")
     released = status in ("open", "served") and rec.get("delete_after") is not None
     if status not in _RESTORABLE or released:
-        why = f"{status} and released (delete_after is set)" if released else repr(status)
+        shown = status if status in _STATUSES else "in a state this tool does not know"
+        why = f"{status} and released (delete_after is set)" if released else shown
         return None, [
             f"REFUSING: checkpoint {name} is {why}: its copy is not the store the record describes, and "
             "storage restore-offline would refuse it (core's Checkpoint.Restorable). Nothing was changed.",
             f"Restore an archive instead: make rollback-restore ROLLBACK_ARCHIVE=<file name in {o.archive_dir}>.",
         ]
-    release = clean(str(rec.get("from_release") or ""))
+    release = str(rec.get("from_release") or "")
+    if not _RELEASE.fullmatch(release):
+        release = ""  # absent, or not a release name: never printed as is
+    taken_at = str(rec.get("taken_at") or "")
     return Source(
         levels=levels,
         describe=f"checkpoint {name} (from_vector in {rec_path})",
         release=f"release {release} (the checkpoint's from_release)"
         if release
         else "the release you upgraded from (the checkpoint records no from_release)",
-        taken_at=clean(str(rec.get("taken_at") or "unknown")),
+        taken_at=taken_at if _TAKEN_AT.fullmatch(taken_at) else "unknown",
         restore_cmd=commands(o, name)["restore_checkpoint"],
     ), []
 
