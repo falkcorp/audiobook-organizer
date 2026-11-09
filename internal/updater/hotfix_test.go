@@ -1,7 +1,7 @@
 // file: internal/updater/hotfix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 55cb52f7-49f0-4844-881d-0df9ba6269f3
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package updater
 
@@ -157,6 +157,7 @@ func newRig(t *testing.T, current string, f *fakeReleases) *hotfixRig {
 		WithHTTPClientForTest(f.srv.Client()),
 		WithExecutableForTest(func() (string, error) { return exe, nil }),
 		WithExitForTest(rec.exit),
+		WithStateDir(t.TempDir()),
 	)
 	return &hotfixRig{u: u, f: f, exe: exe, exit: rec}
 }

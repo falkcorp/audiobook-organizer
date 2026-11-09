@@ -1,7 +1,7 @@
 // file: internal/updater/updater.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-11-05
+// last-edited: 2026-11-08
 
 package updater
 
@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"golang.org/x/mod/semver"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -57,6 +59,15 @@ var (
 	ErrInvalidVersion = errors.New("version is not a release tag")
 	// ErrReleaseNotFound: the release source has no release with that tag.
 	ErrReleaseNotFound = errors.New("release not found")
+	// ErrSwapBusy: a restore or reset swap is staged (restore_pending) or in
+	// flight (restore_inflight) in the one swap slot (05-updater 5U.12). It is
+	// restorejournal's own sentinel, so the error the slot probe returns
+	// matches it. Swapping in a new binary under a staged or half-applied
+	// swap would pair the new build with the old build's intent.
+	ErrSwapBusy = restorejournal.ErrSwapPending
+	// ErrNoStateDir: the updater was built without a state directory, so it
+	// cannot read the swap slot and refuses rather than skip the check.
+	ErrNoStateDir = errors.New("updater has no state directory: cannot check the swap slot, refusing to apply")
 )
 
 // describeSuffix matches the suffix `git describe --tags --always --dirty`
@@ -110,6 +121,10 @@ type Updater struct {
 	executable func() (string, error)              // os.Executable
 	rename     func(oldpath, newpath string) error // os.Rename
 	exit       func(code int)                      // os.Exit
+
+	// stateDir is the resolved absolute state directory whose restore/ holds
+	// the swap slot. Empty means "unknown": an apply refuses (ErrNoStateDir).
+	stateDir string
 }
 
 // Option configures an Updater built by NewUpdater.
@@ -118,6 +133,24 @@ type Option func(*Updater)
 // WithAPIBaseForTest points the release lookups at another API root (a test server).
 func WithAPIBaseForTest(base string) Option {
 	return func(u *Updater) { u.apiBase = strings.TrimRight(base, "/") }
+}
+
+// WithStateDir sets the resolved absolute state directory (the one the
+// kernel's app.Options.StateDir names) whose restore/ holds the swap slot. An
+// apply reads the slot there and refuses while a swap is staged or in flight.
+//
+// The directory is made absolute here; a directory that cannot be (or an
+// empty one) leaves the updater with none, and an apply then refuses.
+func WithStateDir(dir string) Option {
+	return func(u *Updater) {
+		u.stateDir = ""
+		if strings.TrimSpace(dir) == "" {
+			return
+		}
+		if abs, err := filepath.Abs(dir); err == nil {
+			u.stateDir = abs
+		}
+	}
 }
 
 // WithHTTPClientForTest replaces the HTTP client used for lookups and downloads.
@@ -519,6 +552,11 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 	if err := u.applyAllowed(tag, info.named); err != nil {
 		return err
 	}
+	// Before anything is downloaded or renamed: no swap may be staged or in
+	// flight.
+	if err := u.checkSwapSlot(); err != nil {
+		return err
+	}
 
 	assetURL, err := u.findAssetURL(info)
 	if err != nil {
@@ -559,6 +597,24 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 	}
 
 	updateLog.Info("Update applied successfully: %s -> %s", info.CurrentVersion, info.LatestVersion)
+	return nil
+}
+
+// checkSwapSlot refuses while the swap slot holds a staged (restore_pending)
+// or in-flight (restore_inflight) swap (05-updater 5U.12). It fails closed: a
+// slot it cannot read, or an updater with no state directory to read it in,
+// refuses too.
+func (u *Updater) checkSwapSlot() error {
+	if strings.TrimSpace(u.stateDir) == "" {
+		return ErrNoStateDir
+	}
+	st, err := restorejournal.ReadSlot(vfs.Default, u.stateDir)
+	if err != nil {
+		return fmt.Errorf("cannot read the swap slot, refusing to apply: %w", err)
+	}
+	if st.Busy() {
+		return st.Err()
+	}
 	return nil
 }
 
