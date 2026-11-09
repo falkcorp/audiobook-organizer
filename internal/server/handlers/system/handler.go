@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.9
+// version: 1.28.10
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -942,7 +942,8 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		//     restored, and that is a refusal, not a server fault.
 		//
 		// Any other error (missing file, unreadable backup directory or
-		// archive) is a 500 via httputil.InternalError.
+		// archive, an archive with no entries: ErrArchiveEmpty) is a 500 via
+		// httputil.InternalError, the same as a truncated archive.
 		switch {
 		case errors.Is(err, backup.ErrChecksumMismatch):
 			httputil.RespondWithConflict(c, err.Error())

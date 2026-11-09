@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.9
+// version: 1.22.10
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -666,6 +666,13 @@ var ErrArchiveCarriesHNSWSnapshot = errors.New("backup archive has an entry in t
 // name looks like it leaves (R1-15 round 4, B1-r4).
 var ErrArchiveEntryEscapes = errors.New("backup archive has an entry that climbs out of the restore target")
 
+// ErrArchiveEmpty is returned by PrepareRestoreIn, and by Extract, for an
+// archive with no entries to restore: an empty or truncated file. It is
+// refused in the prepare step, so the restore handler does not mark the HNSW
+// snapshot diverged for a restore that cannot write anything (R1-15 round-4
+// verification review, SHOULD-FIX 2).
+var ErrArchiveEmpty = errors.New("backup archive has no entries")
+
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
 // TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
@@ -793,7 +800,7 @@ func scanArchive(archivePath string) (sum string, err error) {
 	}
 	hash := sha256.New()
 	src := io.TeeReader(f, hash)
-	scanErr := scanEntries(codec, src)
+	scanErr := scanEntries(codec, src, filepath.Base(archivePath))
 	// Hash what the decompressor did not read: the end of the stream, or
 	// everything after a scan error. scanEntries has closed the decompressor
 	// by now, and zstd's Close waits for the goroutine that reads its input
@@ -806,18 +813,24 @@ func scanArchive(archivePath string) (sum string, err error) {
 }
 
 // scanEntries reads every tar header in the archive stream r, written by
-// codec, and refuses an entry entryRefusal refuses. It closes the
-// decompressor before it returns (scanArchive depends on that).
-func scanEntries(codec Codec, r io.Reader) error {
+// codec, and refuses an entry entryRefusal refuses, and an archive with no
+// entry the extraction would count (ErrArchiveEmpty). name is the archive's,
+// for the error. It closes the decompressor before it returns (scanArchive
+// depends on that).
+func scanEntries(codec Codec, r io.Reader, name string) error {
 	compReader, err := codec.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
 	}
 	defer compReader.Close()
 	tarReader := tar.NewReader(compReader)
+	entries := 0
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
+			if entries == 0 {
+				return emptyArchiveError(name)
+			}
 			return nil
 		}
 		if err != nil {
@@ -826,7 +839,18 @@ func scanEntries(codec Codec, r io.Reader) error {
 		if err := entryRefusal(header.Name); err != nil {
 			return err
 		}
+		// The extraction skips a name that is empty once its leading
+		// slashes go, and counts every other entry.
+		if strings.TrimLeft(filepath.ToSlash(header.Name), "/") != "" {
+			entries++
+		}
 	}
+}
+
+// emptyArchiveError is ErrArchiveEmpty for the archive named name.
+func emptyArchiveError(name string) error {
+	return fmt.Errorf("%w: backup %s contained no entries: it is empty or truncated, "+
+		"and nothing was restored", ErrArchiveEmpty, name)
 }
 
 // PreparedRestore is a backup found and, when asked, verified, ready to
@@ -841,8 +865,8 @@ type PreparedRestore struct {
 // with verify, checks the same read against the checksum sidecar. It takes no
 // target and writes nothing, so every error it returns (ErrBackupNotFound,
 // ErrVerificationUnsupported, ErrChecksumMismatch,
-// ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes, an unreadable backup
-// directory or archive)
+// ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes, ErrArchiveEmpty, an
+// unreadable backup directory or archive)
 // leaves the target as it was. Extract is the step that writes, and the
 // restore handler marks the HNSW snapshot diverged between the two (R1-15
 // round-3 review, B1-r3).
@@ -1101,8 +1125,7 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 	// addToArchive, either Close, Stat or the checksum leaves one behind under a
 	// real archive name.
 	if extracted == 0 {
-		return fmt.Errorf("backup %s contained no entries: it is empty or truncated, "+
-			"and nothing was restored", filepath.Base(archivePath))
+		return emptyArchiveError(filepath.Base(archivePath))
 	}
 
 	return nil
