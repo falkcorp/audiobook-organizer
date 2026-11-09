@@ -1,12 +1,13 @@
 // file: internal/updater/register.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 8c9d0a1b-2c3d-4e5f-6a7b-8c9d0a1b2c3d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 //
 // Constructors for the auto-updater and its scheduler, which the server's
 // service container holds as Overrides (R1-15 replaced the init()
 // registration with explicit construction):
-//   - "updater":         *Updater, NewService(the build's version).
+//   - "updater":         *Updater, NewService(the build's version, options such as
+//                        WithStateDir).
 //   - "updatescheduler": *SchedulerStarterAdapter wrapping *Scheduler,
 //                        NewSchedulerService(updater). Implements
 //                        Starter/Stopper for Container.Start / Container.Stop.
@@ -55,11 +56,11 @@ func (a *SchedulerStarterAdapter) Stop(_ context.Context) error {
 // serviceregistry.KeyUpdater, for the build's version; an empty version is
 // "dev" (the historical inline default, and what a container built in
 // isolation used). It replaces this file's init() registration (R1-15).
-func NewService(version string) *Updater {
+func NewService(version string, opts ...Option) *Updater {
 	if version == "" {
 		version = "dev"
 	}
-	return NewUpdater(version)
+	return NewUpdater(version, opts...)
 }
 
 // NewSchedulerService builds the "updatescheduler" service around upd: the
