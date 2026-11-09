@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.1
+// version: 1.30.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -21,14 +21,15 @@ package system
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/gin-gonic/gin"
 )
 
@@ -105,6 +107,33 @@ type Handler struct {
 	// repairs.apply) the caller may see in GET /dashboard's recent_operations.
 	// Unset (nil) hides every Repairs operation: see WithRepairsOpAccess.
 	repairsAccess *opaccess.Repairs
+
+	// restoreStager yields, at request time, the stager POST /backup/restore
+	// stages through. Nil, or a provider yielding nil, answers 503. See
+	// WithRestoreStager.
+	restoreStager func() RestoreStager
+}
+
+// RestoreStager stages a backup restore in the journaled swap and asks for
+// the restart that applies it (05-backup §5B.3.4, release R1's form):
+// internal/books implements it over backup.StageRestore and the kernel's
+// Deps.RequestRestart.
+type RestoreStager interface {
+	// StageRestore stages a restore of the archive filename in backupDir
+	// (matched against the directory's listing) and returns what it
+	// staged; verify requires the archive's checksum sidecar.
+	StageRestore(ctx context.Context, backupDir, filename string, verify bool, requestedBy string) (backup.StagedRestore, error)
+	// RequestRestart asks the service to stop and exit 75, so the service
+	// manager starts it again and the boot applies the staged restore.
+	RequestRestart(reason string)
+}
+
+// WithRestoreStager installs the provider of POST /backup/restore's stager.
+// Lazy, as WithPostureTokens is: books installs it once the App exists,
+// after the handlers are wired.
+func (h *Handler) WithRestoreStager(f func() RestoreStager) *Handler {
+	h.restoreStager = f
+	return h
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs operation out of
@@ -777,7 +806,25 @@ func (h *Handler) ListBackups(c *gin.Context) {
 	})
 }
 
-// RestoreBackup restores from a backup file. Implements POST /backup/restore.
+// RestoreBackup stages a restore of a backup. Implements POST
+// /backup/restore.
+//
+// A restore never extracts over the running store any more (09 §9.1; R1-25):
+// the archive is extracted into the journaled swap's staging directory and
+// staged as a KindArchive intent (backup.StageRestore through the books
+// stager), the request is answered 202 with restart_required, and then the
+// service is asked to restart (exit 75). The swap runs at the next boot,
+// before the store opens. target_path is refused: a restore into another
+// directory runs offline (storage restore-offline --into).
+//
+// Errors: 400 for a target_path or for verify=true on an archive without a
+// checksum sidecar (backup.ErrVerificationUnsupported); 404 for an archive
+// not in the backup directory; 409 for an archive whose sidecar disagrees
+// (backup.ErrChecksumMismatch) or a restore or reset already staged or in
+// flight (restorejournal.ErrSwapPending); 422 for a swap whose renames the
+// filesystem would refuse (restorejournal.ErrRenameRefused,
+// ErrTargetsRefused); 503 when this process has no stager; 500 otherwise.
+// Nothing is staged on any error.
 func (h *Handler) RestoreBackup(c *gin.Context) {
 	var req struct {
 		BackupFilename string `json:"backup_filename" binding:"required"`
@@ -789,74 +836,57 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-
-	backupConfig := backup.DefaultBackupConfig()
-	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
-	safeFilename := library.SanitizeFilename(req.BackupFilename)
-
-	// Use current database path as target if not specified
-	var targetPath string
 	if req.TargetPath != "" {
-		cleanTarget, err := library.CleanAbsolutePath(req.TargetPath)
-		if err != nil {
-			httputil.RespondWithBadRequest(c, "invalid target_path: "+err.Error())
-			return
-		}
-		if library.IsDangerousRoot(cleanTarget) {
-			httputil.RespondWithBadRequest(c, "restore target is a protected system directory")
-			return
-		}
-		targetPath = cleanTarget
-	} else {
-		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
+		httputil.RespondWithBadRequest(c, "target_path is not supported: a restore replaces the served database at the next restart; "+
+			"to restore into another directory, stop the service and run `audiobook-organizer storage restore-offline --archive <file> --into <dir>`")
+		return
+	}
+	var stager RestoreStager
+	if h.restoreStager != nil {
+		stager = h.restoreStager()
+	}
+	if stager == nil {
+		httputil.RespondWithServiceUnavailable(c, "restore is not available in this process")
+		return
 	}
 
-	// RestoreBackupIn (not RestoreBackup) so req.BackupFilename is only ever
-	// used as a directory-listing lookup key, never joined directly into a
-	// filesystem path -- see backup.RestoreBackupIn's doc comment (CodeQL
-	// go/path-injection: sanitizing the filename is not a credited barrier in
-	// this repo, only resolving it against os.ReadDir's own results is).
-	if err := backup.RestoreBackupIn(backupConfig.BackupDir, safeFilename, targetPath, req.Verify); err != nil {
-		// backup.RestoreBackupIn distinguishes two verify=true failure shapes,
-		// both fail-closed (no extraction performed) rather than silently
-		// restoring unverified:
-		//
-		//   - ErrChecksumMismatch: the archive's current bytes disagree with
-		//     the checksum recorded when it was created -- i.e. the request
-		//     conflicts with the actual state of the stored resource. 409 is
-		//     the closer fit than 422: nothing about the JSON body is
-		//     malformed, the archive on disk no longer matches what it's
-		//     supposed to be.
-		//   - ErrVerificationUnsupported: no checksum sidecar exists at all
-		//     (a legacy backup from before this feature), so there is nothing
-		//     to compare against. 400: the caller's request cannot be
-		//     satisfied as specified.
-		//
-		// Any other error (missing file, corrupted archive structure, path
-		// escape, etc.) is still a 500 via httputil.InternalError, unchanged.
+	backupDir := backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
+	requestedBy := "api"
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		requestedBy = "user:" + u.Username
+	}
+	// The filename is only ever a lookup key in the backup directory's
+	// listing (backup.StageRestore's lookupArchive; CodeQL go/path-injection).
+	staged, err := stager.StageRestore(c.Request.Context(), backupDir, library.SanitizeFilename(req.BackupFilename), req.Verify, requestedBy)
+	if err != nil {
 		switch {
-		case errors.Is(err, backup.ErrChecksumMismatch):
-			httputil.RespondWithConflict(c, err.Error())
 		case errors.Is(err, backup.ErrVerificationUnsupported):
 			httputil.RespondWithBadRequest(c, err.Error())
+		case errors.Is(err, os.ErrNotExist):
+			httputil.RespondWithNotFound(c, "backup", req.BackupFilename)
+		case errors.Is(err, backup.ErrChecksumMismatch), errors.Is(err, restorejournal.ErrSwapPending):
+			httputil.RespondWithConflict(c, err.Error())
+		case errors.Is(err, restorejournal.ErrRenameRefused), errors.Is(err, restorejournal.ErrTargetsRefused):
+			httputil.RespondWithError(c, http.StatusUnprocessableEntity, err.Error(), "restore_refused")
 		default:
-			httputil.InternalError(c, "failed to restore backup", err)
+			httputil.InternalError(c, "failed to stage the restore", err)
 		}
 		return
 	}
 
-	// Reaching here means either verify=false (verification not requested) or
-	// verify=true and the checksum matched -- backup.RestoreBackupIn returns an
-	// error in every other case, so "verified" always equals what was asked
-	// for. The fields are included explicitly (rather than omitted) so a
-	// caller parsing the response, not just the server log, can tell whether
-	// verification actually happened.
-	httputil.RespondWithOK(c, gin.H{
-		"message":          "backup restored successfully",
-		"target":           targetPath,
+	// Reaching here means verify=false, or verify=true and the archive
+	// matched its sidecar: StageRestore refuses every other case, so
+	// "verified" equals what was asked for.
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"message":          "restore staged; the service restarts now to apply it",
+		"restart_required": true,
+		"restore_id":       staged.ID,
 		"verified":         req.Verify,
 		"verify_requested": req.Verify,
 	})
+	// After the answer is written: the restart's stop drains the listener
+	// within the shutdown budget, so the 202 reaches the client.
+	stager.RequestRestart("restore " + staged.ID + " staged")
 }
 
 // DeleteBackup deletes a backup file. Implements DELETE /backup/:filename.
@@ -871,8 +901,9 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	filename = library.SanitizeFilename(filename)
 
-	// DeleteBackupIn (not DeleteBackup): same reasoning as RestoreBackupIn
-	// above -- filename is only ever used as a directory-listing lookup key.
+	// DeleteBackupIn (not DeleteBackup): filename is only ever used as a
+	// directory-listing lookup key (CodeQL go/path-injection), as in the
+	// restore stager's backup.StageRestore above.
 	if err := backup.DeleteBackupIn(backupConfig.BackupDir, filename); err != nil {
 		httputil.InternalError(c, "failed to delete backup", err)
 		return

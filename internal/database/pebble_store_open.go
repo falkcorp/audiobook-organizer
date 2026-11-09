@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -212,6 +212,32 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	}
 	pebbleOpenLog.Info("PebbleDB opened at %s through core storage (books at version %d)", logger.SanitizeLogValue(abs), db.AppliedVersion(BooksOwner))
 	return store, nil
+}
+
+// VerifyStoreOpens opens the store directory dir read-only through core
+// storage, with books as the only owner and this build's guard and claims,
+// and closes it (05-backup's VerifyOpen in its R1 form): ABO's restore
+// stager (backup.StageRestore) runs it on an extracted archive, so a store
+// this build cannot open is never staged. It writes nothing (Pebble
+// read-only, nothing created) and leaves pending migrations to the restore
+// boot, which runs them.
+func VerifyStoreOpens(ctx context.Context, dir string) error {
+	build, err := standaloneBuildID()
+	if err != nil {
+		return fmt.Errorf("pebble store: %w", err)
+	}
+	opened, err := storage.Open(ctx, storage.OpenOptions{
+		Path:      dir,
+		ReadOnly:  true,
+		MustExist: true,
+		Build:     build,
+		Owners:    []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true, Spec: BooksSpec()}},
+		Logger:    logger.FromContext(ctx).With("subsystem", "storage"),
+	})
+	if err != nil {
+		return err
+	}
+	return opened.Close()
 }
 
 // refuseSwap is the standalone opener's pre-boot swap check (R1-23 review
