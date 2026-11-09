@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.6.0
+# version: 1.7.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -654,9 +654,10 @@ def _check_host_conf(cfg: dict[str, str]) -> None:
     """local.conf carries only Environment= lines, so the ExecStart=
     override and the host's other settings live in host.conf beside it,
     which the owner writes as root. Without it the service would restart on
-    the base unit's ExecStart (no TLS, the wrong store), so local-conf
-    refuses unless host.conf is a root-owned regular file, not writable by
-    group or others, that runs nothing but the service user's ExecStart.
+    the base unit's ExecStart (no TLS, the wrong store), so install-staged
+    unit and local-conf both refuse, before they copy anything, unless
+    host.conf is a root-owned regular file, not writable by group or
+    others, that runs nothing but the service user's ExecStart.
     A refusal names the line, never its text."""
     path = f"{SYSTEMD_DIR}/{cfg['unit']}.d/{HOST_CONF}"
     why = (
@@ -856,6 +857,11 @@ def op_install(args: list[str]) -> int:
     if what not in ("binary", "unit", "local-conf"):
         raise RefusedError("usage: install binary|unit|local-conf", 2)
     cfg = load_config()
+    if what in ("unit", "local-conf"):
+        # Before anything is read or copied: without a good host.conf the
+        # base unit's ExecStart would run (no TLS, the wrong store), so
+        # neither the unit nor local.conf is installed.
+        _check_host_conf(cfg)
     if what == "unit":
         data = _read_template(cfg)
         os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
@@ -870,7 +876,6 @@ def op_install(args: list[str]) -> int:
         raise RefusedError(f"{key} is not set in {CONFIG}: nothing to install from")
     if what == "binary":
         return _install_binary(cfg["bin"], src)
-    _check_host_conf(cfg)
     fd, _ = _read_staged(src, UNIT_LIMIT)
     try:
         data = _read_all(fd, UNIT_LIMIT + 1)
