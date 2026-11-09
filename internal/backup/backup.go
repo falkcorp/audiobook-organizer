@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.16
+// version: 1.22.17
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1298,6 +1299,9 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 	if !strings.HasSuffix(within, string(filepath.Separator)) {
 		within += string(filepath.Separator)
 	}
+	// changed holds each directory whose entries the extraction changed,
+	// synced after the last entry (syncChanged).
+	changed := newChangedDirs(filepath.Clean(targetPath))
 
 	// Extract files
 	for {
@@ -1366,6 +1370,7 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			if err := os.MkdirAll(target, 0775); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", target, err)
 			}
+			changed.add(filepath.Dir(target))
 		case tar.TypeReg:
 			// Ensure parent directory exists
 			if err := os.MkdirAll(filepath.Dir(target), 0775); err != nil {
@@ -1374,6 +1379,7 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			if err := writeEntry(target, tarReader, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("archive entry %q: %w", header.Name, err)
 			}
+			changed.add(filepath.Dir(target))
 		default:
 			slog.Warn("backup unsupported file type", "type", header.Typeflag, "name", header.Name)
 		}
@@ -1401,12 +1407,102 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		return emptyArchiveError(filepath.Base(archivePath))
 	}
 
+	// Each entry's file was synced before its rename (writeEntry), but the
+	// renames, and the directories MkdirAll made, live in their directories'
+	// entries, which a crash can still lose until those directories are
+	// synced. A restore that answered 200 could then come back after a crash
+	// as a mix of old and new files.
+	return changed.sync()
+}
+
+// changedDirs is the set of directories whose entries an extraction
+// changed: each directory an entry was renamed into or made in, and each
+// ancestor of one up to base, the nearest directory that existed before the
+// extraction began. A directory MkdirAll made is itself an entry in its
+// parent, so its parent changed too; above base, nothing did.
+type changedDirs struct {
+	base string
+	dirs map[string]struct{}
+}
+
+// newChangedDirs returns an empty set for an extraction into target.
+func newChangedDirs(target string) *changedDirs {
+	base := target
+	for {
+		if _, err := os.Stat(base); err == nil {
+			break
+		}
+		parent := filepath.Dir(base)
+		if parent == base {
+			break
+		}
+		base = parent
+	}
+	return &changedDirs{base: base, dirs: map[string]struct{}{}}
+}
+
+// add records dir and its ancestors up to the set's base. dir is always
+// at or under base: every destination lies under the target, which is.
+func (c *changedDirs) add(dir string) {
+	for {
+		if _, seen := c.dirs[dir]; seen {
+			return
+		}
+		c.dirs[dir] = struct{}{}
+		parent := filepath.Dir(dir)
+		if dir == c.base || parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
+// sync syncs every directory in the set, deepest first (syncDir), and
+// returns the first failure.
+func (c *changedDirs) sync() error {
+	dirs := make([]string, 0, len(c.dirs))
+	for dir := range c.dirs {
+		dirs = append(dirs, dir)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		if len(dirs[i]) != len(dirs[j]) {
+			return len(dirs[i]) > len(dirs[j])
+		}
+		return dirs[i] < dirs[j]
+	})
+	for _, dir := range dirs {
+		if err := syncDir(dir); err != nil {
+			return fmt.Errorf("failed to sync directory %s: %w", dir, err)
+		}
+	}
 	return nil
 }
 
 // afterEntryHook, nil outside tests, runs in extractArchive after each
 // entry, with its name.
 var afterEntryHook func(name string)
+
+// syncDir makes dir's entries durable: the names renamed into it and the
+// directories made in it. A variable so a test can see which directories
+// a restore syncs.
+//
+// It does nothing on Windows. Go's File.Sync there is FlushFileBuffers,
+// which needs a handle opened for writing, and os.Open opens a directory
+// read-only, so a directory has no sync to call; NTFS journals the rename
+// itself.
+var syncDir = func(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		return errors.Join(err, d.Close())
+	}
+	return d.Close()
+}
 
 // writeEntry writes the regular file read from r, with mode, at dst: into a
 // new file in dst's directory, fsynced, then renamed over dst. A rename
