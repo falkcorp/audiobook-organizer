@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -474,6 +474,48 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 			entries: []entry{{name: "wayne-manor/", dir: true}},
 			landed:  "batcave",
 		},
+		{
+			// R1-15 round-6 verification review, B1-r6: the snapshot
+			// directory's path is a dangling symlink. os.Stat cannot give
+			// it an identity, and standing its parent and its name in for
+			// it, as for a directory not made yet, let the entry create the
+			// symlink's target: the snapshot directory from then on.
+			name: "a dangling symlink at the snapshot directory",
+			setup: func(t *testing.T, base string) (string, string) {
+				snap := filepath.Join(base, "hnsw")
+				mustSymlink(t, "joker", snap)
+				return base, snap
+			},
+			entries: []entry{{name: "joker/hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrUnresolvableSymlink,
+		},
+		{
+			// B1-r6 one level up: a dangling symlink among the snapshot
+			// directory's ancestors.
+			name: "a dangling symlink above the snapshot directory",
+			setup: func(t *testing.T, base string) (string, string) {
+				mustSymlink(t, "joker", filepath.Join(base, "arkham"))
+				return base, filepath.Join(base, "arkham", "hnsw")
+			},
+			entries: []entry{{name: "joker/hnsw/hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrUnresolvableSymlink,
+		},
+		{
+			// B1-r6 for the restored database's snapshot directory, under
+			// a custom target.
+			name: "a dangling symlink at the snapshot directory under a custom target",
+			setup: func(t *testing.T, base string) (string, string) {
+				target := filepath.Join(base, "gotham")
+				mustMkdir(t, target)
+				mustSymlink(t, "joker", filepath.Join(target, "hnsw"))
+				return target, filepath.Join(target, "hnsw")
+			},
+			entries: []entry{{name: "joker/hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrUnresolvableSymlink,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -522,6 +564,29 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 			t.Fatalf("extractArchive = %v; want the entry written", err)
 		}
 	})
+
+	// B1-r6: a snapshot directory the restore cannot resolve refuses every
+	// entry, not only one aimed at it: where the directory is cannot be
+	// told, so no destination can be cleared of it. A dangling link, and
+	// one that loops.
+	for name, link := range map[string]string{"dangling": "joker", "looping": "hnsw"} {
+		t.Run("an entry outside a "+name+" snapshot directory", func(t *testing.T) {
+			base := t.TempDir()
+			archive := filepath.Join(base, "the-dark-knight.tar")
+			writePlainTar(t, archive, [][2]string{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+			target := filepath.Join(base, "gotham")
+			mustMkdir(t, target)
+			snap := filepath.Join(target, "hnsw")
+			mustSymlink(t, link, snap)
+			err := extractArchive(archive, target, []string{snap})
+			if !errors.Is(err, ErrUnresolvableSymlink) {
+				t.Fatalf("extractArchive = %v; want ErrUnresolvableSymlink", err)
+			}
+			if _, err := os.Lstat(filepath.Join(target, "audiobooks.pebble")); !os.IsNotExist(err) {
+				t.Errorf("the extraction wrote into the target (%v)", err)
+			}
+		})
+	}
 }
 
 // TestExtractArchive_SkipsTheTargetItself: an entry that names the target
@@ -544,33 +609,45 @@ func TestExtractArchive_SkipsTheTargetItself(t *testing.T) {
 	}
 }
 
-func TestPathsOverlap(t *testing.T) {
+// TestCheckPathsApart: the restore handler refuses a target_path that is
+// the live snapshot directory, lies above it or lies inside it
+// (ErrPathsOverlap), compared by identity, and one it cannot compare with it
+// because a symlink on either path does not resolve (ErrUnresolvableSymlink,
+// R1-15 round-6 verification review, B1-r6).
+func TestCheckPathsApart(t *testing.T) {
 	base := t.TempDir()
 	snap := filepath.Join(base, "gotham", "hnsw")
 	mustMkdir(t, snap)
 	mustSymlink(t, filepath.Join(base, "gotham"), filepath.Join(base, "wayne-manor"))
-	cases := map[string]bool{
-		snap:                                    true,  // the directory itself
-		filepath.Join(base, "gotham"):           true,  // above it
-		base:                                    true,  // further above
-		filepath.Join(snap, "batcave"):          true,  // inside it, not created yet
-		filepath.Join(base, "wayne-manor"):      true,  // above it, through a symlink
-		filepath.Join(base, "wayne-manor/hnsw"): true,  // the directory, through a symlink
-		filepath.Join(base, "gotham", "hnsw2"):  false, // a sibling sharing the prefix
-		filepath.Join(base, "arkham"):           false, // a sibling of its parent
+	mustSymlink(t, "joker", filepath.Join(base, "harley"))
+	mustSymlink(t, "riddler", filepath.Join(base, "riddler"))
+	cases := map[string]error{
+		snap:                                    ErrPathsOverlap, // the directory itself
+		filepath.Join(base, "gotham"):           ErrPathsOverlap, // above it
+		base:                                    ErrPathsOverlap, // further above
+		filepath.Join(snap, "batcave"):          ErrPathsOverlap, // inside it, not created yet
+		filepath.Join(base, "wayne-manor"):      ErrPathsOverlap, // above it, through a symlink
+		filepath.Join(base, "wayne-manor/hnsw"): ErrPathsOverlap, // the directory, through a symlink
+		filepath.Join(base, "gotham", "hnsw2"):  nil,             // a sibling sharing the prefix
+		filepath.Join(base, "arkham"):           nil,             // a sibling of its parent
+		// B1-r6: a target that is, or lies under, a symlink that does not
+		// resolve, dangling or looping, cannot be compared.
+		filepath.Join(base, "harley"):            ErrUnresolvableSymlink,
+		filepath.Join(base, "harley", "batcave"): ErrUnresolvableSymlink,
+		filepath.Join(base, "riddler"):           ErrUnresolvableSymlink,
 	}
 	// S1-r5: on a case-insensitive filesystem these name the directory.
 	for _, alias := range []string{"HNSW", "hn\u017fw"} {
 		if caseAlias(t, t.TempDir(), "hnsw", alias) {
-			cases[filepath.Join(base, "gotham", alias)] = true
-			cases[filepath.Join(base, "gotham", alias, "batcave")] = true
+			cases[filepath.Join(base, "gotham", alias)] = ErrPathsOverlap
+			cases[filepath.Join(base, "gotham", alias, "batcave")] = ErrPathsOverlap
 		} else {
 			t.Logf("the filesystem does not fold %q to hnsw; that row is skipped", alias)
 		}
 	}
 	for p, want := range cases {
-		if got := PathsOverlap(p, snap); got != want {
-			t.Errorf("PathsOverlap(%q, snapshot) = %v, want %v", p, got, want)
+		if got := CheckPathsApart(p, snap); !errors.Is(got, want) || (want == nil) != (got == nil) {
+			t.Errorf("CheckPathsApart(%q, snapshot) = %v, want %v", p, got, want)
 		}
 	}
 
@@ -578,17 +655,62 @@ func TestPathsOverlap(t *testing.T) {
 	// identity and its name, compared without case, stand in for it.
 	absent := filepath.Join(base, "batcave", "hnsw")
 	mustMkdir(t, filepath.Dir(absent))
-	for p, want := range map[string]bool{
-		absent:                                 true,
-		filepath.Join(base, "batcave", "HNSW"): true,
-		filepath.Join(base, "batcave", "HNSW", "x"):  true,
-		filepath.Join(base, "batcave"):               true, // above it
-		filepath.Join(base, "batcave", "hnsw-old"):   false,
-		filepath.Join(base, "batcave-annex", "hnsw"): false,
+	for p, want := range map[string]error{
+		absent:                                 ErrPathsOverlap,
+		filepath.Join(base, "batcave", "HNSW"): ErrPathsOverlap,
+		filepath.Join(base, "batcave", "HNSW", "x"):  ErrPathsOverlap,
+		filepath.Join(base, "batcave"):               ErrPathsOverlap, // above it
+		filepath.Join(base, "batcave", "hnsw-old"):   nil,
+		filepath.Join(base, "batcave-annex", "hnsw"): nil,
 	} {
-		if got := PathsOverlap(p, absent); got != want {
-			t.Errorf("PathsOverlap(%q, a snapshot directory not made yet) = %v, want %v", p, got, want)
+		if got := CheckPathsApart(p, absent); !errors.Is(got, want) || (want == nil) != (got == nil) {
+			t.Errorf("CheckPathsApart(%q, a snapshot directory not made yet) = %v, want %v", p, got, want)
 		}
+	}
+
+	// B1-r6, the reviewer's shape: the snapshot directory's path is a
+	// dangling symlink, and the target is where it points. Any target is
+	// refused: where the directory is cannot be told.
+	dangling := filepath.Join(base, "arkham-asylum", "hnsw")
+	mustMkdir(t, filepath.Dir(dangling))
+	mustSymlink(t, "real-hnsw", dangling)
+	for _, p := range []string{
+		filepath.Join(base, "arkham-asylum", "real-hnsw"),
+		filepath.Join(base, "blackgate"),
+	} {
+		if got := CheckPathsApart(p, dangling); !errors.Is(got, ErrUnresolvableSymlink) {
+			t.Errorf("CheckPathsApart(%q, a dangling snapshot directory) = %v, want ErrUnresolvableSymlink", p, got)
+		}
+	}
+}
+
+// TestCheckSnapshotDirs (B1-r6): the restore handler checks the snapshot
+// directories before it marks the store or writes anything, and refuses one
+// whose path, or one of whose ancestors, is a symlink that does not resolve.
+// A directory not made yet is fine.
+func TestCheckSnapshotDirs(t *testing.T) {
+	base := t.TempDir()
+	live := filepath.Join(base, "gotham", "hnsw")
+	mustMkdir(t, live)
+	absent := filepath.Join(base, "gotham", "batcave", "hnsw")
+	mustSymlink(t, "joker", filepath.Join(base, "harley"))
+	mustSymlink(t, "riddler", filepath.Join(base, "riddler"))
+	for name, tc := range map[string]struct {
+		dirs []string
+		want error
+	}{
+		"existing and not made yet": {[]string{live, absent}, nil},
+		"none":                      {nil, nil},
+		"dangling":                  {[]string{live, filepath.Join(base, "harley")}, ErrUnresolvableSymlink},
+		"under a dangling link":     {[]string{filepath.Join(base, "harley", "hnsw"), live}, ErrUnresolvableSymlink},
+		"looping":                   {[]string{filepath.Join(base, "riddler", "hnsw")}, ErrUnresolvableSymlink},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := CheckSnapshotDirs(tc.dirs)
+			if !errors.Is(got, tc.want) || (tc.want == nil) != (got == nil) {
+				t.Fatalf("CheckSnapshotDirs = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 
