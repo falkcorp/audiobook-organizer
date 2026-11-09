@@ -1,5 +1,5 @@
 # file: scripts/tests/test_deploy_wait_ready.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: f22657cf-f7bf-4b6c-a942-2799f4bd4890
 # last-edited: 2026-11-09
 
@@ -17,6 +17,7 @@ Run with:
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -253,6 +254,31 @@ class WaitReadyTest(unittest.TestCase):
             extra_env={"DEPLOY_RESTART_GRACE": "30"},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_an_empty_invocation_is_not_ready(self) -> None:
+        """An active unit with no InvocationID is not the restarted process,
+        however the baseline compares."""
+        shows = [fake_ssh.show("active", invocation="")]
+        proc, _, _ = self.run_wait(
+            shows,
+            [READY],
+            timeout="30",
+            invocation="0a0a",
+            extra_env={"DEPLOY_RESTART_GRACE": "0.3"},
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("not restarted", proc.stderr)
+
+    def test_ssh_keeps_the_connection_alive(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "deploy_wait_ready", REPO_ROOT / "scripts" / "deploy_wait_ready.py"
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        pairs = list(zip(mod.SSH_OPTS[::2], mod.SSH_OPTS[1::2]))
+        self.assertIn(("-o", "ServerAliveInterval=15"), pairs)
+        self.assertIn(("-o", "ServerAliveCountMax=4"), pairs)
 
     def test_empty_baseline_accepts_any_new_invocation(self) -> None:
         """A unit that was stopped before the start has no invocation to

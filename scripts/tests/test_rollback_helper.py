@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -254,6 +254,7 @@ class Config(unittest.TestCase):
             ("service_user", "Alfred Pennyworth"),
             ("unit", "x.service; id"),
             ("unit", "audiobook-organizer"),
+            ("unit", "batman:robin.service"),
             ("offline_env", "HOME=/x LD_PRELOAD=/tmp/evil.so"),
             ("offline_env", "HOME=/x;id"),
             ("archive_dir", "/srv/arch ives"),
@@ -744,6 +745,19 @@ class SwapPrev(unittest.TestCase):
         self.assertTrue(os.stat(h.bin).st_mode & stat.S_IXUSR)
         self.assertFalse(Path(f"{h.bin}.new").exists())
 
+    def test_the_running_binarys_inode_is_never_written(self):
+        """A rename over the old binary, never a write into it: the running
+        process's open file (its text) still reads the old content."""
+        h = self.setup_host()
+        before = os.stat(h.bin).st_ino
+        fd = os.open(h.bin, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        code, _, err = h.run("swap-prev")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(os.pread(fd, 64, 0), b"current")
+        self.assertNotEqual(os.stat(h.bin).st_ino, before)
+        self.assertEqual(h.bin.read_text(), "prev")
+
     def test_without_prev_nothing_changes(self):
         h = self.setup_host()
         os.unlink(f"{h.bin}.prev")
@@ -755,9 +769,13 @@ class SwapPrev(unittest.TestCase):
     def test_symlinked_prev_is_refused(self):
         h = self.setup_host()
         os.unlink(f"{h.bin}.prev")
-        os.symlink("/bin/sh", f"{h.bin}.prev")
+        target = h.root / "joker-binary"
+        target.write_text("joker")
+        target.chmod(0o755)
+        os.symlink(target, f"{h.bin}.prev")
         self.assertEqual(h.run("swap-prev")[0], 1)
         self.assertEqual(h.bin.read_text(), "current")
+        self.assertFalse(Path(f"{h.bin}.rolled-back").exists())
 
     def test_takes_no_arguments(self):
         for extra in (["x"], ["/bin/sh"], [""]):
@@ -1255,10 +1273,18 @@ class Stubs(unittest.TestCase):
         mod = load()
         stubs = HELPER.parent
         for name, sub in mod.STUBS.items():
-            text = (stubs / name).read_text()
-            self.assertIn(
-                f'exec /usr/bin/python3 -I {mod.LIBDIR}/rollback_helper.py {sub} "$@"\n', text, name
+            lines = (stubs / name).read_text().split("\n")
+            # The whole file: a /bin/sh shebang, comments only, the one exec
+            # line, and a final newline. Nothing else can run before it.
+            self.assertEqual(lines[0], "#!/bin/sh", name)
+            self.assertEqual(lines[-1], "", name)
+            self.assertEqual(
+                lines[-2],
+                f'exec /usr/bin/python3 -I {mod.LIBDIR}/rollback_helper.py {sub} "$@"',
+                name,
             )
+            for ln in lines[1:-2]:
+                self.assertTrue(ln == "#" or ln.startswith("# "), (name, ln))
             self.assertTrue(os.access(stubs / name, os.X_OK), name)
 
 
