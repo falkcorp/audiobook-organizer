@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.10.0
+# version: 1.11.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -629,8 +629,9 @@ def _env_key_denied(assignment: str) -> bool:
 
 def render_local_conf(text: str, source: str) -> str:
     """The local.conf drop-in to install, rendered from the staged file:
-    `[Service]` and its `Environment=` lines, each re-written as is after it
-    matches _ENV_ASSIGNMENT. Comment and blank lines are dropped; anything
+    `[Service]` and its `Environment=` lines (logical lines, joined as
+    systemd joins them), each re-written as is after it matches
+    _ENV_ASSIGNMENT. Comment and blank lines are dropped; anything
     else refuses (by line number: a refusal never prints the file). Settings
     other than Environment= (ExecStart=, WorkingDirectory=, MemoryMax=, ...)
     decide what runs and as whom, so they live in host.conf, which the owner
@@ -639,14 +640,11 @@ def render_local_conf(text: str, source: str) -> str:
         raise RefusedError("carriage returns and NUL bytes are refused")
     lines: list[str] = []
     section = False
-    for n, raw in enumerate(text.split("\n"), 1):
-        s = raw.strip(_WS)
-        if not s or s[0] in "#;":
-            continue  # dropped: nothing in it reaches systemd
-        if not _DIRECTIVE_CHARS.fullmatch(raw):
-            raise RefusedError(
-                f"line {n}: only printable ASCII and tabs are allowed outside comments"
-            )
+    # Logical lines, as systemd would read the staged file (_logical_lines):
+    # comments and blank lines are dropped there, and a value continued by
+    # a trailing backslash is checked, and rendered, as the one line it is.
+    for n, joined in _logical_lines(text, source):
+        s = joined.strip(_WS)
         if s == "[Service]":
             section = True
             continue
@@ -787,11 +785,18 @@ def _logical_lines(text: str, path: str) -> list[tuple[int, str]]:
     return out
 
 
+# A word systemd reads as a command separator in ExecStart= (`;`), and the
+# spellings that are close enough that a parser change could make them one:
+# `\;` and a quoted `;` are refused too.
+_SEMICOLON_WORD = re.compile(r"""\\?;|";"|';'""")
+
+
 def _check_rules(text: str, cfg: dict[str, str], path: str) -> None:
     """Refuse a unit file or drop-in that runs anything but the service
     user's ExecStart: another Exec*= line, an ExecStart= whose command does
     not start with an absolute path after only the @, - and : prefixes (so
-    no + ! | or anything unknown), PermissionsStartOnly=,
+    no + ! | or anything unknown), an ExecStart= with a `;` word (a second
+    command), Type=oneshot (which runs each of them), PermissionsStartOnly=,
     AmbientCapabilities=, or a User=/Group= other than the config's. Lines
     are checked as systemd joins them (_logical_lines). A refusal names the
     line, never its text."""
@@ -809,6 +814,13 @@ def _check_rules(text: str, cfg: dict[str, str], path: str) -> None:
                 "runs ExecStart= with a prefix other than @, - or : (+ and ! run it with "
                 "privileges) or without an absolute path"
             )
+        elif key == "ExecStart" and any(_SEMICOLON_WORD.fullmatch(w) for w in value.split()):
+            problem = (
+                "puts a `;` word in ExecStart=, which starts a second command whose prefix "
+                "the check never sees"
+            )
+        elif key == "Type" and value == "oneshot":
+            problem = "sets Type=oneshot, which runs every command an ExecStart= line holds"
         elif key in _HOST_REFUSED:
             problem = f"sets {key}="
         elif key in want and value != want[key]:
@@ -945,7 +957,9 @@ def _check_unit_fragment(cfg: dict[str, str], installing_unit: bool) -> None:
     generated unit (SourcePath set), a FragmentPath outside SYSTEMD_DIR and
     FRAGMENT_DIRS, or a copy in any other directory refuses. With none at
     all it refuses, except for install-staged unit, which is about to write
-    the checked template to SYSTEMD_DIR."""
+    the checked template to SYSTEMD_DIR: it also skips the SYSTEMD_DIR copy
+    it replaces, so a bad /etc copy never blocks the command that fixes it.
+    Every other copy (a shadowed /usr/lib one) must still pass."""
     unit = cfg["unit"]
     allowed = {SYSTEMD_DIR, *FRAGMENT_DIRS}
     p = subprocess.run(  # noqa: S603 (fixed argv)
@@ -1000,14 +1014,14 @@ def _check_unit_fragment(cfg: dict[str, str], installing_unit: bool) -> None:
             "unit first (install-staged unit); nothing installed"
         )
     for path in sorted(found):
+        if installing_unit and path == etc:
+            continue  # the copy install-staged unit replaces with the checked template
         try:
             text = _read_root_conf(path)
         except FileNotFoundError as e:
-            if installing_unit and path == etc:
-                continue
             raise RefusedError(f"{path}, {unit}'s unit file, is missing; nothing installed") from e
         try:
-            _check_template(text, cfg)
+            _check_template(text, cfg, path)
         except RefusedError as e:
             raise RefusedError(f"{path}: {e}; nothing installed") from e
         _check_rules(text, cfg, path)
@@ -1024,19 +1038,24 @@ def _check_unit_dropins(cfg: dict[str, str]) -> None:
         _check_rules(text, cfg, path)
 
 
-def _check_template(text: str, cfg: dict[str, str]) -> None:
-    """The owner's unit template must name this config's binary, user and
-    group: a template from another install would start the wrong thing."""
+def _check_template(text: str, cfg: dict[str, str], path: str) -> None:
+    """The owner's unit template, and every copy of the unit file, must name
+    this config's binary, user and group: a template from another install
+    would start the wrong thing, and a unit without User= runs as root.
+    Read as systemd reads it: logical lines (_logical_lines), so a User=
+    folded into the line before it by a trailing backslash is not a User=;
+    the last assignment wins, and an empty one resets the setting."""
     service = False
-    found = {"User": None, "Group": None, "ExecStart": None}
-    for line in text.split("\n"):
+    found: dict[str, str | None] = {"User": None, "Group": None, "ExecStart": None}
+    for _, line in _logical_lines(text, path):
         s = line.strip(_WS)
         if s.startswith("["):
             service = s == "[Service]"
             continue
         key, sep, value = s.partition("=")
-        if service and sep and key in found and value:
-            found[key] = value
+        key, value = key.strip(_WS), value.strip(_WS)
+        if service and sep and key in found:
+            found[key] = value or None
     want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
     for key, who in want.items():
         if found[key] != who:
@@ -1142,7 +1161,7 @@ def _read_template(cfg: dict[str, str]) -> bytes:
         text = data.decode("utf-8", "strict")
     except UnicodeDecodeError as e:
         raise RefusedError(f"{path} is not UTF-8") from e
-    _check_template(text, cfg)
+    _check_template(text, cfg, path)
     _check_rules(text, cfg, path)
     return data
 
