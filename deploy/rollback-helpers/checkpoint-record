@@ -1,0 +1,12 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/checkpoint-record
+# version: 1.0.0
+# guid: 45abc6b6-305c-49fc-b7e0-aa7fb07ba92c
+# last-edited: 2026-11-09
+#
+# Print a checkpoint record (NAME), run as the service user.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py record "$@"
