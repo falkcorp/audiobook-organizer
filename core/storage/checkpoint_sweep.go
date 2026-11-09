@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint_sweep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0f3c7e-6a1d-4f0e-9a52-2d8f61c4b7a3
 // last-edited: 2026-11-08
 
@@ -83,10 +83,10 @@ const maxLooseReported = 20
 var ErrCheckpointSweepBusy = errors.New("storage: another checkpoint sweep or prune is running")
 
 // ErrPruneSwapInFlight: storage prune-checkpoints refuses while an offline
-// restore or any other swap is in flight (restore/<id>/inflight.json
-// exists), because that swap may be about to read the checkpoint it would
-// delete (§5S.3.12 "Retention").
-var ErrPruneSwapInFlight = errors.New("storage: a restore is in flight; boot the current build once to finish it, then prune")
+// restore or any other swap is staged or in flight (restore/pending.json
+// or a restore/<id>/inflight.json exists), because that swap may be about
+// to read the checkpoint it would delete (§5S.3.12 "Retention").
+var ErrPruneSwapInFlight = errors.New("storage: a restore is staged or in flight; boot the current build once to finish it, then prune")
 
 // CheckpointInfo is one checkpoint as health reports it (§5S.3.12
 // "Retention"; 05-health §5H.3.1): storage_checkpoint_retained with its
@@ -832,9 +832,9 @@ type PruneResult struct {
 // §6.4.5): it deletes every completed and released checkpoint now, before
 // its delete_after, and with IncludeOpen the open and served ones too,
 // through the sweeper's delete order (record, copy, pointer). It opens no
-// store, so it runs with the service stopped or while it serves; it
-// refuses while a swap is in flight (ErrPruneSwapInFlight), and waits for
-// a sweep in progress. It deletes records only: garbage, scratch entries
+// store, so it runs with the service stopped or while it serves; it waits
+// for a sweep in progress, then, holding the lock, refuses while a swap is
+// staged or in flight (ErrPruneSwapInFlight). It deletes records only: garbage, scratch entries
 // and modes stay the sweeper's, because a store that is booting may be
 // writing a checkpoint whose record does not exist yet.
 func PruneCheckpoints(ctx context.Context, o PruneOptions) (PruneResult, error) {
@@ -866,20 +866,18 @@ func PruneCheckpoints(ctx context.Context, o PruneOptions) (PruneResult, error) 
 		fs: fs, dbPath: filepath.Clean(o.Path), cpDir: filepath.Join(parent, checkpointLeaf), stateDir: o.StateDir,
 		log: o.Logger, now: o.Clock().UTC(), chmod: osChmod(fs), walk: osModeWalk(fs),
 	}
-	if o.StateDir != "" {
-		ids, err := restorejournal.InFlightIDs(fs, o.StateDir)
-		if err != nil {
-			return res, err
-		}
-		if len(ids) > 0 {
-			return res, fmt.Errorf("%w (restore/%s/inflight.json)", ErrPruneSwapInFlight, ids[0])
-		}
-	}
 	unlock, ok, err := a.lockWithin(ctx, o.lockWait)
 	if err != nil {
 		return res, err
 	}
 	defer unlock()
+	// The swap probe runs under the lock, not before it: a restore that
+	// stages or starts while this prune waits for the lock is seen. A
+	// storage restore-offline that holds the same lock while it stages and
+	// swaps (R1-25's seam) can then never race a prune.
+	if err := swapProbe(fs, o.StateDir); err != nil {
+		return res, err
+	}
 	failed, err := a.failedDirs()
 	if err != nil {
 		return res, err
@@ -909,6 +907,31 @@ func PruneCheckpoints(ctx context.Context, o PruneOptions) (PruneResult, error) 
 		}
 	}
 	return res, nil
+}
+
+// swapProbe is prune's refusal while a swap is staged or in flight:
+// restore/pending.json, which the next boot swaps in and which may name a
+// checkpoint to restore (a KindCheckpoint intent), or any
+// restore/<id>/inflight.json. With no state directory there is no swap
+// slot to read.
+func swapProbe(fs vfs.FS, stateDir string) error {
+	if stateDir == "" {
+		return nil
+	}
+	pending := restorejournal.PendingPath(stateDir)
+	if _, err := fs.Stat(pending); err == nil {
+		return fmt.Errorf("%w (restore/%s is staged)", ErrPruneSwapInFlight, restorejournal.PendingName)
+	} else if !oserrorNotExist(err) {
+		return fmt.Errorf("storage: prune-checkpoints: read the swap slot: %w", err)
+	}
+	ids, err := restorejournal.InFlightIDs(fs, stateDir)
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		return fmt.Errorf("%w (restore/%s/%s)", ErrPruneSwapInFlight, ids[0], restorejournal.InflightName)
+	}
+	return nil
 }
 
 // lockWithin takes the sweep lock, retrying while another sweep or prune
