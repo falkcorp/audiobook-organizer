@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.14
+// version: 1.28.15
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -1005,8 +1005,24 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// after the extraction, deferred so that it runs whether the extraction
 	// finished, failed partway or panicked, as the backstop should an entry
 	// still reach one.
-	h.removeANNCleanStopMarkers(snapshotDirs)
-	defer h.removeANNCleanStopMarkers(snapshotDirs)
+	// A marker the first removal can neither remove nor empty would go on
+	// vouching, so the restore fails there, before its first write (R1-15
+	// round-6 verification review, NIT). Any other error is about a marker
+	// that vouched for nothing (it did not parse) and is gone. The
+	// backstop's error can only be logged, as the restore has written by
+	// then.
+	if err := h.removeANNCleanStopMarkers(snapshotDirs); err != nil {
+		if errors.Is(err, database.ErrCleanStopNotDiscarded) {
+			httputil.InternalError(c, "backup not restored: a clean-stop marker beside a snapshot directory could be neither removed nor emptied, and nothing was written", err)
+			return
+		}
+		systemLog.Warn("backup restore: %v", err)
+	}
+	defer func() {
+		if err := h.removeANNCleanStopMarkers(snapshotDirs); err != nil {
+			systemLog.Error("backup restore: %v", err)
+		}
+	}()
 	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
 		// A snapshot directory that stopped resolving during the
 		// extraction (B1-r6) is the same 409 as one refused above.
@@ -1069,13 +1085,18 @@ func annSnapshotDirs(targetPath, root string) []string {
 }
 
 // removeANNCleanStopMarkers removes a clean-stop marker in each of the
-// restore's snapshot directories (annSnapshotDirs).
-func (h *Handler) removeANNCleanStopMarkers(snapshotDirs []string) {
+// restore's snapshot directories (annSnapshotDirs). It tries every
+// directory and joins their errors (database.TakeHNSWCleanStop):
+// database.ErrCleanStopNotDiscarded is in it when a marker may still
+// vouch.
+func (h *Handler) removeANNCleanStopMarkers(snapshotDirs []string) error {
+	var errs []error
 	for _, dir := range snapshotDirs {
 		if _, err := database.TakeHNSWCleanStop(dir); err != nil {
-			systemLog.Error("backup restore: %v", err)
+			errs = append(errs, err)
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // DeleteBackup deletes a backup file. Implements DELETE /backup/:filename.

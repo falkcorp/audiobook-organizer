@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -646,4 +646,43 @@ func TestDisableHNSWCleanStopClaim_RestoreTurnsClaimsBackOn(t *testing.T) {
 	if markerExists(t, dir) {
 		t.Error("an open after the restore left the marker on disk")
 	}
+}
+
+// TestTakeHNSWCleanStop_SaysWhetherAMarkerStays (R1-15 round-6 verification
+// review, NIT): the restore handler fails before its first write when a
+// marker may still vouch, so TakeHNSWCleanStop's error says which errors
+// those are (ErrCleanStopNotDiscarded). A marker that did not parse vouched
+// for nothing and is gone: an error, but not that one.
+func TestTakeHNSWCleanStop_SaysWhetherAMarkerStays(t *testing.T) {
+	t.Run("a marker that does not parse", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(cleanStopPath(dir), []byte("the joker was here"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		vouched, err := TakeHNSWCleanStop(dir)
+		if vouched || err == nil {
+			t.Fatalf("TakeHNSWCleanStop = %v, %v; want false and the parse error", vouched, err)
+		}
+		if errors.Is(err, ErrCleanStopNotDiscarded) {
+			t.Errorf("a marker that was removed is reported as staying: %v", err)
+		}
+		if markerExists(t, dir) {
+			t.Error("the marker is still on disk")
+		}
+	})
+	t.Run("a marker that can be neither removed nor emptied", func(t *testing.T) {
+		dir := t.TempDir()
+		writeMarker(t, dir)
+		if err := os.Chmod(cleanStopPath(dir), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		readOnlyDir(t, dir)
+		vouched, err := TakeHNSWCleanStop(dir)
+		if vouched {
+			t.Error("a marker that stays is reported as vouching for this run")
+		}
+		if !errors.Is(err, ErrCleanStopNotDiscarded) {
+			t.Fatalf("TakeHNSWCleanStop error = %v; want ErrCleanStopNotDiscarded", err)
+		}
+	})
 }

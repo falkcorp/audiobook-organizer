@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -691,4 +691,65 @@ func TestRestoreBackup_RefusesAnUnresolvableSnapshotDirectory(t *testing.T) {
 	for _, p := range probes {
 		runRestoreProbe(t, p)
 	}
+}
+
+// TestRestoreBackup_FailsBeforeWritingWhenAMarkerStays (R1-15 round-6
+// verification review, NIT): the restore removes the markers in both
+// snapshot directories before its first write, and a marker that can be
+// neither removed nor emptied would go on vouching for a snapshot the
+// restored database does not match. Nothing has been written at that
+// point, so the restore fails there, with a 500, instead of logging it and
+// writing anyway. The store was marked by then (marked).
+func TestRestoreBackup_FailsBeforeWritingWhenAMarkerStays(t *testing.T) {
+	runRestoreProbe(t, restoreProbe{
+		name: "a restored marker that can be neither removed nor emptied",
+		setup: func(t *testing.T, root string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root ignores file and directory permissions")
+			}
+			restored := filepath.Join(root, "gotham", "hnsw")
+			plantMarker(t, restored)
+			require.NoError(t, os.Chmod(filepath.Join(restored, "hnsw.clean-stop"), 0o444))
+			require.NoError(t, os.Chmod(restored, 0o555))
+			t.Cleanup(func() { _ = os.Chmod(restored, 0o755) })
+		},
+		entries: func(string) []tarEntry {
+			return []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}}
+		},
+		target:     func(root string) string { return filepath.Join(root, "gotham") },
+		marked:     true,
+		wantStatus: http.StatusInternalServerError,
+	})
+}
+
+// TestRestoreBackup_GoesOnPastAMarkerThatDoesNotVouch: a marker that does
+// not parse vouched for nothing, and the first removal removes it, so the
+// restore goes on. Only a marker that may still vouch stops it
+// (database.ErrCleanStopNotDiscarded).
+func TestRestoreBackup_GoesOnPastAMarkerThatDoesNotVouch(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "audiobooks.pebble")
+	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = filepath.Join(root, "backups")
+	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+	target := filepath.Join(root, "gotham")
+	restored := filepath.Join(target, "hnsw")
+	require.NoError(t, os.MkdirAll(restored, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(restored, "hnsw.clean-stop"), []byte("the riddler was here"), 0o644))
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "hush.tar"), []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+
+	h, _ := newTestHandler(t)
+	h.WithANNSnapshotDivergence(func(string) {})
+	body, err := json.Marshal(map[string]any{"backup_filename": "hush.tar", "target_path": target})
+	require.NoError(t, err)
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.False(t, markerPresent(t, restored), "the marker that did not parse was not removed")
+	got, err := os.ReadFile(filepath.Join(target, "audiobooks.pebble", "MANIFEST-000001"))
+	require.NoError(t, err)
+	assert.Equal(t, "batcave", string(got))
 }
