@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -816,5 +817,178 @@ func TestPrepareRestoreIn_RecordsTheArchiveRoot(t *testing.T) {
 				t.Errorf("Root() = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestExtractArchive_ReplacesAFileRatherThanWritingIntoIt (R1-15 round-6
+// verification review, SF1): a file already at an entry's destination can be
+// a hard link to a file in a snapshot directory, or to a Pebble checkpoint's,
+// and no directory comparison sees a hard link: it is the same inode under
+// another name. Truncating and writing the file at the destination wrote
+// that inode, so the snapshot's file changed. The extraction writes each
+// entry to a new file in the destination's directory and renames it into
+// place, which replaces the name and leaves the inode, with every other name
+// for it, as it was.
+func TestExtractArchive_ReplacesAFileRatherThanWritingIntoIt(t *testing.T) {
+	base := t.TempDir()
+	snap := filepath.Join(base, "hnsw")
+	target := filepath.Join(base, "gotham")
+	mustMkdir(t, snap, filepath.Join(target, "audiobooks.pebble"))
+	graph := filepath.Join(snap, "graph.bin")
+	if err := os.WriteFile(graph, []byte("the long halloween"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(target, "audiobooks.pebble", "OPTIONS-000002")
+	if err := os.Link(graph, dest); err != nil {
+		t.Skipf("the filesystem does not make hard links: %v", err)
+	}
+	archive := filepath.Join(base, "dark-victory.tar")
+	writePlainTar(t, archive, [][2]string{{"audiobooks.pebble/OPTIONS-000002", "hush"}})
+	if err := extractArchive(archive, target, []string{snap}); err != nil {
+		t.Fatalf("extractArchive = %v; want the entry written", err)
+	}
+	if got, err := os.ReadFile(graph); err != nil || string(got) != "the long halloween" {
+		t.Errorf("the snapshot's file reads %q (%v) after the extraction; want it unchanged", got, err)
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "hush" {
+		t.Errorf("the destination reads %q (%v); want the entry's content", got, err)
+	}
+}
+
+// dirNames returns the names in dir, sorted.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(ents))
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// TestExtractArchive_RenamesEachEntryIntoPlace (SF1): each entry is
+// written to a new file beside its destination and renamed over it, so a
+// destination is either its old file or the entry's whole file, never a
+// part of it, and the new file takes the entry's mode. Nothing of the new
+// file is left behind, whether the entry was written or not.
+func TestExtractArchive_RenamesEachEntryIntoPlace(t *testing.T) {
+	t.Run("written", func(t *testing.T) {
+		base := t.TempDir()
+		archive := filepath.Join(base, "year-one.tar")
+		f, err := os.Create(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tw := tar.NewWriter(f)
+		for _, e := range []struct {
+			name string
+			mode int64
+		}{{"audiobooks.pebble/MANIFEST-000001", 0o640}, {"audiobooks.pebble/CURRENT", 0o600}} {
+			if err := tw.WriteHeader(&tar.Header{Name: e.name, Mode: e.mode, Size: 7, Typeflag: tar.TypeReg}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write([]byte("batcave")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(base, "gotham")
+		if err := extractArchive(archive, target, nil); err != nil {
+			t.Fatalf("extractArchive = %v", err)
+		}
+		db := filepath.Join(target, "audiobooks.pebble")
+		if got := dirNames(t, db); len(got) != 2 || got[0] != "CURRENT" || got[1] != "MANIFEST-000001" {
+			t.Errorf("the database directory holds %q; want only the two entries", got)
+		}
+		for name, want := range map[string]os.FileMode{"MANIFEST-000001": 0o640, "CURRENT": 0o600} {
+			fi, err := os.Stat(filepath.Join(db, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode().Perm() != want {
+				t.Errorf("%s has mode %v; want %v", name, fi.Mode().Perm(), want)
+			}
+		}
+	})
+
+	t.Run("cut off inside an entry", func(t *testing.T) {
+		base := t.TempDir()
+		full := filepath.Join(base, "full.tar")
+		writePlainTar(t, full, [][2]string{
+			{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+			{"audiobooks.pebble/OPTIONS-000002", strings.Repeat("hush", 4096)},
+		})
+		raw, err := os.ReadFile(full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The second entry's header starts at 1024 (a 512-byte header, the
+		// first entry's 7 bytes padded to 512); cut inside its data.
+		archive := filepath.Join(base, "cut.tar")
+		if err := os.WriteFile(archive, raw[:1024+512+2048], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(base, "gotham")
+		db := filepath.Join(target, "audiobooks.pebble")
+		mustMkdir(t, db)
+		old := filepath.Join(db, "OPTIONS-000002")
+		if err := os.WriteFile(old, []byte("the old options"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := extractArchive(archive, target, nil); err == nil {
+			t.Fatal("extractArchive = nil; want the cut-off entry's error")
+		}
+		if got, err := os.ReadFile(old); err != nil || string(got) != "the old options" {
+			t.Errorf("the destination reads %.40q (%v) after a failed entry; want its old file", got, err)
+		}
+		if got := dirNames(t, db); len(got) != 2 || got[0] != "MANIFEST-000001" || got[1] != "OPTIONS-000002" {
+			t.Errorf("the database directory holds %q; want the written entry and the old file only", got)
+		}
+	})
+}
+
+// TestExtractArchive_ReadsTheSnapshotDirsAtEachEntry: the snapshot
+// directories are looked up again for every entry. A directory that did not
+// exist when the extraction began (the server's periodic HNSW export can
+// make one) has no identity until it is made, and a symlink planted to it
+// resolves into it from then on. The directory is made between the two
+// entries (afterEntryHook).
+func TestExtractArchive_ReadsTheSnapshotDirsAtEachEntry(t *testing.T) {
+	base := t.TempDir()
+	target, live := filepath.Join(base, "gotham"), filepath.Join(base, "wayne-manor")
+	snap := filepath.Join(live, "hnsw")
+	mustMkdir(t, target, live)
+	mustSymlink(t, snap, filepath.Join(target, "lnk"))
+	var after []string
+	afterEntryHook = func(name string) {
+		after = append(after, name)
+		if name == "first" {
+			mustMkdir(t, snap)
+		}
+	}
+	t.Cleanup(func() { afterEntryHook = nil })
+
+	archive := filepath.Join(base, "knightfall.tar")
+	writePlainTar(t, archive, [][2]string{
+		{"first", "bane"},
+		{"lnk/hnsw.clean-stop", "a marker"},
+	})
+	err := extractArchive(archive, target, []string{snap})
+	if len(after) != 1 || after[0] != "first" {
+		t.Fatalf("entries extracted: %q; want only the first", after)
+	}
+	if !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
+		t.Fatalf("extractArchive = %v; want ErrArchiveCarriesHNSWSnapshot", err)
+	}
+	if _, err := os.Lstat(filepath.Join(snap, "hnsw.clean-stop")); !os.IsNotExist(err) {
+		t.Errorf("the marker was written into the snapshot directory made during the extraction (%v)", err)
 	}
 }
