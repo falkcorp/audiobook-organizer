@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -24,12 +24,18 @@ cp Makefile.local.example Makefile.local
 $EDITOR Makefile.local          # set DEPLOY_HOST, DEPLOY_BIN, fix the scp source path
 
 cp deploy/local.conf.example deploy/local.conf
-$EDITOR deploy/local.conf       # set real TLS cert/key paths, DB path, WHISPER_REMOTE_URL
+$EDITOR deploy/local.conf       # set WHISPER_REMOTE_URL and the other Environment= lines
 ```
 
-`deploy/local.conf` is deployed as a systemd drop-in at
-`/etc/systemd/system/audiobook-organizer.service.d/local.conf` (see
-[`runbooks.md`](runbooks.md#systemd-service) for the existing deploy runbook);
+`deploy/local.conf` holds only the service's `Environment=` lines. `deploy`
+renders them into the systemd drop-in
+`/etc/systemd/system/audiobook-organizer.service.d/local.conf` through the
+`install-staged` helper (see "Rollback helpers" below, and
+[`runbooks.md`](runbooks.md#systemd-service) for the existing deploy runbook).
+Every other setting of the host (the `ExecStart=` command line with its TLS
+and DB paths, `TimeoutStopSec=`, `WorkingDirectory=`, `MemoryMax=`) lives in
+`host.conf` beside it, which the owner writes once as root and no deploy
+touches; see "host.conf: the settings deploy does not write" below.
 `Makefile.local` is picked up automatically by the committed `Makefile` via
 `-include Makefile.local`.
 
@@ -219,10 +225,11 @@ grants: the binary, the unit and `local.conf` go through `install-staged`
 (`binary`, `unit`, `local-conf`), the pprof drop-in through `pprof on|off`,
 and the restart is `/usr/bin/systemctl restart <unit>`.
 `Makefile.local.example`'s `deploy`, `deploy-debug` and `pprof-off` show each
-line. A `sudo cp` of the unit or of `local.conf` into
-`/etc/systemd/system` is not granted, and must not be: systemd reads those
-files as root, so whoever can write them can write `User=root` or
-`ExecStartPre=` and is root.
+line. Drop any `scp` of `deploy/audiobook-organizer.service`: the unit is
+installed from the helper bundle, not from an upload. A `sudo cp` of the unit
+or of `local.conf` into `/etc/systemd/system` is not granted, and must not
+be: systemd reads those files as root, so whoever can write them can write
+`User=root` or `ExecStartPre=` and is root.
 
 Paste these two lines into its `deploy` (and `deploy-debug`) recipe. Put the
 first after the binary is copied to the host and before the `ssh` that moves
@@ -248,17 +255,19 @@ restart` no longer waits for the server's `READY=1`.
 #### Installing the unit
 
 **The owner installs the unit.** `deploy/audiobook-organizer.service` sets
-`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`.
-`Makefile.local.example`'s `deploy` uploads it, and `deploy/local.conf` when
-present, and installs both through `install-staged`, which refuses either
-file unless every directive in it is on the helper's allowlist (below), so
-the next deploy installs it. To install it by hand:
+`Type=notify`, `NotifyAccess=main` and `TimeoutStartSec=300`. It is part of
+the helper bundle: the owner installs it root-owned into the helpers'
+directory with the rest of the bundle ("Rollback helpers" below), and every
+`deploy` runs `install-staged unit`, which copies that root-owned file into
+`/etc/systemd/system` unchanged. A change to the committed unit reaches the
+host when the owner reinstalls the bundle, never through a deploy upload.
+To install it by hand:
 
 1. Deploy a binary that sends `READY=1` first (or run
    `scripts/deploy-match-unit-type.sh` before restarting). A new binary under
    the old `Type=simple` unit is fine; it simply has no socket to notify.
 2. Copy the unit: `sudo cp deploy/audiobook-organizer.service /etc/systemd/system/`.
-   Your `local.conf` drop-in keeps overriding `ExecStart`. It must start the
+   Your `host.conf` drop-in keeps overriding `ExecStart`. It must start the
    binary directly, not through a wrapper shell, because `NotifyAccess=main`
    accepts the notification only from the main process.
 3. Run `sudo systemctl daemon-reload`.
@@ -402,31 +411,57 @@ root-owned config:
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
-| `install-staged` | root | `binary`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`), or `stage_unit` / `stage_local_conf` as the unit / its `local.conf` drop-in after checking every directive, then `daemon-reload` |
+| `install-staged` | root | `binary`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; then `daemon-reload` |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
-`install-staged` opens each staged file as root, so it refuses one that is
-a symlink, has a second hard link (a link to `/etc/shadow` would open), or is
-not owned by the deploy user (`SUDO_UID`). `install-staged unit` and
-`install-staged local-conf` read the file once (at most 256 KiB), check it,
-and install the bytes they checked; a refusal names the line, never its
-text. Every directive must be on the allowlist in `rollback_helper.py`
-(`ALLOWED`): the ones the committed unit and `local.conf.example` use, with
-`User=` and `Group=` equal to the config's `service_user` and
-`service_group` (the unit must set both: a unit without `User=` runs as
-root), `ExecStart=` absolute with no `+` or `!` prefix, `StandardOutput=` and
-`StandardError=` to the journal only, and `Wants=` limited to the network and
-filesystem targets. Anything else (`ExecStartPre=`, `SupplementaryGroups=`,
-`AmbientCapabilities=`, `EnvironmentFile=`, ...) is refused by name; add a
-directive to `ALLOWED` only after checking it cannot run, write or grant
-anything as root. Outside comments a line may hold only printable ASCII and
-tabs: Python takes characters such as a vertical tab, `\x1c` or U+2028 for
-whitespace or line breaks and systemd does not, so `User=audiobook` followed
-by one would pass a check and be an invalid `User=` that systemd ignores,
-running the unit as root. `ExecStart=` may not contain `;` (systemd reads it
-as a second command line). A comment or blank line inside a continued value,
-and a backslash followed by spaces, are refused, because systemd versions
-read them differently.
+`install-staged` never installs uploaded text as a unit file. systemd reads
+unit files and drop-ins as root, so a file the deploy user can shape is a way
+to `User=root` or `ExecStartPre=`; an earlier version checked uploaded files
+against an allowlist of directives, and every check of that kind leaves a gap
+where Python and systemd read a line differently. Instead:
+
+- **`install-staged unit`** copies `audiobook-organizer.service` from the
+  helpers' own directory. It refuses unless that file is root-owned, not
+  writable by group or others, not a symlink, at most 256 KiB, and its
+  `[Service]` section's `User=` and `Group=` equal the config's
+  `service_user` and `service_group` and its `ExecStart=` runs the config's
+  `bin`. Nothing the deploy user uploads is read.
+- **`install-staged local-conf`** reads `stage_local_conf` and writes a new
+  drop-in of its own: a fixed header, `[Service]`, and the file's
+  `Environment=` lines. Comment and blank lines are dropped. Every other line
+  must be `[Service]` or an `Environment=` line holding one assignment,
+  `KEY=value` with `KEY` a shell-style name and `value` either free of
+  whitespace, quotes and backslashes or wholly inside one pair of double or
+  single quotes with no backslash. Anything else (`ExecStart=`, a second
+  section, a continuation, two assignments on one line) refuses the deploy.
+  Every kept line may hold only printable ASCII and tabs, and a carriage
+  return or NUL anywhere refuses: Python takes characters such as a vertical
+  tab, `\x1c` or U+2028 for whitespace or line breaks and systemd does not, so
+  a check that passed on them would not be checking what systemd reads.
+  Only spaces and tabs are trimmed. Comments may hold any UTF-8 (they are
+  never installed).
+- **`install-staged binary`** copies the staged binary through the open file
+  descriptor it checked, never by name.
+
+Every staged file is opened as root, so `install-staged` opens it with no
+symlink in any component of its path (each directory from `/` with
+`O_NOFOLLOW`), and refuses one that is not a regular file, has a second hard
+link (a link to `/etc/shadow` would open) or is not owned by the deploy user
+(`SUDO_UID`). A refusal names the line number and the rule, never the line's
+text, so it cannot print a file the deploy user could not read.
+
+#### host.conf: the settings deploy does not write
+
+Since `local.conf` carries only `Environment=` lines, the rest of what it used
+to hold moves to `/etc/systemd/system/audiobook-organizer.service.d/host.conf`,
+which the owner writes once as root (`sudoedit` it, then
+`sudo systemctl daemon-reload`). `deploy/local.conf.example` shows the block
+in comments: the `ExecStart=` reset and the full command line with its TLS
+and DB paths, and `TimeoutStopSec=`. Put `WorkingDirectory=`, `MemoryMax=` and
+any other host-specific setting there too. Do this before the first deploy
+with these helpers: until then `install-staged local-conf` refuses a
+`local.conf` that still holds them, and the deploy stops before it touches
+the binary.
 
 Install them on the deploy host (as root):
 
@@ -437,14 +472,17 @@ install -o root -g root -m 0755 deploy/rollback-helpers/rollback_helper.py \
   deploy/rollback-helpers/restore-offline deploy/rollback-helpers/unit-type \
   deploy/rollback-helpers/swap-prev deploy/rollback-helpers/install-staged \
   deploy/rollback-helpers/pprof /usr/local/libexec/audiobook-organizer/rollback/
+install -o root -g root -m 0644 deploy/audiobook-organizer.service \
+  /usr/local/libexec/audiobook-organizer/rollback/
 install -o root -g root -m 0644 deploy/rollback-helpers/rollback.conf.example /etc/audiobook-organizer/rollback.conf
 ```
 
 Then edit `/etc/audiobook-organizer/rollback.conf` (`bin`, `db`, `state_dir`,
 `unit`, `service_user`, `archive_dir`, `checkpoint_dir` if
 `core.storage.checkpoint_dir` is set, `service_group` if it differs from
-`service_user`, and the deploy's staging paths `stage_bin`, `stage_unit` and
-`stage_local_conf`, the files your `deploy` uploads with `scp`). The helpers
+`service_user`, and the deploy's staging paths `stage_bin` and
+`stage_local_conf`, the files your `deploy` uploads with `scp`; a leftover
+`stage_unit` is refused as an unknown setting). The helpers
 refuse to run unless the file and its directory are root-owned and not
 writable by group or others, and neither `service_user` nor `service_group`
 may be `root`. The recipes read the file (it holds no
