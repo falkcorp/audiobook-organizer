@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.9.1 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -308,9 +308,8 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
      with the current binary's `storage restore-offline --into` (which
      writes the copy's own `.storage-levels`), prints those levels and deletes
      the copy, which holds the store's secrets, whatever the outcome. All of
-     that runs as the service user. (R1-25's swap lock must exempt `--into`,
-     which never touches the live store, for this to run while the service is
-     up.)
+     that runs as the service user. `--into` never touches the live store
+     and takes no swap lock, so this runs while the service is up.
    - `.prev --print-storage-levels` must **equal** the source's levels. A
      `.prev` that serves less would refuse the restored store, and one that
      serves more would migrate it again. On a mismatch it refuses and names
@@ -334,8 +333,8 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    goes to `/run/audiobook-organizer-rollback/restore.log` and is relayed, so
    a dropped ssh connection neither kills the restore nor loses its output,
    and systemd refuses a second restore while one runs. The command takes the
-   store's swap lock itself and refuses while a service is running or
-   starting. The recipe does not retry. Afterwards it checks again that the
+   store's swap lock itself (an flock on `<state dir>/swap.lock` that never
+   waits) and refuses while a service is running or starting. The recipe does not retry. Afterwards it checks again that the
    unit stayed stopped.
 6. The `swap-prev` helper keeps the current binary as
    `$(DEPLOY_BIN).rolled-back` and installs `.prev` atomically; it starts
