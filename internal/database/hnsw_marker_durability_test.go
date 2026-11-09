@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_marker_durability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e5bb1cc-11e8-4ef8-b8b5-1f68f38a572f
 // last-edited: 2026-11-09
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -126,8 +127,15 @@ func TestTakeCleanStop_SyncsTheDirectoryWhenNoMarkerIsThere(t *testing.T) {
 	t.Run("the sync fails", func(t *testing.T) {
 		dir := t.TempDir()
 		recordDirSyncs(t, func(string) error { return errSimulatedSync })
-		if _, err := takeCleanStop(dir); !errors.Is(err, ErrCleanStopNotDiscarded) {
-			t.Errorf("takeCleanStop = %v; want ErrCleanStopNotDiscarded", err)
+		_, err := takeCleanStop(dir)
+		if !errors.Is(err, ErrCleanStopNotDiscarded) {
+			t.Fatalf("takeCleanStop = %v; want ErrCleanStopNotDiscarded", err)
+		}
+		// The remedy, as the discard variant gives one (R1-25 follow-up N-4).
+		for _, want := range []string{"could not be synced", "the user the service runs as", "run again"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("takeCleanStop = %v; want it to say %q", err, want)
+			}
 		}
 	})
 	t.Run("the directory goes between the look and the sync", func(t *testing.T) {
