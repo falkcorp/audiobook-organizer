@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.51.0 -->
+<!-- version: 1.52.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-09 -->
 
 # Platform-core planning operation — state
 
@@ -112,6 +112,8 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W23 | R1-19 | #4488 `af4432e3c` | T2: build identity: `--version-json`, `--print-upgrade-floor`, `app.BinaryID`, UI build-ID meta and the stale-build banner; the docker-image job's `PROBE_BUILD_ID` probe is on and passed on the real image. Re-cut for R1-17 (#4482 closed). Deployed 2026-11-08; `--version-json` verified on the deployed binary |
 | W24 | R1-30 | #4495 `f6f57bc7f` | T2: `core/web` npm workspace with `@mediacore/api-client` 0.1.0, consumed by `web/` through `file:`; both Docker frontend stages build it. Three CI rounds: CI's frontend job now builds the package first (`scripts/ci/ensure_core_web.sh`), minimatch overridden to 11.x under eslint only (GHSA-g3hv-75wg-m249), four permissive dev-dependency licences named in `allow-dependencies-licenses`, ruff format (#4483, #4491, #4494 closed). Deployed 2026-11-08 |
 | W25 | R1-06 | #4498 `de0ab0a1d` | T2: report-only core version check in core's merge gate, `core-checkpoint` job in the production release, `make -C core readiness` with the SC scripts, and a nightly split-readiness fold-in through the CI bot app (not a PAT). Draft #4489 closed after the re-cut |
+| W26 | R1-23 | #4504 `552d57c4f` | T4: storage flip: the kernel opens the one store at P2 and takes the pre-migration checkpoint before the first write; books reaches its rows only through strict claims (`ABO_CORE_STORAGE_CLAIMS_MODE=shadow` is the emergency dial; scans stay clipped either way). The review's six unregistered key families are covered by a registry-independent claim-violation guard. Re-cut three times (#4493, #4501 closed). Merged 2026-11-09 |
+| W27 | R1-24 | #4507 `c8421370a` | T3: checkpoint sweeper, `prune-checkpoints` and authenticated storage tokens; deletes the plaintext-secrets copy the first R1 boot leaves, which ends the deploy hold after R1-23. Creates `core/app/offline.go` and `cmd/offline.go` ahead of R1-25's `OfflineCommands`. Re-cut onto main after R1-23 (#4500, #4502 and #4505 closed). Merged 2026-11-09 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -130,7 +132,7 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 30 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06).
+None for agents. R0 complete (6/6). R1: 32 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06, R1-23, R1-24).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
@@ -138,13 +140,17 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
 
-W14 to W25 merged 2026-11-08: R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30 and R1-06. Remaining:
-- R1-23 (T4, storage flip with strict claims; review NOT MERGEABLE: six key families production writes were never registered, so merges, merge undo and scan identity proposals would be refused; being fixed with a registry-independent claim-violation guard). Prod deploys after R1-23 merges are held until R1-24 (checkpoint retention) merges too: the first R1 boot's checkpoint holds plaintext secrets.
-- R1-24 (T3, checkpoint sweeper) and R1-25 (T4, offline restore and reset) building, stacked on R1-23; then R1-26, R1-27, R1-28.
-- The R1-15 follow-up (#4496, HNSW clean-stop marker; round-4 verification found a crafted restore archive can still place a marker in the live snapshot directory; being fixed).
+W14 to W27 merged 2026-11-08 and 2026-11-09: R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06, R1-23 and R1-24. In flight as of 2026-11-09 11:30 EST:
+- R1-25 (T4, offline restore and reset) is on round 7; its earlier PRs #4510, #4516 and #4518 are superseded.
+- R1-27 is #4519 (draft, stacked on R1-25), then R1-28 is #4520 (draft, stacked on R1-27).
+- R1-26 waits on R1-25.
 - R1-31 (executive summary) last.
+
+The R1-15 follow-up (HNSW clean-stop marker) merged as #4512 `0aa7d519c` on 2026-11-09 at 07:40 EST and was deployed at 07:45; it supersedes #4496, #4506 and #4476, and ports the earlier work onto core storage. It is not a plan row, so the R1 count is unchanged. The deploy hold between R1-23 and R1-24 is over: both are merged.
 
 R1-23's deferred step 3 (engine re-home into core, the `database.Store` split, the Pebble collector move) and its kernel write gate (D14) become follow-up rows; its review confirmed no remaining R1 row depends on them. In plain terms: the server now starts, stops, logs and serves its web surface through the new framework, and reports its build identity; the new storage engine is built but not switched on yet.
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
+
+Side PR 2026-11-09 (not a plan row): #4508 `df3bd0449` (CI retry and prefetch: the R0 archive download retries transient errors, the Dockerfiles' curl calls fail and retry on HTTP errors, and the R0 archive is prefetched so `TestR0OpensR1Store` makes no CI download).
