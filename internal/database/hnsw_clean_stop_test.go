@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-09
 
@@ -893,8 +893,15 @@ func TestTakeHNSWCleanStop_SaysWhetherAMarkerStays(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-		if _, err := TakeHNSWCleanStop(dir); !errors.Is(err, ErrCleanStopNotDiscarded) {
+		_, err := TakeHNSWCleanStop(dir)
+		if !errors.Is(err, ErrCleanStopNotDiscarded) {
 			t.Fatalf("TakeHNSWCleanStop error = %v; want ErrCleanStopNotDiscarded", err)
+		}
+		// The remedy, as the discard variant gives one (R1-25 follow-up N-4).
+		for _, want := range []string{"could not be looked up", "the user the service runs as", "delete the marker by hand", "run again"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("TakeHNSWCleanStop error = %v; want it to say %q", err, want)
+			}
 		}
 	})
 }
