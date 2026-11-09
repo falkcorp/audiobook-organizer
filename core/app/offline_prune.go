@@ -1,5 +1,5 @@
 // file: core/app/offline_prune.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7435e2a1-aaaa-450e-96a6-35082ffd5d60
 // last-edited: 2026-11-08
 
@@ -31,7 +31,7 @@ failed, which the previous build is serving from) is kept unless
 from that upgrade.
 
 It opens no store, so it runs with the service stopped or while it serves.
-It refuses while an offline restore is in flight.`
+It refuses while a restore is staged or in flight.`
 
 // pruneCheckpointsCommand is storage prune-checkpoints (05-storage §5S.3.12
 // "Retention"; 06 §6.4.5): storage.PruneCheckpoints over the app's store
