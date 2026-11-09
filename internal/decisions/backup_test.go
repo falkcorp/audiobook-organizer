@@ -1,11 +1,12 @@
 // file: internal/decisions/backup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6a41f93-58e2-4b07-9c1d-3e8f720b5a64
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package decisions_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 
 // A decision made today must come back from tomorrow's backup: the backup
 // codec is not prefix-filtered, and this pins that with a real on-disk store,
-// the production checkpoint path and a verified restore.
+// the production checkpoint path and the live restore's verified extractor.
 func TestBackupRoundTrip_DecisionsSurvive(t *testing.T) {
 	parent := t.TempDir()
 	dbPath := filepath.Join(parent, "audiobooks.pebble")
@@ -42,10 +43,15 @@ func TestBackupRoundTrip_DecisionsSurvive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, kv.Close())
 
-	restoreRoot := t.TempDir()
-	require.NoError(t, backup.RestoreBackupIn(backupDir, info.Filename, restoreRoot, true))
+	// The live restore's extractor (backup.StageRestore stages with it): the
+	// archive's sidecar is checked, and the store lands in an empty directory.
+	restoredDir := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	require.NoError(t, os.Mkdir(restoredDir, 0o700))
+	sum, err := backup.ExtractStore(t.Context(), info.Path, restoredDir)
+	require.NoError(t, err)
+	require.Equal(t, info.Checksum, sum)
 
-	restored, err := database.NewPebbleStore(filepath.Join(restoreRoot, "audiobooks.pebble"))
+	restored, err := database.NewPebbleStore(restoredDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = restored.Close() })
 

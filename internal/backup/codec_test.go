@@ -1,7 +1,7 @@
 // file: internal/backup/codec_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9d41f6a2-58bc-4e07-b3d9-1a6c082e4f75
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package backup
 
@@ -329,7 +329,7 @@ func TestRestoreReadsAGzipArchiveWrittenBeforeThisChange(t *testing.T) {
 	f.Close()
 
 	target := t.TempDir()
-	if err := RestoreBackup(archive, target, false); err != nil {
+	if err := extractBackup(archive, target); err != nil {
 		t.Fatalf("a pre-existing gzip archive must still restore: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(target, "pebble", "CURRENT"))
@@ -435,7 +435,7 @@ func TestRestoreOfAnEmptyArchiveIsAnError(t *testing.T) {
 			if err := os.WriteFile(archive, tc.body, 0o600); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			err := RestoreBackup(archive, t.TempDir(), false)
+			err := extractBackup(archive, t.TempDir())
 			if err == nil {
 				t.Fatal("restoring an empty/truncated archive reported success; " +
 					"the caller would believe their database was recovered")

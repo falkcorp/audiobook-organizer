@@ -1,11 +1,12 @@
 // file: internal/database/standalone_swap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 96b69961-40ee-480a-8fb1-be5e87dbe976
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -146,5 +147,47 @@ func TestStandaloneOpenerHonoursInflightSwap(t *testing.T) {
 				t.Fatalf("a refused open changed the store's directory:\nbefore %v\nafter  %v", before, after)
 			}
 		})
+	}
+}
+
+// TestVerifyStoreOpens (05-backup's VerifyOpen, R1's form; the restore
+// stager's check of an extracted archive): a store books' guard admits opens
+// read-only and nothing under it changes; an empty directory and a missing
+// one are refused, and the missing one is not created.
+func TestVerifyStoreOpens(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "gotham.pebble")
+	s, err := NewPebbleStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAuthor("Harvey Dent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Pebble's directory lock is taken read-only too, which touches LOCK's
+	// modification time; nothing else may change.
+	unlocked := func(s []string) []string {
+		return slices.DeleteFunc(s, func(e string) bool { return strings.HasPrefix(e, "LOCK ") })
+	}
+	before := unlocked(treeState(t, dir))
+	if err := VerifyStoreOpens(ctx, dir); err != nil {
+		t.Fatalf("a served store: %v", err)
+	}
+	if after := unlocked(treeState(t, dir)); !slices.Equal(before, after) {
+		t.Fatalf("the check wrote to the store:\nbefore %v\nafter  %v", before, after)
+	}
+	empty := t.TempDir()
+	if err := VerifyStoreOpens(ctx, empty); err == nil {
+		t.Fatal("an empty directory passed")
+	}
+	missing := filepath.Join(t.TempDir(), "arkham.pebble")
+	if err := VerifyStoreOpens(ctx, missing); err == nil {
+		t.Fatal("a missing directory passed")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the check created %s (%v)", missing, err)
 	}
 }
