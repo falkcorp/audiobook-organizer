@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.11
+// version: 1.8.12
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-09
 
@@ -953,7 +953,11 @@ func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[st
 		base := filepath.Base(binPath)
 		entityType := strings.TrimPrefix(strings.TrimSuffix(base, ".bin"), "hnsw-")
 
-		f, err := os.Open(binPath)
+		// openRegular: a snapshot file that is a symlink can point at a
+		// file a restore wrote, outside the snapshot directory, and the
+		// graph would load those bytes (R1-15 round-7 verification review,
+		// S1-r7). The import refuses it; the index is rebuilt from Pebble.
+		f, err := openRegular(binPath)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("hnsw import: open %s: %w", binPath, err)
 		}
@@ -982,7 +986,7 @@ func (s *HNSWEmbeddingStore) loadSnapshot(dir string) (map[string]*hnsw.Graph[st
 		newGraphs[entityType] = g
 
 		metaPath := filepath.Join(dir, "hnsw-"+entityType+".meta.json")
-		b, err := os.ReadFile(metaPath)
+		b, err := readRegularFile(metaPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				newMeta[entityType] = map[string]map[string]string{}
@@ -1200,7 +1204,7 @@ func (s *HNSWEmbeddingStore) importChecked(dir string, truth func(entityType str
 // export writes a fresh one.
 func readSnapshotTruth(dir, entityType string) (snapshotTruth, error) {
 	var st snapshotTruth
-	b, err := os.ReadFile(truthPath(dir, entityType))
+	b, err := readRegularFile(truthPath(dir, entityType))
 	if err != nil {
 		return st, err
 	}
