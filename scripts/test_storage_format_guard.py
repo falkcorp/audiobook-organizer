@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_storage_format_guard.py
-# version: 2.3.0
+# version: 2.3.1
 # guid: 75f5cdf5-6d94-4c67-a679-062b1e13e414
 # last-edited: 2026-11-09
 
@@ -16,6 +16,7 @@ scripts/tests/test_make_rollback.py. Run with:
 import importlib.util
 import json
 import subprocess
+import sys
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -24,6 +25,11 @@ _SCRIPT = Path(__file__).resolve().parent / "storage_format_guard.py"
 _spec = importlib.util.spec_from_file_location("storage_format_guard", _SCRIPT)
 guard = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
+# Registered before exec_module (the importlib recipe): dataclasses, under
+# `from __future__ import annotations`, looks the class's module up in
+# sys.modules while the module body runs, and Python 3.12 (CI's) fails
+# with AttributeError when it is absent.
+sys.modules[_spec.name] = guard
 _spec.loader.exec_module(guard)
 
 R = guard.Result

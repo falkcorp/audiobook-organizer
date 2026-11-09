@@ -1,5 +1,5 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
 # last-edited: 2026-11-09
 
@@ -63,9 +63,16 @@ STOPPED_SHOW = r"^systemctl show -p ActiveState,SubState "
 INVOCATION_SHOW = r"^systemctl show -p InvocationID --value "
 OLD_INVOCATION = "0ld1nv0c"
 
-_spec = importlib.util.spec_from_file_location("storage_format_guard", GUARD)
+# A name of its own, so it never replaces test_storage_format_guard's copy
+# of the same file in sys.modules when discovery runs both in one process.
+_spec = importlib.util.spec_from_file_location("storage_format_guard_for_make_rollback", GUARD)
 guard = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
+# Registered before exec_module (the importlib recipe): dataclasses, under
+# `from __future__ import annotations`, looks the class's module up in
+# sys.modules while the module body runs, and Python 3.12 (CI's) fails
+# with AttributeError when it is absent.
+sys.modules[_spec.name] = guard
 _spec.loader.exec_module(guard)
 
 # The fake host's tools, logged to the invocation log.

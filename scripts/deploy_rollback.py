@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deploy_rollback.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 0d519d12-853d-4902-8896-8d5744a32cbd
 # last-edited: 2026-11-09
 
@@ -70,7 +70,16 @@ def load_guard(path: str) -> ModuleType:
     if spec is None or spec.loader is None:
         raise SystemExit(f"deploy_rollback: cannot load the guard {path}")
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # Registered before exec_module (the importlib recipe): the guard's
+    # dataclasses, under `from __future__ import annotations`, look their
+    # module up in sys.modules while it loads, and Python 3.12 fails with
+    # AttributeError when it is absent. Removed again if the load fails.
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return mod
 
 
