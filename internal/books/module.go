@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-09
 
@@ -131,6 +131,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		// Each step marks this boot migrated, which voids the HNSW
 		// clean-stop marker Options took (AdoptHNSWCleanStopClaim).
 		Storage: database.BooksSpec(func() { m.migrated.Store(true) }),
+		// HEAD's factory-reset file effects (the Open Library dumps and,
+		// only on request, the library folder's contents), run at the boot
+		// that applies a ResetFactory swap (reset_hook.go).
+		ResetHook: m.resetHook(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

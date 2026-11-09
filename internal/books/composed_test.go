@@ -1,5 +1,5 @@
 // file: internal/books/composed_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
 // last-edited: 2026-11-09
 
@@ -89,6 +89,10 @@ type composed struct {
 	// expectViolations exempts this boot from the claim guard
 	// (checkClaimViolations); expectClaimViolations sets it.
 	expectViolations bool
+	// restore puts the process defaults back, once: runningApp.stop calls
+	// it after Run returns, as serve's deferred restore does, so a test can
+	// boot the same store again; Cleanup calls it otherwise.
+	restore func()
 }
 
 // expectClaimViolations exempts c from the claim guard: the test makes an
@@ -169,15 +173,16 @@ func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config
 	}
 	t.Cleanup(func() { Release(mod) })
 	require.NoError(t, err)
-	restore, err := app.InstallProcessDefaults(a)
+	installed, err := app.InstallProcessDefaults(a)
 	require.NoError(t, err)
+	restore := sync.OnceFunc(installed)
 	t.Cleanup(restore)
 	require.NoError(t, Attach(mod, a))
 	srv := mod.srv.Load()
 	require.NotNil(t, srv, "Register built no server")
 	store := mod.store.Load()
 	require.NotNil(t, store, "Register built no store")
-	c = &composed{app: a, mod: mod, srv: srv, store: store, newLog: newLog}
+	c = &composed{app: a, mod: mod, srv: srv, store: store, newLog: newLog, restore: restore}
 	return c
 }
 
@@ -292,8 +297,16 @@ func runComposed(t *testing.T) *runningApp {
 // every start hook has returned (06 §6.5.2 start steps (2) and (7)).
 func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
 	t.Helper()
+	return runComposedIn(t, "", edit, pre, opt, booted)
+}
+
+// runComposedIn is runComposedWith over the state directory stateDir ("" is
+// a fresh temporary one), so two boots of one store share their swap slot
+// and keys.
+func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+	t.Helper()
 	addrs := make(chan net.Addr, 1)
-	c := bootComposedWith(t, false, "", edit, pre, func(o *app.Options) {
+	c := bootComposedWith(t, false, stateDir, edit, pre, func(o *app.Options) {
 		if opt != nil {
 			opt(o)
 		}
@@ -328,13 +341,15 @@ func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database
 	return r
 }
 
-// stop cancels Run and waits for it to return; later calls return the same
-// result.
+// stop cancels Run and waits for it to return, then puts the process
+// defaults back as serve does once Run has returned; later calls return the
+// same result.
 func (r *runningApp) stop() error {
 	r.once.Do(func() {
 		r.cancel()
 		select {
 		case r.runErr = <-r.ran:
+			r.restore()
 		case <-time.After(60 * time.Second):
 			r.runErr = errors.New("Run did not return after its context was cancelled")
 		}
