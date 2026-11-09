@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.10
+// version: 1.22.11
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -780,10 +780,10 @@ func sidecarDigest(sidecarPath, name string) (string, error) {
 // One read serves both because a restore runs on archives of many gigabytes:
 // verifying and scanning separately would read the whole archive twice
 // before the extraction reads it a third time.
-func scanArchive(archivePath string) (sum string, err error) {
+func scanArchive(archivePath string) (sum, root string, err error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to open backup file: %w", err)
+		return "", "", fmt.Errorf("failed to open backup file: %w", err)
 	}
 	// A failed close counts as a failed read: no digest, so a verifying
 	// caller refuses rather than trust it. A scan error already returned
@@ -796,52 +796,58 @@ func scanArchive(archivePath string) (sum string, err error) {
 
 	codec, err := SniffCodec(f)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	hash := sha256.New()
 	src := io.TeeReader(f, hash)
-	scanErr := scanEntries(codec, src, filepath.Base(archivePath))
+	root, scanErr := scanEntries(codec, src, filepath.Base(archivePath))
 	// Hash what the decompressor did not read: the end of the stream, or
 	// everything after a scan error. scanEntries has closed the decompressor
 	// by now, and zstd's Close waits for the goroutine that reads its input
 	// (Decoder.Close waits on streamWg), so this is the only reader left on
 	// src and the hash takes the file's bytes in order, each once.
 	if _, err := io.Copy(io.Discard, src); err != nil {
-		return "", fmt.Errorf("failed to read backup file: %w", err)
+		return "", "", fmt.Errorf("failed to read backup file: %w", err)
 	}
-	return hex.EncodeToString(hash.Sum(nil)), scanErr
+	return hex.EncodeToString(hash.Sum(nil)), root, scanErr
 }
 
 // scanEntries reads every tar header in the archive stream r, written by
 // codec, and refuses an entry entryRefusal refuses, and an archive with no
-// entry the extraction would count (ErrArchiveEmpty). name is the archive's,
-// for the error. It closes the decompressor before it returns (scanArchive
-// depends on that).
-func scanEntries(codec Codec, r io.Reader, name string) error {
+// entry the extraction would count (ErrArchiveEmpty). It returns the first
+// path component of the first entry it counts: the archive's root, the
+// database directory's name when the backup was taken. name is the
+// archive's, for the error. It closes the decompressor before it returns
+// (scanArchive depends on that).
+func scanEntries(codec Codec, r io.Reader, name string) (string, error) {
 	compReader, err := codec.NewReader(r)
 	if err != nil {
-		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
+		return "", fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
 	}
 	defer compReader.Close()
 	tarReader := tar.NewReader(compReader)
 	entries := 0
+	root := ""
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
 			if entries == 0 {
-				return emptyArchiveError(name)
+				return "", emptyArchiveError(name)
 			}
-			return nil
+			return root, nil
 		}
 		if err != nil {
-			return fmt.Errorf("failed to read tar header: %w", err)
+			return "", fmt.Errorf("failed to read tar header: %w", err)
 		}
 		if err := entryRefusal(header.Name); err != nil {
-			return err
+			return "", err
 		}
 		// The extraction skips a name that is empty once its leading
 		// slashes go, and counts every other entry.
-		if strings.TrimLeft(filepath.ToSlash(header.Name), "/") != "" {
+		if trimmed := strings.TrimLeft(filepath.ToSlash(header.Name), "/"); trimmed != "" {
+			if entries == 0 {
+				root, _, _ = strings.Cut(path.Clean(trimmed), "/")
+			}
 			entries++
 		}
 	}
@@ -857,6 +863,15 @@ func emptyArchiveError(name string) error {
 // extract into a target (PrepareRestoreIn, then Extract).
 type PreparedRestore struct {
 	archivePath string
+	root        string
+}
+
+// Root is the archive's root: the first path component of its first entry,
+// which for a backup this program wrote is the database directory's name
+// when the backup was taken (addToArchive). A restore into a target writes
+// that database at target/Root().
+func (r *PreparedRestore) Root() string {
+	return r.root
 }
 
 // PrepareRestoreIn finds the backup named filename in backupDir and reads it
@@ -920,7 +935,7 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 		}
 	}
 
-	computed, scanErr := scanArchive(archivePath)
+	computed, root, scanErr := scanArchive(archivePath)
 	if verify {
 		if computed == "" {
 			return nil, fmt.Errorf("failed to compute checksum for %s: %w", name, scanErr)
@@ -935,7 +950,7 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 		return nil, scanErr
 	}
 
-	return &PreparedRestore{archivePath: archivePath}, nil
+	return &PreparedRestore{archivePath: archivePath, root: root}, nil
 }
 
 // Extract extracts the prepared backup into targetPath. It can fail after
