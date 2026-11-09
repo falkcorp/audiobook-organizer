@@ -1,12 +1,13 @@
 - [ ] **Make `library.CleanAbsolutePath` and `library.Join` sanitizers CodeQL credits, then
-      re-check the dismissed path alerts** (from #4496's round-7 SF2; filed there, not built).
+      re-check the dismissed path alerts** (from the R1-15 clean-stop PR's round-7 SF2; filed there, not
+      built).
       - **Why.** CodeQL's `go/path-injection` and `go/zipslip` do not treat either result as
         sanitized. `CleanAbsolutePath` (`core/library/pathvalidation.go`) rejects a path when
         `cleaned != path`, a comparison the queries do not read, and its doc comment says taint
         tools treat its return as sanitized, which is false. `Join` and `Validate`
         (`core/library/safepath.go`) check `cleaned != cleanRoot && !strings.HasPrefix(...)`:
         the equal-root branch skips the prefix check, so the check does not guard the path they
-        return. #4496 worked around both in its own two callers with restated checks:
+        return. The R1-15 clean-stop PR worked around both in its own two callers with restated checks:
         `strings.HasPrefix(target, within)` in `internal/backup/backup.go`'s `extractArchive`,
         and `strings.HasPrefix(cleanTarget, VolumeName+Separator)` in
         `internal/server/handlers/system/handler.go`'s `RestoreBackup`.
@@ -14,7 +15,7 @@
         `Join` and `Validate` could make one prefix check of `cleaned+sep` against
         `cleanRoot+sep`, and `CleanAbsolutePath` could add a prefix check against
         `VolumeName(cleaned)+sep`. Run CodeQL locally (2.27.4, go-queries 1.6.14, `TaintedPath`
-        and `ZipSlip`) on the whole module before and after. Then remove #4496's two
+        and `ZipSlip`) on the whole module before and after. Then remove those two
         restatements and the comments that explain them.
       - **Callers.** `CleanAbsolutePath`, 12 production calls:
         - `internal/mediainfo/mediainfo.go`
