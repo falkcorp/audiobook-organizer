@@ -1,5 +1,5 @@
 // file: internal/backup/prepare_restore_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 29ed21ba-737f-4de2-844d-5681aec413d7
 // last-edited: 2026-11-08
 
@@ -97,9 +97,11 @@ func TestPrepareRestoreIn_Refusals(t *testing.T) {
 
 func TestPreparedRestore_ExtractCanFailAfterWriting(t *testing.T) {
 	backupDir := t.TempDir()
+	// The second entry's parent is the file the first one wrote, so the
+	// extraction cannot create it.
 	writePlainTar(t, filepath.Join(backupDir, "knightfall.tar"), [][2]string{
 		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
-		{"../bane", "venom"},
+		{"audiobooks.pebble/MANIFEST-000001/bane", "venom"},
 	})
 	r, err := PrepareRestoreIn(backupDir, "knightfall.tar", false)
 	if err != nil {
@@ -107,7 +109,7 @@ func TestPreparedRestore_ExtractCanFailAfterWriting(t *testing.T) {
 	}
 	target := t.TempDir()
 	if err := r.Extract(target); err == nil {
-		t.Fatal("Extract succeeded; want the escaping entry refused")
+		t.Fatal("Extract succeeded; want the entry under a file to fail")
 	}
 	if _, err := os.Stat(filepath.Join(target, "audiobooks.pebble", "MANIFEST-000001")); err != nil {
 		t.Errorf("the entry before the failure was not written (%v); this case must fail after a write", err)

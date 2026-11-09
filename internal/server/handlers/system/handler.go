@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.8
+// version: 1.28.9
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -947,9 +947,10 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		//     (a legacy backup from before this feature), so there is nothing
 		//     to compare against. 400: the caller's request cannot be
 		//     satisfied as specified.
-		//   - ErrArchiveCarriesHNSWSnapshot: the archive has an entry in the
-		//     HNSW snapshot directory, which no real backup has (R1-15 round
-		//     4). 400, like the case above: the archive named cannot be
+		//   - ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes: the
+		//     archive has an entry in the HNSW snapshot directory, or one
+		//     that climbs out of the target, which no real backup has (R1-15
+		//     round 4). 400, like the case above: the archive named cannot be
 		//     restored, and that is a refusal, not a server fault.
 		//
 		// Any other error (missing file, unreadable backup directory or
@@ -958,7 +959,8 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		case errors.Is(err, backup.ErrChecksumMismatch):
 			httputil.RespondWithConflict(c, err.Error())
 		case errors.Is(err, backup.ErrVerificationUnsupported),
-			errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot):
+			errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot),
+			errors.Is(err, backup.ErrArchiveEntryEscapes):
 			httputil.RespondWithBadRequest(c, err.Error())
 		default:
 			httputil.InternalError(c, "failed to restore backup", err)
