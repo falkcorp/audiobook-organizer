@@ -1,7 +1,7 @@
 # file: deploy/audiobook-organizer.service
-# version: 4.6.1
+# version: 4.7.0
 # guid: f1e2d3c4-b5a6-9870-8765-4321fedcba98
-# last-edited: 2026-10-12
+# last-edited: 2026-11-09
 #
 # systemd service unit for audiobook-organizer on Linux
 #
@@ -29,6 +29,9 @@
 # the number to tune for a stricter start bound. Long startup steps (opening
 # the store, each migration, opening the search index) push it out with
 # EXTEND_TIMEOUT_USEC as they make progress, never on a timer.
+# Exit 78 is not restarted and the stop budget is 60 s with KillMode=mixed
+# (see the [Service] comments). These need `sudo systemctl daemon-reload` on
+# the host after the owner installs this file.
 #
 # Installation:
 #   1. Create service user:
@@ -110,6 +113,26 @@ Environment="FP_PARALLEL_WORKERS=16"
 # Restart policy: restart on failure with 5-second delay
 Restart=on-failure
 RestartSec=5
+# Exit 78 (EX_CONFIG) is a refusal, not a crash: a build that cannot open the
+# store (its level guard or upgrade floor, 05-storage §5S.3.7, 09 §9.2.2)
+# exits 78 before writing anything, and its last log line is
+# `install <release> first`. Restarting it would only repeat the refusal, so
+# systemd leaves the unit failed, and scripts/deploy-wait-ready.sh reports it
+# by name. Exit 75 (the restart the service requests after staging a
+# restore) still restarts.
+RestartPreventExitStatus=78
+
+# Stop budget (05-health §5H.4, "The budget must fit the supervisor's stop
+# timeout"; OPS-13, OPS9-11): the server's own stop takes at most
+# core.shutdown.budget (25 s) plus the store close, and the previous release
+# a rollback may run under this same unit drains HTTP for up to 30 s before
+# closing its stores. 60 s covers both; systemd SIGKILLs only after it.
+TimeoutStopSec=60
+# SIGTERM goes to the main process only, so tasks running as subprocesses (in
+# their own process group) are stopped and stamped `interrupted` by the
+# server's executor instead of being killed at t = 0 (05-health §5H.4;
+# OPS2-23). Whatever is left at TimeoutStopSec gets SIGKILL.
+KillMode=mixed
 
 # cgroup memory limit — prevents OOM taking down the whole system. Set above
 # GOMEMLIMIT so the Go soft limit triggers GC before systemd kills the process.
