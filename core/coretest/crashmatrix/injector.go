@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/injector.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 81489850-3e9c-4d6d-a657-d875036d118e
 // last-edited: 2026-11-08
 
@@ -32,12 +32,14 @@ const BuildID = "crashmatrix-current-build"
 // make the same operations. Stage's default expiry is an hour after it.
 func Now() time.Time { return time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC) }
 
-// readyMessage is the kernel's record of readiness (06 §6.5.2 step 8): the
-// end of the writer table's range, where the kit stops recording. A kernel
-// that renamed it would leave the shutdown's operations recorded, and the
-// store's close makes an unlabelled WAL sync, so the kit fails loudly
-// rather than silently widening its range.
-const readyMessage = "kernel: ready"
+// readyMessage is the kernel's record that Run's start sequence is done:
+// readiness (06 §6.5.2 step 8), then the checkpoint sweeper's first sweep
+// (05-storage §5S.4 step 15, the writer table's "After readiness" row). It
+// is the end of the writer table's range, where the kit stops recording. A
+// kernel that renamed it would leave the shutdown's operations recorded,
+// and the store's close makes an unlabelled WAL sync, so the kit fails
+// loudly rather than silently widening its range.
+const readyMessage = "kernel: start complete"
 
 // Injector wires one boot of the kit: app.New with the boot's filesystem,
 // binary ID, clock and labeller (05-storage §5S.3.16). Build receives one

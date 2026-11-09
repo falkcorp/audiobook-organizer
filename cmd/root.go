@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-11-08
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -387,6 +388,7 @@ func init() {
 	rootCmd.AddCommand(diagnosticsCmd)
 	rootCmd.AddCommand(metadataInspectCmd)
 	rootCmd.AddCommand(seedCmd)
+	addOfflineCommands(rootCmd, func() []module.Module { return []module.Module{books.Module()} })
 
 	// Add serve command specific flags
 	serveCmd.Flags().String("port", "8484", "port to run the web server on")

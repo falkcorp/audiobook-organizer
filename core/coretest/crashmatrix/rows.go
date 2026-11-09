@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.3
+// version: 1.0.5
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-08
 
@@ -7,15 +7,25 @@ package crashmatrix
 
 import (
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Row is one row of 06 §6.5.1's boot-writer table as this build has it:
 // the phase, the writer, and the crash-point labels its durable operations
 // carry (internal/bootseam's regions, set at the writer's call sites).
+//
+// Retried marks a writer that runs after readiness and whose failure the
+// boot logs and its next run repairs (the checkpoint sweeper: a sweep that
+// fails is tried again at the next period, and the next boot's first sweep
+// is one). An error injected at one of its labels leaves a boot that reached
+// readiness with the failed sweep's leftovers, which only the retry clears:
+// the kit checks I2 and I3 there, then boots once more and checks I1-I6
+// after that boot's retry.
 type Row struct {
-	Phase  string
-	Writer string
-	Labels []string
+	Phase   string
+	Writer  string
+	Labels  []string
+	Retried bool
 }
 
 // Rows is core's part of the writer table that exists in this build (06
@@ -71,6 +81,7 @@ func Rows() []Row {
 		{Phase: "Run 0 (before start step 1)", Writer: "storage: ready_at and status served on the live store's open checkpoint records ((*DB).MarkServed, 05-storage §5S.3.12)", Labels: []string{
 			"storage.checkpoint.ready",
 		}},
+		{Phase: "After readiness (05-storage §5S.4 step 15)", Writer: "the checkpoint sweeper's first sweep: delete_after on a checkpoint that stopped being needed, deletion of every checkpoint past it (record, copy, pointer), garbage (record-less directories, dangling records, a dangling pointer) and expired scratch entries ((*DB).SweepCheckpoints, 05-storage §5S.3.12)", Labels: storage.SweepLabels(), Retried: true},
 	}
 }
 
