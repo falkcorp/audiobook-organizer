@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint_sweep_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9c1e6f47-2b80-4d3a-a5f1-7e04b9d2c816
 // last-edited: 2026-11-08
 
@@ -670,6 +670,35 @@ func TestDryRunScratchModeAndSweep(t *testing.T) {
 	}
 	if _, err := e.fs.Stat(filepath.Join(cpDir(e), "scratch")); err != nil {
 		t.Fatalf("the scratch area itself was removed: %v", err)
+	}
+}
+
+// TestSweepRefusedWhileTheLockIsHeld: a sweep takes the checkpoint
+// directory's lock, so while a prune (or another sweep) holds it the sweep
+// returns ErrCheckpointSweepBusy and changes nothing, and the next one,
+// after the lock is released, does the work. Real filesystem: the lock is
+// the OS's, and a non-OS filesystem takes none (cpArea.lock).
+func TestSweepRefusedWhileTheLockIsHeld(t *testing.T) {
+	e := headStore(t, vfs.Default, cpOwners()...)
+	db := e.open()
+	dir := cpDir(e)
+	const scarecrow = "20260304T000000Z-5ca7e001"
+	released := time.Now().Add(-time.Hour)
+	writeForeignCheckpoint(t, vfs.Default, dir, scarecrow, "released", time.Now().Add(-8*24*time.Hour), &released)
+	before := cpNames(t, vfs.Default, dir)
+	l, err := vfs.Default.Lock(filepath.Join(dir, sweepLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.SweepCheckpoints(context.Background(), "")
+	_ = l.Close()
+	mustErrIs(t, err, ErrCheckpointSweepBusy)
+	if after := cpNames(t, vfs.Default, dir); !slices.Equal(before, after) {
+		t.Fatalf("a sweep refused by the lock changed %v to %v", before, after)
+	}
+	rep := sweep(t, db)
+	if !slices.Contains(rep.Deleted, scarecrow) {
+		t.Fatalf("the sweep after the lock was released = %+v, want %s deleted", rep, scarecrow)
 	}
 }
 
