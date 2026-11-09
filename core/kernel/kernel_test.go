@@ -1,7 +1,7 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package kernel
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics/metricstest"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // testModule is a module built from a manifest and a Register func.
@@ -229,6 +230,13 @@ func TestValidation_ProblemKinds(t *testing.T) {
 			r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore, TopSegments: []string{"settings"}})
 			return nil
 		}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/settings/"} })}, nil},
+		{module.ProblemResetHook, nil, []module.Module{
+			mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() }),
+			mod("arkham", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() }),
+		}, nil},
+		{module.ProblemResetHook, nil, []module.Module{
+			mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = &storage.ResetHook{Plan: wholeResetHook().Plan} }),
+		}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind.String(), func(t *testing.T) {
@@ -535,5 +543,29 @@ func TestKernelFamiliesGathered(t *testing.T) {
 	}
 	if want := []string{"P1", "P2", "P4a", "P4b", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
 		t.Fatalf("boot phases recorded = %v, want %v", phases, want)
+	}
+}
+
+// wholeResetHook is a reset hook with Plan and Run that does nothing.
+func wholeResetHook() *storage.ResetHook {
+	return &storage.ResetHook{
+		Plan: func(context.Context, storage.ResetRequest) (storage.ResetPlan, error) {
+			return storage.ResetPlan{}, nil
+		},
+		Run: func(context.Context, storage.ResetRun) error { return nil },
+	}
+}
+
+// TestCatalog_OneResetHook: one declared hook passes P1, and a disabled
+// module's hook still counts against a second.
+func TestCatalog_OneResetHook(t *testing.T) {
+	if _, err := New(t.Context(), testConfig(t, mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() }))); err != nil {
+		t.Fatalf("one reset hook: %v", err)
+	}
+	_, err := New(t.Context(), testConfig(t,
+		mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook(); m.DefaultEnabled = false }),
+		mod("arkham", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() })))
+	if !hasKind(err, module.ProblemResetHook) {
+		t.Fatalf("a disabled module's hook beside a second: %v", err)
 	}
 }
