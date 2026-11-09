@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-08-hnsw-clean-stop-executive-summary.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 42dae9c5-6b36-4000-91ca-af79a8cacdbf -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -55,7 +55,7 @@ The cost: any run that fingerprinted a book, merged editions or cleaned up finge
 
 **The fix.** A restore now runs in two steps: first it finds the backup and checks it, which writes nothing; then it unpacks it. Between the two, the server starts treating the index as out of step for the rest of the run, so any shutdown from that moment on writes no note, and a note written just before is deleted. After unpacking, the server also deletes any note beside the live database and beside the restored one. This also happens when unpacking fails partway, because some files may already be replaced.
 
-A backup file cannot bring a note of its own. A real backup holds only the database folder, and the index's folder sits beside it, so a backup file with anything in that folder was made by hand or came from elsewhere. The first step now reads the whole file and refuses such a backup before anything is written. The same read refuses a backup file that is damaged or cut short, which used to be half unpacked before the restore failed. When the checksum check is on, both checks share one read of the file, so a large backup is not read an extra time. Only a restore refused at the first step (the backup was not found, its checksum did not match, the backup folder or file could not be read, or the file held something in the index's folder) leaves the note alone.
+A backup file can no longer bring a note of its own. (One way remains: a shortcut that someone put in the database's folder by hand and that points into the index's folder. Nothing creates one; it is tracked in TODO, and the deletion after unpacking still removes such a note.) A real backup holds only the database folder, and the index's folder sits beside it, so a backup file with anything in that folder was made by hand or came from elsewhere. The first step now reads the whole file and refuses such a backup before anything is written. The same read refuses a backup file that is damaged or cut short, which used to be half unpacked before the restore failed. When the checksum check is on, both checks share one read of the file, so a large backup is not read an extra time. Only a restore refused at the first step (the backup was not found, its checksum did not match, the backup folder or file could not be read, or the file held something in the index's folder) leaves the note alone.
 
 ## Maintenance tools did not remove the note
 
