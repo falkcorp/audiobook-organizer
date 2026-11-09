@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.3.0
+# version: 2.4.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
 # last-edited: 2026-11-09
 
@@ -83,6 +83,9 @@ DOCS = "docs/system/deploy-and-gpu-ops.md (Rollback helpers, sudoers)"
 HELPER_DIR = "/usr/local/libexec/audiobook-organizer/rollback"
 HOST_CONFIG = "/etc/audiobook-organizer/rollback.conf"
 TRANSIENT_UNIT = "audiobook-organizer-rollback-restore"
+# The restore log's last line, written by the transient unit itself
+# (deploy/rollback-helpers/rollback_helper.py carries the same string).
+RESTORE_DONE = "rollback helper: restore-offline finished: "
 SSH_OPTS = [
     "-o",
     "BatchMode=yes",
@@ -195,6 +198,7 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "restore_checkpoint": f"sudo -n {h}/restore-offline checkpoint {name}",
         "restore_archive": f"sudo -n {h}/restore-offline archive {o.archive}",
         "unit": f"systemctl show -p ActiveState,SubState {o.unit}",
+        "restore_unit": f"systemctl show -p ActiveState --value {TRANSIENT_UNIT}.service",
         "invocation": f"systemctl show -p InvocationID --value {o.unit}",
         "stop": f"sudo -n /usr/bin/systemctl stop {o.unit}",
         "start": f"sudo -n /usr/bin/systemctl start {o.unit}",
@@ -405,6 +409,18 @@ def check_inflight(o: Opts, get: Getter) -> list[str]:
             f"Boot the current build once to finish it (sudo systemctl start {o.unit}), then decide again.",
         ]
     return []
+
+
+def restore_check_lines(o: Opts) -> list[str]:
+    """How the deploy user checks a restore left running on the host, with no
+    sudo: the log is group-readable and ends with the unit's exit status."""
+    return [
+        f"Check it as yourself (the log is readable by your group): ssh {o.host} systemctl is-active {TRANSIENT_UNIT} "
+        f"prints active or activating while it runs, and ssh {o.host} tail -n 5 {o.transient_log} ends with "
+        f"`{RESTORE_DONE}exit 0` when it succeeded.",
+        f"Any other `{RESTORE_DONE}` line, or none once the unit is no longer active (it was killed), means it "
+        "failed.",
+    ]
 
 
 def unit_state(o: Opts, get: Getter) -> tuple[str | None, str]:

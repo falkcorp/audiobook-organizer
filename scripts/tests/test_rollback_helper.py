@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -80,6 +81,19 @@ sys.exit(rc)
 """
 
 
+# A fake systemctl: `show -p ActiveState --value` prints the transient
+# unit's state from a file (absent: inactive, as systemd answers for a unit
+# that is not loaded); everything else succeeds.
+_SYSTEMCTL_BODY = """
+if "ActiveState" in sys.argv:
+    try:
+        print(open({state!r}).read().strip())
+    except FileNotFoundError:
+        print("inactive")
+sys.exit(0)
+"""
+
+
 def load():
     spec = importlib.util.spec_from_file_location("rollback_helper", HELPER)
     mod = importlib.util.module_from_spec(spec)
@@ -119,7 +133,9 @@ class Host:
                 "find",
                 "import subprocess; sys.exit(subprocess.run(['/usr/bin/find', *sys.argv[1:]]).returncode)",
             ),
-            "systemctl": self.tool("systemctl", "sys.exit(0)"),
+            "systemctl": self.tool(
+                "systemctl", _SYSTEMCTL_BODY.format(state=str(self.root / "transient-state"))
+            ),
             "systemd-run": self.tool("systemd-run", _SYSTEMD_RUN_BODY),
             "python3": sys.executable,
         }
@@ -165,7 +181,6 @@ class Host:
         log = f"{self.run_dir}/restore.log"
         return [
             "--wait",
-            "--collect",
             "--quiet",
             "--unit=audiobook-organizer-rollback-restore",
             "--service-type=exec",
@@ -175,7 +190,18 @@ class Host:
             f"--setenv=HOME={self.state}",
             f"--setenv=ABK_STATE_DIR={self.state}",
             "--",
+            sys.executable,
+            "-I",
+            str(HELPER),
+            "_report",
+            "--",
         ]
+
+    def transient_state(self, state: str) -> None:
+        (self.root / "transient-state").write_text(state + "\n")
+
+    def restore_log(self) -> Path:
+        return self.run_dir / "restore.log"
 
 
 class Config(unittest.TestCase):
@@ -472,6 +498,160 @@ class Restore(unittest.TestCase):
             argv[len(h.prefix()) :],
             [sys.executable, "-I", str(HELPER), "_into-worker", "batcave.tar.gz"],
         )
+
+
+class TransientRun(unittest.TestCase):
+    """The restore's transient unit: never two at once, the log appended and
+    never truncated, readable by the deploy user without sudo, and the
+    restore's exit status written into it by the unit itself (so it is there
+    when the ssh session, and this helper with it, is gone)."""
+
+    def fake_bin(self, h: Host, body: str) -> None:
+        h.bin.write_text(f"#!{sys.executable}\nimport os, sys\n{body}\n")
+        h.bin.chmod(0o755)
+
+    def test_a_running_restore_is_refused_and_its_log_untouched(self):
+        for state in ("active", "activating", "deactivating", "reloading", ""):
+            h = Host(self)
+            h.run_dir.mkdir()
+            h.restore_log().write_text("=== robin's restore, still running ===\n")
+            h.transient_state(state)
+            code, _, err = h.run("restore", "checkpoint", NAME)
+            self.assertEqual(code, 1, state)
+            self.assertIn("audiobook-organizer-rollback-restore", err, state)
+            self.assertEqual(
+                h.restore_log().read_text(), "=== robin's restore, still running ===\n", state
+            )
+            self.assertEqual([t for t in h.tools() if t["tool"] == "systemd-run"], [], state)
+
+    def test_a_failed_leftover_unit_is_reset_before_the_run(self):
+        h = Host(self)
+        h.transient_state("failed")
+        self.fake_bin(h, "sys.exit(0)")
+        code, _, err = h.run("restore", "checkpoint", NAME)
+        self.assertEqual(code, 0, err)
+        calls = [t for t in h.tools() if t["tool"] in ("systemctl", "systemd-run")]
+        resets = [i for i, t in enumerate(calls) if t["argv"][:1] == ["reset-failed"]]
+        runs = [i for i, t in enumerate(calls) if t["tool"] == "systemd-run"]
+        self.assertEqual(len(resets), 1)
+        self.assertEqual(
+            calls[resets[0]]["argv"], ["reset-failed", "audiobook-organizer-rollback-restore"]
+        )
+        self.assertLess(resets[0], runs[0])
+
+    def test_an_inactive_unit_is_not_reset(self):
+        h = Host(self)
+        self.fake_bin(h, "sys.exit(0)")
+        code, _, err = h.run("restore", "checkpoint", NAME)
+        self.assertEqual(code, 0, err)
+        self.assertFalse(any(t["argv"][:1] == ["reset-failed"] for t in h.tools()))
+
+    def test_the_log_is_appended_never_truncated(self):
+        h = Host(self)
+        h.run_dir.mkdir()
+        h.restore_log().write_text("joker's earlier restore output\n")
+        self.fake_bin(h, "print('restored the batcave')")
+        code, out, err = h.run("restore", "checkpoint", NAME)
+        self.assertEqual(code, 0, err)
+        text = h.restore_log().read_text()
+        self.assertTrue(text.startswith("joker's earlier restore output\n"), text)
+        self.assertIn("restored the batcave", text)
+        self.assertIn("restored the batcave", out)
+        self.assertNotIn("joker", out, "only this run's output is relayed")
+
+    def test_each_run_starts_with_a_marker(self):
+        h = Host(self)
+        self.fake_bin(h, "print('restored')")
+        h.run("restore", "checkpoint", NAME)
+        first = h.restore_log().read_text().splitlines()[0]
+        self.assertRegex(
+            first, r"^=== audiobook-organizer-rollback-restore started \d{4}-\d\d-\d\dT\S+Z ===$"
+        )
+
+    def test_the_exit_status_is_written_into_the_log(self):
+        for rc in (0, 3):
+            h = Host(self)
+            self.fake_bin(h, f"print('restoring'); sys.exit({rc})")
+            code, _, _ = h.run("restore", "checkpoint", NAME)
+            self.assertEqual(code, rc)
+            last = h.restore_log().read_text().splitlines()[-1]
+            self.assertEqual(last, f"{h.mod.RESTORE_DONE}exit {rc}")
+
+    def test_the_unit_is_not_collected(self):
+        h = Host(self)
+        self.fake_bin(h, "sys.exit(0)")
+        h.run("restore", "checkpoint", NAME)
+        argv = [t for t in h.tools() if t["tool"] == "systemd-run"][0]["argv"]
+        self.assertNotIn("--collect", argv, "a failed unit keeps its Result for systemctl status")
+
+    def test_the_run_dir_and_log_are_readable_by_the_deploy_users_group(self):
+        gid = os.getgroups()[-1]
+        h = Host(self)
+        h.run_dir.mkdir(mode=0o700)
+        h.restore_log().write_text("")
+        h.restore_log().chmod(0o600)
+        self.fake_bin(h, "sys.exit(0)")
+        with unittest.mock.patch.dict(os.environ, {"SUDO_GID": str(gid)}):
+            code, _, err = h.run("restore", "checkpoint", NAME)
+        self.assertEqual(code, 0, err)
+        d, f = os.stat(h.run_dir), os.stat(h.restore_log())
+        self.assertEqual(stat.S_IMODE(d.st_mode), 0o750)
+        self.assertEqual(stat.S_IMODE(f.st_mode), 0o640)
+        self.assertEqual((d.st_gid, f.st_gid), (gid, gid))
+
+    def test_a_symlinked_log_is_refused(self):
+        h = Host(self)
+        h.run_dir.mkdir()
+        target = h.root / "penguin.txt"
+        target.write_text("untouched\n")
+        h.restore_log().symlink_to(target)
+        self.fake_bin(h, "sys.exit(0)")
+        code, _, _ = h.run("restore", "checkpoint", NAME)
+        self.assertEqual(code, 1)
+        self.assertEqual(target.read_text(), "untouched\n")
+        self.assertEqual([t for t in h.tools() if t["tool"] == "systemd-run"], [])
+
+
+class Report(unittest.TestCase):
+    """_report: the wrapper the transient unit runs as the service user."""
+
+    def run_report(self, *cmd: str) -> tuple[int, str]:
+        p = subprocess.run(
+            [sys.executable, "-I", str(HELPER), "_report", "--", *cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return p.returncode, p.stdout
+
+    def test_exit_status_is_passed_through_and_printed_last(self):
+        mod = load()
+        code, out = self.run_report(sys.executable, "-c", "print('alfred'); raise SystemExit(4)")
+        self.assertEqual(code, 4)
+        self.assertEqual(out.splitlines(), ["alfred", f"{mod.RESTORE_DONE}exit 4"])
+
+    def test_a_signal_is_named(self):
+        mod = load()
+        code, out = self.run_report(
+            sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+        )
+        self.assertEqual(code, 128 + 9)
+        self.assertEqual(out.splitlines()[-1], f"{mod.RESTORE_DONE}signal 9")
+
+    def test_a_command_that_cannot_start_still_ends_the_log(self):
+        mod = load()
+        code, out = self.run_report("/nonexistent/arkham-asylum")
+        self.assertEqual(code, 127)
+        self.assertEqual(out.splitlines()[-1], f"{mod.RESTORE_DONE}exit 127 (could not start)")
+
+    def test_usage(self):
+        for argv in ([], ["--"], ["true"], ["true", "--"]):
+            p = subprocess.run(
+                [sys.executable, "-I", str(HELPER), "_report", *argv],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(p.returncode, 2, argv)
 
 
 class IntoWorker(unittest.TestCase):
