@@ -1,7 +1,7 @@
 // file: internal/config/ai_endpoints.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f0b6c2e-8a41-4d7e-9b15-6e2c7a9d4f10
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package config
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // AIEndpoint is one AI server row in the capability-routing settings

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_preview_bound_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c8e21-93a4-4b7f-8e16-2a7f1c4b9d03
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A purge is bound to the preview in front of the user: it takes the books the

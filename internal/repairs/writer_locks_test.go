@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 89ff8b34-1ba1-405c-bf6b-cfe54095629c
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

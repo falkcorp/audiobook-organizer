@@ -1,7 +1,7 @@
 // file: internal/merge/undo_heartbeat_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: fa81dcd0-b54f-4e6e-b6c0-e3426100e477
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/readstatus"
 )
 

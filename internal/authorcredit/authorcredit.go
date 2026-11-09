@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 // Package authorcredit turns one author credit string ("J.N. Chaney, Jonathan
 // P. Brazee") into the author rows a book should be credited to, in order.
@@ -74,7 +74,7 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )

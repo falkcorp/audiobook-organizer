@@ -1,7 +1,7 @@
 // file: internal/undo/author_merge.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b7d21f94-3a68-4e05-9c1b-5f8e0a3d7c26
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Journal rows an author merge (entities.author-merge and ai.author-scan-apply,

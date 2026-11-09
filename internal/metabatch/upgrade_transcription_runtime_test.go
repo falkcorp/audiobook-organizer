@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_transcription_runtime_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c6a9e14-7d52-4b38-a1f6-93e2b5d80c47
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The nightly upgrade lowers its score floor for a candidate the audio intro

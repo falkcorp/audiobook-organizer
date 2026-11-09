@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_combine_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d2e6b14-3a87-4c50-b1f9-7e0a5c3d8f26
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

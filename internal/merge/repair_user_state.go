@@ -1,7 +1,7 @@
 // file: internal/merge/repair_user_state.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6f3c1a92-8e5b-4d07-b4a1-3c9e7f2d5b18
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"golang.org/x/sync/errgroup"
 )
 

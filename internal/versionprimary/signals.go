@@ -1,7 +1,7 @@
 // file: internal/versionprimary/signals.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ac90734f-6d4e-405b-8edc-18da688f272b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

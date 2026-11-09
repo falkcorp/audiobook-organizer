@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/iterate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 package sdk
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // BookStore is the narrow interface PageBooks needs — a paginated book reader.

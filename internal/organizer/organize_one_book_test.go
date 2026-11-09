@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_one_book_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e2a91d4-3c58-4b7f-8a06-1d94f2e7b350
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

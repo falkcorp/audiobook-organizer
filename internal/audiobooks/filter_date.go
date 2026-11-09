@@ -1,14 +1,14 @@
 // file: internal/audiobooks/filter_date.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 953a0b92-fcf9-4757-8f95-5c6463dfc016
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

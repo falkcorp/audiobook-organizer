@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3a9f6d21-7c84-4e0b-bd35-9f12a7c6e840
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"

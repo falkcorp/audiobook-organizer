@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_detect_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a7c3e19-2b84-4d6f-9e01-c8b4f2a6d735
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Fixtures from the adversarial review of the first cut: each grouped

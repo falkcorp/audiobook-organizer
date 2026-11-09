@@ -1,7 +1,7 @@
 // file: internal/metafetch/catalog_stage.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6c0f3b95-2e8a-4d71-b4a9-9f1d5a7e0c28
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 //
 // The local author-catalog blocking stage of the metadata search (spec 02
 // section 3.3, B1 and B2; owner decision D31). Before the provider fan-out a
@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

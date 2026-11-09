@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -37,8 +37,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

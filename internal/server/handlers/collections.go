@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.7
+// version: 2.1.8
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"

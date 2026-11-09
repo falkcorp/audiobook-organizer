@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_security_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7f1c2a93-4d8e-4b6a-9c10-2e5b7a0d1f44
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

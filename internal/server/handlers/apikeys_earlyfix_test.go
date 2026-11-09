@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys_earlyfix_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 36700d48-c983-4568-a301-abd5f8a675a7
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

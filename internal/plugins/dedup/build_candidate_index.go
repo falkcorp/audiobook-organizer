@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 87487445-8923-477d-866c-b8153fd7755b
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.build-candidate-status-index (INIT-2 T4).
 //
@@ -34,7 +34,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

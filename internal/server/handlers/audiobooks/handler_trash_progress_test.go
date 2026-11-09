@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

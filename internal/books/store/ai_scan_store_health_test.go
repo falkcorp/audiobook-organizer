@@ -1,0 +1,59 @@
+// file: internal/books/store/ai_scan_store_health_test.go
+// version: 1.2.3
+// guid: 32eddfe1-cb1f-4009-9b7c-a3e3c626c050
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAIScanHealthStats_SharedReportsPrefixEstimate(t *testing.T) {
+	p := newCensusRawStore(t)
+	b := p.db.NewBatch()
+	pad := make([]byte, 200)
+	for i := range 10000 {
+		require.NoError(t, b.Set([]byte(fmt.Sprintf("book:%06d", i)), pad, nil))
+	}
+	require.NoError(t, b.Commit(pebble.Sync))
+
+	s, err := NewAIScanStoreFromDB(p.db)
+	require.NoError(t, err)
+	require.NoError(t, p.db.Flush())
+
+	stats, err := s.HealthStats()
+	require.NoError(t, err)
+	require.Equal(t, "aiscan_prefix_estimate", stats.SizeSource)
+	m, err := p.db.Metrics()
+	require.NoError(t, err)
+	require.Less(t, stats.SizeBytes, m.DiskSpaceUsage())
+}
+
+func TestAIScanHealthStats_OwnedReportsStoreUsage(t *testing.T) {
+	s, err := NewAIScanStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	stats, err := s.HealthStats()
+	require.NoError(t, err)
+	require.Equal(t, "store_disk_usage", stats.SizeSource)
+}
+
+// A shared DB closed under the store (shutdown racing a health request) must
+// surface as an error, not a panic.
+func TestAIScanHealthStats_ClosedSharedDBReturnsError(t *testing.T) {
+	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
+	require.NoError(t, err)
+	s, err := NewAIScanStoreFromDB(NewGatedDB(db))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	require.NotPanics(t, func() { _, err = s.HealthStats() })
+	require.ErrorIs(t, err, pebble.ErrClosed)
+}

@@ -1,7 +1,7 @@
 // file: tools/cmd/dedup-dataset-audit/main.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e7a1c92-8b3d-4f10-9c21-7a5b6c4d3e2f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Command dedup-dataset-audit is a READ-ONLY analysis tool that measures, over
 // the full dedup candidate set, how well an auto-labeling "oracle" could label
@@ -35,7 +35,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // bookAgg is the per-book rollup we need for pair analysis, memoised so books

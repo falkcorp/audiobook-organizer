@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.4.2
+// version: 2.4.3
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestGetFileSize tests the getFileSize function

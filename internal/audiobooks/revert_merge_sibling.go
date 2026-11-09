@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_sibling.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7c4e1a96-2b83-4d50-9f17-a6e3d0b85c21
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

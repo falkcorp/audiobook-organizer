@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tag_facets.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3e9a6c1d-7b2f-4d85-a0c4-8f1e2b6d9a73
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Scoped tag facets: the Library's Browse-by-Tag chips counted over the
 // CURRENT result set instead of the whole library. The match set comes from
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 

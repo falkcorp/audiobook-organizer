@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"

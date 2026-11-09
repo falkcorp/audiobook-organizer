@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

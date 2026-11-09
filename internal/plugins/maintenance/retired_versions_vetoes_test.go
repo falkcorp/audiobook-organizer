@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 91e6c0d4-3b2a-4f75-8d18-6a4f2c97e0b3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f3f3e2a-8f1a-4b3e-9c2d-7a1e5f8b9c10
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestIsProtectedPathCachesImportPaths verifies that repeated calls to

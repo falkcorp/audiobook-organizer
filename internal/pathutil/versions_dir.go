@@ -1,7 +1,7 @@
 // file: internal/pathutil/versions_dir.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b5145e37-5347-4308-b396-dcb2bbd4c873
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package pathutil
 
@@ -13,7 +13,7 @@ import (
 // VersionsDirName is the hidden directory inside a book's folder where the
 // files of its non-active versions live: <book folder>/.versions/<version id>/.
 // internal/versions re-exports it (versions.VersionsDirName); it is declared
-// here, below both internal/database and internal/versions, so the two can
+// here, below both internal/books/store and internal/versions, so the two can
 // share one definition of what a version slot is.
 const VersionsDirName = ".versions"
 

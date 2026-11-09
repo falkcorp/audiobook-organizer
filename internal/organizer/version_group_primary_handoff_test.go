@@ -1,7 +1,7 @@
 // file: internal/organizer/version_group_primary_handoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f6d8a43-7b2e-4c95-9d10-e3a4b7c58f26
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

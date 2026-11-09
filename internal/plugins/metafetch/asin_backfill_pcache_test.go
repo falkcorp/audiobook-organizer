@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_pcache_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a3e9c04-1f72-4b8d-9e25-c0d84b7a1f36
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func withSharedProviderCache(t *testing.T) {

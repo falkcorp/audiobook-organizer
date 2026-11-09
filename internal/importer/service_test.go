@@ -1,7 +1,7 @@
 // file: internal/importer/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5b6c
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package importer
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

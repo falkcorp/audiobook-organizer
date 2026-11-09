@@ -5,7 +5,7 @@
 package dedupmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockSeriesBooksStore) EXPECT() *MockSeriesBooksStore_Expecter {
 }
 
 // GetBooksBySeriesIDAllVersions provides a mock function for the type MockSeriesBooksStore
-func (_mock *MockSeriesBooksStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error) {
+func (_mock *MockSeriesBooksStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]store.BookCore, error) {
 	ret := _mock.Called(seriesID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBooksBySeriesIDAllVersions")
 	}
 
-	var r0 []database.BookCore
+	var r0 []store.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]store.BookCore, error)); ok {
 		return returnFunc(seriesID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []store.BookCore); ok {
 		r0 = returnFunc(seriesID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookCore)
+			r0 = ret.Get(0).([]store.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -97,12 +97,12 @@ func (_c *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call) Run(run func(
 	return _c
 }
 
-func (_c *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call) Return(bookCores []database.BookCore, err error) *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call {
+func (_c *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call) Return(bookCores []store.BookCore, err error) *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call {
 	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call) RunAndReturn(run func(seriesID int) ([]database.BookCore, error)) *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call {
+func (_c *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call) RunAndReturn(run func(seriesID int) ([]store.BookCore, error)) *MockSeriesBooksStore_GetBooksBySeriesIDAllVersions_Call {
 	_c.Call.Return(run)
 	return _c
 }

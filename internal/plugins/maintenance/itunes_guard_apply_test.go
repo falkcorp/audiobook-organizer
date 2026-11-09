@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_guard_apply_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2a7c90-4d1b-4f38-a6e2-9b3d0c8f1a57
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"

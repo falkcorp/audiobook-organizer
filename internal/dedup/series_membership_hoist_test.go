@@ -1,7 +1,7 @@
 // file: internal/dedup/series_membership_hoist_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b2d8f47-1e93-4a05-b7c8-0f5e3a9d2c71
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newHoistCountingStore wires a MockStore whose PER-SERIES membership getter

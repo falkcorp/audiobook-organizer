@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_remote_only_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 609372fb-2803-46d8-a413-c4263e5f71be
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -23,8 +23,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
 )

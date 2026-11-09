@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

@@ -1,5 +1,5 @@
 // file: internal/activity/api_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2e7f4a1-6c9d-4e3b-8f0a-1d5c7e2b9f4a
 
 package activity
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newTestWriter builds a Writer that writes to an in-memory channel only

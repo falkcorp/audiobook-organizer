@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/user_state_deadlock_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 0630076b-d80b-4cf5-b741-2fcc6a0bf393
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -22,7 +22,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

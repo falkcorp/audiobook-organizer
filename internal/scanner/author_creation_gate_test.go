@@ -1,15 +1,15 @@
 // file: internal/scanner/author_creation_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4f1e27-5b9a-4d3c-b6e2-0a7d9f3c1b58
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

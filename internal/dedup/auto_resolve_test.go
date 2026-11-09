@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -21,8 +21,8 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

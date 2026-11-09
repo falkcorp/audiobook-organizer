@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,8 +15,8 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_viewer_states_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a9d2e47-8c13-4f60-b7a1-d3e6f0928c5b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package playlist
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

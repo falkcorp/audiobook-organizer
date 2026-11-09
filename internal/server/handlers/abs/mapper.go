@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/mapper.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7a2f58d1-0b64-4e93-8c1d-6f9047b5e2a3
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs
 
@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"golang.org/x/sync/errgroup"
@@ -390,7 +390,7 @@ func (h *Handler) loadChapters(bookID string, files []fileView) []audioutil.Chap
 
 // resolveNarrators picks the AUTHORITATIVE narrator source.
 //
-// internal/database holds narrators three ways (spec §12 leaves the choice to this
+// internal/books/store holds narrators three ways (spec §12 leaves the choice to this
 // phase). The decision, and the reason:
 //
 //	1st  the BookNarrator junction (via GetNarratorsByBookIDs) — the normalized

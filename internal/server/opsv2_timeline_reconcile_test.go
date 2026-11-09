@@ -1,7 +1,7 @@
 // file: internal/server/opsv2_timeline_reconcile_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1aadeb25-3ece-4be2-88a9-5f21fd2900ac
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestStoreExposesOpsV2TimelineReconcile runs the production

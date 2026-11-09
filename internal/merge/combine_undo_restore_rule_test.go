@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_restore_rule_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 24aaf1dd-a2da-4467-a16b-aa81eaa00a53
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

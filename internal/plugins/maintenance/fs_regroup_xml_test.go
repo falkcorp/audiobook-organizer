@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.7.1
+// version: 2.7.2
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress_write_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2b7f4e91-8a05-4c63-b1d8-70e396a5cf42
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )

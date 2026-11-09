@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize_inplace_undo_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d5e0c3a-2f41-4b7a-9e16-5a3c7b9d2e08
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )

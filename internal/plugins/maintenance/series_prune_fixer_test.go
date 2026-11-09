@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

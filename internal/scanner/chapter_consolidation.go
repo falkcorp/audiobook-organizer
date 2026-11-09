@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidation.go
-// version: 2.4.5
+// version: 2.4.6
 // guid: f9a0b1c2-d3e4-5f60-a7b8-c9d0e1f2a3b4
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

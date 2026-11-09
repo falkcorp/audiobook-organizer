@@ -1,5 +1,5 @@
 // file: internal/server/backup_restore_clean_stop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a9d6cf17-ae83-4c1f-8e9c-20c081498477
 // last-edited: 2026-11-09
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/stretchr/testify/require"

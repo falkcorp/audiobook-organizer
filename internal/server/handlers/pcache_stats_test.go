@@ -1,7 +1,7 @@
 // file: internal/server/handlers/pcache_stats_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 53fdb1b5-7be2-452b-a745-a14b47a44e70
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 

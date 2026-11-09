@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/preflight_access_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9aeb6546-3b73-4a06-860d-1971f3a0c029
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"

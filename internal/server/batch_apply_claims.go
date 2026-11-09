@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0c6a9e42-7d1b-4f83-a5e2-9b3f1d7c4e60
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

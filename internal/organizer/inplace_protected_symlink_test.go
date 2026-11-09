@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_protected_symlink_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a7d19c3-62be-4f80-b5e1-9d03c8a6f742
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

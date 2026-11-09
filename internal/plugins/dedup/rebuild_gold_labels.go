@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rebuild_gold_labels.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 74b6de83-de1b-4231-8edc-6920a2f7b91c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.rebuild-gold-labels.
 //
@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

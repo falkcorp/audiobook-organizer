@@ -1,14 +1,14 @@
 // file: internal/server/series_membership_hoist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4e2a19-6b3d-4f70-9e15-a2d7c80b3f64
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mustSeriesMembers builds the hoisted membership map a caller of

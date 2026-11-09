@@ -1,7 +1,7 @@
 // file: internal/server/scan_cache_backfill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c2a9f81-73de-4b06-a1c8-6e9d0b34f2a7
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newScanCacheBackfillServer builds a server over a real store holding ONE

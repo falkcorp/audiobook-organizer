@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: b1896d34-1538-4a3f-a3f0-469871f9ca8c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

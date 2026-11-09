@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/book_signature_scan.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-05-06
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

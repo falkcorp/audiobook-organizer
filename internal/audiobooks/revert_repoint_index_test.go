@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_repoint_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c2e8a41-7d93-4b6f-9e0a-3f1b6d8c2a74
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // repointStub serves repointPathIndexAwayFrom: hidden book "c" holds one row

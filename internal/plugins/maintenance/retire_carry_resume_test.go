@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_resume_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0c7d4e2a-91b3-4f68-a5d0-3e8f1b72c946
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

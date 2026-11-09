@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -21,7 +21,7 @@ import (
 // --- book_atpath: index ops ---
 //
 // The index itself, its invariant and its startup backfill live in
-// internal/database/pebble_store_atpath_index.go. These two ops are the
+// internal/books/store/pebble_store_atpath_index.go. These two ops are the
 // operator's handles on it:
 //
 //   - maintenance.book-atpath-index-verify: read-only diff of index vs rows.

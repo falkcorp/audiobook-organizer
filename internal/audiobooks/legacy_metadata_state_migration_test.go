@@ -1,7 +1,7 @@
 // file: internal/audiobooks/legacy_metadata_state_migration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2a6f9d18-7c34-4e05-b1a8-9f3c6d0e4b72
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

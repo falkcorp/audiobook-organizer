@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/test_ci_remote.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: b886cb9e-2020-4cfc-806d-6002504520df
-# last-edited: 2026-10-11
+# last-edited: 2026-11-09
 
 """Unit tests for scripts/ci_remote.py: CI_NODES parsing, decode routing,
 sharding, scheduling, coverage merging and the generated remote scripts.
@@ -214,7 +214,7 @@ class HeavyPackageTest(unittest.TestCase):
 
     def pkgs(self):
         return [
-            _pkg(self.MOD + "internal/database", size=100),  # seeded 1800s
+            _pkg(self.MOD + "internal/books/store", size=100),  # seeded 1800s
             _pkg(self.MOD + "internal/server", size=100, decode=True),  # seeded 500s
             _pkg(self.MOD + "internal/plugins/maintenance", size=100, decode=True),  # 360s
             _pkg(self.MOD + "internal/operations/registry", size=100),  # 96s
@@ -226,7 +226,7 @@ class HeavyPackageTest(unittest.TestCase):
         self.assertEqual(
             [leg.packages[0].removeprefix(self.MOD) for leg in heavy],
             [
-                "internal/database",
+                "internal/books/store",
                 "internal/server",
                 "internal/plugins/maintenance",
                 "internal/operations/registry",
@@ -245,7 +245,7 @@ class HeavyPackageTest(unittest.TestCase):
 
     def test_database_timeout_at_least_50m(self):
         legs = cr.build_shards(self.pkgs(), cr.Timings(None), ["darwin"], ["darwin"], 1, 2)
-        db = next(leg for leg in legs if leg.packages == (self.MOD + "internal/database",))
+        db = next(leg for leg in legs if leg.packages == (self.MOD + "internal/books/store",))
         self.assertGreaterEqual(db.timeout_min, 50)
         self.assertIn("-timeout 50m", cr.go_test_command(db.packages, "c.out", 4, db.timeout_min))
         small = next(leg for leg in legs if not leg.heavy)

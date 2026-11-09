@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_progress_owner_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 53d21039-f771-45b3-b5d6-0eee5d1ae953
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seedListener gives a non-admin user listening progress on bookID: a book

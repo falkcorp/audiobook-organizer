@@ -1,7 +1,7 @@
 // file: internal/usermerge/undo.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e2b94a57-0c31-4d86-b7f5-6a3d8c1f9e20
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

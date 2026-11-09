@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_saveresult_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4e1c73-2b85-4f60-8d19-3e7c0a5b6f24
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

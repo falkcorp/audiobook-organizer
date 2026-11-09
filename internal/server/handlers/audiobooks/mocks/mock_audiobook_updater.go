@@ -7,7 +7,7 @@ package audiobooksmocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,24 +48,24 @@ func (_m *MockAudiobookUpdater) EXPECT() *MockAudiobookUpdater_Expecter {
 }
 
 // UpdateAudiobookWithWarnings provides a mock function for the type MockAudiobookUpdater
-func (_mock *MockAudiobookUpdater) UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error) {
+func (_mock *MockAudiobookUpdater) UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*store.Book, []string, error) {
 	ret := _mock.Called(ctx, id, payload)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateAudiobookWithWarnings")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 []string
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*database.Book, []string, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*store.Book, []string, error)); ok {
 		return returnFunc(ctx, id, payload)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) *store.Book); ok {
 		r0 = returnFunc(ctx, id, payload)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, map[string]any) []string); ok {
@@ -119,12 +119,12 @@ func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) Run(run func(ct
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) Return(book *database.Book, strings []string, err error) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) Return(book *store.Book, strings []string, err error) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
 	_c.Call.Return(book, strings, err)
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error)) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*store.Book, []string, error)) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
 	_c.Call.Return(run)
 	return _c
 }

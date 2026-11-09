@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/require"
 )

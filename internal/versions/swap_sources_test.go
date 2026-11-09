@@ -1,7 +1,7 @@
 // file: internal/versions/swap_sources_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a1c9e37-2d84-4b60-9f3a-8e7b1d4c6a02
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The swap moves a file only when its source is there and its destination is

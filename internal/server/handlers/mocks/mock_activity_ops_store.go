@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockActivityOpsStore) EXPECT() *MockActivityOpsStore_Expecter {
 }
 
 // GetOpLogsV2 provides a mock function for the type MockActivityOpsStore
-func (_mock *MockActivityOpsStore) GetOpLogsV2(opID string, limit int) ([]database.OpLogV2Row, error) {
+func (_mock *MockActivityOpsStore) GetOpLogsV2(opID string, limit int) ([]store.OpLogV2Row, error) {
 	ret := _mock.Called(opID, limit)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetOpLogsV2")
 	}
 
-	var r0 []database.OpLogV2Row
+	var r0 []store.OpLogV2Row
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.OpLogV2Row, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]store.OpLogV2Row, error)); ok {
 		return returnFunc(opID, limit)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, int) []database.OpLogV2Row); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int) []store.OpLogV2Row); ok {
 		r0 = returnFunc(opID, limit)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.OpLogV2Row)
+			r0 = ret.Get(0).([]store.OpLogV2Row)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
@@ -103,12 +103,12 @@ func (_c *MockActivityOpsStore_GetOpLogsV2_Call) Run(run func(opID string, limit
 	return _c
 }
 
-func (_c *MockActivityOpsStore_GetOpLogsV2_Call) Return(opLogV2Rows []database.OpLogV2Row, err error) *MockActivityOpsStore_GetOpLogsV2_Call {
+func (_c *MockActivityOpsStore_GetOpLogsV2_Call) Return(opLogV2Rows []store.OpLogV2Row, err error) *MockActivityOpsStore_GetOpLogsV2_Call {
 	_c.Call.Return(opLogV2Rows, err)
 	return _c
 }
 
-func (_c *MockActivityOpsStore_GetOpLogsV2_Call) RunAndReturn(run func(opID string, limit int) ([]database.OpLogV2Row, error)) *MockActivityOpsStore_GetOpLogsV2_Call {
+func (_c *MockActivityOpsStore_GetOpLogsV2_Call) RunAndReturn(run func(opID string, limit int) ([]store.OpLogV2Row, error)) *MockActivityOpsStore_GetOpLogsV2_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package transcode
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestBuildConcatFile(t *testing.T) {

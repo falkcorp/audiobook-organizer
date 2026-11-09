@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/stretchr/testify/mock"
 )

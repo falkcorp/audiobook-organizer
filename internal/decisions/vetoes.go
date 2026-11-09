@@ -1,7 +1,7 @@
 // file: internal/decisions/vetoes.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

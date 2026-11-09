@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5bb37ed8-73c4-429c-8168-cc4e2fb52f0e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestPlanCrossFolderPurges_Gates pins every gate of the owner-approved rule:

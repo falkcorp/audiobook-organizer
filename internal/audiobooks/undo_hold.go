@@ -1,7 +1,7 @@
 // file: internal/audiobooks/undo_hold.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b3e1c94-5a28-4d60-9f17-c2d84e60a3b5
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

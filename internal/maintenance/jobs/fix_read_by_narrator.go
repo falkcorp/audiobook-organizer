@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.6.1
+// version: 2.6.2
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,7 +13,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

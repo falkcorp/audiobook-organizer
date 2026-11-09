@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback_followups_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 094d2b26-ad58-4773-969d-15e89565cb5f
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/dailyquota"

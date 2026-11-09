@@ -1,11 +1,11 @@
 // file: internal/versions/store.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // The store surface this package needs, measured with an empty-interface
 // compiler probe under -gcflags=-e: 12 methods plus one forwarding constraint

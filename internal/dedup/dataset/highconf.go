@@ -1,11 +1,11 @@
 // file: internal/dedup/dataset/highconf.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b9e1c70-8d42-4a16-9f53-7c2e6a8b1d04
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dataset
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // MineHighConfidenceDup detects high-precision DUPLICATE signals between two books
 // that the rule Classify() does not emit as positives. It is the positive-label

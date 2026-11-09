@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_prop_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 864889b2-5529-4d23-9220-2f17e11fab35
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Property-based tests for the library-list sort, filter, and pagination
 // code paths in internal/server/audiobook_service.go. These properties
@@ -31,7 +31,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/rapidgen"
 	"pgregory.net/rapid"
 )

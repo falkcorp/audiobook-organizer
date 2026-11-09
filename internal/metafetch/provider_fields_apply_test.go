@@ -1,14 +1,14 @@
 // file: internal/metafetch/provider_fields_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6fc4d04d-91c8-4194-b98b-133f4b647ffe
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A Google Books candidate's newly mapped fields reach the Book through the

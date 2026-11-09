@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_close_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0c6d4a82-91e7-4b35-8f2a-d3a7b5e1c649
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

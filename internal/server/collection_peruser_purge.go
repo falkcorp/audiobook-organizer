@@ -1,14 +1,14 @@
 // file: internal/server/collection_peruser_purge.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4b7e1c93-2d58-4f06-9a31-c6e8d0f5b274
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"errors"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )

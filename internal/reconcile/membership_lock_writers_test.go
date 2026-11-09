@@ -1,15 +1,15 @@
 // file: internal/reconcile/membership_lock_writers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e2a6c91-4f3b-4d58-b0c7-1a9e5d8f2b36
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package reconcile
 
 import (
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

@@ -1,7 +1,7 @@
 // file: internal/catalog/alias_backfill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4b71e90-2f5c-4a68-9e13-7c8a0b5f2d46
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // asinScanner is an authority.Scanner over a fixed ref_asin:person: keyspace.

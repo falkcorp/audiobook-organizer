@@ -1,7 +1,7 @@
 // file: internal/audiobooks/transcribed_title_pushdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f3a1d62-4b09-4c7e-9a15-2e6c0b7d4f38
-// last-edited: 2026-07-01
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

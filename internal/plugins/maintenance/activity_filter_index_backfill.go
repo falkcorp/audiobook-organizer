@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

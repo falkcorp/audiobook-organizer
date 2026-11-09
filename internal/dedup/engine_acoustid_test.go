@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_acoustid_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c8f25a0d-8e69-47f7-a36f-60c191b73810
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestAcoustIDScan_BoilerplateTitleDoesNotEmitCandidate(t *testing.T) {

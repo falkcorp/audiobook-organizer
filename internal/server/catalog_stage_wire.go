@@ -1,15 +1,15 @@
 // file: internal/server/catalog_stage_wire.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b5e18c37-0d92-4a64-a8f3-7c2e9d1b4056
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

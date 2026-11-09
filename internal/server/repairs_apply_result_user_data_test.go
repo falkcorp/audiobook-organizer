@@ -1,7 +1,7 @@
 // file: internal/server/repairs_apply_result_user_data_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b7e1d95-8a42-4c60-9f18-e5d2a0c64b37
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // A repairs.apply result records which user's grant an owner row ran under
 // (owner_user_id, on the result and on each row) and the free text a fixer wrote
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

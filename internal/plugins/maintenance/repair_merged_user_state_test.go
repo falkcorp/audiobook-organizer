@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b8e1d63-7a2f-4c95-8e0d-6f3a9c1b2e57
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"

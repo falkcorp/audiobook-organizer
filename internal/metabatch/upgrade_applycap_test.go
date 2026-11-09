@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_applycap_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2c9d5e71-8f4b-4a3e-b6d0-7e1c3a5f9d24
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

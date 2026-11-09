@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_names_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4d230bdc-f5c8-4daf-a1a4-8ae60cd023e0
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // knownPeople returns an authority keyspace in which each name is a known

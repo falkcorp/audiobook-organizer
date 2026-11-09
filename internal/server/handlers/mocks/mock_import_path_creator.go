@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockImportPathCreator) EXPECT() *MockImportPathCreator_Expecter {
 }
 
 // CreateImportPath provides a mock function for the type MockImportPathCreator
-func (_mock *MockImportPathCreator) CreateImportPath(path string, name string) (*database.ImportPath, error) {
+func (_mock *MockImportPathCreator) CreateImportPath(path string, name string) (*store.ImportPath, error) {
 	ret := _mock.Called(path, name)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateImportPath")
 	}
 
-	var r0 *database.ImportPath
+	var r0 *store.ImportPath
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.ImportPath, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*store.ImportPath, error)); ok {
 		return returnFunc(path, name)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) *database.ImportPath); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) *store.ImportPath); ok {
 		r0 = returnFunc(path, name)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.ImportPath)
+			r0 = ret.Get(0).(*store.ImportPath)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
@@ -103,12 +103,12 @@ func (_c *MockImportPathCreator_CreateImportPath_Call) Run(run func(path string,
 	return _c
 }
 
-func (_c *MockImportPathCreator_CreateImportPath_Call) Return(importPath *database.ImportPath, err error) *MockImportPathCreator_CreateImportPath_Call {
+func (_c *MockImportPathCreator_CreateImportPath_Call) Return(importPath *store.ImportPath, err error) *MockImportPathCreator_CreateImportPath_Call {
 	_c.Call.Return(importPath, err)
 	return _c
 }
 
-func (_c *MockImportPathCreator_CreateImportPath_Call) RunAndReturn(run func(path string, name string) (*database.ImportPath, error)) *MockImportPathCreator_CreateImportPath_Call {
+func (_c *MockImportPathCreator_CreateImportPath_Call) RunAndReturn(run func(path string, name string) (*store.ImportPath, error)) *MockImportPathCreator_CreateImportPath_Call {
 	_c.Call.Return(run)
 	return _c
 }

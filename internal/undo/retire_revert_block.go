@@ -1,7 +1,7 @@
 // file: internal/undo/retire_revert_block.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b1d8e47-2c93-4fa6-9d0e-a3c7f6128b54
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The retire change types are reversible (retire.go: part 5 teaches the

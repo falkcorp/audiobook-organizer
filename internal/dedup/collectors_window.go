@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_window.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c4e1b07-63d2-4f8a-a5e9-2b7d0c8f4a13
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 // Package dedup — window-print collector (02-PR8, owner decisions D14a, D34).
 //
@@ -33,7 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

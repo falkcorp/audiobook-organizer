@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.21.2
+// version: 1.21.3
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -33,8 +33,8 @@ import (
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

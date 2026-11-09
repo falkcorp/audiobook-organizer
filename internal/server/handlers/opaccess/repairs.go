@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
@@ -19,7 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

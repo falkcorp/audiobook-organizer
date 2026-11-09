@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_backfill.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c17d94ae-0b62-4f38-9d51-3ae680f2b7c4
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // legacyBackfillStore is the optional store capability the backfill needs on top

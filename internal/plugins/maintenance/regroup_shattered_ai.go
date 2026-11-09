@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -46,7 +46,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

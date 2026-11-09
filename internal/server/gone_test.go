@@ -1,7 +1,7 @@
 // file: internal/server/gone_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8a3d6f12-c405-4e97-b1d8-72f9e0a5c346
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestGone_Helper(t *testing.T) {

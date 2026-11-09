@@ -1,7 +1,7 @@
 // file: internal/server/server_startup_activity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b2e8f4d-0c19-4a73-b5d8-9e1a7c3f6d42
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

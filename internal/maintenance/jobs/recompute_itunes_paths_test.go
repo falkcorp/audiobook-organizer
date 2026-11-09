@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b7c8d9e0-f1a2-3456-bcde-789012345012
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 // Package jobs_test exercises the recompute-itunes-paths maintenance job.
 // noopReporter and the blank jobs import are provided by fix_read_by_narrator_test.go.
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

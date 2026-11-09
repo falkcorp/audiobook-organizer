@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_noop_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8b2c61-9d4e-4a7f-b015-6e2d8c9a4b17
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package registry
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type p6CapturingRecorder struct{ got []database.ActivityEntry }

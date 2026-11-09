@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_itunes_guard_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c4f7a92-6d1b-4e38-8a25-9b3e1f6c7d40
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"

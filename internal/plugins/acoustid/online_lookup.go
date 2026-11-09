@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

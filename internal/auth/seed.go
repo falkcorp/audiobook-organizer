@@ -1,7 +1,7 @@
 // file: internal/auth/seed.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2e8f4a1d-7c3b-4f60-b9d5-1c6e0f2b9a57
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 //
 // Seed roles — idempotent upsert of the canonical roles (admin,
 // editor, viewer, fp-worker) with their permission sets. Called at
@@ -17,7 +17,7 @@ package auth
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seedStore is what this package actually calls, measured by emptying the

@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_rejected_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b82d75a5-b760-4375-98c3-d10426139c5d
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

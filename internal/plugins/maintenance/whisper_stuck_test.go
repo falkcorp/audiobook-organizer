@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_stuck_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b0e3d52-41c8-4f6a-9d2b-e85a1c4f7390
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )

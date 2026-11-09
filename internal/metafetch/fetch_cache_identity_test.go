@@ -1,7 +1,7 @@
 // file: internal/metafetch/fetch_cache_identity_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b1e9c42-8d3f-4a7e-b25c-0f9a3d7e41c8
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/stretchr/testify/assert"

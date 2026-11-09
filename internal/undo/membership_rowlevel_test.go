@@ -1,7 +1,7 @@
 // file: internal/undo/membership_rowlevel_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7e98c6d5-ae02-4209-a3b4-306133edd303
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Case counts. Every sim is deterministic in its seed (the same seed replays the

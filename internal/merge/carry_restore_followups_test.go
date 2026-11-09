@@ -1,7 +1,7 @@
 // file: internal/merge/carry_restore_followups_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: beba4668-6a7b-4db7-b6b6-636dd756c5e7
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 var (

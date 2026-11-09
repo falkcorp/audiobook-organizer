@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 

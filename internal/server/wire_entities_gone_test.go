@@ -1,7 +1,7 @@
 // file: internal/server/wire_entities_gone_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 6d2a9c41-7b58-4e03-91f6-a4c8e2b05d37
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

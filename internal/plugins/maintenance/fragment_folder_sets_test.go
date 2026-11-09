@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"

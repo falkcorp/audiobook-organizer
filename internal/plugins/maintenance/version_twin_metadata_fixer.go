@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

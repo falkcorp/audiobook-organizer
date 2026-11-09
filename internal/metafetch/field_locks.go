@@ -1,14 +1,14 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )

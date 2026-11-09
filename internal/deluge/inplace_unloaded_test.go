@@ -1,7 +1,7 @@
 // file: internal/deluge/inplace_unloaded_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3d0b6c52-7a41-4e98-8f15-c2e9a04b7d63
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 //
 // An in-place import fails closed while the Deluge protected-path list has
 // never loaded: the cache answers "not protected" for every seeding file then,
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

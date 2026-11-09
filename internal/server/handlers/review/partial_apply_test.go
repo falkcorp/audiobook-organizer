@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/partial_apply_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d4a1f60-2c97-4e35-b0a8-5f1e93c7d268
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"

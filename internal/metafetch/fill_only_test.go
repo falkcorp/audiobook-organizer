@@ -1,7 +1,7 @@
 // file: internal/metafetch/fill_only_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4c8e1f27-9a6b-4d35-8e02-b7f1c3a9d640
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

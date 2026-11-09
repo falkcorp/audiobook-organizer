@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 63289143-7fae-47b5-9ed9-888ac3c2034a
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"golang.org/x/sync/errgroup"

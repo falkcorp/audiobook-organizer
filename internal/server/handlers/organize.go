@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 // Package handlers — OrganizeHandler covers the organize-preview and
 // single-book organize HTTP endpoints.
@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

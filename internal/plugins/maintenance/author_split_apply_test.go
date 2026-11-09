@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

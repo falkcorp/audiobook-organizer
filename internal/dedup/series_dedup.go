@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.16.3
+// version: 1.16.4
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
@@ -955,7 +955,7 @@ func MergeSeries(
 	// just recorded as failed. A series whose books are all trashed enumerated
 	// EMPTY, reassigned nothing, and was deleted anyway. That is the shape that
 	// left 6,893 phantom series IDs held by 13,322 live books on production
-	// 2026-08-14; see internal/database/series_bookref.go.
+	// 2026-08-14; see internal/books/store/series_bookref.go.
 	//
 	// One scan for the whole run, not one per mergeID. The counts cannot go
 	// stale in a direction that makes the guard wrong: books only ever move AWAY

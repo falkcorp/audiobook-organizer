@@ -1,7 +1,7 @@
 // file: internal/search/per_user_values.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b7d2c1e-84a3-4f60-9e1d-2a6c0b9f3d47
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package search
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // PerUserValueError is returned by CheckPerUserValues for a per-user term whose

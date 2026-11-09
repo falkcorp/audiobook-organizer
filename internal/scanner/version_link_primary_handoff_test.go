@@ -1,15 +1,15 @@
 // file: internal/scanner/version_link_primary_handoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1d8e27-5a93-4b6f-9e02-7f3a1b6c8d54
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

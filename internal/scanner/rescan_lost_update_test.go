@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // rescanRaceStore fires a concurrent write exactly once, at the moment

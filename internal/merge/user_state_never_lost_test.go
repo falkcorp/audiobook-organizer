@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_never_lost_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e9a3c17-2b8d-4f60-a4e7-1c6d8b0f3a92
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/stretchr/testify/require"
 )

@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/intro_transcribe_sort_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f2b9c81-7d36-4a5e-9b02-3c8e1a6d5f47
-// last-edited: 2026-09-01
+// last-edited: 2026-11-09
 
 package maintenance
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newSortStore returns a MockStore serving a fixed BookFile set for any bookID.

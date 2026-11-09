@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_sweep.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 481f65a7-e54a-4be2-b43e-d6d992fcbd60
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

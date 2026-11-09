@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -97,23 +97,23 @@ func (_c *MockAIScanStore_DeleteScan_Call) RunAndReturn(run func(id int) error) 
 }
 
 // GetPhases provides a mock function for the type MockAIScanStore
-func (_mock *MockAIScanStore) GetPhases(scanID int) ([]database.ScanPhase, error) {
+func (_mock *MockAIScanStore) GetPhases(scanID int) ([]store.ScanPhase, error) {
 	ret := _mock.Called(scanID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetPhases")
 	}
 
-	var r0 []database.ScanPhase
+	var r0 []store.ScanPhase
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.ScanPhase, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]store.ScanPhase, error)); ok {
 		return returnFunc(scanID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.ScanPhase); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []store.ScanPhase); ok {
 		r0 = returnFunc(scanID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ScanPhase)
+			r0 = ret.Get(0).([]store.ScanPhase)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -148,34 +148,34 @@ func (_c *MockAIScanStore_GetPhases_Call) Run(run func(scanID int)) *MockAIScanS
 	return _c
 }
 
-func (_c *MockAIScanStore_GetPhases_Call) Return(scanPhases []database.ScanPhase, err error) *MockAIScanStore_GetPhases_Call {
+func (_c *MockAIScanStore_GetPhases_Call) Return(scanPhases []store.ScanPhase, err error) *MockAIScanStore_GetPhases_Call {
 	_c.Call.Return(scanPhases, err)
 	return _c
 }
 
-func (_c *MockAIScanStore_GetPhases_Call) RunAndReturn(run func(scanID int) ([]database.ScanPhase, error)) *MockAIScanStore_GetPhases_Call {
+func (_c *MockAIScanStore_GetPhases_Call) RunAndReturn(run func(scanID int) ([]store.ScanPhase, error)) *MockAIScanStore_GetPhases_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetScan provides a mock function for the type MockAIScanStore
-func (_mock *MockAIScanStore) GetScan(id int) (*database.Scan, error) {
+func (_mock *MockAIScanStore) GetScan(id int) (*store.Scan, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetScan")
 	}
 
-	var r0 *database.Scan
+	var r0 *store.Scan
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Scan, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Scan, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Scan); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Scan); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Scan)
+			r0 = ret.Get(0).(*store.Scan)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -210,34 +210,34 @@ func (_c *MockAIScanStore_GetScan_Call) Run(run func(id int)) *MockAIScanStore_G
 	return _c
 }
 
-func (_c *MockAIScanStore_GetScan_Call) Return(scan *database.Scan, err error) *MockAIScanStore_GetScan_Call {
+func (_c *MockAIScanStore_GetScan_Call) Return(scan *store.Scan, err error) *MockAIScanStore_GetScan_Call {
 	_c.Call.Return(scan, err)
 	return _c
 }
 
-func (_c *MockAIScanStore_GetScan_Call) RunAndReturn(run func(id int) (*database.Scan, error)) *MockAIScanStore_GetScan_Call {
+func (_c *MockAIScanStore_GetScan_Call) RunAndReturn(run func(id int) (*store.Scan, error)) *MockAIScanStore_GetScan_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetScanResults provides a mock function for the type MockAIScanStore
-func (_mock *MockAIScanStore) GetScanResults(scanID int) ([]database.ScanResult, error) {
+func (_mock *MockAIScanStore) GetScanResults(scanID int) ([]store.ScanResult, error) {
 	ret := _mock.Called(scanID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetScanResults")
 	}
 
-	var r0 []database.ScanResult
+	var r0 []store.ScanResult
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.ScanResult, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]store.ScanResult, error)); ok {
 		return returnFunc(scanID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.ScanResult); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []store.ScanResult); ok {
 		r0 = returnFunc(scanID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ScanResult)
+			r0 = ret.Get(0).([]store.ScanResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -272,34 +272,34 @@ func (_c *MockAIScanStore_GetScanResults_Call) Run(run func(scanID int)) *MockAI
 	return _c
 }
 
-func (_c *MockAIScanStore_GetScanResults_Call) Return(scanResults []database.ScanResult, err error) *MockAIScanStore_GetScanResults_Call {
+func (_c *MockAIScanStore_GetScanResults_Call) Return(scanResults []store.ScanResult, err error) *MockAIScanStore_GetScanResults_Call {
 	_c.Call.Return(scanResults, err)
 	return _c
 }
 
-func (_c *MockAIScanStore_GetScanResults_Call) RunAndReturn(run func(scanID int) ([]database.ScanResult, error)) *MockAIScanStore_GetScanResults_Call {
+func (_c *MockAIScanStore_GetScanResults_Call) RunAndReturn(run func(scanID int) ([]store.ScanResult, error)) *MockAIScanStore_GetScanResults_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListScans provides a mock function for the type MockAIScanStore
-func (_mock *MockAIScanStore) ListScans() ([]database.Scan, error) {
+func (_mock *MockAIScanStore) ListScans() ([]store.Scan, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListScans")
 	}
 
-	var r0 []database.Scan
+	var r0 []store.Scan
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.Scan, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.Scan, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.Scan); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.Scan); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Scan)
+			r0 = ret.Get(0).([]store.Scan)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -327,12 +327,12 @@ func (_c *MockAIScanStore_ListScans_Call) Run(run func()) *MockAIScanStore_ListS
 	return _c
 }
 
-func (_c *MockAIScanStore_ListScans_Call) Return(scans []database.Scan, err error) *MockAIScanStore_ListScans_Call {
+func (_c *MockAIScanStore_ListScans_Call) Return(scans []store.Scan, err error) *MockAIScanStore_ListScans_Call {
 	_c.Call.Return(scans, err)
 	return _c
 }
 
-func (_c *MockAIScanStore_ListScans_Call) RunAndReturn(run func() ([]database.Scan, error)) *MockAIScanStore_ListScans_Call {
+func (_c *MockAIScanStore_ListScans_Call) RunAndReturn(run func() ([]store.Scan, error)) *MockAIScanStore_ListScans_Call {
 	_c.Call.Return(run)
 	return _c
 }

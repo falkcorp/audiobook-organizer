@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading_failclosed_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0a6d2e4f-8b13-4c7e-95f2-d3b8a1c6e470
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

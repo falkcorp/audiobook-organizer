@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_review_snapshot_pin_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b7d4e91-6c05-4a38-9f1e-7d3a8c52e0b4
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

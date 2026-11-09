@@ -1,7 +1,7 @@
 // file: internal/operations/registry/register.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package registry
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // RegistryWrapper wraps *Registry to adapt its Start(ctx) (void) method to

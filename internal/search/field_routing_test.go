@@ -1,7 +1,7 @@
 // file: internal/search/field_routing_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package search
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // duration: used to go to Bleve under its own name, which is not indexed

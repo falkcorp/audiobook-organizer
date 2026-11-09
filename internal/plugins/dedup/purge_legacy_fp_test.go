@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9e4b7f3a-2c1d-4e8b-b6a5-0d7c9e2f5b8a
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Table-driven tests for the dedup.purge-legacy-fp-candidates op (T015).
 //
@@ -29,7 +29,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

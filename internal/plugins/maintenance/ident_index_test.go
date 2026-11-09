@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 484bb658-22bc-46f4-b1b8-80b4bc6c33ea
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type fakeIdentRebuilder struct {

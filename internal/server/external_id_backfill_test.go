@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a8d1f63-2e7b-4c95-b0f4-9c3e6a1d7b28
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 

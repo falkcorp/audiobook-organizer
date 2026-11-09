@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_values_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5e2b9d84-1c73-4a06-8f95-d0b3a7e61c42
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

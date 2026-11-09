@@ -1,7 +1,7 @@
 // file: internal/server/admin_routes_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 77227bb9-356c-49c7-bb9b-98245ccb7bed
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Every route behind the admin role is classified here, with a reason. The rule

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 0d4c7f61-2b58-4a39-9c6e-51f0a7d3b284
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // --- fixture helpers ---

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_client_sort.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0b122ca1-3d17-4eb2-b2dd-5707ab882ef2
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 //
 // ── client sorts the store cannot push down ─────────────────────────────────
 //
@@ -30,7 +30,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"

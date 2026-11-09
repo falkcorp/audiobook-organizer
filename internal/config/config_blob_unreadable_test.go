@@ -1,7 +1,7 @@
 // file: internal/config/config_blob_unreadable_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c41e9d2-5b8a-4f13-a6e0-2d9f3b7c8e14
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package config
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A config_blob row that exists but will not load used to log a Warn and fall

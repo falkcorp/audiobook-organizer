@@ -1,7 +1,7 @@
 // file: internal/batch/restore_library_state_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5c054407-02a8-465f-bb5a-c509387c20b3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

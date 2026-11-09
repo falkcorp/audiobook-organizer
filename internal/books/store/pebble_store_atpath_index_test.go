@@ -1,0 +1,935 @@
+// file: internal/books/store/pebble_store_atpath_index_test.go
+// version: 1.7.2
+// guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"pgregory.net/rapid"
+)
+
+// hostilePaths is the key-format regression alphabet: empty, ':'-bearing
+// prefixes of each other, a NUL-bearing (corrupt) path, non-ASCII, trailing
+// space.
+var hostilePaths = []string{"", "/a", "/a:x", "/a:x:y", "/a/b", "/a\x00b", "/ä", "/a "}
+
+func newAtPathStore(t testing.TB) *PebbleStore {
+	t.Helper()
+	s, err := NewPebbleStoreInMemory("db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s.WaitForWarmup()
+	return s
+}
+
+// resetAtPathIndex wipes every index key and the sentinel, simulating a store
+// written by a pre-index binary.
+func resetAtPathIndex(t testing.TB, s *PebbleStore) {
+	t.Helper()
+	if err := s.db.DeleteRange([]byte(bookAtPathPrefix), bareRowUpperBound(bookAtPathPrefix), pebble.Sync); err != nil {
+		t.Fatalf("delete range: %v", err)
+	}
+	if err := s.db.Delete([]byte(bookAtPathBackfillKey), pebble.Sync); err != nil {
+		t.Fatalf("delete sentinel: %v", err)
+	}
+	s.bookAtPathBuilt.Store(false)
+}
+
+func mustBackfill(t testing.TB, s *PebbleStore) {
+	t.Helper()
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+}
+
+// fataler is the slice of testing.TB that *rapid.T also satisfies.
+type fataler interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
+// checkAgainstOracle asserts, for every path in paths, that the index answer
+// equals the full-scan answer, and that verify finds no missing key.
+func checkAgainstOracle(t fataler, s *PebbleStore, paths []string) {
+	t.Helper()
+	for _, p := range paths {
+		// Both readers: the live-only one, and the one that keeps trashed rows
+		// (BookIDsAtPath, which the purge trusts before it removes a file).
+		for _, includeTrashed := range []bool{false, true} {
+			want, err := s.bookIDsAtPathScan(p, includeTrashed)
+			if err != nil {
+				t.Fatalf("scan(%q, trashed=%t): %v", p, includeTrashed, err)
+			}
+			got, err := s.bookIDsAtPathIndex(p, includeTrashed)
+			if err != nil {
+				t.Fatalf("index(%q, trashed=%t): %v", p, includeTrashed, err)
+			}
+			if len(want) == 0 && len(got) == 0 {
+				continue
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("path %q (trashed=%t): index = %v, scan = %v", p, includeTrashed, got, want)
+			}
+		}
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if rep.MissingLive != 0 || rep.MissingTrashed != 0 {
+		t.Fatalf("verify found missing keys: %+v", rep)
+	}
+}
+
+func TestBookAtPathKey_BoundsAreExact(t *testing.T) {
+	for _, p := range hostilePaths {
+		lo, hi := bookAtPathBounds(p)
+		for _, q := range hostilePaths {
+			k := bookAtPathKey(q, "01ID")
+			in := string(k) >= string(lo) && string(k) < string(hi)
+			// The only way another path's key lands in P's range is a NUL at
+			// position len(P) in Q, i.e. the corrupt "/a\x00b" under "/a".
+			// The reader skips that candidate; see TestLiveBookIDsAtPath_NulPath.
+			wantIn := q == p || (p == "/a" && q == "/a\x00b")
+			if in != wantIn {
+				t.Errorf("key for %q in range of %q = %v, want %v", q, p, in, wantIn)
+			}
+		}
+	}
+	path, id, ok := splitBookAtPathKey(bookAtPathKey("/a\x00b", "X1"))
+	if !ok || path != "/a\x00b" || id != "X1" {
+		t.Fatalf("split = %q %q %v", path, id, ok)
+	}
+}
+
+// TestUpdateBook_CompetingWriteWaitsForStripe is the Q2 counterexample, landed
+// in what used to be UpdateBook's race window. W2 starts a title-only write at
+// /A and reads oldBook (/A). While W2 is between that read and its commit, W1
+// (a stale copy that moves the book to /B) is started on another goroutine.
+// Before 2026-09-13 W1 committed inside W2's window and W2 then committed its
+// row at /A with "no path change", which a path-change-gated Set turned into a
+// false "path is free". The book's write stripe now makes W1 wait until W2 has
+// committed, so W1 is the last write: the row ends at /B, and the index must
+// agree with the scan oracle on both paths.
+func TestUpdateBook_CompetingWriteWaitsForStripe(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2, err := s.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2.Title = "t2"
+	w1, err := s.GetBookByID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w1.FilePath = "/B"
+
+	w1Done := make(chan error, 1)
+	committedEarly := false
+	defer func() { updateBookAfterOldReadHook = nil }()
+	updateBookAfterOldReadHook = func(id string) {
+		updateBookAfterOldReadHook = nil // W1's own UpdateBook must not re-enter
+		go func() {
+			_, err := s.UpdateBook(id, w1)
+			w1Done <- err
+		}()
+		// W1 must still be blocked on the stripe W2 holds.
+		select {
+		case err := <-w1Done:
+			committedEarly = true
+			w1Done <- err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if _, err := s.UpdateBook(b.ID, w2); err != nil {
+		t.Fatal(err)
+	}
+	if committedEarly {
+		t.Fatal("W1 committed while W2 held the book's write stripe")
+	}
+	if err := <-w1Done; err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetBookByID(b.ID)
+	if err != nil || row.FilePath != "/B" {
+		t.Fatalf("W1 was the last write, want row at /B, got %v %v", row, err)
+	}
+	ids, err := s.LiveBookIDsAtPath("/B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != b.ID {
+		t.Fatalf("LiveBookIDsAtPath(/B) = %v, want [%s]", ids, b.ID)
+	}
+	checkAgainstOracle(t, s, []string{"/A", "/B"})
+}
+
+// TestBookAtPathIndex_RandomOps is the primary test: random writes over the
+// hostile alphabet, index == scan oracle and no missing key after every step.
+func TestBookAtPathIndex_RandomOps(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		s := newAtPathStore(t)
+		defer s.Close()
+		mustBackfill(t, s)
+
+		var ids []string
+		stale := map[string]Book{}
+		pathGen := rapid.SampledFrom(hostilePaths)
+
+		pickID := func(label string) (string, bool) {
+			if len(ids) == 0 {
+				return "", false
+			}
+			return rapid.SampledFrom(ids).Draw(rt, label), true
+		}
+		fresh := func(id string) *Book {
+			b, err := s.GetBookByID(id)
+			if err != nil || b == nil {
+				rt.Fatalf("GetBookByID(%s) = %v, %v", id, b, err)
+			}
+			return b
+		}
+
+		steps := rapid.IntRange(1, 25).Draw(rt, "steps")
+		for range steps {
+			switch rapid.IntRange(0, 7).Draw(rt, "op") {
+			case 0: // create
+				b, err := s.CreateBook(&Book{Title: "b", FilePath: pathGen.Draw(rt, "path")})
+				if err != nil {
+					rt.Fatal(err)
+				}
+				ids = append(ids, b.ID)
+			case 1: // move
+				if id, ok := pickID("id"); ok {
+					b := fresh(id)
+					b.FilePath = pathGen.Draw(rt, "path")
+					if _, err := s.UpdateBook(id, b); err != nil {
+						rt.Fatal(err)
+					}
+				}
+			case 2: // snapshot for a later stale write
+				if id, ok := pickID("id"); ok {
+					stale[id] = *fresh(id)
+				}
+			case 3: // stale title-only write (lost-update revert)
+				if id, ok := pickID("id"); ok {
+					if b, has := stale[id]; has {
+						b.Title = "stale"
+						if _, err := s.UpdateBook(id, &b); err != nil {
+							rt.Fatal(err)
+						}
+					}
+				}
+			case 4: // soft-delete / restore toggle
+				if id, ok := pickID("id"); ok {
+					b := fresh(id)
+					flag := !markedForDeletionFlag(b.MarkedForDeletion)
+					b.MarkedForDeletion = &flag
+					if _, err := s.UpdateBook(id, b); err != nil {
+						rt.Fatal(err)
+					}
+				}
+			case 5: // hard delete
+				if id, ok := pickID("id"); ok {
+					if err := s.DeleteBook(id); err != nil {
+						rt.Fatal(err)
+					}
+					for j, x := range ids {
+						if x == id {
+							ids = append(ids[:j], ids[j+1:]...)
+							break
+						}
+					}
+					delete(stale, id)
+				}
+			case 6: // merge-shaped: survivor moves onto loser's path, loser trashed
+				if len(ids) >= 2 {
+					a := rapid.SampledFrom(ids).Draw(rt, "survivor")
+					l := rapid.SampledFrom(ids).Draw(rt, "loser")
+					if a != l {
+						loser := fresh(l)
+						surv := fresh(a)
+						surv.FilePath = loser.FilePath
+						if _, err := s.UpdateBook(a, surv); err != nil {
+							rt.Fatal(err)
+						}
+						tr := true
+						loser.MarkedForDeletion = &tr
+						if _, err := s.UpdateBook(l, loser); err != nil {
+							rt.Fatal(err)
+						}
+					}
+				}
+			case 7: // booksig sidecar migration (rewrites rows, no path change)
+				if id, ok := pickID("id"); ok {
+					if _, err := s.MigrateBookSigToSidecar(id, false); err != nil {
+						rt.Fatal(err)
+					}
+				}
+			}
+			checkAgainstOracle(rt, s, hostilePaths)
+		}
+	})
+}
+
+// TestBookAtPathIndex_ConcurrentWriters is the executable form of the
+// completeness proof under UpdateBook's self-race. Run with -race.
+func TestBookAtPathIndex_ConcurrentWriters(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+
+	var shared []string
+	for i := range 4 {
+		b, err := s.CreateBook(&Book{Title: "c", FilePath: hostilePaths[i]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shared = append(shared, b.ID)
+	}
+
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func(seed int64) {
+			defer wg.Done()
+			r := rand.New(rand.NewSource(seed))
+			for range 40 {
+				switch r.Intn(4) {
+				case 0, 1:
+					id := shared[r.Intn(len(shared))]
+					b, err := s.GetBookByID(id)
+					if err != nil || b == nil {
+						continue
+					}
+					if r.Intn(2) == 0 {
+						b.FilePath = hostilePaths[r.Intn(len(hostilePaths))]
+					} else {
+						f := r.Intn(2) == 0
+						b.MarkedForDeletion = &f
+					}
+					_, _ = s.UpdateBook(id, b)
+				case 2:
+					nb, err := s.CreateBook(&Book{Title: "n", FilePath: hostilePaths[r.Intn(len(hostilePaths))]})
+					if err == nil && r.Intn(2) == 0 {
+						_ = s.DeleteBook(nb.ID)
+					}
+				case 3:
+					_, _ = s.LiveBookIDsAtPath(hostilePaths[r.Intn(len(hostilePaths))])
+				}
+			}
+		}(int64(w))
+	}
+	wg.Wait()
+	checkAgainstOracle(t, s, hostilePaths)
+}
+
+func TestBackfill_BuildsIndexForPreIndexRows(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	for i, p := range hostilePaths {
+		b, err := s.CreateBook(&Book{Title: fmt.Sprint(i), FilePath: p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i%3 == 0 {
+			tr := true
+			b.MarkedForDeletion = &tr
+			if _, err := s.UpdateBook(b.ID, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	resetAtPathIndex(t, s)
+
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.SentinelSet || rep.MissingLive == 0 {
+		t.Fatalf("precondition: expected an unbuilt, empty index, got %+v", rep)
+	}
+
+	old := bookAtPathBackfillChunk
+	bookAtPathBackfillChunk = 2
+	defer func() { bookAtPathBackfillChunk = old }()
+
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scanned != len(hostilePaths) || res.Commits < 4 {
+		t.Fatalf("result = %+v, want %d scanned over several chunks", res, len(hostilePaths))
+	}
+	built, err := s.bookAtPathIndexBuilt()
+	if err != nil || !built {
+		t.Fatalf("sentinel not set: %v %v", built, err)
+	}
+	checkAgainstOracle(t, s, hostilePaths)
+
+	// A second run is a no-op.
+	res, err = s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil || !res.Skipped {
+		t.Fatalf("second run = %+v, %v; want skipped", res, err)
+	}
+}
+
+func TestBackfill_InterruptedRunLeavesNoSentinelAndReaderFallsBack(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	for range 7 {
+		if _, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resetAtPathIndex(t, s)
+
+	oldChunk, oldHook := bookAtPathBackfillChunk, bookAtPathBackfillAfterChunk
+	defer func() { bookAtPathBackfillChunk, bookAtPathBackfillAfterChunk = oldChunk, oldHook }()
+	bookAtPathBackfillChunk = 2
+	ctx, cancel := context.WithCancel(context.Background())
+	bookAtPathBackfillAfterChunk = func(commits int) {
+		if commits == 1 {
+			cancel()
+		}
+	}
+	if _, err := s.BackfillBookAtPathIndex(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	built, err := s.bookAtPathIndexBuilt()
+	if err != nil || built {
+		t.Fatalf("an interrupted run must not set the sentinel: built=%v err=%v", built, err)
+	}
+
+	var viaIndex []bool
+	oldRead := bookAtPathReadHook
+	bookAtPathReadHook = func(v bool) { viaIndex = append(viaIndex, v) }
+	defer func() { bookAtPathReadHook = oldRead }()
+
+	// The partial index holds only the keys committed before the cancel; the
+	// reader must not consult it.
+	ids, err := s.LiveBookIDsAtPath("/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 7 || len(viaIndex) != 1 || viaIndex[0] {
+		t.Fatalf("pre-sentinel read: ids=%d viaIndex=%v; want 7 from the scan", len(ids), viaIndex)
+	}
+
+	bookAtPathBackfillAfterChunk = nil
+	mustBackfill(t, s)
+	ids, err = s.LiveBookIDsAtPath("/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 7 || !viaIndex[len(viaIndex)-1] {
+		t.Fatalf("post-sentinel read: ids=%d viaIndex=%v; want 7 from the index", len(ids), viaIndex)
+	}
+}
+
+func TestBackfill_ConcurrentMoveBetweenChunksKeepsCompleteness(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	var ids []string
+	for range 6 {
+		b, err := s.CreateBook(&Book{Title: "x", FilePath: "/src"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, b.ID)
+	}
+	resetAtPathIndex(t, s)
+
+	oldChunk, oldHook := bookAtPathBackfillChunk, bookAtPathBackfillAfterChunk
+	defer func() { bookAtPathBackfillChunk, bookAtPathBackfillAfterChunk = oldChunk, oldHook }()
+	bookAtPathBackfillChunk = 2
+	bookAtPathBackfillAfterChunk = func(commits int) {
+		if commits != 1 {
+			return
+		}
+		// Move the last book (not yet visited by the scan) and the first (already
+		// visited) while the backfill is mid-run.
+		for _, id := range []string{ids[0], ids[len(ids)-1]} {
+			b, err := s.GetBookByID(id)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			b.FilePath = "/dst"
+			if _, err := s.UpdateBook(id, b); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	mustBackfill(t, s)
+	checkAgainstOracle(t, s, []string{"/src", "/dst"})
+}
+
+// TestBackfill_WorkerPoolIndexesEveryRow pins the pool at 4 workers so -race
+// sees real concurrent workers (and concurrent hook calls) on any machine,
+// including a CI runner whose NumCPU is small.
+func TestBackfill_WorkerPoolIndexesEveryRow(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	const n = 200
+	paths := make([]string, 10)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("/pool/%d", i)
+	}
+	for i := range n {
+		if _, err := s.CreateBook(&Book{Title: fmt.Sprint(i), FilePath: paths[i%len(paths)]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resetAtPathIndex(t, s)
+
+	oldChunk, oldWorkers, oldHook := bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk
+	defer func() {
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk = oldChunk, oldWorkers, oldHook
+	}()
+	bookAtPathBackfillChunk = 7
+	bookAtPathBackfillWorkers = 4
+	var hookCalls atomic.Int64
+	bookAtPathBackfillAfterChunk = func(int) { hookCalls.Add(1) }
+
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scanned != n {
+		t.Fatalf("scanned = %d, want %d", res.Scanned, n)
+	}
+	// Each chunk commit holds at most 7 keys, plus one sentinel commit.
+	if minCommits := (n+6)/7 + 1; res.Commits < minCommits {
+		t.Fatalf("commits = %d, want >= %d", res.Commits, minCommits)
+	}
+	if got := hookCalls.Load(); got != int64(res.Commits-1) {
+		t.Fatalf("hook ran %d times, want one per chunk commit (%d)", got, res.Commits-1)
+	}
+	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
+		t.Fatalf("sentinel not set: %v %v", built, err)
+	}
+	checkAgainstOracle(t, s, paths)
+}
+
+// seedUndecodableAfterBackfill builds the index over one good book at /good
+// plus one book row that does not decode, and returns the good book's id.
+func seedUndecodableAfterBackfill(t *testing.T, s *PebbleStore) string {
+	t.Helper()
+	good, err := s.CreateBook(&Book{Title: "good", FilePath: "/good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetAtPathIndex(t, s)
+	if err := s.db.Set([]byte("book:01BADROW"), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("an undecodable row must not fail the backfill: %v", err)
+	}
+	if res.UndecodableRows != 1 || !reflect.DeepEqual(res.SampleUndecodable, []string{"01BADROW"}) {
+		t.Fatalf("undecodable = %d %v, want 1 [01BADROW]", res.UndecodableRows, res.SampleUndecodable)
+	}
+	if built, err := s.bookAtPathIndexBuilt(); err != nil || !built {
+		t.Fatalf("sentinel not set: %v %v", built, err)
+	}
+	return good.ID
+}
+
+// plantUndecodableMarker writes a marker the way the backfill does: noted in
+// the in-memory set first, then committed. A raw s.db.Set alone would bypass
+// the set, which no production writer can do.
+func plantUndecodableMarker(t testing.TB, s *PebbleStore, id string) {
+	t.Helper()
+	if err := s.noteUndecodableMarker(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set(bookAtPathUndecodableKey(id), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasUndecodableMarker(t *testing.T, s *PebbleStore, id string) bool {
+	t.Helper()
+	_, closer, err := s.db.Get(bookAtPathUndecodableKey(id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer.Close()
+	return true
+}
+
+func setRawBookRow(t *testing.T, s *PebbleStore, id, v string) {
+	t.Helper()
+	if err := s.db.Set([]byte("book:"+id), []byte(v), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLiveBookIDsAtPath_UndecodableRowFailsClosed: an undecodable row has no
+// readable path, so after the backfill no path can be vouched for. The lookup
+// must ERROR, never return an empty or partial set (#3335 reads empty as free).
+func TestLiveBookIDsAtPath_UndecodableRowFailsClosed(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedUndecodableAfterBackfill(t, s)
+	if !hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("backfill wrote no marker for the undecodable row")
+	}
+	for _, p := range []string{"/good", "/anything"} {
+		if ids, err := s.LiveBookIDsAtPath(p); err == nil {
+			t.Fatalf("LiveBookIDsAtPath(%s) = %v, nil; want a fail-closed error", p, ids)
+		} else if !strings.Contains(err.Error(), "01BADROW") {
+			t.Fatalf("error does not name the sample id: %v", err)
+		}
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.UndecodableRows != 1 || rep.StaleMarkers != 0 || rep.UnmarkedUndecodable != 0 || rep.MissingLive != 0 {
+		t.Fatalf("verify = %+v, want undecodable 1 and no drift", rep)
+	}
+}
+
+// TestLiveBookIDsAtPath_RepairedOutOfBandIsACandidate: a row rewritten as valid
+// JSON out of band has a marker but NO index key. It must be returned at its
+// own path (ignoring it would read that folder as free) and not at another.
+func TestLiveBookIDsAtPath_RepairedOutOfBandIsACandidate(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/good"}`)
+	ids, err := s.LiveBookIDsAtPath("/good")
+	want := []string{goodID, "01BADROW"}
+	sort.Strings(want)
+	if err != nil || !reflect.DeepEqual(ids, want) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want %v", ids, err, want)
+	}
+
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/elsewhere"}`)
+	if ids, err := s.LiveBookIDsAtPath("/good"); err != nil || !reflect.DeepEqual(ids, []string{goodID}) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, goodID)
+	}
+	if ids, err := s.LiveBookIDsAtPath("/elsewhere"); err != nil || !reflect.DeepEqual(ids, []string{"01BADROW"}) {
+		t.Fatalf("LiveBookIDsAtPath(/elsewhere) = %v %v, want [01BADROW]", ids, err)
+	}
+
+	// A trashed repaired row is not live.
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","file_path":"/elsewhere","marked_for_deletion":true}`)
+	if ids, err := s.LiveBookIDsAtPath("/elsewhere"); err != nil || len(ids) != 0 {
+		t.Fatalf("LiveBookIDsAtPath(/elsewhere) = %v %v, want [] for a trashed row", ids, err)
+	}
+}
+
+// TestLiveBookIDsAtPath_RemovedOutOfBandLiftsBlock: a marker whose row is gone
+// is stale and does not block.
+func TestLiveBookIDsAtPath_RemovedOutOfBandLiftsBlock(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+	if err := s.db.Delete([]byte("book:01BADROW"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.LiveBookIDsAtPath("/good"); err != nil || !reflect.DeepEqual(ids, []string{goodID}) {
+		t.Fatalf("LiveBookIDsAtPath(/good) = %v %v, want [%s]", ids, err, goodID)
+	}
+}
+
+// TestUpdateAndDeleteBook_DropUndecodableMarker: once a row decodes again,
+// UpdateBook and DeleteBook drop its marker in their own batch.
+func TestUpdateAndDeleteBook_DropUndecodableMarker(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedUndecodableAfterBackfill(t, s)
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","title":"fixed","file_path":"/fixed"}`)
+	b, err := s.GetBookByID("01BADROW")
+	if err != nil || b == nil {
+		t.Fatalf("repaired row does not read: %v %v", b, err)
+	}
+	if _, err := s.UpdateBook("01BADROW", b); err != nil {
+		t.Fatal(err)
+	}
+	if hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("UpdateBook left the undecodable marker behind")
+	}
+	if ids, err := s.LiveBookIDsAtPath("/fixed"); err != nil || !reflect.DeepEqual(ids, []string{"01BADROW"}) {
+		t.Fatalf("LiveBookIDsAtPath(/fixed) = %v %v, want [01BADROW]", ids, err)
+	}
+
+	plantUndecodableMarker(t, s, "01BADROW")
+	if err := s.DeleteBook("01BADROW"); err != nil {
+		t.Fatal(err)
+	}
+	if hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("DeleteBook left the undecodable marker behind")
+	}
+}
+
+// TestRebuild_RecomputesUndecodableMarkers: the rebuild clears every marker and
+// re-adds one only for rows that are still undecodable.
+func TestRebuild_RecomputesUndecodableMarkers(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	goodID := seedUndecodableAfterBackfill(t, s)
+	// A stale marker (row gone) and a marker on a decodable book.
+	for _, id := range []string{"01GONEMARKER", goodID} {
+		plantUndecodableMarker(t, s, id)
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StaleMarkers != 2 || rep.UnmarkedUndecodable != 0 {
+		t.Fatalf("verify drift = stale %d unmarked %d, want 2 and 0", rep.StaleMarkers, rep.UnmarkedUndecodable)
+	}
+	// And an undecodable row with no marker.
+	setRawBookRow(t, s, "01BADTWO", "[")
+	rep, err = s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.UnmarkedUndecodable != 1 || !reflect.DeepEqual(rep.SampleUnmarked, []string{"01BADTWO"}) {
+		t.Fatalf("verify unmarked = %d %v, want 1 [01BADTWO]", rep.UnmarkedUndecodable, rep.SampleUnmarked)
+	}
+
+	res, err := s.RebuildBookAtPathIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.UndecodableRows != 2 {
+		t.Fatalf("rebuild undecodable = %d, want 2", res.UndecodableRows)
+	}
+	for id, want := range map[string]bool{"01GONEMARKER": false, goodID: false, "01BADROW": true, "01BADTWO": true} {
+		if got := hasUndecodableMarker(t, s, id); got != want {
+			t.Fatalf("marker %s = %v after rebuild, want %v", id, got, want)
+		}
+	}
+	rep, err = s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StaleMarkers != 0 || rep.UnmarkedUndecodable != 0 {
+		t.Fatalf("verify after rebuild = stale %d unmarked %d, want 0 and 0", rep.StaleMarkers, rep.UnmarkedUndecodable)
+	}
+}
+
+func TestLiveBookIDsAtPath_ReaderFailsClosedAndSkipsExtras(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+	b, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Extra for a hard-deleted book: skipped, not an error.
+	if err := s.db.Set(bookAtPathKey("/p", "01GONE"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := s.LiveBookIDsAtPath("/p")
+	if err != nil || len(ids) != 1 || ids[0] != b.ID {
+		t.Fatalf("with a gone extra: ids=%v err=%v", ids, err)
+	}
+
+	// Malformed key (empty id) in the path's range: error.
+	if err := s.db.Set([]byte(bookAtPathPrefix+"/m\x00"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LiveBookIDsAtPath("/m"); err == nil {
+		t.Fatal("a malformed key must fail the lookup")
+	}
+
+	// Undecodable candidate row: error.
+	if err := s.db.Set(bookAtPathKey("/u", "01UNDECODABLE"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte("book:01UNDECODABLE"), []byte("{"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LiveBookIDsAtPath("/u"); err == nil {
+		t.Fatal("an undecodable candidate row must fail the lookup")
+	}
+}
+
+func TestLiveBookIDsAtPath_NulPathDoesNotLeakIntoPrefix(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+	a, _ := s.CreateBook(&Book{Title: "a", FilePath: "/a"})
+	n, _ := s.CreateBook(&Book{Title: "n", FilePath: "/a\x00b"})
+	ids, err := s.LiveBookIDsAtPath("/a")
+	if err != nil || len(ids) != 1 || ids[0] != a.ID {
+		t.Fatalf("/a: %v %v", ids, err)
+	}
+	ids, err = s.LiveBookIDsAtPath("/a\x00b")
+	if err != nil || len(ids) != 1 || ids[0] != n.ID {
+		t.Fatalf("/a\\x00b: %v %v", ids, err)
+	}
+}
+
+func TestVerifyBookAtPathIndex_ClassifiesEveryDefect(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	mustBackfill(t, s)
+	live, _ := s.CreateBook(&Book{Title: "l", FilePath: "/live"})
+	tr := true
+	trashed, _ := s.CreateBook(&Book{Title: "t", FilePath: "/trash", MarkedForDeletion: &tr})
+	moved, _ := s.CreateBook(&Book{Title: "m", FilePath: "/now"})
+
+	for _, k := range [][]byte{bookAtPathKey("/live", live.ID), bookAtPathKey("/trash", trashed.ID)} {
+		if err := s.db.Delete(k, pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range [][]byte{
+		bookAtPathKey("/was", moved.ID),     // row moved
+		bookAtPathKey("/gone", "01NOBOOK"),  // row gone
+		[]byte(bookAtPathPrefix + "no-nul"), // malformed
+	} {
+		if err := s.db.Set(k, []byte{}, pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BookAtPathIndexReport{
+		SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 4,
+		MissingLive: 1, MissingTrashed: 1, ExtraRowGone: 1, ExtraRowMoved: 1, Malformed: 1,
+	}
+	got := rep
+	got.SampleMissingLive, got.SampleMissingTrashed, got.SampleExtra, got.SampleMalformed = nil, nil, nil, nil
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("report = %+v\nwant     %+v", got, want)
+	}
+	if len(rep.SampleMissingLive) != 1 || rep.SampleMissingLive[0] != live.ID+" /live" {
+		t.Fatalf("missing-live sample = %v", rep.SampleMissingLive)
+	}
+}
+
+// TestBackfill_CancelUnblocksTheProducer covers the producer's cancel branch.
+// With one worker and a one-row chunk, the producer fills the rows channel
+// (workers*64) long before the worker's first commit. Cancelling on that commit
+// makes the worker return, and the producer, parked on a full channel, must
+// take its gctx.Done branch and return too; otherwise g.Wait never returns and
+// the backfill hangs. The wait is bounded so a regression fails instead of
+// hanging the package.
+func TestBackfill_CancelUnblocksTheProducer(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	const rows = 200 // > workers*64 with one worker, so the producer must block
+	for i := range rows {
+		if _, err := s.CreateBook(&Book{Title: "x", FilePath: fmt.Sprintf("/p/%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resetAtPathIndex(t, s)
+
+	oldChunk, oldWorkers, oldHook := bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk
+	t.Cleanup(func() {
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk = oldChunk, oldWorkers, oldHook
+	})
+	bookAtPathBackfillChunk, bookAtPathBackfillWorkers = 1, 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bookAtPathBackfillAfterChunk = func(commits int) {
+		if commits == 1 {
+			cancel()
+		}
+	}
+
+	var err error
+	waitOrFatal(t, "BackfillBookAtPathIndex to return after a cancel with the producer blocked", func() {
+		_, err = s.BackfillBookAtPathIndex(ctx, nil)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if built, berr := s.bookAtPathIndexBuilt(); berr != nil || built {
+		t.Fatalf("a cancelled run must not set the sentinel: built=%v err=%v", built, berr)
+	}
+}
+
+// TestBackfill_ReportsProgressPerChunk: a pass reports how many rows it has
+// staged after every chunk commit, so the op running it keeps the watchdog's
+// liveness clock fresh through a long first build instead of going silent for
+// the whole pass. A nil callback is allowed (every other test passes one).
+func TestBackfill_ReportsProgressPerChunk(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	for range 7 {
+		if _, err := s.CreateBook(&Book{Title: "x", FilePath: "/p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, force := range []bool{false, true} {
+		resetAtPathIndex(t, s)
+		oldChunk, oldWorkers := bookAtPathBackfillChunk, bookAtPathBackfillWorkers
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers = 2, 1
+		var (
+			mu   sync.Mutex
+			seen []int
+		)
+		progress := func(scanned int) {
+			mu.Lock()
+			defer mu.Unlock()
+			seen = append(seen, scanned)
+		}
+		var (
+			res BookAtPathBackfillResult
+			err error
+		)
+		if force {
+			res, err = s.RebuildBookAtPathIndex(context.Background(), progress)
+		} else {
+			res, err = s.BackfillBookAtPathIndex(context.Background(), progress)
+		}
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers = oldChunk, oldWorkers
+		if err != nil {
+			t.Fatalf("force=%t: %v", force, err)
+		}
+		mu.Lock()
+		got := append([]int(nil), seen...)
+		mu.Unlock()
+		if len(got) < 3 {
+			t.Fatalf("force=%t: 7 rows in chunks of 2 must report at least 3 times, got %v", force, got)
+		}
+		for i := 1; i < len(got); i++ {
+			if got[i] < got[i-1] {
+				t.Fatalf("force=%t: progress went backwards: %v", force, got)
+			}
+		}
+		if got[len(got)-1] != res.Scanned {
+			t.Fatalf("force=%t: last report = %d, want the final scanned count %d (%v)", force, got[len(got)-1], res.Scanned, got)
+		}
+	}
+}

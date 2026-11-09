@@ -1,7 +1,7 @@
 // file: internal/ai/register_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 7e1a4c9b-2d3f-4b8e-a6c5-0f9d8e7b6a51
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package ai
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

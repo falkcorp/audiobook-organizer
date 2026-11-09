@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // conjRepairWrites records every mutating call the op makes, so a dry-run test

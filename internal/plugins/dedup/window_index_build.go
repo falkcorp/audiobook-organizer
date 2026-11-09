@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

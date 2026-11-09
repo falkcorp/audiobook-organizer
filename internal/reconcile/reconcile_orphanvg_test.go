@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_orphanvg_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a1c9e2d-4f6b-4a3e-9d0c-5b8e2f1a6c3d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestAssignOrphanVGs_PoolCorrectness drives AssignOrphanVGs across a worker

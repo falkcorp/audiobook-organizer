@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_mixed.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d8e1f7a-4b92-4c65-a0e3-9f5d7b2c6a18
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/block_hash_guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e8c1b94-3a60-4d27-9f4e-7b2d0a6c8e13
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // hashHolderLookup is the two lookups that find the books holding a file hash

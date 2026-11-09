@@ -1,7 +1,7 @@
 // file: internal/merge/undo_pointer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e8c2b47-9d16-4a30-b7f4-1c6a3e09d852
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type pointerRowsStub struct {

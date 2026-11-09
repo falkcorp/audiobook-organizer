@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.6.3
+// version: 2.6.4
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,8 +15,8 @@ import (
 	"time"
 	"unicode"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

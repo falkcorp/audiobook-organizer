@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b6e90c4-7d15-4a83-9c2f-61e8f3b5a047
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The regroup snapshot keeps a PID that only a retired row holds out of PIDLoc.

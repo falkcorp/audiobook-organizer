@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_root_and_single_book_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3e8a1d6-5f27-4b90-8d14-7a2b9e0f6c35
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // batmanTitles are the book titles the purge fixtures use: Batman comic

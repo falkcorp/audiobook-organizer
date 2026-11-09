@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

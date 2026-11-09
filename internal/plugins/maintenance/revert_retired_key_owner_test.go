@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/revert_retired_key_owner_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c4a7d915-2e63-48b0-9f1d-5b8e3a07c162
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredKeyFixture: a retired row K holds the single-owner key of a shared

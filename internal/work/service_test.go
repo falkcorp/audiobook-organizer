@@ -1,7 +1,7 @@
 // file: internal/work/service_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f0g1h2i3-j4k5-6l7m-8n9o-0p1q2r3s4t5u
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package work
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // MockWorkStore is a mock implementation of database.WorkStore for testing

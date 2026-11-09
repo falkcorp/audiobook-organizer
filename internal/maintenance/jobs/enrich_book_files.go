@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/enrich_book_files.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a1000009-0000-0000-0000-000000000009
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -14,7 +14,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

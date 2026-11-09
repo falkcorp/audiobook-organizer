@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/relink_missing_to_itunes.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: e0f6a4d5-7b8c-9d0e-1f2a-3b4c5d6e7f80
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/mediacore/library"

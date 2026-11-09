@@ -1,7 +1,7 @@
 // file: internal/importer/dedup_on_import_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b2e5d71-3c84-4a0f-8e16-d47a0c5f2b39
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package importer
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: tools/cmd/oplint/analyzer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8def934-7124-4f87-a67e-9f206a103d30
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package main
 
@@ -14,9 +14,9 @@ import (
 )
 
 // One fixture package per rule under testdata/src/.../internal/oplintcases
-// (inside the module path, so they may import the internal/database stub),
+// (inside the module path, so they may import the internal/books/store stub),
 // each with // want annotations; clean must produce nothing. The stubs of
-// pkg/ops, internal/database and internal/opscatalog live under their real
+// pkg/ops, internal/books/store and internal/opscatalog live under their real
 // import paths in the same GOPATH-style tree.
 func TestAnalyzer(t *testing.T) {
 	const cases = "github.com/falkcorp/audiobook-organizer/internal/oplintcases/"

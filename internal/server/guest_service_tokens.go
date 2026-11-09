@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

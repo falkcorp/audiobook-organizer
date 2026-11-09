@@ -1,7 +1,7 @@
 // file: internal/versionprimary/vptest/vptest.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d3f2a18-7c4b-4e91-a05d-8b2e9f1c4d70
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 // Package vptest seeds version groups on a real PebbleStore for the tests of
 // every path that hands a group's primary flag on (versionprimary.Ensure-
@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Fixture is a Pebble store plus a library root on disk.

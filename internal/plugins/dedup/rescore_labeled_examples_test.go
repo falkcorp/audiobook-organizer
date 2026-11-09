@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6d2b8f14-3a97-4e05-9c81-7f0a5d3e2c68
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Tests for dedup.rescore-labeled-examples. A fake pairScorer stands in for the
 // real Engine so the persistence contract (below-band write, narrow write that
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"

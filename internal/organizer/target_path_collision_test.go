@@ -1,7 +1,7 @@
 // file: internal/organizer/target_path_collision_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7c1a9e4f-2b3d-4c5e-8f6a-1d2e3f4a5b6c
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )
 

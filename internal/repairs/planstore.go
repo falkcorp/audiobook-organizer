@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Where a plan's rows live.

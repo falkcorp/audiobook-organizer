@@ -1,14 +1,14 @@
 // file: internal/metafetch/apply_author_creation_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f9d6b3a-7e14-4c85-9a0b-6d1e8c4f2a97
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

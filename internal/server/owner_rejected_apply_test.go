@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"

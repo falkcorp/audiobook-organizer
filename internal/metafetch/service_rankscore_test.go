@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_rankscore_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 61e828ea-550f-4785-ab97-1e894be5a182
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

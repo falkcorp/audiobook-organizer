@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

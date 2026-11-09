@@ -1,7 +1,7 @@
 // file: internal/reconcile/retired_callers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a9f6c52-d018-4e47-b2c9-7e15a8d40f36
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

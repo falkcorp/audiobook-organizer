@@ -1,7 +1,7 @@
 // file: internal/audiobooks/list_pagination_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c1e9b42-3a6d-4f01-9d8e-2b5c6a7e1f04
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

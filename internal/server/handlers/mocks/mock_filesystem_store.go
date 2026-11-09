@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -157,23 +157,23 @@ func (_c *MockFilesystemStore_DeleteImportPath_Call) RunAndReturn(run func(id in
 }
 
 // GetAllImportPaths provides a mock function for the type MockFilesystemStore
-func (_mock *MockFilesystemStore) GetAllImportPaths() ([]database.ImportPath, error) {
+func (_mock *MockFilesystemStore) GetAllImportPaths() ([]store.ImportPath, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllImportPaths")
 	}
 
-	var r0 []database.ImportPath
+	var r0 []store.ImportPath
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.ImportPath, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.ImportPath, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.ImportPath); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.ImportPath); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ImportPath)
+			r0 = ret.Get(0).([]store.ImportPath)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -201,34 +201,34 @@ func (_c *MockFilesystemStore_GetAllImportPaths_Call) Run(run func()) *MockFiles
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetAllImportPaths_Call) Return(importPaths []database.ImportPath, err error) *MockFilesystemStore_GetAllImportPaths_Call {
+func (_c *MockFilesystemStore_GetAllImportPaths_Call) Return(importPaths []store.ImportPath, err error) *MockFilesystemStore_GetAllImportPaths_Call {
 	_c.Call.Return(importPaths, err)
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetAllImportPaths_Call) RunAndReturn(run func() ([]database.ImportPath, error)) *MockFilesystemStore_GetAllImportPaths_Call {
+func (_c *MockFilesystemStore_GetAllImportPaths_Call) RunAndReturn(run func() ([]store.ImportPath, error)) *MockFilesystemStore_GetAllImportPaths_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookByFilePath provides a mock function for the type MockFilesystemStore
-func (_mock *MockFilesystemStore) GetBookByFilePath(path string) (*database.Book, error) {
+func (_mock *MockFilesystemStore) GetBookByFilePath(path string) (*store.Book, error) {
 	ret := _mock.Called(path)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByFilePath")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(path)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(path)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -263,34 +263,34 @@ func (_c *MockFilesystemStore_GetBookByFilePath_Call) Run(run func(path string))
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetBookByFilePath_Call) Return(book *database.Book, err error) *MockFilesystemStore_GetBookByFilePath_Call {
+func (_c *MockFilesystemStore_GetBookByFilePath_Call) Return(book *store.Book, err error) *MockFilesystemStore_GetBookByFilePath_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetBookByFilePath_Call) RunAndReturn(run func(path string) (*database.Book, error)) *MockFilesystemStore_GetBookByFilePath_Call {
+func (_c *MockFilesystemStore_GetBookByFilePath_Call) RunAndReturn(run func(path string) (*store.Book, error)) *MockFilesystemStore_GetBookByFilePath_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetDashboardStats provides a mock function for the type MockFilesystemStore
-func (_mock *MockFilesystemStore) GetDashboardStats() (*database.DashboardStats, error) {
+func (_mock *MockFilesystemStore) GetDashboardStats() (*store.DashboardStats, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetDashboardStats")
 	}
 
-	var r0 *database.DashboardStats
+	var r0 *store.DashboardStats
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (*database.DashboardStats, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() (*store.DashboardStats, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() *database.DashboardStats); ok {
+	if returnFunc, ok := ret.Get(0).(func() *store.DashboardStats); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.DashboardStats)
+			r0 = ret.Get(0).(*store.DashboardStats)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -318,37 +318,37 @@ func (_c *MockFilesystemStore_GetDashboardStats_Call) Run(run func()) *MockFiles
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetDashboardStats_Call) Return(dashboardStats *database.DashboardStats, err error) *MockFilesystemStore_GetDashboardStats_Call {
+func (_c *MockFilesystemStore_GetDashboardStats_Call) Return(dashboardStats *store.DashboardStats, err error) *MockFilesystemStore_GetDashboardStats_Call {
 	_c.Call.Return(dashboardStats, err)
 	return _c
 }
 
-func (_c *MockFilesystemStore_GetDashboardStats_Call) RunAndReturn(run func() (*database.DashboardStats, error)) *MockFilesystemStore_GetDashboardStats_Call {
+func (_c *MockFilesystemStore_GetDashboardStats_Call) RunAndReturn(run func() (*store.DashboardStats, error)) *MockFilesystemStore_GetDashboardStats_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // UpdateBook provides a mock function for the type MockFilesystemStore
-func (_mock *MockFilesystemStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
+func (_mock *MockFilesystemStore) UpdateBook(id string, book *store.Book) (*store.Book, error) {
 	ret := _mock.Called(id, book)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateBook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Book) (*store.Book, error)); ok {
 		return returnFunc(id, book)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Book) *store.Book); ok {
 		r0 = returnFunc(id, book)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, *database.Book) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(string, *store.Book) error); ok {
 		r1 = returnFunc(id, book)
 	} else {
 		r1 = ret.Error(1)
@@ -363,20 +363,20 @@ type MockFilesystemStore_UpdateBook_Call struct {
 
 // UpdateBook is a helper method to define mock.On call
 //   - id string
-//   - book *database.Book
+//   - book *store.Book
 func (_e *MockFilesystemStore_Expecter) UpdateBook(id any, book any) *MockFilesystemStore_UpdateBook_Call {
 	return &MockFilesystemStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
-func (_c *MockFilesystemStore_UpdateBook_Call) Run(run func(id string, book *database.Book)) *MockFilesystemStore_UpdateBook_Call {
+func (_c *MockFilesystemStore_UpdateBook_Call) Run(run func(id string, book *store.Book)) *MockFilesystemStore_UpdateBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 *database.Book
+		var arg1 *store.Book
 		if args[1] != nil {
-			arg1 = args[1].(*database.Book)
+			arg1 = args[1].(*store.Book)
 		}
 		run(
 			arg0,
@@ -386,18 +386,18 @@ func (_c *MockFilesystemStore_UpdateBook_Call) Run(run func(id string, book *dat
 	return _c
 }
 
-func (_c *MockFilesystemStore_UpdateBook_Call) Return(book1 *database.Book, err error) *MockFilesystemStore_UpdateBook_Call {
+func (_c *MockFilesystemStore_UpdateBook_Call) Return(book1 *store.Book, err error) *MockFilesystemStore_UpdateBook_Call {
 	_c.Call.Return(book1, err)
 	return _c
 }
 
-func (_c *MockFilesystemStore_UpdateBook_Call) RunAndReturn(run func(id string, book *database.Book) (*database.Book, error)) *MockFilesystemStore_UpdateBook_Call {
+func (_c *MockFilesystemStore_UpdateBook_Call) RunAndReturn(run func(id string, book *store.Book) (*store.Book, error)) *MockFilesystemStore_UpdateBook_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // UpdateImportPath provides a mock function for the type MockFilesystemStore
-func (_mock *MockFilesystemStore) UpdateImportPath(id int, path *database.ImportPath) error {
+func (_mock *MockFilesystemStore) UpdateImportPath(id int, path *store.ImportPath) error {
 	ret := _mock.Called(id, path)
 
 	if len(ret) == 0 {
@@ -405,7 +405,7 @@ func (_mock *MockFilesystemStore) UpdateImportPath(id int, path *database.Import
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(int, *database.ImportPath) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, *store.ImportPath) error); ok {
 		r0 = returnFunc(id, path)
 	} else {
 		r0 = ret.Error(0)
@@ -420,20 +420,20 @@ type MockFilesystemStore_UpdateImportPath_Call struct {
 
 // UpdateImportPath is a helper method to define mock.On call
 //   - id int
-//   - path *database.ImportPath
+//   - path *store.ImportPath
 func (_e *MockFilesystemStore_Expecter) UpdateImportPath(id any, path any) *MockFilesystemStore_UpdateImportPath_Call {
 	return &MockFilesystemStore_UpdateImportPath_Call{Call: _e.mock.On("UpdateImportPath", id, path)}
 }
 
-func (_c *MockFilesystemStore_UpdateImportPath_Call) Run(run func(id int, path *database.ImportPath)) *MockFilesystemStore_UpdateImportPath_Call {
+func (_c *MockFilesystemStore_UpdateImportPath_Call) Run(run func(id int, path *store.ImportPath)) *MockFilesystemStore_UpdateImportPath_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 int
 		if args[0] != nil {
 			arg0 = args[0].(int)
 		}
-		var arg1 *database.ImportPath
+		var arg1 *store.ImportPath
 		if args[1] != nil {
-			arg1 = args[1].(*database.ImportPath)
+			arg1 = args[1].(*store.ImportPath)
 		}
 		run(
 			arg0,
@@ -448,7 +448,7 @@ func (_c *MockFilesystemStore_UpdateImportPath_Call) Return(err error) *MockFile
 	return _c
 }
 
-func (_c *MockFilesystemStore_UpdateImportPath_Call) RunAndReturn(run func(id int, path *database.ImportPath) error) *MockFilesystemStore_UpdateImportPath_Call {
+func (_c *MockFilesystemStore_UpdateImportPath_Call) RunAndReturn(run func(id int, path *store.ImportPath) error) *MockFilesystemStore_UpdateImportPath_Call {
 	_c.Call.Return(run)
 	return _c
 }

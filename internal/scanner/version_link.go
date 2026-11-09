@@ -1,7 +1,7 @@
 // file: internal/scanner/version_link.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f4ff5e2-d0d7-45eb-ac42-18142fcf22cb
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Same-folder version linking ("smart dedup").

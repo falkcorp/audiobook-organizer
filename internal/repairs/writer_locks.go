@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_locks.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 37c8abdf-afee-4662-8fc6-4e18d4194825
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/itunesguard/itunesguard.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1de95145-912c-41bf-badc-055bca21b429
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // Package itunesguard is the one iTunes-ownership predicate for writes to a
 // book's version-group primary flag. HARD RULE: an iTunes book's
@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

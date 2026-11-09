@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_aggregates_test.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 3f6a1c84-b2d7-4e95-8a13-d90e5b7c4f26
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 )

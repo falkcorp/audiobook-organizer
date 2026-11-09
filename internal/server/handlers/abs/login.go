@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package abs
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"

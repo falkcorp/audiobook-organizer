@@ -1,7 +1,7 @@
 // file: internal/dedup/eligibility.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b8c2f3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-06-10
+// last-edited: 2026-11-09
 
 // Package dedup — PairEligibility pre-filter (fable5 T014).
 //
@@ -37,7 +37,7 @@
 package dedup
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // PairEligibility reports whether books a and b are eligible for dedup

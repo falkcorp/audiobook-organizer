@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

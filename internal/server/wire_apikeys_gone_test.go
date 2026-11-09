@@ -1,7 +1,7 @@
 // file: internal/server/wire_apikeys_gone_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2e7b9d04-5c18-4a63-9f2a-b8d1c6e40a57
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 

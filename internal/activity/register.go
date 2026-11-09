@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 2.0.1
-// last-edited: 2026-11-08
+// version: 2.0.2
+// last-edited: 2026-11-09
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -24,8 +24,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -49,7 +49,7 @@ func ServiceDefs() []serviceregistry.ServiceDef {
 				// decorator --
 				// silently taking the "non-Pebble backend" branch below, which
 				// looks like a supported configuration rather than a bug. The
-				// FromStore constructor does that unwrap inside internal/database,
+				// FromStore constructor does that unwrap inside internal/books/store,
 				// so this package never names the concrete type. See
 				// database/store_capability.go.
 				s := database.NewPebbleActivityStoreFromStore(store)

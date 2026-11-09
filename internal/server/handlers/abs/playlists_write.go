@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/playlists_write.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6ddbf78d-bfe3-47a7-946a-c677d6f16821
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package abs
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )

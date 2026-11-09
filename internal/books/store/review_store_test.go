@@ -1,0 +1,847 @@
+// file: internal/books/store/review_store_test.go
+// version: 1.5.1
+// guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+)
+
+func newReviewTestStore(t *testing.T) *PebbleStore {
+	t.Helper()
+	s, err := NewPebbleStoreInMemory("db")
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	s.WaitForWarmup()
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func mkReviewItem(kind, dedupKey, folder, summary, payload string) ReviewItem {
+	return ReviewItem{
+		Kind:      kind,
+		DedupKey:  dedupKey,
+		FolderRef: folder,
+		Summary:   summary,
+		Payload:   payload,
+	}
+}
+
+func TestDeleteReviewItemIfPending_RemovesRecordAndAllIndexes(t *testing.T) {
+	s := newReviewTestStore(t)
+	it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-del", "/books/a", "sum", `{}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if deleted, err := s.DeleteReviewItemIfPending(it.ID); err != nil || !deleted {
+		t.Fatalf("delete: deleted=%v err=%v", deleted, err)
+	}
+
+	// Record gone.
+	if got, _ := s.GetReviewItem(it.ID); got != nil {
+		t.Fatalf("expected item gone after delete, got %+v", got)
+	}
+	// Status index gone → pending count is 0.
+	if n, _ := s.CountReviewItems(ReviewStatusPending); n != 0 {
+		t.Fatalf("expected 0 pending after delete, got %d", n)
+	}
+	// Dedup index gone → re-upserting the same DedupKey creates a FRESH row (a new
+	// ID), not an update of the deleted one. This is what lets the regroup reconcile
+	// safely purge-then-re-emit.
+	again, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-del", "/books/a", "sum2", `{}`))
+	if err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if again.ID == it.ID {
+		t.Fatal("expected a fresh ID after delete+re-upsert (dedup index must have been torn down)")
+	}
+	if again.Status != ReviewStatusPending {
+		t.Fatalf("re-upserted item should be pending, got %q", again.Status)
+	}
+}
+
+func TestDeleteReviewItemIfPending_MissingIsNoOp(t *testing.T) {
+	s := newReviewTestStore(t)
+	if deleted, err := s.DeleteReviewItemIfPending("does-not-exist"); err != nil || deleted {
+		t.Fatalf("deleting a missing id must be a no-op, got deleted=%v err=%v", deleted, err)
+	}
+}
+
+func TestUpsertReviewItem_NewAssignsIDAndPending(t *testing.T) {
+	s := newReviewTestStore(t)
+	got, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk1", "/books/a", "sum", `{"x":1}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if got.ID == "" {
+		t.Fatal("expected an ID to be assigned")
+	}
+	if got.Status != ReviewStatusPending {
+		t.Fatalf("expected status pending, got %q", got.Status)
+	}
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatal("expected CreatedAt/UpdatedAt to be set")
+	}
+
+	// Round-trip.
+	fetched, err := s.GetReviewItem(got.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched == nil || fetched.DedupKey != "dk1" || fetched.Summary != "sum" {
+		t.Fatalf("round-trip mismatch: %+v", fetched)
+	}
+}
+
+func TestUpsertReviewItem_IdempotentOnDedupKey(t *testing.T) {
+	s := newReviewTestStore(t)
+	first, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk1", "/books/a", "sum1", `{"v":1}`))
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	// Re-upsert same DedupKey with new Summary/Payload — must update in place, not duplicate.
+	second, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk1", "/books/a", "sum2", `{"v":2}`))
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected same ID on re-upsert, got %q vs %q", second.ID, first.ID)
+	}
+	if second.Summary != "sum2" || second.Payload != `{"v":2}` {
+		t.Fatalf("expected Summary/Payload updated on pending re-upsert, got %+v", second)
+	}
+
+	// Exactly one row must exist.
+	count, err := s.CountReviewItems("")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row after idempotent re-upsert, got %d", count)
+	}
+}
+
+func TestUpsertReviewItem_PreservesRejectedStatus(t *testing.T) {
+	s := newReviewTestStore(t)
+	first, err := s.UpsertReviewItem(mkReviewItem("regroup.anthology", "dk2", "/books/b", "sum1", `{"v":1}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Human rejects it.
+	if _, err := s.DecideReviewItem(first.ID, ReviewStatusRejected, "", time.Time{}); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+
+	// A re-scan re-upserts the same DedupKey with a fresh summary/payload.
+	reupsert, err := s.UpsertReviewItem(mkReviewItem("regroup.anthology", "dk2", "/books/b", "NEW-sum", `{"v":9}`))
+	if err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if reupsert.Status != ReviewStatusRejected {
+		t.Fatalf("re-scan must NOT un-reject: got status %q", reupsert.Status)
+	}
+	// Full no-op for a decided item: summary/payload preserved, not overwritten.
+	if reupsert.Summary != "sum1" || reupsert.Payload != `{"v":1}` {
+		t.Fatalf("decided item must be untouched by re-upsert, got %+v", reupsert)
+	}
+
+	// Still rejected on disk, still exactly one row.
+	fetched, err := s.GetReviewItem(first.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if fetched.Status != ReviewStatusRejected {
+		t.Fatalf("expected persisted rejected status, got %q", fetched.Status)
+	}
+	if c, _ := s.CountReviewItems(""); c != 1 {
+		t.Fatalf("expected 1 row, got %d", c)
+	}
+}
+
+func TestCountReviewItems_ByStatusIndex(t *testing.T) {
+	s := newReviewTestStore(t)
+	// 3 pending, then reject one.
+	var ids []string
+	for i, dk := range []string{"a", "b", "c"} {
+		it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", dk, "/books/"+dk, "s", ""))
+		if err != nil {
+			t.Fatalf("upsert %d: %v", i, err)
+		}
+		ids = append(ids, it.ID)
+	}
+	if _, err := s.DecideReviewItem(ids[0], ReviewStatusRejected, "", time.Time{}); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+
+	if got, _ := s.CountReviewItems(ReviewStatusPending); got != 2 {
+		t.Fatalf("expected 2 pending, got %d", got)
+	}
+	if got, _ := s.CountReviewItems(ReviewStatusRejected); got != 1 {
+		t.Fatalf("expected 1 rejected, got %d", got)
+	}
+	if got, _ := s.CountReviewItems(""); got != 3 {
+		t.Fatalf("expected 3 total, got %d", got)
+	}
+}
+
+func TestListReviewItems_FilterByStatusAndKind(t *testing.T) {
+	s := newReviewTestStore(t)
+	seed := []struct{ kind, dk string }{
+		{"regroup.multidisc", "m1"},
+		{"regroup.multidisc", "m2"},
+		{"regroup.anthology", "a1"},
+	}
+	for _, sd := range seed {
+		if _, err := s.UpsertReviewItem(mkReviewItem(sd.kind, sd.dk, "/f/"+sd.dk, "s", "")); err != nil {
+			t.Fatalf("seed %s: %v", sd.dk, err)
+		}
+	}
+
+	// Status pending + kind filter.
+	items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Kind: "regroup.multidisc"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected 2 multidisc pending, got total=%d len=%d", total, len(items))
+	}
+	for _, it := range items {
+		if it.Kind != "regroup.multidisc" {
+			t.Fatalf("unexpected kind in filtered result: %q", it.Kind)
+		}
+	}
+
+	// No status filter → all 3.
+	_, total, err = s.ListReviewItems(ReviewFilter{})
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 total, got %d", total)
+	}
+}
+
+func TestListReviewItems_Pagination(t *testing.T) {
+	s := newReviewTestStore(t)
+	for i := range 5 {
+		dk := string(rune('a' + i))
+		if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", dk, "/f/"+dk, "s", "")); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	page, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Limit: 2, Offset: 0})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("expected total 5, got %d", total)
+	}
+	if len(page) != 2 {
+		t.Fatalf("expected page size 2, got %d", len(page))
+	}
+}
+
+func TestDecideReviewItem_MovesIndexRow(t *testing.T) {
+	s := newReviewTestStore(t)
+	it, err := s.UpsertReviewItem(mkReviewItem("regroup.version-group", "vg1", "/f/vg1", "s", ""))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Move pending → approved.
+	updated, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "", time.Time{})
+	if err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+	if updated == nil || updated.Status != ReviewStatusApproved {
+		t.Fatalf("expected approved, got %+v", updated)
+	}
+
+	// The pending index row must be gone; the approved one present.
+	if got, _ := s.CountReviewItems(ReviewStatusPending); got != 0 {
+		t.Fatalf("expected 0 pending after move, got %d", got)
+	}
+	if got, _ := s.CountReviewItems(ReviewStatusApproved); got != 1 {
+		t.Fatalf("expected 1 approved after move, got %d", got)
+	}
+
+	// The old-status index scan must not resurface it (stale-row guard).
+	pendingList, _, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending})
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(pendingList) != 0 {
+		t.Fatalf("expected no pending items, got %d", len(pendingList))
+	}
+}
+
+func TestDecideReviewItem_NotFoundWithoutAction(t *testing.T) {
+	s := newReviewTestStore(t)
+	got, err := s.DecideReviewItem("nonexistent", ReviewStatusApproved, "", time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for missing item, got %+v", got)
+	}
+}
+
+// 🔴 THE DECISION MUST OUTLIVE EVERY SUBSEQUENT WRITE. A recorded ChosenAction is
+// the only durable record that a human DISAGREED with the classifier; if any later
+// write clears it, the replay path silently falls back to the payload's
+// recommendation and merges books the reviewer said to keep apart.
+//
+// This walks the real sequence: decide → the apply claim's approved → applying →
+// applied (which carries no action of its own) → producer re-scan, asserting the action survives all three, and
+// that no unrelated field was collateral damage of the decision write.
+func TestDecideReviewItem_PersistsAndIsNeverClearedByLaterWrites(t *testing.T) {
+	s := newReviewTestStore(t)
+	it, err := s.UpsertReviewItem(mkReviewItem(
+		"regroup.multidisc", "dk-dec", "/books/a", "sum", `{"recommendedAction":"combine"}`))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// A reviewer overrides the recommendation.
+	got, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "separate", time.Time{})
+	if err != nil {
+		t.Fatalf("DecideReviewItem: %v", err)
+	}
+	if got.ChosenAction != "separate" || got.Status != ReviewStatusApproved {
+		t.Fatalf("got status=%q action=%q, want approved/separate", got.Status, got.ChosenAction)
+	}
+	// The narrow write must not have disturbed anything it was not asked to change.
+	if got.Kind != it.Kind || got.DedupKey != it.DedupKey || got.FolderRef != it.FolderRef ||
+		got.Summary != it.Summary || got.Payload != it.Payload || !got.CreatedAt.Equal(it.CreatedAt) {
+		t.Fatalf("decision write disturbed an unrelated field: %+v vs %+v", got, it)
+	}
+
+	// A blank-action decision must leave the recorded one alone: blank means
+	// "don't touch", never "clear".
+	if _, err := s.DecideReviewItem(it.ID, ReviewStatusApproved, "", time.Time{}); err != nil {
+		t.Fatalf("DecideReviewItem (blank action): %v", err)
+	}
+	if reread, _ := s.GetReviewItem(it.ID); reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a blank-action decision, want separate", reread.ChosenAction)
+	}
+	// Applying it (claim → finish) must leave the decision alone too.
+	claim, err := s.ClaimReviewItemForApply(it.ID, "separate", time.Time{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := s.FinishReviewItemApply(it.ID, claim.Token); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	reread, _ := s.GetReviewItem(it.ID)
+	if reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a status-only write, want separate — the transition "+
+			"wiped the decision it was carrying out", reread.ChosenAction)
+	}
+	if reread.Status != ReviewStatusApplied {
+		t.Fatalf("status = %q, want applied", reread.Status)
+	}
+
+	// A producer re-scan is a full no-op on a decided row, so it cannot resurrect the
+	// recommendation either.
+	if _, err := s.UpsertReviewItem(mkReviewItem(
+		"regroup.multidisc", "dk-dec", "/books/a", "rescanned", `{"recommendedAction":"combine"}`)); err != nil {
+		t.Fatalf("re-scan upsert: %v", err)
+	}
+	reread, _ = s.GetReviewItem(it.ID)
+	if reread.ChosenAction != "separate" {
+		t.Fatalf("chosen_action = %q after a re-scan, want separate", reread.ChosenAction)
+	}
+}
+
+// Persisting a decision on a missing row behaves like every other store getter:
+// (nil, nil), so the handler can answer 404 rather than inventing a row.
+func TestDecideReviewItem_NotFound(t *testing.T) {
+	s := newReviewTestStore(t)
+	got, err := s.DecideReviewItem("nonexistent", ReviewStatusApproved, "combine", time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for missing item, got %+v", got)
+	}
+}
+
+func TestReviewStatsByKind(t *testing.T) {
+	s := newReviewTestStore(t)
+	items := []struct{ kind, dk string }{
+		{"regroup.multidisc", "m1"},
+		{"regroup.multidisc", "m2"},
+		{"regroup.anthology", "a1"},
+	}
+	var anthologyID string
+	for _, sd := range items {
+		it, err := s.UpsertReviewItem(mkReviewItem(sd.kind, sd.dk, "/f/"+sd.dk, "s", ""))
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if sd.kind == "regroup.anthology" {
+			anthologyID = it.ID
+		}
+	}
+	if _, err := s.DecideReviewItem(anthologyID, ReviewStatusRejected, "", time.Time{}); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+
+	stats, err := s.ReviewStatsByKind()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	pendingByKind := map[string]int{}
+	for _, st := range stats {
+		if st.Status == ReviewStatusPending {
+			pendingByKind[st.Kind] = st.Count
+		}
+	}
+	if pendingByKind["regroup.multidisc"] != 2 {
+		t.Fatalf("expected 2 pending multidisc, got %d", pendingByKind["regroup.multidisc"])
+	}
+	if _, ok := pendingByKind["regroup.anthology"]; ok {
+		t.Fatalf("expected no pending anthology (it was rejected), got %d", pendingByKind["regroup.anthology"])
+	}
+}
+
+func TestUpsertReviewItem_RequiresDedupKeyAndKind(t *testing.T) {
+	s := newReviewTestStore(t)
+	if _, err := s.UpsertReviewItem(ReviewItem{Kind: "regroup.multidisc"}); err == nil {
+		t.Fatal("expected error for empty DedupKey")
+	}
+	if _, err := s.UpsertReviewItem(ReviewItem{DedupKey: "dk"}); err == nil {
+		t.Fatal("expected error for empty Kind")
+	}
+}
+
+// A producer upsert writes only pending items: statuses belong to DecideReviewItem
+// and the apply claim, so an insert carrying approved/applied/anything else is
+// refused on every path (new row, existing row, dangling dedup index) and writes
+// nothing. An empty status and an explicit pending are both fine.
+func TestUpsertReviewItem_RefusesANonPendingStatus(t *testing.T) {
+	s := newReviewTestStore(t)
+	for _, status := range []string{ReviewStatusApproved, ReviewStatusApplied, ReviewStatusApplying, ReviewStatusNeedsAttention, "on-hold"} {
+		in := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum", "{}")
+		in.Status = status
+		if _, err := s.UpsertReviewItem(in); err == nil {
+			t.Fatalf("new row: upsert accepted status %q", status)
+		}
+	}
+	if n, _ := s.CountReviewItems(""); n != 0 {
+		t.Fatalf("a refused upsert wrote %d rows", n)
+	}
+
+	pending := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum", "{}")
+	pending.Status = ReviewStatusPending
+	first, err := s.UpsertReviewItem(pending)
+	if err != nil || first.Status != ReviewStatusPending {
+		t.Fatalf("explicit pending = %+v, %v", first, err)
+	}
+
+	// Existing row: refused too, not silently ignored.
+	in := mkReviewItem("regroup.multidisc", "dk-new", "/books/a", "sum2", "{}")
+	in.Status = ReviewStatusApplied
+	if _, err := s.UpsertReviewItem(in); err == nil {
+		t.Fatal("existing row: upsert accepted status applied")
+	}
+	if got, _ := s.GetReviewItem(first.ID); got.Summary != "sum" || got.Status != ReviewStatusPending {
+		t.Fatalf("a refused upsert changed the row: %+v", got)
+	}
+
+	// Dangling dedup index: the record is gone, the index remains.
+	if err := s.db.Delete(reviewItemRecKey(first.ID), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	in.Status = ReviewStatusApproved
+	if _, err := s.UpsertReviewItem(in); err == nil {
+		t.Fatal("dangling index: upsert accepted status approved")
+	}
+	in.Status = ""
+	re, err := s.UpsertReviewItem(in)
+	if err != nil || re.Status != ReviewStatusPending || re.ID != first.ID {
+		t.Fatalf("dangling index, empty status = %+v, %v; want a pending row under the old id", re, err)
+	}
+	if n := countStatus(t, s, ReviewStatusApproved) + countStatus(t, s, ReviewStatusApplied); n != 0 {
+		t.Fatalf("%d rows landed in a decision status", n)
+	}
+}
+
+// A pending hold re-emitted unchanged is a full no-op, UpdatedAt included: that stamp
+// is the if_updated_at a reviewer's open row carries, and stamping it on every
+// regroup run would make every approve of an unchanged hold answer 409. A real change
+// to Summary or Payload still refreshes the row and moves the stamp.
+func TestUpsertReviewItem_IdenticalRefreshKeepsUpdatedAt(t *testing.T) {
+	s := newReviewTestStore(t)
+	in := mkReviewItem("regroup.multidisc", "dk1", "/books/a", "sum", `{"v":1}`)
+	first, err := s.UpsertReviewItem(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	again, err := s.UpsertReviewItem(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.GetReviewItem(first.ID)
+	if !again.UpdatedAt.Equal(first.UpdatedAt) || !stored.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("identical refresh moved UpdatedAt: first %v, returned %v, stored %v",
+			first.UpdatedAt, again.UpdatedAt, stored.UpdatedAt)
+	}
+	// The stamp a reviewer read still claims.
+	if _, err := s.ClaimReviewItemForApply(first.ID, "combine", first.UpdatedAt); err != nil {
+		t.Fatalf("claim with the stamp read before an identical refresh: %v", err)
+	}
+
+	s2 := newReviewTestStore(t)
+	f2, _ := s2.UpsertReviewItem(in)
+	for name, change := range map[string]func(*ReviewItem){
+		"summary": func(i *ReviewItem) { i.Summary = "sum2" },
+		"payload": func(i *ReviewItem) { i.Payload = `{"v":2}` },
+	} {
+		changed := in
+		change(&changed)
+		time.Sleep(5 * time.Millisecond)
+		got, err := s2.UpsertReviewItem(changed)
+		if err != nil || !got.UpdatedAt.After(f2.UpdatedAt) {
+			t.Fatalf("%s change: UpdatedAt %v not after %v (err %v)", name, got.UpdatedAt, f2.UpdatedAt, err)
+		}
+		f2 = got
+	}
+}
+
+// TestListReviewItems_Search covers the Search narrowing.
+//
+// THE FIXTURE IS THE TEST. Each row is built so the needle "zephyr" appears in
+// EXACTLY ONE place, and in a DIFFERENT place per row -- one per field the
+// matcher walks, and one per branch of the payload recursion (plain string,
+// array element, nested object). A fixture whose rows all say "zephyr"
+// everywhere would pass with any subset of those wired up, including none of the
+// ones the caller cares about, so it could not observe a dropped field.
+//
+// Dropping any single field or recursion branch drops exactly one row from the
+// expected set. The array row is not decoration: `files[]` holds the member
+// FILENAMES, which is the thing a reviewer is most likely to type, and an
+// earlier draft of this fixture let a "don't recurse into arrays" mutant survive.
+func TestListReviewItems_Search(t *testing.T) {
+	s := newReviewTestStore(t)
+
+	const (
+		totalRows    = 8
+		totalMatches = 7
+	)
+
+	// Dedup keys, folders and summaries are deliberately needle-free except where
+	// the row's name says otherwise.
+	seed := []struct{ name, kind, dk, folder, summary, payload string }{
+		{"match-in-summary", "regroup.multidisc", "dk-1", "/lib/aaa", "Zephyr and the sea", `{"folder":"/lib/aaa"}`},
+		{"match-in-folder-ref", "regroup.multidisc", "dk-2", "/lib/zephyr-hall", "plain summary", `{"folder":"/lib/bbb"}`},
+		{"match-in-dedup-key", "regroup.multidisc", "zephyr-dk", "/lib/ccc", "plain summary", `{"folder":"/lib/ccc"}`},
+		{"match-in-payload-string", "regroup.multidisc", "dk-4", "/lib/ddd", "plain summary", `{"title":"The Zephyr Variations"}`},
+		{"match-in-payload-array", "regroup.multidisc", "dk-5", "/lib/eee", "plain summary", `{"folder":"/lib/eee","files":["01 - intro.mp3","02 - zephyr rising.mp3"]}`},
+		{"match-in-payload-nested", "regroup.multidisc", "dk-6", "/lib/fff", "plain summary", `{"folder":"/lib/fff","recommendationEvidence":{"note":"matches the Zephyr series stem"}}`},
+		{"match-nowhere", "regroup.multidisc", "dk-7", "/lib/ggg", "plain summary", `{"title":"Something else","files":["01 - a.mp3"]}`},
+		{"match-in-summary-other-kind", "regroup.anthology", "dk-8", "/lib/hhh", "zephyr collection", `{}`},
+	}
+	for _, sd := range seed {
+		if _, err := s.UpsertReviewItem(mkReviewItem(sd.kind, sd.dk, sd.folder, sd.summary, sd.payload)); err != nil {
+			t.Fatalf("seed %s: %v", sd.name, err)
+		}
+	}
+
+	byDedup := func(items []ReviewItem) map[string]bool {
+		got := map[string]bool{}
+		for _, it := range items {
+			got[it.DedupKey] = true
+		}
+		return got
+	}
+
+	t.Run("matches every field and every payload branch", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr", Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != totalMatches {
+			t.Fatalf("total: want %d matches, got %d", totalMatches, total)
+		}
+		if len(items) != totalMatches {
+			t.Fatalf("items: want %d, got %d", totalMatches, len(items))
+		}
+		got := byDedup(items)
+		// Named individually so a failure says WHICH lookup path broke.
+		for key, where := range map[string]string{
+			"dk-1":      "summary",
+			"dk-2":      "folder_ref",
+			"zephyr-dk": "dedup_key",
+			"dk-4":      "a payload string value",
+			"dk-5":      "a payload ARRAY element (files[])",
+			"dk-6":      "a NESTED payload object value",
+			"dk-8":      "summary, on a different kind",
+		} {
+			if !got[key] {
+				t.Errorf("row %q matches only in %s and was not returned -- that lookup path is broken", key, where)
+			}
+		}
+		if got["dk-7"] {
+			t.Errorf("row dk-7 matches the needle nowhere and must not be returned")
+		}
+	})
+
+	t.Run("matching is case-insensitive in both directions", func(t *testing.T) {
+		// Needle upper, haystack mixed: the fixture stores "Zephyr", never "ZEPHYR".
+		_, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "ZEPHYR"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != totalMatches {
+			t.Fatalf("upper-case needle: want %d, got %d", totalMatches, total)
+		}
+		// Needle lower, haystack upper-initial: dk-1's summary is "Zephyr and the sea".
+		items, _, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr and"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(items) != 1 || items[0].DedupKey != "dk-1" {
+			t.Fatalf("lower-case needle against a capitalised summary: want just dk-1, got %d rows", len(items))
+		}
+	})
+
+	t.Run("composes with the kind filter rather than replacing it", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{
+			Status: ReviewStatusPending,
+			Kind:   "regroup.anthology",
+			Search: "zephyr",
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		// dk-8 is the only anthology and it matches. The six multidisc matches must
+		// be EXCLUDED by Kind, not merely ranked below it.
+		if total != 1 || len(items) != 1 || items[0].DedupKey != "dk-8" {
+			t.Fatalf("kind+search: want just dk-8, got total=%d len=%d", total, len(items))
+		}
+	})
+
+	t.Run("total counts matches, not the page", func(t *testing.T) {
+		// THE POINT OF THE WHOLE CHANGE. Limit is BELOW the match count on purpose:
+		// a Limit at or above it cannot tell a correct total from a total that is
+		// silently len(items).
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr", Limit: 2})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("page: want 2 rows, got %d", len(items))
+		}
+		if total != totalMatches {
+			t.Fatalf("total must describe MATCHES (%d), not the page (2); got %d", totalMatches, total)
+		}
+	})
+
+	t.Run("a JSON KEY name is not a match", func(t *testing.T) {
+		// Every payload in the fixture carries the key "folder", "title" or "files",
+		// so a matcher that searched the raw payload TEXT would return most of the
+		// queue here. This is the test that separates value-matching from
+		// text-matching, and it is the reason the store decodes at all.
+		for _, key := range []string{"folder", "title", "files", "recommendationEvidence"} {
+			items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: key})
+			if err != nil {
+				t.Fatalf("list %q: %v", key, err)
+			}
+			// No VALUE anywhere in the fixture contains any of these words, so the
+			// honest answer for every one of them is zero.
+			if total != 0 || len(items) != 0 {
+				t.Fatalf("key name %q matched %d row(s) -- the matcher is reading JSON keys, not values", key, total)
+			}
+		}
+	})
+
+	t.Run("matches the kind string itself", func(t *testing.T) {
+		// 🔴 THE COMPENSATING CONTROL FOR A DOCUMENTED OMISSION, and it was
+		// untested. reviewSearchMatches deliberately does not search the
+		// frontend's kind LABELS, and the argument for that is partly "the kind
+		// string is searchable instead". Deleting it.Kind from the field list
+		// survived the entire suite, because neither fixture's needle appears in
+		// any kind. A load-bearing claim with no test under it is the shape this
+		// repo keeps getting caught by.
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "multidisc", Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		// Seven multidisc rows, and not the anthology.
+		if total != 7 || len(items) != 7 {
+			t.Fatalf("kind-string search: want the 7 multidisc rows, got total=%d len=%d", total, len(items))
+		}
+		for _, it := range items {
+			if it.Kind != "regroup.multidisc" {
+				t.Fatalf("kind-string search returned a %q row", it.Kind)
+			}
+		}
+	})
+
+	t.Run("matches the item id", func(t *testing.T) {
+		// Low value on its own -- reviewers rarely type ULIDs -- but recorded so
+		// a surviving "delete it.ID" mutant is not chased as a mystery later.
+		all, _, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Limit: totalRows})
+		if err != nil {
+			t.Fatalf("list all: %v", err)
+		}
+		target := all[0]
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: target.ID})
+		if err != nil {
+			t.Fatalf("list by id: %v", err)
+		}
+		if total != 1 || len(items) != 1 || items[0].ID != target.ID {
+			t.Fatalf("id search: want exactly that row, got total=%d len=%d", total, len(items))
+		}
+	})
+
+	t.Run("does not match numbers, only strings", func(t *testing.T) {
+		// jsonStringValuesContain documents that numeric leaves are not matched,
+		// mirroring the frontend: searching "3" must not return every hold
+		// carrying a disc number 3. Adding a float64 case to that switch
+		// survived the whole suite. This is DIFFERENTIAL -- two rows, the same
+		// digits, one as a number and one as a string -- so a digit colliding
+		// with some ULID cannot fake the result.
+		s2 := newReviewTestStore(t)
+		if _, err := s2.UpsertReviewItem(mkReviewItem("regroup.multidisc", "num-row", "/lib/n", "plain", `{"discNumbers":[424242]}`)); err != nil {
+			t.Fatalf("seed number row: %v", err)
+		}
+		if _, err := s2.UpsertReviewItem(mkReviewItem("regroup.multidisc", "str-row", "/lib/s", "plain", `{"title":"424242"}`)); err != nil {
+			t.Fatalf("seed string row: %v", err)
+		}
+		items, total, err := s2.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "424242"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 1 || len(items) != 1 {
+			t.Fatalf("want only the STRING row, got total=%d len=%d", total, len(items))
+		}
+		if items[0].DedupKey != "str-row" {
+			t.Fatalf("matched the number row instead of the string row")
+		}
+	})
+
+	t.Run("pages through the matches without losing or repeating one", func(t *testing.T) {
+		// 🔴 SEARCH MADE PAGING LOAD-BEARING. `total` now advertises 7 matches
+		// while a page shows 2, so the other 5 have to be REACHABLE -- and
+		// `start := f.Offset` -> `start := 0` survived every test here, because
+		// no test in this file has ever passed a non-zero Offset.
+		seen := map[string]int{}
+		for offset := 0; offset < totalMatches; offset += 2 {
+			page, total, err := s.ListReviewItems(ReviewFilter{
+				Status: ReviewStatusPending, Search: "zephyr", Limit: 2, Offset: offset,
+			})
+			if err != nil {
+				t.Fatalf("offset %d: %v", offset, err)
+			}
+			// The total must not move as the caller walks the pages.
+			if total != totalMatches {
+				t.Fatalf("offset %d: total moved to %d", offset, total)
+			}
+			for _, it := range page {
+				seen[it.DedupKey]++
+			}
+		}
+		if len(seen) != totalMatches {
+			t.Fatalf("walking the pages saw %d distinct rows, want %d", len(seen), totalMatches)
+		}
+		for key, n := range seen {
+			if n != 1 {
+				t.Fatalf("row %q appeared on %d pages; pages must be disjoint", key, n)
+			}
+		}
+	})
+
+	t.Run("respects the status filter as well as the search", func(t *testing.T) {
+		// Every seeded row is pending, so without this nothing distinguishes
+		// "search respects status" from "search ignores it".
+		s3 := newReviewTestStore(t)
+		keep, err := s3.UpsertReviewItem(mkReviewItem("regroup.multidisc", "still-pending", "/lib/p", "Zephyr one", `{}`))
+		if err != nil {
+			t.Fatalf("seed pending: %v", err)
+		}
+		gone, err := s3.UpsertReviewItem(mkReviewItem("regroup.multidisc", "decided", "/lib/d", "Zephyr two", `{}`))
+		if err != nil {
+			t.Fatalf("seed decided: %v", err)
+		}
+		if _, err := s3.DecideReviewItem(gone.ID, ReviewStatusApproved, "", time.Time{}); err != nil {
+			t.Fatalf("set status: %v", err)
+		}
+		items, total, err := s3.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 1 || len(items) != 1 || items[0].ID != keep.ID {
+			t.Fatalf("want only the pending match, got total=%d len=%d", total, len(items))
+		}
+	})
+
+	t.Run("an empty or blank search narrows nothing", func(t *testing.T) {
+		for _, needle := range []string{"", "   ", "\t\n"} {
+			_, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: needle})
+			if err != nil {
+				t.Fatalf("list %q: %v", needle, err)
+			}
+			if total != totalRows {
+				t.Fatalf("blank search %q must return the whole queue (%d), got %d", needle, totalRows, total)
+			}
+		}
+	})
+
+	t.Run("a needle matching nothing returns an empty set and a zero total", func(t *testing.T) {
+		items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "no-such-string"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if total != 0 || len(items) != 0 {
+			t.Fatalf("want an empty result, got total=%d len=%d", total, len(items))
+		}
+	})
+}
+
+// TestListReviewItems_SearchUndecodablePayload is a SEPARATE test with its own
+// store on purpose. It seeds a row, and the sub-tests of
+// TestListReviewItems_Search assert on exact totals over a shared store -- a seed
+// there would change their expected counts, which is how the first draft of this
+// test failed. Fixture coupling between sub-tests is a real defect, not a nuisance.
+func TestListReviewItems_SearchUndecodablePayload(t *testing.T) {
+	s := newReviewTestStore(t)
+	if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-ok", "/lib/ok", "plain summary", `{"title":"Zephyr Variations"}`)); err != nil {
+		t.Fatalf("seed ok: %v", err)
+	}
+	// Deliberately not valid JSON. A hold like this still RENDERS in the queue --
+	// the frontend's parsePayload returns null and the row shows its summary -- so
+	// it must stay findable. Skipping it would make a visible row unreachable,
+	// which is the one outcome a search box must never produce.
+	if _, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-broken", "/lib/broken", "plain summary", `{not json at all: zephyr`)); err != nil {
+		t.Fatalf("seed broken: %v", err)
+	}
+
+	items, total, err := s.ListReviewItems(ReviewFilter{Status: ReviewStatusPending, Search: "zephyr"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("want both the decodable and the broken hold, got total=%d len=%d", total, len(items))
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.DedupKey] = true
+	}
+	if !got["dk-broken"] {
+		t.Error("a hold whose payload will not decode must still match on its raw text")
+	}
+	if !got["dk-ok"] {
+		t.Error("a hold with a decodable payload must still match on its values")
+	}
+}

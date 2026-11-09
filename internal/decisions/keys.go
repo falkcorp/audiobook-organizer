@@ -1,7 +1,7 @@
 // file: internal/decisions/keys.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b8f2d6e-41c7-4a95-9e0d-6f12a7c8b534
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -13,7 +13,7 @@ import (
 )
 
 // Key families, all in the main Pebble store. Each is registered in
-// internal/database/keyfamilies.go.
+// internal/books/store/keyfamilies.go.
 //
 //	decision:r:<ULID>                                                 -> Record JSON (append-only log; the dataset)
 //	decision:v:<op_kind>:<subject_key>                                -> Verdict JSON (current state of one proposal)

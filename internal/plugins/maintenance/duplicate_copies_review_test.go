@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.6.5
+// version: 1.6.6
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

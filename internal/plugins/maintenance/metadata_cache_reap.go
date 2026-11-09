@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -51,7 +51,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

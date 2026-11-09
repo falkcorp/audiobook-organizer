@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -70,7 +70,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

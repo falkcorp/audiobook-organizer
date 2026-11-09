@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_cancel_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f6a2d81-95e3-4c07-b1a8-6d20c9f3e574
-// last-edited: 2026-08-12
+// last-edited: 2026-11-09
 
 // Regression tests for a scan that ignored its context.
 //
@@ -28,7 +28,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

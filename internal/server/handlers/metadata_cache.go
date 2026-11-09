@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.46.3
+// version: 1.46.4
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -843,7 +843,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 // by default), O(1), with missing = unasked + asked_empty, the same count the
 // Library shows for ident:missing. missing does not exclude appendix C's
 // franchise books, so it is the goal number plus those of them that are
-// unasked or asked_empty (deriveIdent in internal/database/ident_state.go).
+// unasked or asked_empty (deriveIdent in internal/books/store/ident_state.go).
 // While the index is being built ready is false and every count is 0; a
 // store without the index reports the same, so the block's shape never
 // changes.

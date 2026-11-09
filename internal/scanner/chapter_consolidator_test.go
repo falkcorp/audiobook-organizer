@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 04249a9d-8f2e-44f4-9652-258511aae768
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // chBook is a record whose title is still its file stem (the scanner's

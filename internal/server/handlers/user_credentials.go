@@ -1,11 +1,11 @@
 // file: internal/server/handlers/user_credentials.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dfbcd913-98ce-4d11-bcc4-3eb6d9cbdf7d
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package handlers
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // ResolveUserCredentialWriter finds database.UserCredentialWriter (the
 // field-scoped password, status and credential-epoch ops) through the store's

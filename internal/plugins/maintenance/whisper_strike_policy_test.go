@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_strike_policy_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7e1b94d2-3a65-4c80-9f17-d2a8b6c05e34
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )

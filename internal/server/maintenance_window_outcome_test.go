@@ -1,14 +1,14 @@
 // file: internal/server/maintenance_window_outcome_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d81b3a7-2c64-4e19-9f70-6b2a8e15c3df
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

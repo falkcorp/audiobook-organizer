@@ -1,7 +1,7 @@
 // file: internal/undo/title_relink.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a5877267-eebe-4c7a-a27b-4e54da1cb6b7
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Journal rows written by maintenance.author-strip-merge's title-as-author

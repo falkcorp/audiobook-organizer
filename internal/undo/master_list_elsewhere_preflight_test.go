@@ -1,7 +1,7 @@
 // file: internal/undo/master_list_elsewhere_preflight_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f4b7a62-93d1-4c58-b2e6-5a8d1c70e394
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The preflight predicts the revert of a read-elsewhere create row where the

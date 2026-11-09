@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

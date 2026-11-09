@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_recovery_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d81f0a6-2c57-4b93-9e6a-71cf05d8b2ae
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

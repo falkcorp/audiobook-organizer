@@ -1,5 +1,5 @@
 // file: internal/server/middleware/auth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c6f88af-1ef3-4f1f-b702-13935ff2cf9f
 
 package middleware
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

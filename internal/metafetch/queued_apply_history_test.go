@@ -1,7 +1,7 @@
 // file: internal/metafetch/queued_apply_history_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0c8a61-9b27-4e5d-a813-c64e0b2d7f95
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func queuedApplyFixture(t *testing.T) (*database.PebbleStore, *Service, *database.Book) {

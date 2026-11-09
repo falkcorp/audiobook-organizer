@@ -1,7 +1,7 @@
 // file: internal/activity/user_data.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 8f75db40-9f7a-4cb3-ad7f-757dd64ea827
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package activity
 
@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TypeTrashDiscardProgressPurge is the audit entry

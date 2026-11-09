@@ -1,7 +1,7 @@
 // file: internal/undo/membership_verdict_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3a71e08-5d94-4f26-b8e0-19f6d2a4b573
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // verdictStore is a ConflictChecker that also reads a list's journal

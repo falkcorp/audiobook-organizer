@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e2d6a51-7c3b-4f18-a0e4-5b8c1d7f2a63
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

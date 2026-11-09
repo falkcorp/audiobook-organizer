@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_lost_update_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ce15c0ee-2b3c-4527-89e3-b2998eb307a7
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // splitLostUpdateStore is a real PebbleStore with the OTHER writer wired in:

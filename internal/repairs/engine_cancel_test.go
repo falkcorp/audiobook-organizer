@@ -1,7 +1,7 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

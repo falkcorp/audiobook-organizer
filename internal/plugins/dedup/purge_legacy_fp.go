@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -38,7 +38,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

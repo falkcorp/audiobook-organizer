@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -14,7 +14,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -315,7 +315,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 		// is NOT merely a one-run deferral. GetAllSeriesBookRefCounts prefers
 		// the memdb whenever it is warm, which is the prod default, while
 		// ModifyBook reads Pebble directly (see
-		// internal/database/series_bookref.go and pebble_store.go). A row the
+		// internal/books/store/series_bookref.go and pebble_store.go). A row the
 		// memdb still holds but Pebble no longer does is therefore counted in
 		// refCounts and unhydratable on EVERY run, so this keeps the series row
 		// indefinitely rather than for one pass.

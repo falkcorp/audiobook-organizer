@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/defs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e5a38-9b26-4f04-8d7a-2e6f3b9c5d17
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

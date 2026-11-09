@@ -1,7 +1,7 @@
 // file: internal/audiobooks/block_hash_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7d3f68-4c19-4e85-a2d6-9f1c5e8a3b74
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const sharedTestHash = "aa11bb22cc33dd44"

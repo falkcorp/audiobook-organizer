@@ -1,14 +1,14 @@
 // file: internal/metadata/track_disc_guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c299cdb-8785-4fa4-b306-ff8cd601f126
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package metadata
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TagVerdict is the per-book decision on whether tag track/disc numbers may

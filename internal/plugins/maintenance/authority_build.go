@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authority/authoritybuild"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

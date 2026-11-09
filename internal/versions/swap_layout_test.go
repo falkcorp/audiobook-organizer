@@ -1,7 +1,7 @@
 // file: internal/versions/swap_layout_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: ceae3827-5dd4-4742-9093-b4d214299d8a
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // These tests pin the layout RunVersionSwap assumes (swapLayoutBlocker): each

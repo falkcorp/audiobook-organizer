@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 // Repoints rows whose file a rename MOVED ON DISK but whose new path the
 // rename could not write to the database, even after retrying.
@@ -40,8 +40,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

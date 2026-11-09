@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d0e1f2a3-b4c5-6789-defa-012345678901
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 // Package jobs_test exercises the fix-version-groups maintenance job.
 // The blank import in fix_read_by_narrator_test.go already registers all
@@ -12,7 +12,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

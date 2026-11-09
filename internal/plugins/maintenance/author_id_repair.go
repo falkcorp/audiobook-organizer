@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

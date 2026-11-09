@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.4
+// version: 1.18.5
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )

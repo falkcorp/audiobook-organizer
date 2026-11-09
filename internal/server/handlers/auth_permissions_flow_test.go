@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_permissions_flow_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b1d3a5e-92c4-4f06-8e1a-5c0d6f2a9b34
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -20,7 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )

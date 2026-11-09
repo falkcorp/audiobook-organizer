@@ -1,7 +1,7 @@
 // file: internal/reconcile/elect_primaries_lost_update_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e7852bba-e5a0-4efe-980b-3c35ba39fb0d
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // electLostUpdateStore wraps electFakeStore with the OTHER writer: it commits

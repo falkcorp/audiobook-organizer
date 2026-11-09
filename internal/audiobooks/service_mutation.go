@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.32.1
+// version: 1.32.2
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.14
+// version: 1.27.15
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

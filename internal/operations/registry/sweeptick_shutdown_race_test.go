@@ -1,7 +1,7 @@
 // file: internal/operations/registry/sweeptick_shutdown_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c9f1a72-8d54-4be1-9f20-6a7c1d4e5b83
-// last-edited: 2026-07-03
+// last-edited: 2026-11-09
 
 // sweeptick_shutdown_race_test.go is the regression test for
 // PEBBLE-CLOSED-SWEEPTICK-RESIDUAL — the residual ticker leg of the shutdown
@@ -39,7 +39,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

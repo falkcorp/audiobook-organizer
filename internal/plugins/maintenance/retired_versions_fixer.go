@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

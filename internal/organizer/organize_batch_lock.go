@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_batch_lock.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4c2e71-3b8d-4f15-a6e0-c5d7b1f3e284
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )
 

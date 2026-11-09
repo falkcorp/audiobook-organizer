@@ -1,7 +1,7 @@
 // file: internal/server/asin_backfill_shutdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4c2e71-6d3b-4f58-b1e0-7c5d8a2f3e64
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

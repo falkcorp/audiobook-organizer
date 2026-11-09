@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -62,8 +62,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

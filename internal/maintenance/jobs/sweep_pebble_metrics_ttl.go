@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/sweep_pebble_metrics_ttl.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b8c9d0e1-f2a3-0008-1234-000000000008
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 // Package jobs — maintenance job: sweep expired Pebble metrics snapshots.
 //
@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 
@@ -54,7 +54,7 @@ func (j *sweepPebbleMetricsTTLJob) Run(
 	// wrapper, so this job took the skip branch below on every prod run and
 	// expired metrics snapshots were never swept. Nothing surfaced it because
 	// skipping is a legitimate outcome on a non-Pebble backend. Constructing via
-	// internal/database also keeps *PebbleStore out of this package entirely.
+	// internal/books/store also keeps *PebbleStore out of this package entirely.
 	metricsStore := database.NewPebbleMetricsStoreFromStore(store)
 	if metricsStore == nil {
 		// Not a Pebble backend — no-op (test double or SQLite fallback).

@@ -1,7 +1,7 @@
 // file: internal/remux/transcode.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package remux
 
@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnosis"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

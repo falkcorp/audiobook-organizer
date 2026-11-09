@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -50,7 +50,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 	"github.com/falkcorp/audiobook-organizer/internal/util"

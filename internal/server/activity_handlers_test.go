@@ -1,7 +1,7 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.3.3
+// version: 5.3.4
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
@@ -23,7 +23,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

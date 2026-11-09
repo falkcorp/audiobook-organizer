@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/split_series_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e9a3c5d1-7b2f-4e8a-b6c4-1f0d9a8e7c53
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package entities_test
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	entitiesmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities/mocks"
 )

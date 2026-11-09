@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_bulk_fetch_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e3d3179f-4937-488d-9b70-a58146a3b10f
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const bulkFetchPath = "/api/v1/metadata/bulk-fetch"

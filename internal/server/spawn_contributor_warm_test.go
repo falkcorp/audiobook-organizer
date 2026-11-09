@@ -1,7 +1,7 @@
 // file: internal/server/spawn_contributor_warm_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a91c7d3-6b02-4e58-9f14-2d7e830ab6c5
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The contributor-cache warm has one ordering requirement and one fallback, and

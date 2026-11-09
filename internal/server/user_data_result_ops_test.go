@@ -1,7 +1,7 @@
 // file: internal/server/user_data_result_ops_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e2b6c41-7a05-4d38-b1f6-4c8d0a35e927
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"

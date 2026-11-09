@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_link_cas_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 91d19c19-e81f-4b9b-9706-59e4789058f3
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package versions
 
@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

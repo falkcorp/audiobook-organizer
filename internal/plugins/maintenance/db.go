@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: d4e5f6a7-b8c9-0123-def0-345678901234
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

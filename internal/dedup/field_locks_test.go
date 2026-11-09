@@ -1,7 +1,7 @@
 // file: internal/dedup/field_locks_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 1e6b8d2c-5f93-4a07-b7c4-9d3e2a8f0b61
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

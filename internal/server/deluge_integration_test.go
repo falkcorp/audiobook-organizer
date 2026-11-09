@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration_test.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Integration tests for Deluge notification helpers and HTTP handlers.
 // Service logic moved to internal/deluge/integration.go; tests updated to
@@ -17,8 +17,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/gin-gonic/gin"
 )

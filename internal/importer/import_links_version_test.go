@@ -1,7 +1,7 @@
 // file: internal/importer/import_links_version_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b7d4e91-6c3a-4f08-9a5e-81d0c7f3b264
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package importer
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

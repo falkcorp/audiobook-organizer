@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/decode_guard_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d7a2e91-b3f0-4c58-8e16-a9c5d02f7b34
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )
 

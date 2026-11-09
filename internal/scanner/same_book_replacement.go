@@ -1,7 +1,7 @@
 // file: internal/scanner/same_book_replacement.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9222d374-25de-4cf6-932b-d8f13ccb6f3d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )

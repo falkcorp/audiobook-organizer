@@ -1,7 +1,7 @@
 // file: internal/metafetch/identity_prior_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9ae53579-716a-44b6-adb8-2944ae90ce16
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A bracket is a note on the credit; the name outside it is the author.

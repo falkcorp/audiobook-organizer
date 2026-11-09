@@ -1,7 +1,7 @@
 // file: scripts/codemods/book_file_duration/literals.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d2c19-8e53-4b06-91fa-d3c6e0b85a27
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 //go:build ignore
 
@@ -58,7 +58,7 @@ func isBF(t types.Type) bool {
 		return false
 	}
 	o := n.Obj()
-	return o.Pkg() != nil && strings.HasSuffix(o.Pkg().Path(), "/internal/database") && (o.Name() == "BookFile" || o.Name() == "BookFileCore")
+	return o.Pkg() != nil && strings.HasSuffix(o.Pkg().Path(), "/internal/books/store") && (o.Name() == "BookFile" || o.Name() == "BookFileCore")
 }
 
 func main() {
@@ -84,10 +84,10 @@ func main() {
 			src, _ := os.ReadFile(fname)
 			// qualifier
 			qual := ""
-			if !strings.HasSuffix(p.PkgPath, "/internal/database") && !strings.HasSuffix(strings.TrimSuffix(p.PkgPath, "_test"), "/internal/database") {
+			if !strings.HasSuffix(p.PkgPath, "/internal/books/store") && !strings.HasSuffix(strings.TrimSuffix(p.PkgPath, "_test"), "/internal/books/store") {
 				qual = "?"
 				for _, im := range f.Imports {
-					if strings.HasSuffix(strings.Trim(im.Path.Value, `"`), "/internal/database") {
+					if strings.HasSuffix(strings.Trim(im.Path.Value, `"`), "/internal/books/store") {
 						if im.Name != nil {
 							qual = im.Name.Name + "."
 						} else {
@@ -98,7 +98,7 @@ func main() {
 			} else if strings.HasSuffix(p.PkgPath, "_test") {
 				qual = "database."
 				for _, im := range f.Imports {
-					if strings.HasSuffix(strings.Trim(im.Path.Value, `"`), "/internal/database") && im.Name != nil {
+					if strings.HasSuffix(strings.Trim(im.Path.Value, `"`), "/internal/books/store") && im.Name != nil {
 						qual = im.Name.Name + "."
 					}
 				}

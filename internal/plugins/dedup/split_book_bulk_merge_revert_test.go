@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_revert_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0b7e4c19-5a62-4f38-9d81-e2c6a7f30d95
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

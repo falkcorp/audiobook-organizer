@@ -1,5 +1,5 @@
 // file: internal/scheduler/integrity_checks_registered_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3e8a1c52-7b94-4d06-a1f3-5c2d9e60b718
 // last-edited: 2026-11-09
 
@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

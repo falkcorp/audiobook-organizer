@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_replace_mode_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 29f23ca2-e262-4623-9ea4-7a09bd0e7836
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 //
 // Owner ruling 2026-09-27: the review page's bulk buttons get a toggle, "Fill
 // empty fields" (default) or "Replace existing". The request's mode reaches
@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_owned_files_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3a58e17-4f20-4b96-8d71-e0b92a6f5c34
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,8 +18,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 

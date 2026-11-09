@@ -1,7 +1,7 @@
 // file: internal/dedup/book_runtime.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 1c5335bc-2f9e-4f1a-829a-f8ed1a96ebc5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

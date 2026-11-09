@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_window_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e5b94-2d08-4a63-9f17-b4e6a8d3c025
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type fakeJournalScan struct {

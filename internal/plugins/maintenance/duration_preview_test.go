@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_preview_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a7d92f1-6c38-4b25-9e07-1d84f5b3ce62
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // capturingReporter records every progress message so a test can assert on the

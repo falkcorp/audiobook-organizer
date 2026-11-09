@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ErrDiscardIncomplete is returned by DiscardUserStateThenHardDeleteLocked when the

@@ -1,7 +1,7 @@
 // file: internal/usermerge/units_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8b1c63-d2a7-4905-b1f4-6a09c3e7d582
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // assertIndexMatchesRow fails unless (user, book)'s status index holds exactly

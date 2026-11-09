@@ -1,5 +1,5 @@
 // file: cmd/dedup_bench_types.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
 // last-edited: 2026-11-09
 
@@ -13,7 +13,7 @@ import (
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

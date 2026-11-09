@@ -1,5 +1,5 @@
 // file: internal/scheduler/asin_backfill_task_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6e1c9a47-3b0d-4f82-a5e9-2d7c8b41f036
 // last-edited: 2026-11-09
 
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

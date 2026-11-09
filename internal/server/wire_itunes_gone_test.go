@@ -1,7 +1,7 @@
 // file: internal/server/wire_itunes_gone_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1c5e8a03-d92b-4f67-a4e0-6b3d7f18c295
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const pidRepairGoneBody = `{"error":"gone","message":"this endpoint has been removed and has no replacement"}`

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_saturation_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 145af753-2faf-4792-8784-654bedb37b46
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

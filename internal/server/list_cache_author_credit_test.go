@@ -1,7 +1,7 @@
 // file: internal/server/list_cache_author_credit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f90f31c-6be1-47fc-a7e5-4ba09868ef03
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

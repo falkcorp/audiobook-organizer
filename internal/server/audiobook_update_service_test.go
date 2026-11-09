@@ -1,5 +1,5 @@
 // file: internal/server/audiobook_update_service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
 
 package server
@@ -9,7 +9,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestAudiobookUpdateService_ExtractStringField(t *testing.T) {

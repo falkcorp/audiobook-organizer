@@ -1,7 +1,7 @@
 // file: internal/undo/membership_anchor_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 3e8b5d27-9a41-4c06-b7f2-1d6a0c93e584
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // carrySim journals retires into one survivor's slot of one list the way the

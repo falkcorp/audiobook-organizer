@@ -1,7 +1,7 @@
 // file: internal/merge/legacy_guard_parity_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e0c7a41-3b92-4d68-a1f4-8c2d6b9e0f73
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

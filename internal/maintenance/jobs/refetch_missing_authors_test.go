@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e4f5a6b7-c8d9-0123-efab-456789012789
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs" // register all jobs
 	"github.com/stretchr/testify/assert"

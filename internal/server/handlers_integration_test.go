@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.14.5
+// version: 1.14.6
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"

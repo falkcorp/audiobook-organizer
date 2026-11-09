@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_db_resolve_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b04ad264-d893-44f7-bd8c-d7f85f1b2385
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func healTestFrames(n int, seed uint32) []byte {

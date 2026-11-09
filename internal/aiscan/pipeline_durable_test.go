@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

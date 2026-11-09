@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_decision_records_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4e7d92b1-5a38-4c06-b2f9-8d1a63c0e745
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

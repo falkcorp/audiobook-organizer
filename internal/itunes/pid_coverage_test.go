@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_coverage_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b5990a2-9a20-4b60-b852-64e4f8edc841
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package itunes
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // coverageStoreFake is a read-only PIDCoverageStore. It records the paging

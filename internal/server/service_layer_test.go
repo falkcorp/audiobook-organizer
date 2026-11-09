@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

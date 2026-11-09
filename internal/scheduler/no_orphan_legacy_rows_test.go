@@ -1,5 +1,5 @@
 // file: internal/scheduler/no_orphan_legacy_rows_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 1e6d90b4-73af-4c25-8d10-b2c4f9a05e37
 // last-edited: 2026-11-09
 
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

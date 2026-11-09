@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -111,8 +111,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

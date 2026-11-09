@@ -1,7 +1,7 @@
 // file: internal/undo/writer_modify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 21f48e3d-4986-407f-9fd4-0f6a666384bd
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The two record-only change types the v3 ops.Writer

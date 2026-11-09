@@ -1,7 +1,7 @@
 // file: internal/catalog/matcher.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a3e5c812-7b4d-4f09-9c26-d18f0e6b7a35
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

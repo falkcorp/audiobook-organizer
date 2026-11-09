@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e6f7a8b9-c0d1-2345-6789-0abcdef01234
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"

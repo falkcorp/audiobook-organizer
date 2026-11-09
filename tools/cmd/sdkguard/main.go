@@ -1,7 +1,7 @@
 // file: tools/cmd/sdkguard/main.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: e8f9a0b1-c2d3-4567-e890-f12345678901
-// last-edited: 2026-08-20
+// last-edited: 2026-11-09
 
 // Package main implements sdkguard, a CI tool that asserts pkg/plugin/sdk has
 // no unexpected internal/ dependencies.
@@ -76,7 +76,7 @@ const modulePrefix = "github.com/falkcorp/audiobook-organizer/internal/"
 var allowedRoots = map[string]bool{
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry": true,
 	"github.com/falkcorp/audiobook-organizer/internal/auth":                true,
-	"github.com/falkcorp/audiobook-organizer/internal/database":            true,
+	"github.com/falkcorp/audiobook-organizer/internal/books/store":         true,
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry":     true,
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/protected_path_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7e2c4a19-0b53-4d86-9f1a-c8d5e3b7a602
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"

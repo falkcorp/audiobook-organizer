@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_stale_write_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f0a8e63-1d4b-4c97-a2e8-7b3c9d6f1e04
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

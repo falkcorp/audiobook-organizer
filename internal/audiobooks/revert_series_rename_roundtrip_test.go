@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_rename_roundtrip_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9f41c6ab-2d78-4e03-b5c9-6e1a7d84f3b2
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

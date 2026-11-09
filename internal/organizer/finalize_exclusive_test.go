@@ -1,7 +1,7 @@
 // file: internal/organizer/finalize_exclusive_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8b2e4f61-9d3a-4c07-b5e8-2f6a1c9d7e43
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Mutation record for finalizeExclusive / copyFile / adoptExistingDestination

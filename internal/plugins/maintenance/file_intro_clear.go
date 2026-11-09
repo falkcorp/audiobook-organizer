@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // scanStandDownDefID is the def whose runs a stand-down quiesces and blocks.

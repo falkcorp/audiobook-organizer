@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package sweep
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // MockBookStore provides a minimal mock for testing sweep functions

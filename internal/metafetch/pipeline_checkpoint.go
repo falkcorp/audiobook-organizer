@@ -1,7 +1,7 @@
 // file: internal/metafetch/pipeline_checkpoint.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 7f8a9b0c-1d2e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/checkpoint.go.
@@ -9,7 +9,7 @@
 package metafetch
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

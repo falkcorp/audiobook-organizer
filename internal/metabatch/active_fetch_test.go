@@ -1,7 +1,7 @@
 // file: internal/metabatch/active_fetch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d7d00f50-68d2-4055-8d44-19e45731c3d6
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type activeOpsStub struct {

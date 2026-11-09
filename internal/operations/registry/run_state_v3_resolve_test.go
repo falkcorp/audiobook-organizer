@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_state_v3_resolve_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 36be2604-c7f2-40f7-a227-ed84dcfb1b84
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

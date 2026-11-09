@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_tag_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91ef8708-fbbd-4341-9dcd-4b994c0456c9
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )

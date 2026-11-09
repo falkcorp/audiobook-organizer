@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/link_guard.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6a7c81b3-f45d-4156-a464-2cae0ff48561
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package deduphandler
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

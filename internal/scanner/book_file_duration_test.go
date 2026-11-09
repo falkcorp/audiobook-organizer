@@ -1,7 +1,7 @@
 // file: internal/scanner/book_file_duration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e1a9c7d-2b84-4f36-a0d9-8c3f6e2b1a47
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"

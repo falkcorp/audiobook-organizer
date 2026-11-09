@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_series_cache_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c1d94b6-2ea8-4f30-9c57-1b0e6a8d3f42
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // seriesPruneNoopProgress discards every reporting call — executeSeriesPrune is

@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.11.3
+// version: 1.11.4
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

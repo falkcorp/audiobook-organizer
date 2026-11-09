@@ -1,7 +1,7 @@
 // file: internal/audiobooks/runtime_index.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2b9f4c61-8e3a-4a7d-9c05-5d1e7f3a6b28
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

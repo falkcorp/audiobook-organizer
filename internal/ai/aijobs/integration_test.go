@@ -1,7 +1,7 @@
 // file: internal/ai/aijobs/integration_test.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 69ad37a4-c90e-4dc4-92a5-155b51f85263
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Ported from NewSQLiteStore to NewPebbleStore.
 
@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -5,7 +5,7 @@
 package dedupmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockEmbeddingStore) EXPECT() *MockEmbeddingStore_Expecter {
 }
 
 // GetCandidateByID provides a mock function for the type MockEmbeddingStore
-func (_mock *MockEmbeddingStore) GetCandidateByID(id int64) (*database.DedupCandidate, error) {
+func (_mock *MockEmbeddingStore) GetCandidateByID(id int64) (*store.DedupCandidate, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetCandidateByID")
 	}
 
-	var r0 *database.DedupCandidate
+	var r0 *store.DedupCandidate
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int64) (*database.DedupCandidate, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int64) (*store.DedupCandidate, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int64) *database.DedupCandidate); ok {
+	if returnFunc, ok := ret.Get(0).(func(int64) *store.DedupCandidate); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.DedupCandidate)
+			r0 = ret.Get(0).(*store.DedupCandidate)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int64) error); ok {
@@ -97,34 +97,34 @@ func (_c *MockEmbeddingStore_GetCandidateByID_Call) Run(run func(id int64)) *Moc
 	return _c
 }
 
-func (_c *MockEmbeddingStore_GetCandidateByID_Call) Return(dedupCandidate *database.DedupCandidate, err error) *MockEmbeddingStore_GetCandidateByID_Call {
+func (_c *MockEmbeddingStore_GetCandidateByID_Call) Return(dedupCandidate *store.DedupCandidate, err error) *MockEmbeddingStore_GetCandidateByID_Call {
 	_c.Call.Return(dedupCandidate, err)
 	return _c
 }
 
-func (_c *MockEmbeddingStore_GetCandidateByID_Call) RunAndReturn(run func(id int64) (*database.DedupCandidate, error)) *MockEmbeddingStore_GetCandidateByID_Call {
+func (_c *MockEmbeddingStore_GetCandidateByID_Call) RunAndReturn(run func(id int64) (*store.DedupCandidate, error)) *MockEmbeddingStore_GetCandidateByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetCandidateStats provides a mock function for the type MockEmbeddingStore
-func (_mock *MockEmbeddingStore) GetCandidateStats() ([]database.CandidateStat, error) {
+func (_mock *MockEmbeddingStore) GetCandidateStats() ([]store.CandidateStat, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetCandidateStats")
 	}
 
-	var r0 []database.CandidateStat
+	var r0 []store.CandidateStat
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.CandidateStat, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.CandidateStat, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.CandidateStat); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.CandidateStat); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.CandidateStat)
+			r0 = ret.Get(0).([]store.CandidateStat)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -152,43 +152,43 @@ func (_c *MockEmbeddingStore_GetCandidateStats_Call) Run(run func()) *MockEmbedd
 	return _c
 }
 
-func (_c *MockEmbeddingStore_GetCandidateStats_Call) Return(candidateStats []database.CandidateStat, err error) *MockEmbeddingStore_GetCandidateStats_Call {
+func (_c *MockEmbeddingStore_GetCandidateStats_Call) Return(candidateStats []store.CandidateStat, err error) *MockEmbeddingStore_GetCandidateStats_Call {
 	_c.Call.Return(candidateStats, err)
 	return _c
 }
 
-func (_c *MockEmbeddingStore_GetCandidateStats_Call) RunAndReturn(run func() ([]database.CandidateStat, error)) *MockEmbeddingStore_GetCandidateStats_Call {
+func (_c *MockEmbeddingStore_GetCandidateStats_Call) RunAndReturn(run func() ([]store.CandidateStat, error)) *MockEmbeddingStore_GetCandidateStats_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListCandidates provides a mock function for the type MockEmbeddingStore
-func (_mock *MockEmbeddingStore) ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error) {
+func (_mock *MockEmbeddingStore) ListCandidates(f store.CandidateFilter) ([]store.DedupCandidate, int, error) {
 	ret := _mock.Called(f)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListCandidates")
 	}
 
-	var r0 []database.DedupCandidate
+	var r0 []store.DedupCandidate
 	var r1 int
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(database.CandidateFilter) ([]database.DedupCandidate, int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(store.CandidateFilter) ([]store.DedupCandidate, int, error)); ok {
 		return returnFunc(f)
 	}
-	if returnFunc, ok := ret.Get(0).(func(database.CandidateFilter) []database.DedupCandidate); ok {
+	if returnFunc, ok := ret.Get(0).(func(store.CandidateFilter) []store.DedupCandidate); ok {
 		r0 = returnFunc(f)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.DedupCandidate)
+			r0 = ret.Get(0).([]store.DedupCandidate)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(database.CandidateFilter) int); ok {
+	if returnFunc, ok := ret.Get(1).(func(store.CandidateFilter) int); ok {
 		r1 = returnFunc(f)
 	} else {
 		r1 = ret.Get(1).(int)
 	}
-	if returnFunc, ok := ret.Get(2).(func(database.CandidateFilter) error); ok {
+	if returnFunc, ok := ret.Get(2).(func(store.CandidateFilter) error); ok {
 		r2 = returnFunc(f)
 	} else {
 		r2 = ret.Error(2)
@@ -202,16 +202,16 @@ type MockEmbeddingStore_ListCandidates_Call struct {
 }
 
 // ListCandidates is a helper method to define mock.On call
-//   - f database.CandidateFilter
+//   - f store.CandidateFilter
 func (_e *MockEmbeddingStore_Expecter) ListCandidates(f any) *MockEmbeddingStore_ListCandidates_Call {
 	return &MockEmbeddingStore_ListCandidates_Call{Call: _e.mock.On("ListCandidates", f)}
 }
 
-func (_c *MockEmbeddingStore_ListCandidates_Call) Run(run func(f database.CandidateFilter)) *MockEmbeddingStore_ListCandidates_Call {
+func (_c *MockEmbeddingStore_ListCandidates_Call) Run(run func(f store.CandidateFilter)) *MockEmbeddingStore_ListCandidates_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 database.CandidateFilter
+		var arg0 store.CandidateFilter
 		if args[0] != nil {
-			arg0 = args[0].(database.CandidateFilter)
+			arg0 = args[0].(store.CandidateFilter)
 		}
 		run(
 			arg0,
@@ -220,12 +220,12 @@ func (_c *MockEmbeddingStore_ListCandidates_Call) Run(run func(f database.Candid
 	return _c
 }
 
-func (_c *MockEmbeddingStore_ListCandidates_Call) Return(dedupCandidates []database.DedupCandidate, n int, err error) *MockEmbeddingStore_ListCandidates_Call {
+func (_c *MockEmbeddingStore_ListCandidates_Call) Return(dedupCandidates []store.DedupCandidate, n int, err error) *MockEmbeddingStore_ListCandidates_Call {
 	_c.Call.Return(dedupCandidates, n, err)
 	return _c
 }
 
-func (_c *MockEmbeddingStore_ListCandidates_Call) RunAndReturn(run func(f database.CandidateFilter) ([]database.DedupCandidate, int, error)) *MockEmbeddingStore_ListCandidates_Call {
+func (_c *MockEmbeddingStore_ListCandidates_Call) RunAndReturn(run func(f store.CandidateFilter) ([]store.DedupCandidate, int, error)) *MockEmbeddingStore_ListCandidates_Call {
 	_c.Call.Return(run)
 	return _c
 }

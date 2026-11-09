@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
 // last-edited: 2026-11-09
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // sensitiveFieldName matches a config field whose name says it is a path, a

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b88da9b-5958-44c8-b57a-183be0ee6123
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lostUpdateRows is the stored table behind newLostUpdateStore. It models the

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

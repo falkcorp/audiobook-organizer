@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-10
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // collisionCall records a single OnCollision invocation for test assertions.

@@ -1,7 +1,7 @@
 // file: internal/repairs/franchise_guard_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 2b7d4e19-6a3c-4f05-8e91-c4d7a2b6f3e0
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/undo/user_book_state.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a2ec13d4-3bc2-4bd4-a63f-d449e9180dca
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeUserBookStateSet: a repair wrote one user's listening state for

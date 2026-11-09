@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_cache_writeback_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d23028ef-779a-4609-8fd4-f113ebedf97d
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

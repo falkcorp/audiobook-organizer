@@ -1,5 +1,5 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
 // last-edited: 2026-11-09
 
@@ -31,7 +31,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 

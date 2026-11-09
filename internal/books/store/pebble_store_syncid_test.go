@@ -1,0 +1,585 @@
+// file: internal/books/store/pebble_store_syncid_test.go
+// version: 1.4.2
+// guid: c4877e93-ba6a-468d-b428-30be15fdfa27
+// last-edited: 2026-11-09
+
+// Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
+// identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
+// UUIDv4 shape, unminted lookup, repoint on untagged move, merge-redirect
+// resolution (including a 3-way chain), merge idempotency, and a concurrent
+// mint race under -race.
+
+package store
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"sync"
+	"testing"
+)
+
+// newPebbleStoreForSyncID opens a fresh PebbleStore in a temp directory and
+// registers cleanup. Returns a *PebbleStore so tests can call sync-id-specific
+// methods directly.
+func newPebbleStoreForSyncID(t *testing.T) *PebbleStore {
+	t.Helper()
+	store, err := NewPebbleStoreInMemory("syncid-db")
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+var syncIDShapeRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func TestSyncID_MintOnFirstEncounter_IsIdempotent(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	first, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID first call: %v", err)
+	}
+	second, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID second call: %v", err)
+	}
+	if first != second {
+		t.Fatalf("MintOrGetSyncID not idempotent: first=%q second=%q", first, second)
+	}
+}
+
+func TestSyncID_DifferentBooksGetDifferentIDs(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	idA, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-a: %v", err)
+	}
+	idB, err := store.MintOrGetSyncID("book-b")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-b: %v", err)
+	}
+	if idA == idB {
+		t.Fatalf("two different books got the same syncID: %q", idA)
+	}
+}
+
+func TestSyncID_MintedIDMatchesUUIDv4Shape(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	id, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID: %v", err)
+	}
+	if len(id) != 36 {
+		t.Fatalf("syncID length = %d, want 36 (Absorb splits compound keys at fixed offset substring(0,36)): %q", len(id), id)
+	}
+	if !syncIDShapeRE.MatchString(id) {
+		t.Fatalf("syncID %q does not match canonical UUIDv4 shape %s", id, syncIDShapeRE.String())
+	}
+}
+
+func TestSyncID_GetSyncIDForBook_Unminted(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	id, ok, err := store.GetSyncIDForBook("never-seen-book")
+	if err != nil {
+		t.Fatalf("GetSyncIDForBook on unminted book returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("GetSyncIDForBook on unminted book returned ok=true, want false")
+	}
+	if id != "" {
+		t.Fatalf("GetSyncIDForBook on unminted book returned id=%q, want empty", id)
+	}
+}
+
+func TestSyncID_RepointSyncItem_MovesReverseIndexAndCurrentBookID(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	oldID, err := store.MintOrGetSyncID("book-old")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-old: %v", err)
+	}
+
+	if err := store.RepointSyncItem("book-old", "book-new"); err != nil {
+		t.Fatalf("RepointSyncItem: %v", err)
+	}
+
+	// The reverse index for the OLD book id must be gone.
+	_, ok, err := store.GetSyncIDForBook("book-old")
+	if err != nil {
+		t.Fatalf("GetSyncIDForBook book-old after repoint: %v", err)
+	}
+	if ok {
+		t.Fatalf("GetSyncIDForBook book-old after repoint still resolves, want gone")
+	}
+
+	// The reverse index for the NEW book id must resolve to the SAME syncID.
+	newLookupID, ok, err := store.GetSyncIDForBook("book-new")
+	if err != nil {
+		t.Fatalf("GetSyncIDForBook book-new after repoint: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetSyncIDForBook book-new after repoint: want ok=true")
+	}
+	if newLookupID != oldID {
+		t.Fatalf("repoint changed the syncID itself: got %q, want %q (same identity, new current book)", newLookupID, oldID)
+	}
+
+	// The SyncItem record's CurrentBookID must be updated.
+	item, err := store.ResolveSyncItem(oldID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem: %v", err)
+	}
+	if item == nil {
+		t.Fatalf("ResolveSyncItem returned nil for a known syncID")
+	}
+	if item.CurrentBookID != "book-new" {
+		t.Fatalf("SyncItem.CurrentBookID = %q, want %q", item.CurrentBookID, "book-new")
+	}
+
+	// Calling MintOrGetSyncID on the OLD book id now must mint a BRAND NEW,
+	// different ID — proving the reverse index really moved, not just got
+	// copied.
+	freshOldID, err := store.MintOrGetSyncID("book-old")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-old after repoint: %v", err)
+	}
+	if freshOldID == oldID {
+		t.Fatalf("MintOrGetSyncID book-old after repoint returned the SAME id %q, want a new one (reverse index should have moved, not been copied)", freshOldID)
+	}
+}
+
+func TestSyncID_RecordSyncMerge_RedirectsLoserToWinner(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	loserID, err := store.MintOrGetSyncID("book-loser")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-loser: %v", err)
+	}
+	winnerID, err := store.MintOrGetSyncID("book-winner")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-winner: %v", err)
+	}
+
+	if err := store.RecordSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("RecordSyncMerge: %v", err)
+	}
+
+	resolved, err := store.ResolveSyncItem(loserID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem(loserID): %v", err)
+	}
+	if resolved == nil {
+		t.Fatalf("ResolveSyncItem(loserID) returned nil, want the winner's live record")
+	}
+	if resolved.SyncID != winnerID {
+		t.Fatalf("ResolveSyncItem(loserID).SyncID = %q, want winner's %q", resolved.SyncID, winnerID)
+	}
+	if resolved.RedirectTo != "" {
+		t.Fatalf("resolved (winner) record has RedirectTo=%q, want empty (live record)", resolved.RedirectTo)
+	}
+
+	winnerItem, err := store.ResolveSyncItem(winnerID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem(winnerID): %v", err)
+	}
+	found := false
+	for _, m := range winnerItem.MergedFrom {
+		if m == loserID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("winner's MergedFrom %v does not contain loser's syncID %q", winnerItem.MergedFrom, loserID)
+	}
+
+	// Idempotency: calling RecordSyncMerge again with the same pair is a no-op.
+	if err := store.RecordSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("RecordSyncMerge (second call): %v", err)
+	}
+	winnerItem2, err := store.ResolveSyncItem(winnerID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem(winnerID) after second merge: %v", err)
+	}
+	if len(winnerItem2.MergedFrom) != len(winnerItem.MergedFrom) {
+		t.Fatalf("MergedFrom length changed on re-run: before=%d after=%d", len(winnerItem.MergedFrom), len(winnerItem2.MergedFrom))
+	}
+
+	loserRaw, err := store.ResolveSyncItem(loserID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem(loserID) after second merge: %v", err)
+	}
+	if loserRaw.SyncID != winnerID {
+		t.Fatalf("RedirectTo changed on re-run: resolved to %q, want %q", loserRaw.SyncID, winnerID)
+	}
+}
+
+func TestSyncID_RecordSyncMerge_ThreeWayRedirectChain(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	bID, err := store.MintOrGetSyncID("book-b")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-b: %v", err)
+	}
+	if _, err := store.MintOrGetSyncID("book-a"); err != nil {
+		t.Fatalf("MintOrGetSyncID book-a: %v", err)
+	}
+	cID, err := store.MintOrGetSyncID("book-c")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID book-c: %v", err)
+	}
+
+	// Merge B into A.
+	if err := store.RecordSyncMerge("book-b", "book-a"); err != nil {
+		t.Fatalf("RecordSyncMerge(B into A): %v", err)
+	}
+	// Merge A's book into C (A's syncID now redirects to C's).
+	if err := store.RecordSyncMerge("book-a", "book-c"); err != nil {
+		t.Fatalf("RecordSyncMerge(A into C): %v", err)
+	}
+
+	// B's ORIGINAL syncID must resolve all the way through A to C's live record.
+	resolved, err := store.ResolveSyncItem(bID)
+	if err != nil {
+		t.Fatalf("ResolveSyncItem(bID): %v", err)
+	}
+	if resolved == nil {
+		t.Fatalf("ResolveSyncItem(bID) returned nil, want C's live record")
+	}
+	if resolved.SyncID != cID {
+		t.Fatalf("ResolveSyncItem(bID).SyncID = %q, want C's %q (chain B->A->C not followed)", resolved.SyncID, cID)
+	}
+	if resolved.RedirectTo != "" {
+		t.Fatalf("resolved (C's) record has RedirectTo=%q, want empty (live record)", resolved.RedirectTo)
+	}
+}
+
+func TestSyncID_ConcurrentMintRace_SingleWinner(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+
+	const goroutines = 16
+	results := make([]string, goroutines)
+	errs := make([]error, goroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := range goroutines {
+		go func() {
+			defer wg.Done()
+			id, err := store.MintOrGetSyncID("race-book")
+			results[i] = id
+			errs[i] = err
+		}()
+	}
+	waitGroupOrFatal(t, &wg, "concurrent sync-ID mint workers")
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: MintOrGetSyncID error: %v", i, err)
+		}
+	}
+
+	want := results[0]
+	if want == "" {
+		t.Fatalf("goroutine 0 returned empty syncID")
+	}
+	for i, got := range results {
+		if got != want {
+			t.Fatalf("goroutine %d returned syncID %q, want %q (all callers should mint/observe the SAME id)", i, got, want)
+		}
+	}
+
+	// Exactly one live record for the book — no orphaned second sync_item
+	// record from a lost race.
+	finalID, ok, err := store.GetSyncIDForBook("race-book")
+	if err != nil {
+		t.Fatalf("GetSyncIDForBook: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetSyncIDForBook: want ok=true after concurrent mint")
+	}
+	if finalID != want {
+		t.Fatalf("GetSyncIDForBook returned %q, want %q", finalID, want)
+	}
+}
+
+// TestSyncID_ClearSyncMerge covers the undo primitive: it reverses one merge
+// (redirect cleared, loser removed from MergedFrom, other MergedFrom entries
+// kept), leaves a redirect that points at a DIFFERENT winner alone, and is a
+// no-op when repeated.
+func TestSyncID_ClearSyncMerge(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	ids := map[string]string{}
+	for _, b := range []string{"loser", "other", "winner", "elsewhere", "stray"} {
+		id, err := store.MintOrGetSyncID("book-" + b)
+		if err != nil {
+			t.Fatalf("mint %s: %v", b, err)
+		}
+		ids[b] = id
+	}
+	for _, pair := range [][2]string{{"loser", "winner"}, {"other", "winner"}, {"stray", "elsewhere"}} {
+		if err := store.RecordSyncMerge("book-"+pair[0], "book-"+pair[1]); err != nil {
+			t.Fatalf("RecordSyncMerge %v: %v", pair, err)
+		}
+	}
+
+	if err := store.ClearSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge: %v", err)
+	}
+	loser, err := store.ResolveSyncItem(ids["loser"])
+	if err != nil || loser == nil || loser.SyncID != ids["loser"] || loser.RedirectTo != "" {
+		t.Fatalf("loser should resolve to itself with no redirect, got %+v err=%v", loser, err)
+	}
+	winner, err := store.ResolveSyncItem(ids["winner"])
+	if err != nil || winner == nil {
+		t.Fatalf("resolve winner: %+v %v", winner, err)
+	}
+	if len(winner.MergedFrom) != 1 || winner.MergedFrom[0] != ids["other"] {
+		t.Fatalf("winner MergedFrom = %v, want only the other loser %q", winner.MergedFrom, ids["other"])
+	}
+	other, _ := store.ResolveSyncItem(ids["other"])
+	if other == nil || other.SyncID != ids["winner"] {
+		t.Fatalf("the other loser must still redirect to the winner, got %+v", other)
+	}
+
+	// A redirect to a different winner is not this merge: leave it.
+	if err := store.ClearSyncMerge("book-stray", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (wrong winner): %v", err)
+	}
+	stray, _ := store.ResolveSyncItem(ids["stray"])
+	if stray == nil || stray.SyncID != ids["elsewhere"] {
+		t.Fatalf("stray must still redirect to elsewhere, got %+v", stray)
+	}
+
+	// Repeat and unminted books are no-ops.
+	if err := store.ClearSyncMerge("book-loser", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (repeat): %v", err)
+	}
+	if err := store.ClearSyncMerge("book-never-minted", "book-winner"); err != nil {
+		t.Fatalf("ClearSyncMerge (unminted): %v", err)
+	}
+	winner2, _ := store.ResolveSyncItem(ids["winner"])
+	if len(winner2.MergedFrom) != 1 {
+		t.Fatalf("repeat changed MergedFrom: %v", winner2.MergedFrom)
+	}
+}
+
+// TestSyncID_ListSyncAliases walks MergedFrom transitively (B->A->C: C's
+// aliases are A and B), returns nil for an id that is itself a redirect, and
+// drops an alias once its merge is cleared.
+func TestSyncID_ListSyncAliases(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	ids := map[string]string{}
+	for _, b := range []string{"a", "b", "c", "lone"} {
+		id, err := store.MintOrGetSyncID("book-" + b)
+		if err != nil {
+			t.Fatalf("mint %s: %v", b, err)
+		}
+		ids[b] = id
+	}
+	if err := store.RecordSyncMerge("book-b", "book-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSyncMerge("book-a", "book-c"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ListSyncAliases(ids["c"])
+	if err != nil {
+		t.Fatalf("ListSyncAliases(c): %v", err)
+	}
+	want := []string{ids["a"], ids["b"]}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListSyncAliases(c) = %v, want %v (transitive through A)", got, want)
+	}
+	if got, err := store.ListSyncAliases(ids["a"]); err != nil || got != nil {
+		t.Fatalf("ListSyncAliases(a) = %v, %v; want nil — a is itself a redirect", got, err)
+	}
+	if got, err := store.ListSyncAliases(ids["lone"]); err != nil || got != nil {
+		t.Fatalf("ListSyncAliases(lone) = %v, %v; want nil", got, err)
+	}
+
+	if err := store.ClearSyncMerge("book-a", "book-c"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.ListSyncAliases(ids["c"]); err != nil || got != nil {
+		t.Fatalf("after ClearSyncMerge(a, c): ListSyncAliases(c) = %v, %v; want nil", got, err)
+	}
+	if got, err := store.ListSyncAliases(ids["a"]); err != nil || !slices.Equal(got, []string{ids["b"]}) {
+		t.Fatalf("after ClearSyncMerge(a, c): ListSyncAliases(a) = %v, %v; want [b]", got, err)
+	}
+}
+
+// TestSyncID_ListSyncAliases_ChapterConsolidationScale pins the alias cap
+// above a chapter-consolidated book: 2026-10-01 a fragment-consolidation apply
+// retired 306 chapter books into American Gods, and the old cap of 256 made
+// every later retire fail its user-state move and the book's bookmarks fail to
+// load. 300 losers into one winner must list all 300.
+func TestSyncID_ListSyncAliases_ChapterConsolidationScale(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	winnerID, err := store.MintOrGetSyncID("book-winner")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID winner: %v", err)
+	}
+	const losers = 300
+	for i := range losers {
+		id := fmt.Sprintf("book-chapter-%03d", i)
+		if _, err := store.MintOrGetSyncID(id); err != nil {
+			t.Fatalf("MintOrGetSyncID %s: %v", id, err)
+		}
+		if err := store.RecordSyncMerge(id, "book-winner"); err != nil {
+			t.Fatalf("RecordSyncMerge %s: %v", id, err)
+		}
+	}
+	aliases, err := store.ListSyncAliases(winnerID)
+	if err != nil {
+		t.Fatalf("ListSyncAliases with %d aliases: %v", losers, err)
+	}
+	if len(aliases) != losers {
+		t.Fatalf("ListSyncAliases returned %d aliases, want %d", len(aliases), losers)
+	}
+}
+
+// TestSyncID_ListSyncAliases_CapStillBounds keeps the cap a hard error: a graph
+// one over the cap fails with ErrSyncAliasLimit instead of truncating.
+func TestSyncID_ListSyncAliases_CapStillBounds(t *testing.T) {
+	prev := maxSyncAliases
+	maxSyncAliases = 5
+	t.Cleanup(func() { maxSyncAliases = prev })
+
+	store := newPebbleStoreForSyncID(t)
+	winnerID, err := store.MintOrGetSyncID("book-winner")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID winner: %v", err)
+	}
+	for i := range 6 {
+		id := fmt.Sprintf("book-loser-%d", i)
+		if _, err := store.MintOrGetSyncID(id); err != nil {
+			t.Fatalf("MintOrGetSyncID %s: %v", id, err)
+		}
+		if err := store.RecordSyncMerge(id, "book-winner"); err != nil {
+			t.Fatalf("RecordSyncMerge %s: %v", id, err)
+		}
+	}
+	if _, err := store.ListSyncAliases(winnerID); !errors.Is(err, ErrSyncAliasLimit) {
+		t.Fatalf("ListSyncAliases over the cap: err = %v, want ErrSyncAliasLimit", err)
+	}
+}
+
+// #3770 review B1: recording a redirect whose winner already redirects back
+// to the loser (directly, or through a chain) must not close a cycle, which
+// ResolveSyncItem reports as a permanently broken chain for every item on it.
+// The winner's stale outgoing link is cleared in the same write; both halves
+// (RedirectTo and MergedFrom) agree afterwards.
+func TestSyncID_RecordSyncMerge_NeverClosesACycle(t *testing.T) {
+	mint := func(t *testing.T, s *PebbleStore, books ...string) map[string]string {
+		t.Helper()
+		ids := map[string]string{}
+		for _, b := range books {
+			id, err := s.MintOrGetSyncID(b)
+			if err != nil {
+				t.Fatalf("mint %s: %v", b, err)
+			}
+			ids[b] = id
+		}
+		return ids
+	}
+	resolvesTo := func(t *testing.T, s *PebbleStore, syncID, wantBook string) {
+		t.Helper()
+		item, err := s.ResolveSyncItem(syncID)
+		if err != nil {
+			t.Fatalf("ResolveSyncItem(%s): %v", syncID, err)
+		}
+		if item == nil || item.CurrentBookID != wantBook {
+			t.Fatalf("ResolveSyncItem(%s) = %+v, want book %s", syncID, item, wantBook)
+		}
+	}
+
+	t.Run("direct reverse edge", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "src", "clone")
+		if err := s.RecordSyncMerge("src", "clone"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("clone", "src"); err != nil {
+			t.Fatal(err)
+		}
+		resolvesTo(t, s, ids["clone"], "src")
+		resolvesTo(t, s, ids["src"], "src")
+		src, _ := s.getSyncItem(ids["src"])
+		clone, _ := s.getSyncItem(ids["clone"])
+		if src.RedirectTo != "" || slices.Contains(clone.MergedFrom, ids["src"]) {
+			t.Fatalf("stale src -> clone link kept: src=%+v clone=%+v", src, clone)
+		}
+		if !slices.Contains(src.MergedFrom, ids["clone"]) {
+			t.Fatalf("src does not list clone as merged: %+v", src)
+		}
+		aliases, err := s.ListSyncAliases(ids["src"])
+		if err != nil || !slices.Equal(aliases, []string{ids["clone"]}) {
+			t.Fatalf("aliases of src = %v (err=%v), want [clone]", aliases, err)
+		}
+	})
+	t.Run("through a chain", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "a", "b", "c")
+		// c -> b -> a, then a -> c would close a -> c -> b -> a.
+		if err := s.RecordSyncMerge("b", "a"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("c", "b"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("a", "c"); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range []string{"a", "b", "c"} {
+			resolvesTo(t, s, ids[b], "c")
+		}
+	})
+	t.Run("one shared item is a no-op", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "x")
+		if err := s.RepointSyncItem("x", "y"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("y", "y"); err != nil {
+			t.Fatal(err)
+		}
+		resolvesTo(t, s, ids["x"], "y")
+	})
+}
+
+// #3770 review N2: two books that share one sync item (the reverse index of
+// both names the same sync id) are a no-op for RecordSyncMerge. Without the
+// guard the item would redirect to itself and ResolveSyncItem would fail for
+// it for good.
+func TestSyncID_RecordSyncMerge_SharedSyncItemIsANoOp(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	sid, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID: %v", err)
+	}
+	if err := store.db.Set(syncItemBookKey("book-b"), []byte(sid), nil); err != nil {
+		t.Fatalf("alias book-b onto %s: %v", sid, err)
+	}
+	if err := store.RecordSyncMerge("book-a", "book-b"); err != nil {
+		t.Fatalf("RecordSyncMerge: %v", err)
+	}
+	item, err := store.getSyncItem(sid)
+	if err != nil || item == nil {
+		t.Fatalf("getSyncItem: %v %v", item, err)
+	}
+	if item.RedirectTo != "" || len(item.MergedFrom) != 0 {
+		t.Fatalf("shared item was changed: RedirectTo=%q MergedFrom=%v", item.RedirectTo, item.MergedFrom)
+	}
+	resolved, err := store.ResolveSyncItem(sid)
+	if err != nil || resolved == nil || resolved.SyncID != sid {
+		t.Fatalf("ResolveSyncItem(%s) = %v, %v; want the item itself", sid, resolved, err)
+	}
+}

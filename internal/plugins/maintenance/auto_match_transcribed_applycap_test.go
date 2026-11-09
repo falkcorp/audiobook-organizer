@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_applycap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a8e2f95-1d4c-4b7a-9e3f-0c5b7d2a8e41
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The bulk apply cap (internal/applycap) on auto-match-transcribed. The op

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book_merge_revert_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a1d9e53-2f74-4c08-8b6e-d30f5a72c194
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

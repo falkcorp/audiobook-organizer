@@ -1,7 +1,7 @@
 // file: internal/foldercover/foldercover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3f1a52-4b6d-4c97-a0e8-6f2d9b7c3a15
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package foldercover
 
@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type fakeStore struct {

@@ -1,7 +1,7 @@
 // file: internal/metafetch/question_key.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d2b8e41-7c39-4f0a-9e16-3b8a0d6c2f57
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -40,8 +40,8 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Provider endpoints, the second segment of a P1 key. Each names one call

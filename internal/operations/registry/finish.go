@@ -1,7 +1,7 @@
 // file: internal/operations/registry/finish.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e5a42-9d3b-4f68-b0a7-3e2d8c6f1a95
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

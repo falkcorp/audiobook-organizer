@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestIsOwnerManualOnly(t *testing.T) {

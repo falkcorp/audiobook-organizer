@@ -1,7 +1,7 @@
 // file: internal/metafetch/cleaned_hint_roundtrip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a90831ba-362e-4ef9-b611-020e8c9d8009
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

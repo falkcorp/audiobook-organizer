@@ -1,7 +1,7 @@
 // file: internal/merge/sync_identity_survival_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 44a928e0-6f46-412d-826b-198c12f52dc7
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // Package merge: cross-mechanism ID-survival acceptance suite.
 //
@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -284,9 +284,9 @@ func TestSyncIdentitySurvives_FileReplace_Primitive(t *testing.T) {
 // TestSyncIdentitySurvives_RedirectChain_PathologicalCycle is the "cycle"
 // half of ResolveSyncItem's documented protection ("caps at 10 hops and
 // tracks visited ids to guard against a cycle or runaway chain" --
-// internal/database/pebble_store_syncid.go). The happy-path chain
+// internal/books/store/pebble_store_syncid.go). The happy-path chain
 // (B -> A -> C, a client holding B's id resolving all the way to C) already
-// has two independent tests -- internal/database/pebble_store_syncid_test.go's
+// has two independent tests -- internal/books/store/pebble_store_syncid_test.go's
 // TestSyncID_RecordSyncMerge_ThreeWayRedirectChain and this package's
 // TestMergeBooks_SyncIdentity_ChainedMerges (sync_follow_test.go) -- so this
 // test does not repeat that; it is the pathological case neither of them

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/activity_mirror.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: af8533f9-bdc2-492d-a225-d66ffa0e0e9f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package registry
 
@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 

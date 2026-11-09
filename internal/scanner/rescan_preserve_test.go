@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_preserve_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: b2f4c6a8-1d3e-4f50-9a7b-2c6e8d0f1a34
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestSaveBookToDatabase_RescanPreservesEnrichedFields is the load-bearing

@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard_symlink_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9f1d4b62-2e7a-4c85-b3f0-6a8c1e5d7b24
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // A path outside books/itunes/ that reaches it through a symlink is the same

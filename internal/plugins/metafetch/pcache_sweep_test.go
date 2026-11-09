@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 04ccc271-b21f-4dfa-b788-6ab9e21ca3ca
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery_fingerprint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1af9e6b0-8cc6-4be2-a92c-885e26107d35
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

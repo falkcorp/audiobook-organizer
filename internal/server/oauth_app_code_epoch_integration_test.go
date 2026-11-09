@@ -1,7 +1,7 @@
 // file: internal/server/oauth_app_code_epoch_integration_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 73e84ab1-70b7-4eb5-b510-17c02d35d030
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

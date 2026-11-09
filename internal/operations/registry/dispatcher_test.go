@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

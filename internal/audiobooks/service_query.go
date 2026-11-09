@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.39.1
+// version: 1.39.2
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -18,8 +18,8 @@ import (
 
 	blevequery "github.com/blevesearch/bleve/v2/search/query"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

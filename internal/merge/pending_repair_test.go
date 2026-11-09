@@ -1,7 +1,7 @@
 // file: internal/merge/pending_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7e4b29-5d1a-4f83-9b6e-2a8f3d7c1e45
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

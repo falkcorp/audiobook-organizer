@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -110,7 +110,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

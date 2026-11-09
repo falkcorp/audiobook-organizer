@@ -1,7 +1,7 @@
 // file: internal/catalog/rules_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f8b3d52-6e9a-4c07-b4d1-8a2c5e7f9b30
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

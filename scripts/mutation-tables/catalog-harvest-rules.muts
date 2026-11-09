@@ -1,7 +1,7 @@
 # file: scripts/mutation-tables/catalog-harvest-rules.muts
-# version: 1.7.0
+# version: 1.7.1
 # guid: 4c1e7a93-8b2d-4f60-a5e9-2d6b0f8c3a71
-# last-edited: 2026-10-02
+# last-edited: 2026-11-09
 #
 # Mutation table for the author-catalog P1 rules: edition grouping, sequence
 # parsing, author disambiguation, and the stale/cap/resume decisions of the
@@ -38,16 +38,16 @@ M14 cap-not-enforced | internal/catalog/harvest.go | s/if r\.raw >= h\.Cfg\.MaxP
 M15 prev-asins-ignored | internal/catalog/harvest.go | s/\&\& prevASINs != nil \{/\&\& false {/
 M16 partial-not-retried | internal/catalog/harvest.go | s/if prev\.State != database\.CatalogHarvestComplete \x7c\x7c prev\.LastCompleteAt == nil \{/if prev.LastCompleteAt == nil {/
 M17 stop-at-total-ignored | internal/catalog/harvest.go | s/case r\.raw >= pg\.TotalResults:/case false:/
-M18 stale-ignores-coauthors | internal/database/catalog_entry_store.go | s/if len\(e\.HarvestedBy\) == 0 \&\& e\.StaleSince == nil \{/if e.StaleSince == nil {/
-M19 group-id-recomputed | internal/database/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n\t\t\tentry\.EditionGroupKey = old\.EditionGroupKey\n//
-M20 batch-group-map-ignored | internal/database/catalog_entry_store.go | s/if gid, ok := pending\[key\]; ok \{/if gid, ok := pending[key]; ok \&\& false {/
-M21 batch-pid-map-ignored | internal/database/catalog_entry_store.go | s/if p, ok := pendingPID\[pk\]; ok \{/if p, ok := pendingPID[pk]; ok \&\& false {/
+M18 stale-ignores-coauthors | internal/books/store/catalog_entry_store.go | s/if len\(e\.HarvestedBy\) == 0 \&\& e\.StaleSince == nil \{/if e.StaleSince == nil {/
+M19 group-id-recomputed | internal/books/store/catalog_entry_store.go | s/\t\t\tentry\.EditionGroupID = old\.EditionGroupID\n\t\t\tentry\.EditionGroupKey = old\.EditionGroupKey\n//
+M20 batch-group-map-ignored | internal/books/store/catalog_entry_store.go | s/if gid, ok := pending\[key\]; ok \{/if gid, ok := pending[key]; ok \&\& false {/
+M21 batch-pid-map-ignored | internal/books/store/catalog_entry_store.go | s/if p, ok := pendingPID\[pk\]; ok \{/if p, ok := pendingPID[pk]; ok \&\& false {/
 M22 not-found-counted-as-error | internal/catalog/disambig.go | s/if errors\.Is\(err, metadata\.ErrCatalogProductNotFound\) \{/if errors.Is(err, metadata.ErrCatalogProductNotFound) && false {/
 M23 404-not-classified | internal/metadata/audible_author_list.go | s/pse\.Status == http\.StatusNotFound/pse.Status == 0/
 M24 registry-not-fed | internal/catalog/harvest.go | s/\th\.Cfg\.OnProviderError\(err\)\n/\n/
 M25 no-stand-down-cancel | internal/catalog/harvest.go | s/\t\t\tcancel\(\)\n\t\t\}/\t\t}/
-M26 verdict-last-writer-wins | internal/database/catalog_entry_store.go | s/applyVerdict\(&entry, harvestKey, !in\.NameOnlyAuthor, in\.AuthorConflict\)/entry.NameOnlyAuthor, entry.AuthorConflict = in.NameOnlyAuthor, in.AuthorConflict/
-M27 unseen-keeps-verdict | internal/database/catalog_entry_store.go | s/\t\te\.ConfirmedBy = withoutKey\(e\.ConfirmedBy, harvestKey\)\n//
+M26 verdict-last-writer-wins | internal/books/store/catalog_entry_store.go | s/applyVerdict\(&entry, harvestKey, !in\.NameOnlyAuthor, in\.AuthorConflict\)/entry.NameOnlyAuthor, entry.AuthorConflict = in.NameOnlyAuthor, in.AuthorConflict/
+M27 unseen-keeps-verdict | internal/books/store/catalog_entry_store.go | s/\t\te\.ConfirmedBy = withoutKey\(e\.ConfirmedBy, harvestKey\)\n//
 M28 empty-page-completes | internal/catalog/harvest.go | s/\t\t\tr\.short = fmt\.Sprintf\("listing ended at[^\n]*\n//
 M29 zero-total-believed | internal/catalog/harvest.go | s/\} else if filed > 0 \{/} else if false {/
 M30 skipped-not-counted | internal/catalog/harvest.go | s/received := len\(pg\.Products\) \+ pg\.Skipped/received := len(pg.Products)/

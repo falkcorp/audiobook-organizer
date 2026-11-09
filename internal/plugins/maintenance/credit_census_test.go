@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credit_census_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 974607e6-4eb5-4df4-8e22-9eefce977bf4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

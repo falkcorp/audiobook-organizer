@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2be72b85-1d35-4b20-a84d-8612dec97417
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

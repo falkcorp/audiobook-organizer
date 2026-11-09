@@ -1,7 +1,7 @@
 // file: internal/audiobooks/restore_library_state_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ddf71ad3-a1e7-432e-a422-41aa7f87a782
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

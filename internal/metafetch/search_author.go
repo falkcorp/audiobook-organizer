@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_author.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b2296132-2b4b-426c-9f36-b3031543cec6
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/transcode_integration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cc5127fa-27ba-490a-b347-bbac0a472878
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 //go:build integration
 
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 )

@@ -5,7 +5,7 @@
 package duplicatesmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockDuplicatesStore) EXPECT() *MockDuplicatesStore_Expecter {
 }
 
 // GetBookByID provides a mock function for the type MockDuplicatesStore
-func (_mock *MockDuplicatesStore) GetBookByID(id string) (*database.Book, error) {
+func (_mock *MockDuplicatesStore) GetBookByID(id string) (*store.Book, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByID")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -97,34 +97,34 @@ func (_c *MockDuplicatesStore_GetBookByID_Call) Run(run func(id string)) *MockDu
 	return _c
 }
 
-func (_c *MockDuplicatesStore_GetBookByID_Call) Return(book *database.Book, err error) *MockDuplicatesStore_GetBookByID_Call {
+func (_c *MockDuplicatesStore_GetBookByID_Call) Return(book *store.Book, err error) *MockDuplicatesStore_GetBookByID_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockDuplicatesStore_GetBookByID_Call) RunAndReturn(run func(id string) (*database.Book, error)) *MockDuplicatesStore_GetBookByID_Call {
+func (_c *MockDuplicatesStore_GetBookByID_Call) RunAndReturn(run func(id string) (*store.Book, error)) *MockDuplicatesStore_GetBookByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetSeriesByID provides a mock function for the type MockDuplicatesStore
-func (_mock *MockDuplicatesStore) GetSeriesByID(id int) (*database.Series, error) {
+func (_mock *MockDuplicatesStore) GetSeriesByID(id int) (*store.Series, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSeriesByID")
 	}
 
-	var r0 *database.Series
+	var r0 *store.Series
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Series, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Series, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Series); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Series); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Series)
+			r0 = ret.Get(0).(*store.Series)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -159,12 +159,12 @@ func (_c *MockDuplicatesStore_GetSeriesByID_Call) Run(run func(id int)) *MockDup
 	return _c
 }
 
-func (_c *MockDuplicatesStore_GetSeriesByID_Call) Return(series *database.Series, err error) *MockDuplicatesStore_GetSeriesByID_Call {
+func (_c *MockDuplicatesStore_GetSeriesByID_Call) Return(series *store.Series, err error) *MockDuplicatesStore_GetSeriesByID_Call {
 	_c.Call.Return(series, err)
 	return _c
 }
 
-func (_c *MockDuplicatesStore_GetSeriesByID_Call) RunAndReturn(run func(id int) (*database.Series, error)) *MockDuplicatesStore_GetSeriesByID_Call {
+func (_c *MockDuplicatesStore_GetSeriesByID_Call) RunAndReturn(run func(id int) (*store.Series, error)) *MockDuplicatesStore_GetSeriesByID_Call {
 	_c.Call.Return(run)
 	return _c
 }

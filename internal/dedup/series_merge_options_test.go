@@ -1,7 +1,7 @@
 // file: internal/dedup/series_merge_options_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d27a4e90-6b13-4c85-9f0e-a31c58b72d64
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // These pin the two protections the Authors & series lane's merges carry.

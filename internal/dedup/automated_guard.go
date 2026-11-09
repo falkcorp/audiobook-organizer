@@ -1,14 +1,14 @@
 // file: internal/dedup/automated_guard.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7bc59120-8b4f-48c2-8ac8-c8119a588036
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Owner rule (2026-09-25): two kinds of candidate are REVIEW-QUEUE ONLY.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.6
+// version: 1.56.7
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

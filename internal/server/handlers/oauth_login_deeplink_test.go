@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login_deeplink_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e04b7c2-1a68-4d39-b0f5-93c7e2016d84
-// last-edited: 2026-08-02
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )

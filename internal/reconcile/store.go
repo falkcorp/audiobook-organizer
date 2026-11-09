@@ -1,12 +1,12 @@
 // file: internal/reconcile/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e3b1a95-2d68-4f04-8b57-0c91e6d4a273
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package reconcile
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

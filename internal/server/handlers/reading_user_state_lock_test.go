@@ -1,7 +1,7 @@
 // file: internal/server/handlers/reading_user_state_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1b1689c7-8d0a-41db-af90-d643d4648337
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The heartbeat with no authenticated user writes as "_local".

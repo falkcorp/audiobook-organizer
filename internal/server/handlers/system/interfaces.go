@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, config
@@ -17,8 +17,8 @@ import (
 	"context"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/gin-gonic/gin"
 )

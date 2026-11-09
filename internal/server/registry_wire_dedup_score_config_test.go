@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire_dedup_score_config_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: a9b707f0-a8bf-408c-80ca-6476753a15ba
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

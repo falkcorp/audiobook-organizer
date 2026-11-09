@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

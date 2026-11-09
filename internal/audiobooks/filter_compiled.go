@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

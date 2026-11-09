@@ -1,7 +1,7 @@
 // file: internal/batch/merge_gate_panic_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2f9a14-6b83-4e05-91c7-a3e58d0b4f26
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

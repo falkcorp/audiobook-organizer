@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credit_census.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1df256d6-add9-41de-bf6d-622ed04e2944
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

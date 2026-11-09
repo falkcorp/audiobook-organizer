@@ -1,6 +1,6 @@
 // file: internal/server/user_handlers_test.go
-// version: 1.2.0
-// last-edited: 2026-10-06
+// version: 1.2.1
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

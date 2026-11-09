@@ -1,7 +1,7 @@
 // file: internal/decisions/retention_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 2c8e5b17-94d0-4f63-a1b2-7e03d6c58a49
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package decisions_test
 
@@ -25,8 +25,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
@@ -504,7 +504,7 @@ func TestRetention_CanaryEveryPruneLikeMethodIsCovered(t *testing.T) {
 // writer (or deleter) the retention table above does not know about.
 func TestRetention_NoOneElseWritesDecisionKeys(t *testing.T) {
 	allowed := map[string]bool{
-		"internal/database/keyfamilies.go": true, // the census registry names the prefixes
+		"internal/books/store/keyfamilies.go": true, // the census registry names the prefixes
 	}
 	out := grepRepo(t, `"decision:`)
 	var offenders []string

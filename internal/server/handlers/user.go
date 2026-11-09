@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8b2e4d61-3c7a-4f95-b1d8-6a0c9e2f5b47
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

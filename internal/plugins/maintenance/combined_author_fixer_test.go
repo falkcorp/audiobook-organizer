@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

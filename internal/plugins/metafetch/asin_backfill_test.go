@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 2b8f4c71-6e05-4d39-a1c7-9e3d0f5a8b26
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

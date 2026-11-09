@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_backfill_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0e83d1-72af-46c9-a1e4-8f6c20d95347
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 package registry
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // backfillFakeStore extends legacyFakeStore with the two listing methods the

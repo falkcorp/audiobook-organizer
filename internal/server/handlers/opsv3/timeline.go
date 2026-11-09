@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/timeline.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a9a8ff32-bf89-4265-a016-59ee9e75d04e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 

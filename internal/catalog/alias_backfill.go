@@ -1,7 +1,7 @@
 // file: internal/catalog/alias_backfill.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c27d8f40-1a6e-4b93-85d2-e9f0b3a7c514
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -20,7 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.12.0
+// version: 3.12.1
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -14,8 +14,8 @@ import (
 	"net/http"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"

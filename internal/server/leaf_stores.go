@@ -1,12 +1,12 @@
 // file: internal/server/leaf_stores.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

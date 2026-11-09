@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

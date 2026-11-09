@@ -1,7 +1,7 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"

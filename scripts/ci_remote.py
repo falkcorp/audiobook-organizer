@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci_remote.py
-# version: 1.2.4
+# version: 1.2.5
 # guid: 4a04a3b5-d6a8-4802-b193-28b78d787636
-# last-edited: 2026-11-07
+# last-edited: 2026-11-09
 
 """Run `make ci` sharded across a pool of remote runner nodes (`make ci-remote`).
 
@@ -352,11 +352,11 @@ def heuristic_seconds(test_bytes: int) -> float:
 
 # Prior runtimes (seconds, module-relative path) for packages known to be slow,
 # used only until they have been measured on one of the pool's GOOS. Without
-# them a first run sizes internal/database by its test-file bytes and packs it
+# them a first run sizes internal/books/store by its test-file bytes and packs it
 # into an ordinary bin next to other slow packages. The numbers are 2026-09-26
 # observations on a loaded Mac.
 SEED_SECONDS = {
-    "internal/database": 1800.0,
+    "internal/books/store": 1800.0,
     "internal/server/handlers/abs": 620.0,
     "internal/server": 500.0,
     "internal/applygate": 420.0,
@@ -370,10 +370,10 @@ SEED_SECONDS = {
 HEAVY_SECONDS = 90.0
 
 # Per-package floors for `go test -timeout`, in minutes. make ci uses 25m for
-# the whole run; internal/database alone has taken 1500-2200s on a loaded Mac,
+# the whole run; internal/books/store alone has taken 1500-2200s on a loaded Mac,
 # so a shard holding it gets at least 50m. Every shard also gets at least 2x
 # the slowest measured time of any package in it.
-PACKAGE_TIMEOUT_MIN = {"internal/database": 50}
+PACKAGE_TIMEOUT_MIN = {"internal/books/store": 50}
 
 
 def rel_pkg(pkg: str) -> str:

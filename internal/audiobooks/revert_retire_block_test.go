@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_block_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c6f2a8d3-9e14-4b07-8a35-1d7b0e5f4c92
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

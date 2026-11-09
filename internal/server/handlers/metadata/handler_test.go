@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.2
+// version: 1.21.3
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -28,8 +28,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

@@ -1,7 +1,7 @@
 // file: internal/testutil/storage_format_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 490e04d3-cb40-4b81-8c85-c7567ef22ee9
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package testutil
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestSetupIntegration_StoreStampedCurrent checks that the store every

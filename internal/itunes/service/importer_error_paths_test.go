@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -25,8 +25,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_title.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a88b51d9-3878-41d2-b50e-c04f1ff6793e
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 //
 // The title the bulk metadata fetch searches a book by, for a book whose own
 // title is not worth searching.
@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

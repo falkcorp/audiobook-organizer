@@ -1,5 +1,5 @@
 // file: internal/scanner/raced_row_primary_handoff_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 00e57d28-b1fc-410b-8ab8-557e1e5fe233
 // last-edited: 2026-11-09
 
@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

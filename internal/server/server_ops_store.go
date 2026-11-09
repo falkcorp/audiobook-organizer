@@ -1,14 +1,14 @@
 // file: internal/server/server_ops_store.go
-// version: 1.24.3
+// version: 1.24.4
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ServerOpsStore is what internal/server actually uses a store FOR.

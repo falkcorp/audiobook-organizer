@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.22.2
+// version: 2.22.3
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -58,9 +58,9 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

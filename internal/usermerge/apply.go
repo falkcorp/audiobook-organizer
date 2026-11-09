@@ -1,7 +1,7 @@
 // file: internal/usermerge/apply.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f6a0c82-d417-4b95-8e23-5a9c1e7d4b06
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/scheduler/interval_clock_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c41a7b98-3e26-4d05-9f7a-2b8e6d015c3f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // settingsBackedScheduler returns a TaskScheduler whose store keeps settings in

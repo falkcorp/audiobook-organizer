@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_acoustid_score_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b9e2c07-3f14-4a86-8d71-c0a4f6e2b153
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/adopt_existing_destination_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1d8e2a-7f94-4b36-a0d5-e83b6f2c9a17
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // adoptExistingDestination is the one adoption test shared by the pre-copy

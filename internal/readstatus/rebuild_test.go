@@ -1,7 +1,7 @@
 // file: internal/readstatus/rebuild_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b2d6f4a-3c19-4e57-a6d0-f1e9c7b5a382
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package readstatus
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // corruptStateStore returns a real store for u1/b1 with a readable position

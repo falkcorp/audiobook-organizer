@@ -1,7 +1,7 @@
 // file: internal/merge/state_follow_should_fix_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f3b7f8e-5a8c-4c71-9b3e-2d6a1c4e7b90
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

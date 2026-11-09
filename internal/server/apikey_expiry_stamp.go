@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_stamp.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 03e89930-38be-47ce-a24e-71825969fb5b
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

@@ -1,12 +1,12 @@
 // file: internal/itunes/service/types.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 43dcecba-4cba-4139-bd4c-5047a9a1f0c0
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

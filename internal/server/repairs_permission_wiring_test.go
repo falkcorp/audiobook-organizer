@@ -1,7 +1,7 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // The Repairs lane's per-fixer permission check as the server wires it
 // (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 const missingFilesPlanPath = "/api/v1/repairs/reconcile.missing-files/plan"

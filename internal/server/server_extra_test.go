@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/stretchr/testify/require"
 )

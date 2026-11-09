@@ -1,5 +1,5 @@
 // file: internal/scheduler/periodic_library_scan_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8c5b1e74-2d06-4f39-a7b8-0e93c5d18a42
 // last-edited: 2026-11-09
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

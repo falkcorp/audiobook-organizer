@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/reembed_embeddings_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a2b1c0d-9e8f-7a6b-5c4d-3e2f1a0b9c8d
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 // Unit tests for the reembed-embeddings op's scan-partition helper and the
 // Phase-1 candidate scan (scanReembedCandidates).
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

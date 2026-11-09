@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.8
+// version: 1.5.9
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: internal/merge/provisional_guard_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 51f8f6c7-7a87-45e9-b9fa-cecc30246566
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // A merge picks a winner and soft-deletes the losers. Doing that without a

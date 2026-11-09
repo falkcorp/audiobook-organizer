@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 9.0.1
+// version: 9.0.2
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

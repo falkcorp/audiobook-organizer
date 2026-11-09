@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_phase_summary_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b1e7c40-9a3f-4d28-8e16-c47f0b93a2d5
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/require"
 )

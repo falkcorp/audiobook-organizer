@@ -1,7 +1,7 @@
 // file: internal/metafetch/queued_apply_user_edit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e9c4b17-6a3f-4d58-b0e1-8f7a2c5d9b36
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A user's web bulk edit (POST /audiobooks/batch) after a queued apply was

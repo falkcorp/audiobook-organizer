@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

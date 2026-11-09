@@ -1,7 +1,7 @@
 // file: internal/server/provider_throttle_wire.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c730dc9f-e858-44d0-b00e-4a9f1aa4d722
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

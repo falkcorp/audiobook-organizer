@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.18.3
+// version: 1.18.4
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type fakeBookFiles struct {

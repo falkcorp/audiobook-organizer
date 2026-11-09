@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

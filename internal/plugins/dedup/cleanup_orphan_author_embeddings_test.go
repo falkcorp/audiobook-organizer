@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_author_embeddings_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-07-08
+// last-edited: 2026-11-09
 
 // Tests for the dedup.cleanup-orphan-author-embeddings op (author-side
 // counterpart to dedup.cleanup-orphan-embeddings).
@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

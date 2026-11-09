@@ -1,7 +1,7 @@
 // file: internal/operations/registry/legacy_op_status_internal_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8e35b0d7-4a91-4c26-bf08-73d9a15c6e42
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // legacyUpdate records one UpdateOperationStatus call.

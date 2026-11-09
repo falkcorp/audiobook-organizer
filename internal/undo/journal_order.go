@@ -1,11 +1,11 @@
 // file: internal/undo/journal_order.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8f1d56-9e24-4c70-a5d1-72e6c0f4b983
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // The order of the journal's rows, for the decisions that depend on which row
 // came first (the membership history, the paired-row rule): the journal clock's

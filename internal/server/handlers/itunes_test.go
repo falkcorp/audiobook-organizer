@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

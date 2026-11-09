@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve_verified_email_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: b7d1909a-d742-41fb-b8cf-25bdae5ca124
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package oauth
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newResolvePebble(t *testing.T) *database.PebbleStore {

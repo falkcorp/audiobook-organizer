@@ -1,7 +1,7 @@
 // file: internal/server/login_throttle_key_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5a1f9c7e-62b8-4d03-9e4a-b7c2d8e1f063
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

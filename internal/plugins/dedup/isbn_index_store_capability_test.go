@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/isbn_index_store_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3935a93-0a19-412c-b62c-2acb6c2a7fc4
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 // Decorator tests for resolveISBNIndexStore (dedup.build-isbn-index).
 //
@@ -15,7 +15,7 @@ package dedup
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pluginISBNCapableStore is a database.Store that also carries all three

@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_handover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c022c5f-dfcc-4f2b-a607-45bbb5837b7a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The organizer's copy has NEW book_file ids, so a sync_file ino must follow

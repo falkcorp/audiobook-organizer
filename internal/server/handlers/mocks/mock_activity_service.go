@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,26 +48,26 @@ func (_m *MockActivityService) EXPECT() *MockActivityService_Expecter {
 }
 
 // GetDistinctSources provides a mock function for the type MockActivityService
-func (_mock *MockActivityService) GetDistinctSources(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error) {
+func (_mock *MockActivityService) GetDistinctSources(ctx context.Context, filter store.ActivityFilter) ([]store.SourceCount, error) {
 	ret := _mock.Called(ctx, filter)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetDistinctSources")
 	}
 
-	var r0 []database.SourceCount
+	var r0 []store.SourceCount
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, database.ActivityFilter) ([]database.SourceCount, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, store.ActivityFilter) ([]store.SourceCount, error)); ok {
 		return returnFunc(ctx, filter)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, database.ActivityFilter) []database.SourceCount); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, store.ActivityFilter) []store.SourceCount); ok {
 		r0 = returnFunc(ctx, filter)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.SourceCount)
+			r0 = ret.Get(0).([]store.SourceCount)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, database.ActivityFilter) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, store.ActivityFilter) error); ok {
 		r1 = returnFunc(ctx, filter)
 	} else {
 		r1 = ret.Error(1)
@@ -82,20 +82,20 @@ type MockActivityService_GetDistinctSources_Call struct {
 
 // GetDistinctSources is a helper method to define mock.On call
 //   - ctx context.Context
-//   - filter database.ActivityFilter
+//   - filter store.ActivityFilter
 func (_e *MockActivityService_Expecter) GetDistinctSources(ctx any, filter any) *MockActivityService_GetDistinctSources_Call {
 	return &MockActivityService_GetDistinctSources_Call{Call: _e.mock.On("GetDistinctSources", ctx, filter)}
 }
 
-func (_c *MockActivityService_GetDistinctSources_Call) Run(run func(ctx context.Context, filter database.ActivityFilter)) *MockActivityService_GetDistinctSources_Call {
+func (_c *MockActivityService_GetDistinctSources_Call) Run(run func(ctx context.Context, filter store.ActivityFilter)) *MockActivityService_GetDistinctSources_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 database.ActivityFilter
+		var arg1 store.ActivityFilter
 		if args[1] != nil {
-			arg1 = args[1].(database.ActivityFilter)
+			arg1 = args[1].(store.ActivityFilter)
 		}
 		run(
 			arg0,
@@ -105,43 +105,43 @@ func (_c *MockActivityService_GetDistinctSources_Call) Run(run func(ctx context.
 	return _c
 }
 
-func (_c *MockActivityService_GetDistinctSources_Call) Return(sourceCounts []database.SourceCount, err error) *MockActivityService_GetDistinctSources_Call {
+func (_c *MockActivityService_GetDistinctSources_Call) Return(sourceCounts []store.SourceCount, err error) *MockActivityService_GetDistinctSources_Call {
 	_c.Call.Return(sourceCounts, err)
 	return _c
 }
 
-func (_c *MockActivityService_GetDistinctSources_Call) RunAndReturn(run func(ctx context.Context, filter database.ActivityFilter) ([]database.SourceCount, error)) *MockActivityService_GetDistinctSources_Call {
+func (_c *MockActivityService_GetDistinctSources_Call) RunAndReturn(run func(ctx context.Context, filter store.ActivityFilter) ([]store.SourceCount, error)) *MockActivityService_GetDistinctSources_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Query provides a mock function for the type MockActivityService
-func (_mock *MockActivityService) Query(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error) {
+func (_mock *MockActivityService) Query(ctx context.Context, filter store.ActivityFilter) ([]store.ActivityEntry, int, error) {
 	ret := _mock.Called(ctx, filter)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Query")
 	}
 
-	var r0 []database.ActivityEntry
+	var r0 []store.ActivityEntry
 	var r1 int
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, database.ActivityFilter) ([]database.ActivityEntry, int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, store.ActivityFilter) ([]store.ActivityEntry, int, error)); ok {
 		return returnFunc(ctx, filter)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, database.ActivityFilter) []database.ActivityEntry); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, store.ActivityFilter) []store.ActivityEntry); ok {
 		r0 = returnFunc(ctx, filter)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ActivityEntry)
+			r0 = ret.Get(0).([]store.ActivityEntry)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, database.ActivityFilter) int); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, store.ActivityFilter) int); ok {
 		r1 = returnFunc(ctx, filter)
 	} else {
 		r1 = ret.Get(1).(int)
 	}
-	if returnFunc, ok := ret.Get(2).(func(context.Context, database.ActivityFilter) error); ok {
+	if returnFunc, ok := ret.Get(2).(func(context.Context, store.ActivityFilter) error); ok {
 		r2 = returnFunc(ctx, filter)
 	} else {
 		r2 = ret.Error(2)
@@ -156,20 +156,20 @@ type MockActivityService_Query_Call struct {
 
 // Query is a helper method to define mock.On call
 //   - ctx context.Context
-//   - filter database.ActivityFilter
+//   - filter store.ActivityFilter
 func (_e *MockActivityService_Expecter) Query(ctx any, filter any) *MockActivityService_Query_Call {
 	return &MockActivityService_Query_Call{Call: _e.mock.On("Query", ctx, filter)}
 }
 
-func (_c *MockActivityService_Query_Call) Run(run func(ctx context.Context, filter database.ActivityFilter)) *MockActivityService_Query_Call {
+func (_c *MockActivityService_Query_Call) Run(run func(ctx context.Context, filter store.ActivityFilter)) *MockActivityService_Query_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 database.ActivityFilter
+		var arg1 store.ActivityFilter
 		if args[1] != nil {
-			arg1 = args[1].(database.ActivityFilter)
+			arg1 = args[1].(store.ActivityFilter)
 		}
 		run(
 			arg0,
@@ -179,12 +179,12 @@ func (_c *MockActivityService_Query_Call) Run(run func(ctx context.Context, filt
 	return _c
 }
 
-func (_c *MockActivityService_Query_Call) Return(activityEntrys []database.ActivityEntry, n int, err error) *MockActivityService_Query_Call {
+func (_c *MockActivityService_Query_Call) Return(activityEntrys []store.ActivityEntry, n int, err error) *MockActivityService_Query_Call {
 	_c.Call.Return(activityEntrys, n, err)
 	return _c
 }
 
-func (_c *MockActivityService_Query_Call) RunAndReturn(run func(ctx context.Context, filter database.ActivityFilter) ([]database.ActivityEntry, int, error)) *MockActivityService_Query_Call {
+func (_c *MockActivityService_Query_Call) RunAndReturn(run func(ctx context.Context, filter store.ActivityFilter) ([]store.ActivityEntry, int, error)) *MockActivityService_Query_Call {
 	_c.Call.Return(run)
 	return _c
 }

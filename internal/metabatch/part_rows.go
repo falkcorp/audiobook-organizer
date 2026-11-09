@@ -1,7 +1,7 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 //
 // Tells a book row that is one file of a set the scanner filed as separate
 // book rows ("06 Chapter 6", "Cobra 100 of 151", "The Sunrise Lands 1" beside
@@ -28,8 +28,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"golang.org/x/sync/singleflight"

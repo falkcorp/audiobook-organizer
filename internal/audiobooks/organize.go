@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/service.go. This file provides type aliases and
@@ -13,7 +13,7 @@ package audiobooks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"

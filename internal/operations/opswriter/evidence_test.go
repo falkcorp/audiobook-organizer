@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/evidence_test.go
-// version: 2.4.5
+// version: 2.4.6
 // guid: 4af29ea6-4101-42cd-b6c6-1e86908383ef
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

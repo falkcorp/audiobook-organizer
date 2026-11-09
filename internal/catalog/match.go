@@ -1,7 +1,7 @@
 // file: internal/catalog/match.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3b9e6c10-5d2a-4f87-9a41-c8e0d7b25f93
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 //
 // The local author-catalog blocking stage (spec 02 section 3.3, B1 and B2):
 // a book is looked up in the harvested catalog with ZERO provider calls,
@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

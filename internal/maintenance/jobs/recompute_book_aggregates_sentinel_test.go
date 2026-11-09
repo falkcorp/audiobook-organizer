@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates_sentinel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0a5c7e39-4b18-4d26-91f7-6e2a8b3c5d40
-// last-edited: 2026-08-29
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metabatch_test
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_provenance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d2f6b83-1e47-4a05-bc39-8f5a0d716e42
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package fileops
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // recorder captures appended events and can be made to fail.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_purge_empty_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f7912f12-2468-4645-af36-7afebc4a496b
-// last-edited: 2026-09-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/stretchr/testify/require"

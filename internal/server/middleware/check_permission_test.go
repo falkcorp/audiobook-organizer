@@ -1,7 +1,7 @@
 // file: internal/server/middleware/check_permission_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: fce91a68-942b-4396-a09d-db4029d93a8b
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // countUsers is a UserCounter answering n (or err).

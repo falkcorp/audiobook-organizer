@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_pagination_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b1c4f27-9d3e-4a60-b5c8-1e70a2f43d96
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Regression tests for search + post-filter pagination.
 //
@@ -30,8 +30,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

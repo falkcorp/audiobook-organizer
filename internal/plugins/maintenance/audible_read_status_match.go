@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_match.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4fe74359-29db-4163-a16f-6d8b17834356
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // This file is the input side of maintenance.audible-read-status: the

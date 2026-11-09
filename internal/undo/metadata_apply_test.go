@@ -1,7 +1,7 @@
 // file: internal/undo/metadata_apply_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a8c1e63-9f27-4b05-8d3e-e6b2a0c79f18
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The classifier, the revert and the preflight must agree on the two rows

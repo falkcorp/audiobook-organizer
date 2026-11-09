@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/lissen_endpoints_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0e8a73-b216-4f9c-a3e7-1c64b9d2f085
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lissenSeed adds three Batman-titled organized books to the oracle seed so the

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/book_pair_counts_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c27f8a15-3e94-4b61-9d0a-5f1e7b3c8d46
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type pairCountsResp struct {

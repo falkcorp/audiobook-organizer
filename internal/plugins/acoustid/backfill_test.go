@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0123
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // makeBookFile builds a BookFile with sensible defaults plus the overrides

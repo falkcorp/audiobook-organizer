@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_reparse_guard_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2b6d41-7e05-4c39-b8a7-1d94e30c5f26
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 

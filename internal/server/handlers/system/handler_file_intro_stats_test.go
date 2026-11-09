@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_file_intro_stats_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c58e1f07-3a94-4d62-b0e7-94f2d6a8b315
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package system_test
 
@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
 	"github.com/gin-gonic/gin"

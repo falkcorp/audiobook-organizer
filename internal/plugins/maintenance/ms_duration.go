@@ -1,11 +1,11 @@
 // file: internal/plugins/maintenance/ms_duration.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f9a1d47-58c2-4e6b-9a03-7c41bd2e8f56
-// last-edited: 2026-09-21
+// last-edited: 2026-11-09
 
 package maintenance
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // durationLooksLikeMillis reports whether a stored duration is a millisecond
 // value that was never divided by 1000 (a legacy iTunes import path stored

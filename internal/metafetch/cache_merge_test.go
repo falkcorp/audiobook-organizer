@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 // The candidate fetch's provider fallback MERGES its answer into the book's
 // cached candidates (SearchOptions.MergeWithCached). These pin the rows a
@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

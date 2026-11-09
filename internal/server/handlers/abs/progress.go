@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs
 
@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"

@@ -1,7 +1,7 @@
 // file: internal/server/operation_error_text_user_data_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1d9e48-3a75-4b02-8f6e-d4a0b7c25e13
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // An operation's error text and progress message are free text its row serves
 // to every library.view caller, and an error such as "merge failed: user_id=<id>
@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

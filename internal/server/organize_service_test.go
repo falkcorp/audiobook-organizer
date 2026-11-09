@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

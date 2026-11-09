@@ -1,7 +1,7 @@
 // file: internal/search/per_user_mixed.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c0d40cc-1952-436b-8cb3-57af681bbbff
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package search
 
@@ -13,7 +13,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // errPerUserNeedsRows is what TranslateAt returns for a query whose per-user terms

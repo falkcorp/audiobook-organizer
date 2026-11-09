@@ -1,7 +1,7 @@
 // file: internal/server/rank_score_differential_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 437d8538-51b0-43d0-b31b-9181ba6ba5a2
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

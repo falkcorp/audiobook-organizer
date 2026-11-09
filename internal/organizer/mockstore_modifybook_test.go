@@ -1,7 +1,7 @@
 // file: internal/organizer/mockstore_modifybook_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f6b1c2e-7d84-4b5a-9e01-c2a5d8f4b716
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // newMockStore returns a mockery store whose ModifyBook composes the mock's

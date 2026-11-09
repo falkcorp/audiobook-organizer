@@ -1,7 +1,7 @@
 // file: internal/metafetch/claim_lock_race_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e4a1c52-93d8-4b6f-a0c5-2f81d6b3e947
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // raceStore wraps a Pebble store with two injectable steps around the

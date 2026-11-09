@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 

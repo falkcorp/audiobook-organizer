@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery_skip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e7b9d05-8c21-4a6f-b0d4-5f92e1c6a738
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

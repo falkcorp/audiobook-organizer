@@ -1,7 +1,7 @@
 // file: internal/server/organize_collision_hook_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b1c65824-b632-4123-aef4-5ced702b8855
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The organize collision hook writes dedup candidates directly, bypassing the

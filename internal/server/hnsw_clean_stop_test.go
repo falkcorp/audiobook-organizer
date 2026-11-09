@@ -1,7 +1,7 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,7 +18,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

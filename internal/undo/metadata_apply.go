@@ -1,7 +1,7 @@
 // file: internal/undo/metadata_apply.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9b4e2c71-5d08-4a3f-8e61-c7f02a9d3b54
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeMetadataApply: a Repairs fixer applied a metadata candidate to

@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_consolidator.go
-// version: 2.5.1
+// version: 2.5.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // chapterNumPrefixDetectRe matches a leading numeric chapter/track prefix:

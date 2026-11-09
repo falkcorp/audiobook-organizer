@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/manual_only_full_guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f3165568-40ba-4911-bf92-4619f0de4387
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 )
 

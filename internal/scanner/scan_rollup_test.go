@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_rollup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f4a2d71-6b83-4c05-a1e7-3d92f8b04c6a
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

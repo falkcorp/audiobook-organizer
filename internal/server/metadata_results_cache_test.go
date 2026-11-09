@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_cache_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1a9f36-2d84-4e57-b0c9-51e8a3d76f42
-// last-edited: 2026-08-05
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // resetMetadataResultsCache puts the package-level cache back to empty so tests

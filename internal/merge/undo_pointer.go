@@ -1,7 +1,7 @@
 // file: internal/merge/undo_pointer.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1a6c9e38-5f02-4b7d-8e49-c3d0a7f25b16
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Undo pointers.

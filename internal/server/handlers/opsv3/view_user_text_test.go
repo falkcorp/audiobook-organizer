@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/view_user_text_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c6e2a8-7f34-4d15-b0a9-5e83d1c7f246
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A run's error and the label of the item each worker is on (Label(current

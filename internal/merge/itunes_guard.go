@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

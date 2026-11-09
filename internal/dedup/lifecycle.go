@@ -1,7 +1,7 @@
 // file: internal/dedup/lifecycle.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: 3e4f5a6b-7c8d-9e0f-a1b2-c3d4e5f60718
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Lifecycle methods on *dedup.Engine that the serviceregistry container
 // picks up via interface satisfaction. PostInit subscribes to lifecycle
@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -40,7 +40,7 @@ const defaultHydrationStopTimeout = 5 * time.Second
 // should be skipped. Controlled by env var DEDUP_CHROMEM_LAZY (default
 // false / eager). When true, the chromem store stays empty and
 // FindSimilar in engine.go falls back to the SQLite linear-scan path
-// (EmbeddingStore.FindSimilar at internal/database/embedding_store.go).
+// (EmbeddingStore.FindSimilar at internal/books/store/embedding_store.go).
 //
 // Tradeoff: skipping hydrate saves ~6GB heap on the full-library / 42K-
 // embedding production library, but each dedup FindSimilar goes from

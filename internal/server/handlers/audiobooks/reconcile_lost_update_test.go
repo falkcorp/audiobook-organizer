@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/reconcile_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4d7e2c9-51a3-4f6e-9c08-7d2a3e5f1b64
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
 )

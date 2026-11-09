@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 502086aa-eba7-403d-96e5-b82be1dbaecb
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/gin-gonic/gin"
 )

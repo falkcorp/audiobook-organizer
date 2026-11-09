@@ -1,7 +1,7 @@
 // file: internal/fileops/write_tags_safe_rescan_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9d4a2c61-7e38-4b05-a1f6-52c8e0b7d493
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package fileops
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

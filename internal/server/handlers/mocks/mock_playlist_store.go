@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,26 +46,26 @@ func (_m *MockPlaylistStore) EXPECT() *MockPlaylistStore_Expecter {
 }
 
 // CreateUserPlaylist provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) CreateUserPlaylist(pl *database.UserPlaylist) (*database.UserPlaylist, error) {
+func (_mock *MockPlaylistStore) CreateUserPlaylist(pl *store.UserPlaylist) (*store.UserPlaylist, error) {
 	ret := _mock.Called(pl)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateUserPlaylist")
 	}
 
-	var r0 *database.UserPlaylist
+	var r0 *store.UserPlaylist
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*database.UserPlaylist) (*database.UserPlaylist, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.UserPlaylist) (*store.UserPlaylist, error)); ok {
 		return returnFunc(pl)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*database.UserPlaylist) *database.UserPlaylist); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.UserPlaylist) *store.UserPlaylist); ok {
 		r0 = returnFunc(pl)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserPlaylist)
+			r0 = ret.Get(0).(*store.UserPlaylist)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*database.UserPlaylist) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*store.UserPlaylist) error); ok {
 		r1 = returnFunc(pl)
 	} else {
 		r1 = ret.Error(1)
@@ -79,16 +79,16 @@ type MockPlaylistStore_CreateUserPlaylist_Call struct {
 }
 
 // CreateUserPlaylist is a helper method to define mock.On call
-//   - pl *database.UserPlaylist
+//   - pl *store.UserPlaylist
 func (_e *MockPlaylistStore_Expecter) CreateUserPlaylist(pl any) *MockPlaylistStore_CreateUserPlaylist_Call {
 	return &MockPlaylistStore_CreateUserPlaylist_Call{Call: _e.mock.On("CreateUserPlaylist", pl)}
 }
 
-func (_c *MockPlaylistStore_CreateUserPlaylist_Call) Run(run func(pl *database.UserPlaylist)) *MockPlaylistStore_CreateUserPlaylist_Call {
+func (_c *MockPlaylistStore_CreateUserPlaylist_Call) Run(run func(pl *store.UserPlaylist)) *MockPlaylistStore_CreateUserPlaylist_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.UserPlaylist
+		var arg0 *store.UserPlaylist
 		if args[0] != nil {
-			arg0 = args[0].(*database.UserPlaylist)
+			arg0 = args[0].(*store.UserPlaylist)
 		}
 		run(
 			arg0,
@@ -97,12 +97,12 @@ func (_c *MockPlaylistStore_CreateUserPlaylist_Call) Run(run func(pl *database.U
 	return _c
 }
 
-func (_c *MockPlaylistStore_CreateUserPlaylist_Call) Return(userPlaylist *database.UserPlaylist, err error) *MockPlaylistStore_CreateUserPlaylist_Call {
+func (_c *MockPlaylistStore_CreateUserPlaylist_Call) Return(userPlaylist *store.UserPlaylist, err error) *MockPlaylistStore_CreateUserPlaylist_Call {
 	_c.Call.Return(userPlaylist, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_CreateUserPlaylist_Call) RunAndReturn(run func(pl *database.UserPlaylist) (*database.UserPlaylist, error)) *MockPlaylistStore_CreateUserPlaylist_Call {
+func (_c *MockPlaylistStore_CreateUserPlaylist_Call) RunAndReturn(run func(pl *store.UserPlaylist) (*store.UserPlaylist, error)) *MockPlaylistStore_CreateUserPlaylist_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -159,23 +159,23 @@ func (_c *MockPlaylistStore_DeleteUserPlaylist_Call) RunAndReturn(run func(id st
 }
 
 // GetBookByID provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) GetBookByID(id string) (*database.Book, error) {
+func (_mock *MockPlaylistStore) GetBookByID(id string) (*store.Book, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByID")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -210,34 +210,34 @@ func (_c *MockPlaylistStore_GetBookByID_Call) Run(run func(id string)) *MockPlay
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetBookByID_Call) Return(book *database.Book, err error) *MockPlaylistStore_GetBookByID_Call {
+func (_c *MockPlaylistStore_GetBookByID_Call) Return(book *store.Book, err error) *MockPlaylistStore_GetBookByID_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetBookByID_Call) RunAndReturn(run func(id string) (*database.Book, error)) *MockPlaylistStore_GetBookByID_Call {
+func (_c *MockPlaylistStore_GetBookByID_Call) RunAndReturn(run func(id string) (*store.Book, error)) *MockPlaylistStore_GetBookByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserBookState provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) GetUserBookState(userID string, bookID string) (*database.UserBookState, error) {
+func (_mock *MockPlaylistStore) GetUserBookState(userID string, bookID string) (*store.UserBookState, error) {
 	ret := _mock.Called(userID, bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserBookState")
 	}
 
-	var r0 *database.UserBookState
+	var r0 *store.UserBookState
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) (*database.UserBookState, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) (*store.UserBookState, error)); ok {
 		return returnFunc(userID, bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string) *database.UserBookState); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string) *store.UserBookState); ok {
 		r0 = returnFunc(userID, bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserBookState)
+			r0 = ret.Get(0).(*store.UserBookState)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
@@ -278,34 +278,34 @@ func (_c *MockPlaylistStore_GetUserBookState_Call) Run(run func(userID string, b
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetUserBookState_Call) Return(userBookState *database.UserBookState, err error) *MockPlaylistStore_GetUserBookState_Call {
+func (_c *MockPlaylistStore_GetUserBookState_Call) Return(userBookState *store.UserBookState, err error) *MockPlaylistStore_GetUserBookState_Call {
 	_c.Call.Return(userBookState, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetUserBookState_Call) RunAndReturn(run func(userID string, bookID string) (*database.UserBookState, error)) *MockPlaylistStore_GetUserBookState_Call {
+func (_c *MockPlaylistStore_GetUserBookState_Call) RunAndReturn(run func(userID string, bookID string) (*store.UserBookState, error)) *MockPlaylistStore_GetUserBookState_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserPlaylist provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) GetUserPlaylist(id string) (*database.UserPlaylist, error) {
+func (_mock *MockPlaylistStore) GetUserPlaylist(id string) (*store.UserPlaylist, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserPlaylist")
 	}
 
-	var r0 *database.UserPlaylist
+	var r0 *store.UserPlaylist
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.UserPlaylist, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.UserPlaylist, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.UserPlaylist); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.UserPlaylist); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserPlaylist)
+			r0 = ret.Get(0).(*store.UserPlaylist)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -340,35 +340,35 @@ func (_c *MockPlaylistStore_GetUserPlaylist_Call) Run(run func(id string)) *Mock
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetUserPlaylist_Call) Return(userPlaylist *database.UserPlaylist, err error) *MockPlaylistStore_GetUserPlaylist_Call {
+func (_c *MockPlaylistStore_GetUserPlaylist_Call) Return(userPlaylist *store.UserPlaylist, err error) *MockPlaylistStore_GetUserPlaylist_Call {
 	_c.Call.Return(userPlaylist, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_GetUserPlaylist_Call) RunAndReturn(run func(id string) (*database.UserPlaylist, error)) *MockPlaylistStore_GetUserPlaylist_Call {
+func (_c *MockPlaylistStore_GetUserPlaylist_Call) RunAndReturn(run func(id string) (*store.UserPlaylist, error)) *MockPlaylistStore_GetUserPlaylist_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListUserPlaylistsForUser provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) ListUserPlaylistsForUser(userID string, playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error) {
+func (_mock *MockPlaylistStore) ListUserPlaylistsForUser(userID string, playlistType string, limit int, offset int) ([]store.UserPlaylist, int, error) {
 	ret := _mock.Called(userID, playlistType, limit, offset)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListUserPlaylistsForUser")
 	}
 
-	var r0 []database.UserPlaylist
+	var r0 []store.UserPlaylist
 	var r1 int
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) ([]database.UserPlaylist, int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) ([]store.UserPlaylist, int, error)); ok {
 		return returnFunc(userID, playlistType, limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) []database.UserPlaylist); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) []store.UserPlaylist); ok {
 		r0 = returnFunc(userID, playlistType, limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.UserPlaylist)
+			r0 = ret.Get(0).([]store.UserPlaylist)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, string, int, int) int); ok {
@@ -426,18 +426,18 @@ func (_c *MockPlaylistStore_ListUserPlaylistsForUser_Call) Run(run func(userID s
 	return _c
 }
 
-func (_c *MockPlaylistStore_ListUserPlaylistsForUser_Call) Return(userPlaylists []database.UserPlaylist, n int, err error) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
+func (_c *MockPlaylistStore_ListUserPlaylistsForUser_Call) Return(userPlaylists []store.UserPlaylist, n int, err error) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
 	_c.Call.Return(userPlaylists, n, err)
 	return _c
 }
 
-func (_c *MockPlaylistStore_ListUserPlaylistsForUser_Call) RunAndReturn(run func(userID string, playlistType string, limit int, offset int) ([]database.UserPlaylist, int, error)) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
+func (_c *MockPlaylistStore_ListUserPlaylistsForUser_Call) RunAndReturn(run func(userID string, playlistType string, limit int, offset int) ([]store.UserPlaylist, int, error)) *MockPlaylistStore_ListUserPlaylistsForUser_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // UpdateUserPlaylist provides a mock function for the type MockPlaylistStore
-func (_mock *MockPlaylistStore) UpdateUserPlaylist(pl *database.UserPlaylist) error {
+func (_mock *MockPlaylistStore) UpdateUserPlaylist(pl *store.UserPlaylist) error {
 	ret := _mock.Called(pl)
 
 	if len(ret) == 0 {
@@ -445,7 +445,7 @@ func (_mock *MockPlaylistStore) UpdateUserPlaylist(pl *database.UserPlaylist) er
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(*database.UserPlaylist) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.UserPlaylist) error); ok {
 		r0 = returnFunc(pl)
 	} else {
 		r0 = ret.Error(0)
@@ -459,16 +459,16 @@ type MockPlaylistStore_UpdateUserPlaylist_Call struct {
 }
 
 // UpdateUserPlaylist is a helper method to define mock.On call
-//   - pl *database.UserPlaylist
+//   - pl *store.UserPlaylist
 func (_e *MockPlaylistStore_Expecter) UpdateUserPlaylist(pl any) *MockPlaylistStore_UpdateUserPlaylist_Call {
 	return &MockPlaylistStore_UpdateUserPlaylist_Call{Call: _e.mock.On("UpdateUserPlaylist", pl)}
 }
 
-func (_c *MockPlaylistStore_UpdateUserPlaylist_Call) Run(run func(pl *database.UserPlaylist)) *MockPlaylistStore_UpdateUserPlaylist_Call {
+func (_c *MockPlaylistStore_UpdateUserPlaylist_Call) Run(run func(pl *store.UserPlaylist)) *MockPlaylistStore_UpdateUserPlaylist_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.UserPlaylist
+		var arg0 *store.UserPlaylist
 		if args[0] != nil {
-			arg0 = args[0].(*database.UserPlaylist)
+			arg0 = args[0].(*store.UserPlaylist)
 		}
 		run(
 			arg0,
@@ -482,7 +482,7 @@ func (_c *MockPlaylistStore_UpdateUserPlaylist_Call) Return(err error) *MockPlay
 	return _c
 }
 
-func (_c *MockPlaylistStore_UpdateUserPlaylist_Call) RunAndReturn(run func(pl *database.UserPlaylist) error) *MockPlaylistStore_UpdateUserPlaylist_Call {
+func (_c *MockPlaylistStore_UpdateUserPlaylist_Call) RunAndReturn(run func(pl *store.UserPlaylist) error) *MockPlaylistStore_UpdateUserPlaylist_Call {
 	_c.Call.Return(run)
 	return _c
 }

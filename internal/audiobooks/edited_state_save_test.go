@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edited_state_save_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 45968a65-7a57-4c9e-b71b-7ee203c64c8a
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A person's edit saves only what it changed, onto the rows as they stand:

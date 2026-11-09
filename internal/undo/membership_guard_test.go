@@ -1,7 +1,7 @@
 // file: internal/undo/membership_guard_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 352f989b-8de0-44c0-b537-7e18620e3abf
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // l0 = [S, L, X]. L left the list without a record that names its place (the

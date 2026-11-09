@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.52.1
+# version: 2.52.2
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -517,7 +517,7 @@ mutate-matrix:
 ## Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3).
 ## Install with `make mockery-install`. Mockery v2.x cannot regenerate
 ## these mocks: it does not support merging multiple interfaces into one
-## shared output file (e.g. internal/database/mocks/mock_store.go), so
+## shared output file (e.g. internal/books/store/mocks/mock_store.go), so
 ## running an older/newer mockery binary here will silently corrupt or
 ## truncate that file. If `make mocks` produces a huge, repo-wide diff,
 ## you are running the wrong mockery version — check `mockery version`.
@@ -556,15 +556,15 @@ mocks-check: mockery-install
 
 ## (removed 2026-08-17) check-mock-fresh — deleted, not repaired. It claimed to
 ## catch a stale MockStore and could not: it ran `go generate
-## ./internal/database/...` in a repo with ZERO //go:generate directives (mocks
+## ./internal/books/store/...` in a repo with ZERO //go:generate directives (mocks
 ## come from .mockery.yaml), so the regeneration was a no-op and the following
-## `git diff --exit-code internal/database/mocks/` only ever detected a dirty
+## `git diff --exit-code internal/books/store/mocks/` only ever detected a dirty
 ## worktree. Measured: add a method to the Store interface and leave the mock
 ## alone — the exact drift the docstring named — and it printed "Mock is fresh"
 ## and exited 0. Its own error message told you to run `make generate`, a target
 ## that does not exist. Coverage lost by removing it: none. Store/mock
 ## divergence is a COMPILE error via the assertions at
-## internal/database/iface_assert.go:12 and internal/database/mock_store.go:30,
+## internal/books/store/iface_assert.go:12 and internal/books/store/mock_store.go:30,
 ## `vet` (a test-short prerequisite) runs over every package, and `mocks-check`
 ## below regenerates from .mockery.yaml and diffs. All three go red on that same
 ## mutation. Do not reintroduce this target; add cases to mocks-check instead.

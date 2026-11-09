@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d2b6f1c-4a3e-4d5f-8b2a-1c6e9f0a7d21
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeImportPathLister is a minimal importPathLister used to count how many

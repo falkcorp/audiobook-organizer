@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_fullscan_score_snapshot_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b4e7d2a-1c3f-4e5b-8a6d-2f7c9e0b1d3a
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

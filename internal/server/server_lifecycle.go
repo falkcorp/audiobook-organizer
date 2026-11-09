@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.12
+// version: 4.67.13
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-09
 
@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -222,7 +222,7 @@ func (s *Server) flushDeferredActivity() {
 // happens even when this call timed out. PebbleStore.Close waits (bounded) for
 // a write already in flight, and refuses any later write with an error
 // wrapping pebble.ErrClosed that Service.writeDeferred logs with a lost-entry
-// count, not a process panic (internal/database/pebble_gate.go).
+// count, not a process panic (internal/books/store/pebble_gate.go).
 //
 // The wait is deferredActivityFlushBudget, clamped to stop's deadline (with
 // a reserve for the steps after it) when stop carries one: StopHook passes

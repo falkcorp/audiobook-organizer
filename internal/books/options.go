@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-09
 
@@ -21,8 +21,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"

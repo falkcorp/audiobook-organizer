@@ -1,7 +1,7 @@
 // file: internal/aiscan/keep_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0b7e4d19-6c82-4f35-9a1d-83e5c7f2a604
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

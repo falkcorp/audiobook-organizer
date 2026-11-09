@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_race_retired_holder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4c7e12-3b59-4a60-9f1e-6c2a0b5d7e93
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredRowOnDeleteStore lands a retired book_file row on the book at the

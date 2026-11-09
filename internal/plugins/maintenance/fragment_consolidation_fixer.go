@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.55.0
+// version: 1.55.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -228,8 +228,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

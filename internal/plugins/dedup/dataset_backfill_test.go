@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2f8ff156-b5ec-4480-ac97-27acc54fd013
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // End-to-end test for the dedup.dataset-backfill op against a real PebbleStore
 // + EmbeddingStore, added alongside the CONC-8 memoize-then-parallelize change
@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // createBookStubAudio (a book whose only file is a sub-256 KiB, zero-duration

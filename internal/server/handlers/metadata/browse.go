@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/browse.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 76ce2b0a-7810-4237-a777-8ae28ace2042
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package metadatahandler
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

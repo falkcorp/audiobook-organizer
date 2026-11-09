@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

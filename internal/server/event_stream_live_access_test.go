@@ -1,7 +1,7 @@
 // file: internal/server/event_stream_live_access_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9c4e7a15-3d82-4b6f-a0e9-5f1b8d2c7a43
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 // An event stream stays open for hours and is checked per event against what
 // the account holds now, not what it held when the stream opened: a caller whose
@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // openStream opens path as token and returns a way to read what it carried and

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_itunes_paths.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: a1000013-0000-0000-0000-000000000013
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

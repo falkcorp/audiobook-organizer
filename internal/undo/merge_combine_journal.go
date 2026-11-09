@@ -1,14 +1,14 @@
 // file: internal/undo/merge_combine_journal.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 5e3a9c17-2d84-4f60-b9a1-7c06e4d2f8b3
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package undo
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

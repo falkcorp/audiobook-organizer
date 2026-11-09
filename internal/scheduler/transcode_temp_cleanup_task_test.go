@@ -1,7 +1,7 @@
 // file: internal/scheduler/transcode_temp_cleanup_task_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8d41c7e2-3a96-4f05-b7d8-2e6f90a1c354
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

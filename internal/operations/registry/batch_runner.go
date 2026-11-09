@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package registry
 
@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

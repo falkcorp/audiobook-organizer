@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_book_cache.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 1aad78ca-65d9-4c69-8875-323ce8dd1196
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )

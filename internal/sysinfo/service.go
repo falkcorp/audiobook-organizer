@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package sysinfo
 
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // SystemServiceStore is the narrow slice of database.Store this service uses.

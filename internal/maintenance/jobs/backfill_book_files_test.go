@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_book_files_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 73490888-1dfc-4aa9-93a9-5d730a8d4f79
-// last-edited: 2026-08-27
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/require"
 )
 

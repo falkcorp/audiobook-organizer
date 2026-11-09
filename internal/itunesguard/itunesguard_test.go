@@ -1,7 +1,7 @@
 // file: internal/itunesguard/itunesguard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ccf32e01-0cfc-4d6c-bc5b-fb300898a243
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package itunesguard
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 

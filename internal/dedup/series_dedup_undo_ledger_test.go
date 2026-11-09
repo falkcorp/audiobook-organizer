@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_undo_ledger_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5ad9f286-bc61-40ee-b7ea-e6a1e771ee63
-// last-edited: 2026-09-10
+// last-edited: 2026-11-09
 
 // Package dedup — regression gates for the two halves of the destructive-op
 // checklist that DedupSeries was missing (TODO.md L4967): its apply path wrote
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

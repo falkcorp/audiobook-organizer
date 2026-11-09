@@ -1,7 +1,7 @@
 // file: internal/server/operation_v1_shape_user_text_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8b5d73-a691-4c0e-b384-7d1e6a9f5c20
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The reconcile scan read and the candidate-fetch results serve a stored

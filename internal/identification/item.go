@@ -1,7 +1,7 @@
 // file: internal/identification/item.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6d14d647-d925-4db9-8df1-4aac425555bf
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package identification
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // FetchResult is what one run of the per-book pipeline reports to Item.

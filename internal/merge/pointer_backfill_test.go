@@ -1,7 +1,7 @@
 // file: internal/merge/pointer_backfill_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3052d5ca-020e-4197-8003-3e5e527e0938
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The backfill offers a pointer only to a journal some undo would accept;

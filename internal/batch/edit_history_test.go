@@ -1,7 +1,7 @@
 // file: internal/batch/edit_history_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f1a62-4b7e-4c09-9e25-71c0b6a4d3f8
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 package batch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func historyFields(rows []database.MetadataChangeRecord) map[string]database.MetadataChangeRecord {

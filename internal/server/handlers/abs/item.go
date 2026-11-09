@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9c8a2f60-1d75-4b38-a0e4-7f21b5c96d13
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs
 
@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/covers"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

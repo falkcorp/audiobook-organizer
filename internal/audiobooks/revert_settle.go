@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

@@ -1,7 +1,7 @@
 // file: internal/server/search_observer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d7e3b1a4-6f28-4c95-b0a7-8e2f5c1d9a36
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_no_answer_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a97db0f2-8212-49bc-b646-6b4c39e34a80
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )

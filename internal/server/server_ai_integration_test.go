@@ -1,7 +1,7 @@
 // file: internal/server/server_ai_integration_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6d5c4b3a-2918-1706-f5e4-d3c2b1a09f8e
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

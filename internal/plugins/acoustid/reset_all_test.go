@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8b2f4a6c-1d3e-4f5a-9c7b-0e1a2b3c4d5f
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

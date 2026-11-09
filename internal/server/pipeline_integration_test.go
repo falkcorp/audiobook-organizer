@@ -1,7 +1,7 @@
 // file: internal/server/pipeline_integration_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b1c2d3e4-f5a6-7890-abcd-ef1234567890
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"

@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -61,9 +61,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

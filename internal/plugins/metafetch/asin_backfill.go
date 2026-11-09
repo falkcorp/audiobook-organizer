@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -63,7 +63,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

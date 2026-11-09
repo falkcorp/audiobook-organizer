@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

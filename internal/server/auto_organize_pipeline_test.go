@@ -1,7 +1,7 @@
 // file: internal/server/auto_organize_pipeline_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6c30f8a4-97b1-4de2-8f05-c4e2b16a73d9
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )

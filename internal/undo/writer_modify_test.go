@@ -1,7 +1,7 @@
 // file: internal/undo/writer_modify_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 637d3886-809d-424c-a5aa-a37e9d01d9f2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func fileModifyRow(field, oldV, newV string) *database.OperationChange {

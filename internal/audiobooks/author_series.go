@@ -1,12 +1,12 @@
 // file: internal/audiobooks/author_series.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // authorReadModel is the author half of what AuthorSeriesService reads: the

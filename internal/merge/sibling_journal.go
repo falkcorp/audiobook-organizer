@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"

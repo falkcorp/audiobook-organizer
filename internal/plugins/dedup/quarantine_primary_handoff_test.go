@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_primary_handoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b8f6c31-9d4e-4a07-8e53-f1c7a02d6b94
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

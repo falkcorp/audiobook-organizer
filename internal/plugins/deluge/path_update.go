@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

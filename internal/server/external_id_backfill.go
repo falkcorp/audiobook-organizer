@@ -1,7 +1,7 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )

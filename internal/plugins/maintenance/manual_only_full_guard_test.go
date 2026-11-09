@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/manual_only_full_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b949bbe2-b0d3-47ca-8f94-753f51e62844
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 )
 

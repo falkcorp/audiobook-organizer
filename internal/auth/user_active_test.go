@@ -1,14 +1,14 @@
 // file: internal/auth/user_active_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8d41f0a7-3c26-4e19-b5a8-7f20c6d913e4
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package auth
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestUserIsActive(t *testing.T) {

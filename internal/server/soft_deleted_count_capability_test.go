@@ -1,7 +1,7 @@
 // file: internal/server/soft_deleted_count_capability_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a9f6e12-8c47-4d05-b2e1-9f7c0d6a4e38
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestSoftDeletedCount_ResolvesThroughDecorator is the shape of the trash count

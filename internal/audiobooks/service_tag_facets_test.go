@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tag_facets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4d2e7f-1a9b-4f36-b5d0-6e3a9c7b2f18
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

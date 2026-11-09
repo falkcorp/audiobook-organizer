@@ -1,7 +1,7 @@
 // file: internal/versions/swap.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // Primary-version swap tracked operation (spec 3.1 task 3).
 //
@@ -28,7 +28,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // VersionSwapParams identifies the two versions involved in a swap.

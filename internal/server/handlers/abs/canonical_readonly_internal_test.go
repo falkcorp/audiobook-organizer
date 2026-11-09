@@ -1,14 +1,14 @@
 // file: internal/server/handlers/abs/canonical_readonly_internal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f16aca7b-73fa-4183-b604-cfce7af5fb36
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mintCountingIdentity fails the test if anything mints (writes) a sync id.

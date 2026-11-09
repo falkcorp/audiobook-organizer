@@ -1,14 +1,14 @@
 // file: internal/metafetch/service_apply_signal_fields_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8f2a6d13-4c9b-4e07-a1d5-6b3e9c2f70a8
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

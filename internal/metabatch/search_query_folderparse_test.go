@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_folderparse_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 2b7e9d40-6a15-4c83-8f2e-d0a41c9b7e56
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // withFolderParse sets metadata_fetch.folder_parse_person_title for one test

@@ -1,14 +1,14 @@
 // file: internal/metafetch/apply_authors_fill_only_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f8a1c6e-2b7d-4e95-a0c4-9d6e1b2f7a58
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

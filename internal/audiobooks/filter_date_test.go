@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_date_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 194b01b9-3cfa-4f88-a4f6-be4b4427cc9b
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // perUserMatches runs one per-user FieldFilter through the matcher the Library

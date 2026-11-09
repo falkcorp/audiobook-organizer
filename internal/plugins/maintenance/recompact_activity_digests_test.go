@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1c7e5a93-6b2d-4f08-9e4a-3d8b7c1f5e26
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // recompactDeps overrides RecompactActivityDigests with a canned result and

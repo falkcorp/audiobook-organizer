@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_applycap_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7a4f1d92-3c6e-4b58-8e07-d5b2a9c1f684
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

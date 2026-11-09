@@ -1,14 +1,14 @@
 // file: internal/testutil/integration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b7c8d9e0-f1a2-4b3c-8d9e-0f1a2b3c4d5e
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 package testutil
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestSetupIntegration_MemDBWarmupComplete is a regression test for the
@@ -19,7 +19,7 @@ import (
 // A book created immediately after setup could race that goroutine: if the
 // memdb write-through triggered by CreateBook landed while mem()==nil
 // (warmup not yet published), memSync silently no-oped (see
-// internal/database/memdb_sync.go), and the eventual warmup snapshot could
+// internal/books/store/memdb_sync.go), and the eventual warmup snapshot could
 // still miss the book — permanently hiding it from GetAllBooks() for the
 // life of the store. On an idle dev machine, warmup of a fresh, near-empty
 // DB finishes before the first write, masking the bug; under CI/full-suite

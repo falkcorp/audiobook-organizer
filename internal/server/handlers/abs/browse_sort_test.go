@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/browse_sort_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9c4e2f81-3a76-4b50-8d19-6e2b7c05af34
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package abs
 
@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

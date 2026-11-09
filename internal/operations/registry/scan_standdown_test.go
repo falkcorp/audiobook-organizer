@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b4e7c9a1-2d63-4f85-9c07-1a6e8d2f5b3c
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

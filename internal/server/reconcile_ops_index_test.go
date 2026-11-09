@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6d0a3c84-1b57-4e92-8f36-9c2e5a710db4
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // reconcileIndexStore models the two listings. ListOperationsV2Since is modelled

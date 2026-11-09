@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_resetter_capability_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3a7f5e91-8b26-4c04-97d1-5e8a2b4f6c73
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type resetCapableStore struct {

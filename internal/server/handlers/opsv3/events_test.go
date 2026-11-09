@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )

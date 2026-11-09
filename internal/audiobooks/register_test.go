@@ -1,6 +1,6 @@
 // file: internal/audiobooks/register_test.go
-// version: 1.0.1
-// last-edited: 2026-11-08
+// version: 1.0.2
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

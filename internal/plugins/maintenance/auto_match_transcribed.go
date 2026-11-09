@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.9.4
+// version: 1.9.5
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

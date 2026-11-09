@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/builder.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 69528b02-de24-4411-8a5e-ac3831986a80
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package authoritybuild
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

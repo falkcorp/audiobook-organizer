@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_review3_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2c9f6b13-7a4e-48d0-b5e1-0d83a7c4f956
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 

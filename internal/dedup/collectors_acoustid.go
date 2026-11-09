@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )

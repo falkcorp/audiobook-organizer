@@ -1,7 +1,7 @@
 // file: internal/dedup/series_prune_core.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 92abb0d6-3922-4a56-a82d-50c26ed23424
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -249,7 +249,7 @@ type SeriesGroupMergeResult struct {
 //     memdb counts and Pebble can no longer hydrate. That is the surviving
 //     half of the hazard that left 6,893 phantom series IDs held by 13,322
 //     live books (+702 trashed) on production 2026-08-14; see
-//     internal/database/series_bookref.go.
+//     internal/books/store/series_bookref.go.
 //
 // Only the row removal is refused. The books that WERE repointed stay
 // repointed: that is strictly an improvement and rolling it back would

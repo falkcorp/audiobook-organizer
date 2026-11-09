@@ -5,7 +5,7 @@
 package dedupmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockDedupStore) EXPECT() *MockDedupStore_Expecter {
 }
 
 // GetAuthorByID provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetAuthorByID(id int) (*database.Author, error) {
+func (_mock *MockDedupStore) GetAuthorByID(id int) (*store.Author, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAuthorByID")
 	}
 
-	var r0 *database.Author
+	var r0 *store.Author
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Author, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Author, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Author); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Author); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Author)
+			r0 = ret.Get(0).(*store.Author)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -97,34 +97,34 @@ func (_c *MockDedupStore_GetAuthorByID_Call) Run(run func(id int)) *MockDedupSto
 	return _c
 }
 
-func (_c *MockDedupStore_GetAuthorByID_Call) Return(author *database.Author, err error) *MockDedupStore_GetAuthorByID_Call {
+func (_c *MockDedupStore_GetAuthorByID_Call) Return(author *store.Author, err error) *MockDedupStore_GetAuthorByID_Call {
 	_c.Call.Return(author, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*database.Author, error)) *MockDedupStore_GetAuthorByID_Call {
+func (_c *MockDedupStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*store.Author, error)) *MockDedupStore_GetAuthorByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookByID provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetBookByID(id string) (*database.Book, error) {
+func (_mock *MockDedupStore) GetBookByID(id string) (*store.Book, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByID")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -159,34 +159,34 @@ func (_c *MockDedupStore_GetBookByID_Call) Run(run func(id string)) *MockDedupSt
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookByID_Call) Return(book *database.Book, err error) *MockDedupStore_GetBookByID_Call {
+func (_c *MockDedupStore_GetBookByID_Call) Return(book *store.Book, err error) *MockDedupStore_GetBookByID_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookByID_Call) RunAndReturn(run func(id string) (*database.Book, error)) *MockDedupStore_GetBookByID_Call {
+func (_c *MockDedupStore_GetBookByID_Call) RunAndReturn(run func(id string) (*store.Book, error)) *MockDedupStore_GetBookByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookFiles provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+func (_mock *MockDedupStore) GetBookFiles(bookID string) ([]store.BookFile, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookFiles")
 	}
 
-	var r0 []database.BookFile
+	var r0 []store.BookFile
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.BookFile, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.BookFile); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]store.BookFile)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -221,34 +221,34 @@ func (_c *MockDedupStore_GetBookFiles_Call) Run(run func(bookID string)) *MockDe
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookFiles_Call) Return(bookFiles []database.BookFile, err error) *MockDedupStore_GetBookFiles_Call {
+func (_c *MockDedupStore_GetBookFiles_Call) Return(bookFiles []store.BookFile, err error) *MockDedupStore_GetBookFiles_Call {
 	_c.Call.Return(bookFiles, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]database.BookFile, error)) *MockDedupStore_GetBookFiles_Call {
+func (_c *MockDedupStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]store.BookFile, error)) *MockDedupStore_GetBookFiles_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookFilesForIDsCore provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error) {
+func (_mock *MockDedupStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]store.BookFileCore, error) {
 	ret := _mock.Called(bookIDs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookFilesForIDsCore")
 	}
 
-	var r0 map[string][]database.BookFileCore
+	var r0 map[string][]store.BookFileCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]database.BookFileCore, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]store.BookFileCore, error)); ok {
 		return returnFunc(bookIDs)
 	}
-	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]database.BookFileCore); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]store.BookFileCore); ok {
 		r0 = returnFunc(bookIDs)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string][]database.BookFileCore)
+			r0 = ret.Get(0).(map[string][]store.BookFileCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
@@ -283,34 +283,34 @@ func (_c *MockDedupStore_GetBookFilesForIDsCore_Call) Run(run func(bookIDs []str
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookFilesForIDsCore_Call) Return(stringToBookFileCores map[string][]database.BookFileCore, err error) *MockDedupStore_GetBookFilesForIDsCore_Call {
+func (_c *MockDedupStore_GetBookFilesForIDsCore_Call) Return(stringToBookFileCores map[string][]store.BookFileCore, err error) *MockDedupStore_GetBookFilesForIDsCore_Call {
 	_c.Call.Return(stringToBookFileCores, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetBookFilesForIDsCore_Call) RunAndReturn(run func(bookIDs []string) (map[string][]database.BookFileCore, error)) *MockDedupStore_GetBookFilesForIDsCore_Call {
+func (_c *MockDedupStore_GetBookFilesForIDsCore_Call) RunAndReturn(run func(bookIDs []string) (map[string][]store.BookFileCore, error)) *MockDedupStore_GetBookFilesForIDsCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBooksByVersionGroup provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+func (_mock *MockDedupStore) GetBooksByVersionGroup(groupID string) ([]store.Book, error) {
 	ret := _mock.Called(groupID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBooksByVersionGroup")
 	}
 
-	var r0 []database.Book
+	var r0 []store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.Book, error)); ok {
 		return returnFunc(groupID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.Book); ok {
 		r0 = returnFunc(groupID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -345,34 +345,34 @@ func (_c *MockDedupStore_GetBooksByVersionGroup_Call) Run(run func(groupID strin
 	return _c
 }
 
-func (_c *MockDedupStore_GetBooksByVersionGroup_Call) Return(books []database.Book, err error) *MockDedupStore_GetBooksByVersionGroup_Call {
+func (_c *MockDedupStore_GetBooksByVersionGroup_Call) Return(books []store.Book, err error) *MockDedupStore_GetBooksByVersionGroup_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetBooksByVersionGroup_Call) RunAndReturn(run func(groupID string) ([]database.Book, error)) *MockDedupStore_GetBooksByVersionGroup_Call {
+func (_c *MockDedupStore_GetBooksByVersionGroup_Call) RunAndReturn(run func(groupID string) ([]store.Book, error)) *MockDedupStore_GetBooksByVersionGroup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetExternalIDsForBook provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
+func (_mock *MockDedupStore) GetExternalIDsForBook(bookID string) ([]store.ExternalIDMapping, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetExternalIDsForBook")
 	}
 
-	var r0 []database.ExternalIDMapping
+	var r0 []store.ExternalIDMapping
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.ExternalIDMapping, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.ExternalIDMapping, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.ExternalIDMapping); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.ExternalIDMapping); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ExternalIDMapping)
+			r0 = ret.Get(0).([]store.ExternalIDMapping)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -407,34 +407,34 @@ func (_c *MockDedupStore_GetExternalIDsForBook_Call) Run(run func(bookID string)
 	return _c
 }
 
-func (_c *MockDedupStore_GetExternalIDsForBook_Call) Return(externalIDMappings []database.ExternalIDMapping, err error) *MockDedupStore_GetExternalIDsForBook_Call {
+func (_c *MockDedupStore_GetExternalIDsForBook_Call) Return(externalIDMappings []store.ExternalIDMapping, err error) *MockDedupStore_GetExternalIDsForBook_Call {
 	_c.Call.Return(externalIDMappings, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetExternalIDsForBook_Call) RunAndReturn(run func(bookID string) ([]database.ExternalIDMapping, error)) *MockDedupStore_GetExternalIDsForBook_Call {
+func (_c *MockDedupStore_GetExternalIDsForBook_Call) RunAndReturn(run func(bookID string) ([]store.ExternalIDMapping, error)) *MockDedupStore_GetExternalIDsForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetSeriesByID provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) GetSeriesByID(id int) (*database.Series, error) {
+func (_mock *MockDedupStore) GetSeriesByID(id int) (*store.Series, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSeriesByID")
 	}
 
-	var r0 *database.Series
+	var r0 *store.Series
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Series, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Series, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Series); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Series); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Series)
+			r0 = ret.Get(0).(*store.Series)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -469,34 +469,34 @@ func (_c *MockDedupStore_GetSeriesByID_Call) Run(run func(id int)) *MockDedupSto
 	return _c
 }
 
-func (_c *MockDedupStore_GetSeriesByID_Call) Return(series *database.Series, err error) *MockDedupStore_GetSeriesByID_Call {
+func (_c *MockDedupStore_GetSeriesByID_Call) Return(series *store.Series, err error) *MockDedupStore_GetSeriesByID_Call {
 	_c.Call.Return(series, err)
 	return _c
 }
 
-func (_c *MockDedupStore_GetSeriesByID_Call) RunAndReturn(run func(id int) (*database.Series, error)) *MockDedupStore_GetSeriesByID_Call {
+func (_c *MockDedupStore_GetSeriesByID_Call) RunAndReturn(run func(id int) (*store.Series, error)) *MockDedupStore_GetSeriesByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListBookSearchRows provides a mock function for the type MockDedupStore
-func (_mock *MockDedupStore) ListBookSearchRows() ([]database.BookSearchRow, error) {
+func (_mock *MockDedupStore) ListBookSearchRows() ([]store.BookSearchRow, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBookSearchRows")
 	}
 
-	var r0 []database.BookSearchRow
+	var r0 []store.BookSearchRow
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.BookSearchRow, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.BookSearchRow, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.BookSearchRow); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.BookSearchRow); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookSearchRow)
+			r0 = ret.Get(0).([]store.BookSearchRow)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -524,12 +524,12 @@ func (_c *MockDedupStore_ListBookSearchRows_Call) Run(run func()) *MockDedupStor
 	return _c
 }
 
-func (_c *MockDedupStore_ListBookSearchRows_Call) Return(bookSearchRows []database.BookSearchRow, err error) *MockDedupStore_ListBookSearchRows_Call {
+func (_c *MockDedupStore_ListBookSearchRows_Call) Return(bookSearchRows []store.BookSearchRow, err error) *MockDedupStore_ListBookSearchRows_Call {
 	_c.Call.Return(bookSearchRows, err)
 	return _c
 }
 
-func (_c *MockDedupStore_ListBookSearchRows_Call) RunAndReturn(run func() ([]database.BookSearchRow, error)) *MockDedupStore_ListBookSearchRows_Call {
+func (_c *MockDedupStore_ListBookSearchRows_Call) RunAndReturn(run func() ([]store.BookSearchRow, error)) *MockDedupStore_ListBookSearchRows_Call {
 	_c.Call.Return(run)
 	return _c
 }

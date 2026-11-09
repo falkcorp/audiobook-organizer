@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -267,7 +267,7 @@ func scanCLIRefs(t *testing.T) (refs []cliRef, files []string, idents map[string
 }
 
 const (
-	aboDatabase  = "github.com/falkcorp/audiobook-organizer/internal/database"
+	aboDatabase  = "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	pebblePkg    = "github.com/cockroachdb/pebble/v2"
 	mediacoreApp = "github.com/falkcorp/mediacore/app"
 )

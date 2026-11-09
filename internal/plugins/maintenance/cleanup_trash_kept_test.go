@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

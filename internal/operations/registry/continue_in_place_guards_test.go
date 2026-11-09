@@ -1,7 +1,7 @@
 // file: internal/operations/registry/continue_in_place_guards_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e4d92-3c51-4a86-8e1f-6d2a9c5b7f13
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )

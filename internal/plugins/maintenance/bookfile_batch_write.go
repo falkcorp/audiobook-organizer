@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0a9c61-8d24-4b17-9e35-c1a7f2b64d08
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // Package maintenance — shared plumbing for ops that rewrite MANY book_file
 // rows of the SAME book.
@@ -32,7 +32,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

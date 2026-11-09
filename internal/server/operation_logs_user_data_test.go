@@ -1,7 +1,7 @@
 // file: internal/server/operation_logs_user_data_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b8e2c47-91d3-4f60-a7c2-3e9d1b6f0a85
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // A log line that names a user -- the Repairs engine's "owner apply by user
 // <id>" line, or any other operation's -- is read only by a caller who holds
@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // engineOwnerApplyLine is the line repairs.Engine logs for an owner apply

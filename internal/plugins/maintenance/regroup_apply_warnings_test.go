@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_warnings_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c9891cd1-04b0-4b90-aab1-2d7d410fce64
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"

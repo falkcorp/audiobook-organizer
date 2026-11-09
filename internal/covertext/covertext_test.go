@@ -1,7 +1,7 @@
 // file: internal/covertext/covertext_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9a6f18-7e2d-4b05-8d41-5f0b1e7a9c62
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package covertext
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func hashOf(s string) string {

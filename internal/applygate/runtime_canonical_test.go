@@ -1,7 +1,7 @@
 // file: internal/applygate/runtime_canonical_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: ab7beb30-e82f-4592-8e09-9527424f2aed
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

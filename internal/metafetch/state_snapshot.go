@@ -1,7 +1,7 @@
 // file: internal/metafetch/state_snapshot.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3a682c02-4109-4286-bcd5-ad66eecac28e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

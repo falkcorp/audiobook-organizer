@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 451212a4-52da-4236-9a22-658fce80859a
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seriesFixture is a book linked to a series, with a position (both the int

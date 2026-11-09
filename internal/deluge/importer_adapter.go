@@ -1,7 +1,7 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 //
 // LibraryImporterAdapter implements tagger.LibraryImporter on top of
 // ImportToLibrary. It is wired into the Server at startup so
@@ -14,8 +14,8 @@ import (
 	"context"
 	"fmt"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/decisions/review_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c18d5f62-0e47-4a93-b6d1-7f3a92e4058c
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // slowKV widens the verdict read-modify-write window so a missing lock shows

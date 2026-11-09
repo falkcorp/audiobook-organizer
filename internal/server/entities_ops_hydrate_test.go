@@ -1,14 +1,14 @@
 // file: internal/server/entities_ops_hydrate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b9d41f27-8e6a-4c02-9f5b-2a7c14e630d8
-// last-edited: 2026-08-15
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fullyPopulatedBook builds a Book with every field the resolve-production-author

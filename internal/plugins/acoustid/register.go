@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/register.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 26480480-20ca-4dd1-88e0-4a747df80a96
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Service registry registration for the acoustid UOS plugin (W5/W7).
 //
@@ -15,7 +15,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"

@@ -1,5 +1,5 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
 // last-edited: 2026-11-09
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/crashmatrix"
 	"github.com/falkcorp/mediacore/module"

@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6c2a9e4d-7b13-4f58-a0d2-3e9b1c5f8a47
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // multiFileBook creates a two-file book whose path is its first file (the

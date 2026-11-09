@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_user_state_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 25096c43-be96-4bd4-8926-6b0af7861373
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )

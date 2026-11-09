@@ -1,5 +1,5 @@
 // file: internal/scanner/incremental_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e9f0a1b2-c3d4-5e6f-7a8b-9c0d1e2f3a4b
 
 package scanner
@@ -7,7 +7,7 @@ package scanner
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestShouldSkipFile_MatchingCache(t *testing.T) {

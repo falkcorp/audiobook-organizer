@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -21,9 +21,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

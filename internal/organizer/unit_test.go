@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/mock"
 )

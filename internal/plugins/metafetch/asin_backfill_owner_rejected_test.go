@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_owner_rejected_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a3e5c17-2f4d-4b90-9e61-7c0d2b4f8a35
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

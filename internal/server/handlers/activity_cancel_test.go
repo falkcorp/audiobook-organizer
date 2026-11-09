@@ -1,13 +1,13 @@
 // file: internal/server/handlers/activity_cancel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c48f1a9-2d76-4b03-8e91-6a3fd027b8ce
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package handlers_test — the activity handlers' behaviour when the client
 // disconnects mid-scan.
 //
 // The store-level guarantee (the scan stops) is proved in
-// internal/database/pebble_activity_cancel_test.go. What is proved HERE is the
+// internal/books/store/pebble_activity_cancel_test.go. What is proved HERE is the
 // other half: that the handler translates a cancelled scan into a response
 // that cannot be mistaken for real data.
 //
@@ -26,7 +26,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"

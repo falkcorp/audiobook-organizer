@@ -1,7 +1,7 @@
 // file: internal/server/author_relink_trashed_ops_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f2a9c41-7d38-4e05-b1a6-93c8e2d05f17
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,9 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

@@ -1,7 +1,7 @@
 // file: internal/organizer/auto_backup_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 4b7e2d18-9c53-4a06-8f21-6d5e3a90c471
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

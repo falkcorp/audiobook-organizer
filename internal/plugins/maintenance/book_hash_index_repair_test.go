@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_hash_index_repair_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b7d9e41-6c35-4a08-9f1e-5d3a8c0b7e62
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // hashIndexKey is the key the store keeps for (hash, book) in the file-hash
-// index (internal/database/pebble_store_book_hash_index.go).
+// index (internal/books/store/pebble_store_book_hash_index.go).
 func hashIndexKey(hash, id string) string { return "book_hash:" + hash + "\x00" + id }
 
 // hashIndexFixture is a library of two books whose index keys the test then

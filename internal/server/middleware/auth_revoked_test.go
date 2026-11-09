@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_revoked_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a6a5afde-8201-4dbb-8e03-4ec5d3e9df1a
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestLegacyAPIKeyAuth_RevokedAtRefusedWhateverStatus is 05-authn §11.1 item

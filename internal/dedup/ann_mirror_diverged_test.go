@@ -1,7 +1,7 @@
 // file: internal/dedup/ann_mirror_diverged_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e493295b-c503-4981-9c08-97312169a02c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // R1-15 follow-up review, MAJOR-1(C): a mirror the engine drops leaves the

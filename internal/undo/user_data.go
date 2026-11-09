@@ -1,17 +1,17 @@
 // file: internal/undo/user_data.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package undo
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
-// The journal's change-type classification table lives in internal/database
+// The journal's change-type classification table lives in internal/books/store
 // (change_type_class.go), so every journal writer, internal/merge included,
 // can reach the one check (database.RecordOperationChange). Every ChangeType
 // constant this package declares must have an entry there, true or false;

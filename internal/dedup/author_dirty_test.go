@@ -1,14 +1,14 @@
 // file: internal/dedup/author_dirty_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5c8f2e91-3a67-4b04-9d2e-7f1a6c3b8d50
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestIsDirtyAuthorName_CopyrightAndEntityShrapnel pins the C413 creation-gate

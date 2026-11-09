@@ -1,7 +1,7 @@
 // file: internal/server/activity_integration_test.go
-// version: 3.1.1
+// version: 3.1.2
 // guid: f8a3b2c1-d4e5-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Ported NewSQLiteActivityStore → the Pebble activity store.
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_slots_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 971a9404-c6e2-4b74-9aa9-4ba77e70ac10
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The rows of a version slot (.versions/<id>/, a trashed or alternate

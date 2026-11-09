@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a82a965b-b258-4d39-b08b-abd352a891e7
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

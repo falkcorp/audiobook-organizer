@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_fastpath_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7d6c8a2e-9f3b-4a1d-8e5c-2b6f4a9d1c3e
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Package server tests for TASK-02 (MAYDEPLOY-H5): runBulkMetadataFetchForBookIDs
 // should resolve authors per-book via GetAuthorByID when len(bookIDs) < 100,
@@ -22,8 +22,8 @@ import (
 	"slices"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )

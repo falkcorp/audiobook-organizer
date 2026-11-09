@@ -1,14 +1,14 @@
 // file: internal/audiobooks/empty_field_filter_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4e8b1a37-9d52-4c06-b3f8-27a1d0e5c964
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 

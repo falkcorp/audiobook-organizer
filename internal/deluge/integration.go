@@ -1,7 +1,7 @@
 // file: internal/deluge/integration.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e5f6a7b8-c9d0-1234-ef01-345678901234
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Deluge integration for library centralization.
 //
@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 var (

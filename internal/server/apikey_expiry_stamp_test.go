@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_stamp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1d9e38-2f7c-4b05-9c84-e3b0a7d2f169
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/books/store_close_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 57bdf0e4-66f2-42ee-bb57-600cb04025ce
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestStoreCloseUnderAbandonedStop (R1-15 review m2): serve closes the store

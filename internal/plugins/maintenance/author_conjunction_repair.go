@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

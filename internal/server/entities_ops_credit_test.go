@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops_credit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 388ccf1f-0f73-4767-bba0-23876b7a593b
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The resolved author takes the production company's slot; it used to be

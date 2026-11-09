@@ -1,14 +1,14 @@
 // file: internal/dedup/lsh_candidate_store_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1d90b4-7a3e-4f52-9d18-2b8e5a0c4d71
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lshCapableStore is a stand-in for *database.PebbleStore: it carries the

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_retire_undo_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 169db87a-6f56-43c0-91a1-9a1fa5f526ea
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

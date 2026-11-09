@@ -1,15 +1,15 @@
 // file: internal/audiobooks/tombstone_sweep_guard.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e6a4d83-b15c-4f27-9c80-71d3a5e2f946
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"fmt"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

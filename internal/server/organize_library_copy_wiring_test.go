@@ -1,7 +1,7 @@
 // file: internal/server/organize_library_copy_wiring_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 96b14120-70fb-45b5-93bd-c9e1c9449b82
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,8 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

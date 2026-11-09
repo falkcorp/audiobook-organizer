@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

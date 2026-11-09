@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_identity_live_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2a7f9c14-6b3e-4d85-a0c2-9e1d5b8f3a76
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The identity leg accepts a row hashed from ANY form of the book's current

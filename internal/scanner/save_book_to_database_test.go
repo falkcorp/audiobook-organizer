@@ -1,7 +1,7 @@
 // file: internal/scanner/save_book_to_database_test.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 0f1e2d3c-4b5a-6978-8899-aabbccddeeff
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // setupPebbleStore provides a PebbleDB-backed store and cleanup hook.

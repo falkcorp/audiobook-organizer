@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_export_access_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6a2f8c15-9d43-4e70-b1a8-3c5d7e0f92b4
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,7 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

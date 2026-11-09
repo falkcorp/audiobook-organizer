@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

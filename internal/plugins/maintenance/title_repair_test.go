@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/title_repair_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1ca153f8-f8b3-40d5-871c-7959e39314ea
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package maintenance
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // agreedStub returns a fixed AgreedChapterTitle result and records whether it

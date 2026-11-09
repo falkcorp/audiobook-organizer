@@ -1,7 +1,7 @@
 // file: internal/metabatch/nomatch_query_shapes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 42692a27-c193-48c7-b76a-6bf2a21ef8e3
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

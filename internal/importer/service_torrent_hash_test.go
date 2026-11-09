@@ -1,7 +1,7 @@
 // file: internal/importer/service_torrent_hash_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7b0f6d2e-3a41-4c85-9e17-5d8a2c4b1f90
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package importer
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const testTorrentHash = "0123456789abcdef0123456789abcdef01234567"

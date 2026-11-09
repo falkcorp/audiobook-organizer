@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/normalize_primary_flags_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f1c4e27-8b6d-4a35-b2e0-7c5d3f8a1e64
-// last-edited: 2026-08-14
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // normalizeFixture builds a store holding all five flag/group states. Only the

@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

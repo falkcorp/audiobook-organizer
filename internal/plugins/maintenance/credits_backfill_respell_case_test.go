@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_respell_case_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f0c6a58-2f1c-4c53-8d0e-31b2f6d7a9b4
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The respelling of a credit reaches every piece the cleaner reads as the

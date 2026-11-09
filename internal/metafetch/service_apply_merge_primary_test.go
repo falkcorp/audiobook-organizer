@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_merge_primary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ac096b2d-9e05-41eb-869a-939958c3ea85
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // mergePrimaryFixture builds a two-book MATCH-4 cluster: "big" has five

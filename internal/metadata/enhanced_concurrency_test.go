@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced_concurrency_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f4a5b6c-7d8e-49f0-a1b2-c3d4e5f60718
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/mock"
 )
 

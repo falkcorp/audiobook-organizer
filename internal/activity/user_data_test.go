@@ -1,7 +1,7 @@
 // file: internal/activity/user_data_test.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package activity
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // WithoutOthersUserData drops the trash purge's per-user summary and leaves

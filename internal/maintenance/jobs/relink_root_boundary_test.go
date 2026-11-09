@@ -1,14 +1,14 @@
 // file: internal/maintenance/jobs/relink_root_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c7d9e14-8b5a-4f36-9e01-a3f6b8d2c570
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package jobs
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type recordingBookFileMutator struct {

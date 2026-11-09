@@ -1,7 +1,7 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,8 +18,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_build_hydrate_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3b1f64-2a9c-4d75-b0e8-5c6f7a2d9b13
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

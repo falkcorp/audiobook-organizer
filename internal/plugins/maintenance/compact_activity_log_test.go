@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // resultReporter is fakeReporter plus SetResult, so ReporterSetResult has a

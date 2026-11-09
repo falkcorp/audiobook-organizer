@@ -1,7 +1,7 @@
 // file: internal/server/dedup_engine_prop_test.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: e6425d8b-3ab4-4e0c-86fd-71ece563085e
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"pgregory.net/rapid"
 )
 
@@ -298,7 +298,7 @@ func TestProp_FindSimilarMaxResults(t *testing.T) {
 // query is at or above the threshold.
 //
 // chromem-go v0.7.0 is an exhaustive brute-force scan, not HNSW (see
-// internal/database/chromem_embedding_store.go), so there is no ANN
+// internal/books/store/chromem_embedding_store.go), so there is no ANN
 // approximation to make room for: outside the numerical guard band
 // described on checkChromemMatchesSqlite the two sets must be equal, and
 // each must equal an independent float64 reference. An earlier version

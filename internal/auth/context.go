@@ -1,7 +1,7 @@
 // file: internal/auth/context.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8c4a2f1d-9b3e-4f60-a8d5-2c7e0f1b9a47
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 //
 // Request-scoped auth state plumbing (spec 3.7). Long-lived deps
 // (database.Store, services) live on the Server struct; per-request
@@ -14,7 +14,7 @@ package auth
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type ctxKey int

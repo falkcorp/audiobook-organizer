@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8d025d9c-5d1a-4c6a-b6d3-6c88a9739dd6
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

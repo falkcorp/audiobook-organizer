@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )

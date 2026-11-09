@@ -1,12 +1,12 @@
 // file: internal/server/handlers/abs_session_revoke.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4b97077b-7dcf-4b7e-85de-cae1671df311
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package handlers
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 

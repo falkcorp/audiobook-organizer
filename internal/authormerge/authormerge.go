@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -27,7 +27,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

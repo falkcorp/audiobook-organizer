@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_security_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b9d4e6a-1c3f-4a8b-bd72-5e0a9c4f1d36
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 )
 

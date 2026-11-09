@@ -1,7 +1,7 @@
 // file: internal/undo/retire.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The change types a retire of a trashed book's files into a retired version

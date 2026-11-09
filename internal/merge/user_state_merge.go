@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_merge.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9b1f6c2e-4d7a-4e83-a5c9-2f8e0d3b7a61
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The per-user conflict rule for a merge (owner requirement, 2026-09-26).

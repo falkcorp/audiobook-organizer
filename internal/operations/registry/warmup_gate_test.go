@@ -1,7 +1,7 @@
 // file: internal/operations/registry/warmup_gate_test.go
-// version: 2.0.3
+// version: 2.0.4
 // guid: 3e8c1a74-5b92-4f06-a1d7-0c6b9e2f4a53
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

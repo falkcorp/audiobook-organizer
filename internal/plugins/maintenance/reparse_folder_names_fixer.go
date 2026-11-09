@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: ac1c25d1-3594-43f6-9254-90bf2ab0b284
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

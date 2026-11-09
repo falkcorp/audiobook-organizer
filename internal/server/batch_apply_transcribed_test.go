@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_transcribed_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6a7c9ec1-ca94-4bd5-b088-7920aaeb18af
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

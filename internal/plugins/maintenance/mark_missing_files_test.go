@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

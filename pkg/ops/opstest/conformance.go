@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/conformance.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2d8e4b17-5f3a-4c69-a1b8-6e9d2c7f4a35
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

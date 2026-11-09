@@ -1,7 +1,7 @@
 // file: internal/server/metadata_results_cache.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 65b9ee5d-b3df-43ed-95a3-b393bb0532a7
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // metadataResultsCacheTTL is how long a built set is served before a refresh is

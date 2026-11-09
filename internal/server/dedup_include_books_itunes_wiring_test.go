@@ -1,7 +1,7 @@
 // file: internal/server/dedup_include_books_itunes_wiring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4e81c07-5d92-4a63-9f1e-27c0a8d3e514
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // The Duplicates lane's include_books listing computes is_itunes from the
 // store's book_file rows and external ids. The handler tests give it a mock
@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestDedupListCandidates_IncludeBooks_ITunesFlag_RealStore(t *testing.T) {

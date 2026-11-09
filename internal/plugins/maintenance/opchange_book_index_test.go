@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

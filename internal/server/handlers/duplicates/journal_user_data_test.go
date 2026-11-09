@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/journal_user_data_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 41be6667-4e23-4fde-9bef-f3782b221fbe
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package duplicates_test
 
@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates"
 	duplicatesmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates/mocks"

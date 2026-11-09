@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_merge_undo_pointers.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 844f88c2-fda0-43f4-bf8d-e4e35ca38b0c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

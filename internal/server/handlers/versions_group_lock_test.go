@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_group_lock_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5b2e9c47-1d8a-4f36-b0e7-3c6a9d1f8e24
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

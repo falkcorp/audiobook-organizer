@@ -1,14 +1,14 @@
 // file: internal/server/operation_text_redact.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2d9e41-0b86-4a35-9f13-e8a5b6d1c704
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // opTextFor returns op as the caller may read it: a copy whose Message and

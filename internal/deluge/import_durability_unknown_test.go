@@ -1,7 +1,7 @@
 // file: internal/deluge/import_durability_unknown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c43b21d1-60e1-474a-8095-186a3ee936b2
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // durUnknownDelugStore applies the repoint (records it) and reports that its

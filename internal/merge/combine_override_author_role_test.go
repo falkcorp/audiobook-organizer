@@ -1,7 +1,7 @@
 // file: internal/merge/combine_override_author_role_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c81e0d7-2b5a-4f93-8e16-a07d3c9b52f4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Round-4 B1 (#4064): the undo of an author override took back every survivor

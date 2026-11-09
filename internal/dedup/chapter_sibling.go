@@ -1,7 +1,7 @@
 // file: internal/dedup/chapter_sibling.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c1d4e7a2-9b35-4f80-8e16-2a7c0d5b9f43
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 // Package dedup — same-physical-book detection for emit-time suppression.
 //
@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

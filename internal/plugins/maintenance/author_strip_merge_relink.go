@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

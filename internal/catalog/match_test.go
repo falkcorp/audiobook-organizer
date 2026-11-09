@@ -1,7 +1,7 @@
 // file: internal/catalog/match_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5e8a1c37-9d40-4b62-a7f3-0c2d9b6e4815
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

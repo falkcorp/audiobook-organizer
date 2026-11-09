@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_already_applied_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b2e8c71-4d9a-4f06-a3e1-7c8d2f9b0e46
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

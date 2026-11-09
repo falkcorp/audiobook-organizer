@@ -1,14 +1,14 @@
 // file: internal/dedup/dataset/highconf_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6d2a8f31-0c54-4b29-8e17-9a3b5c7d2e60
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dataset
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestMineHighConfidenceDup_SharedFileHash(t *testing.T) {

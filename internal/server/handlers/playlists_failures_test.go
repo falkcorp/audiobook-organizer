@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists_failures_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a3c5e91-4d27-4b60-9f18-e2b7d0c6a453
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

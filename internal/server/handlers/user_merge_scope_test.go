@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_merge_scope_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e06f8e85-8d38-4fe0-9456-9e011d8a9412
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

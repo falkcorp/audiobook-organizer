@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.6
+// version: 2.31.7
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -37,7 +37,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

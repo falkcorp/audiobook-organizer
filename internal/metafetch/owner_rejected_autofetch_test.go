@@ -1,7 +1,7 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

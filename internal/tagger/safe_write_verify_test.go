@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write_verify_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 7c1e5b94-2d38-4f6a-a0b7-93e4c8d51f26
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package tagger
 
@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	taglib "go.senan.xyz/taglib"
 )

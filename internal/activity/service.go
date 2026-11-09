@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package activity
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

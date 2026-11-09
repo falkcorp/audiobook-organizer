@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/service_unit_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e2f3a4b5-c6d7-8e9f-0a1b-3c4d5e6f7a8b
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

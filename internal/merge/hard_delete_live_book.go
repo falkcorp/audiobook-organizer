@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_live_book.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e7b1c92-6a30-4d85-b1f7-0c93d8a25e61
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

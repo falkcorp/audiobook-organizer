@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud_hash_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c4e1a73-8d25-4f6b-b3e0-7a2d6f9c1e58
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"

@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_credential_epoch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b905c23d-19d7-45cf-ba5f-e3b1513bd206
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

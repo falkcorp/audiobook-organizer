@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/ingest.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c21642cf-8b47-4c22-a6d1-debe423b7a8e
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package authoritybuild
 
@@ -14,12 +14,12 @@ import (
 	"io"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // CatalogRawPrefix is the author catalog's raw-payload keyspace
-// (internal/database/catalog_entry_store.go, cat_raw:<entry id>): the
+// (internal/books/store/catalog_entry_store.go, cat_raw:<entry id>): the
 // Audible product JSON exactly as received, the only lossless source of
 // contributor lists with narrator ASINs. The catalog store writes it on the
 // shared main Pebble DB, so the raw KV surface reads it; a test proves that

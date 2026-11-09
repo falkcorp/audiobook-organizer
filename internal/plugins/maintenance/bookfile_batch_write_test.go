@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2f6b41-5a83-4c07-b3e9-0c71a8d54e26
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package sweep
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // guardVerdict is what fakeGuard answers for one path.

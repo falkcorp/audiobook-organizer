@@ -1,7 +1,7 @@
 // file: internal/undo/user_content_follow.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 5c0e6a52-3b6d-4f0e-9a43-8d1f2b7c4e91
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeUserContentFollow: a retire carried a user's own content from the

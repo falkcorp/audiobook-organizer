@@ -1,7 +1,7 @@
 // file: internal/dedup/embed_model_cutover_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9
-// last-edited: 2026-07-03
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestEmbedBooks_ReembedsOnModelChange locks the fix for the embedding-backend

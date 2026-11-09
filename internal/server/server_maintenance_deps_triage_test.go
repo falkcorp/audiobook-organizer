@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_triage_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 858930a2-ded4-48a8-9404-abc75c5bd103
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,13 +12,13 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 )
 
 // newTriageTestEmbeddingStore creates a temp-dir-backed EmbeddingStore for
-// server-level DedupTriageExactPending tests. Unlike internal/database's
+// server-level DedupTriageExactPending tests. Unlike internal/books/store's
 // unexported newTestEmbeddingStore helper, this uses the exported
 // database.NewEmbeddingStore constructor since this test lives outside the
 // database package.

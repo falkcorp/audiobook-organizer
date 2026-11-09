@@ -1,7 +1,7 @@
 // file: internal/batch/trash_grants_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 22c685fe-e807-4213-a039-f8dece0f9456
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

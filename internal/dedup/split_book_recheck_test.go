@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_recheck_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8d3f5b21-6a94-4c70-b1e8-2f7a4c9d0e35
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

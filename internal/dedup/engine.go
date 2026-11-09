@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.96.8
+// version: 1.96.9
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -22,8 +22,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
@@ -3271,7 +3271,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	//   - Every check funnels candidate writes through upsertExactCandidate
 	//     -> EmbeddingStore.UpsertCandidateNew, which canonicalises the pair
 	//     key and does the read-check-write under its own s.mu (see
-	//     internal/database/embedding_store.go) — concurrent upserts of the
+	//     internal/books/store/embedding_store.go) — concurrent upserts of the
 	//     same pair from two workers are safe and idempotent. Verified by
 	//     TestFullScanLayer1ParallelMatchesSerialCandidates below.
 	//   - checkExactFileHash -> handleFileHashMatch can call
@@ -3422,7 +3422,7 @@ func (de *Engine) FullScan(ctx context.Context, progress func(phase string, done
 	// concurrent reads/writes (internal mutexes around counter/op-CAS state,
 	// an atomic pointer for the warm in-memory query layer, and the
 	// underlying cockroachdb/pebble.DB is itself concurrency-safe) — see
-	// internal/database/pebble_store.go.
+	// internal/books/store/pebble_store.go.
 	//
 	// Per-book errors are logged and swallowed (never returned), exactly as
 	// the serial loop did, so a scoring failure for one book cannot abort or

@@ -1,7 +1,7 @@
 // file: internal/applygate/partial.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

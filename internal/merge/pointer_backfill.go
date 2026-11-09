@@ -1,7 +1,7 @@
 // file: internal/merge/pointer_backfill.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 56e834dc-3c76-4989-9ce4-9db933749d76
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 
 	ulid "github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Undo-pointer backfill.

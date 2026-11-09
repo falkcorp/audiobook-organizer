@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

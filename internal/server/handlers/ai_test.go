@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 0e40aea8-a75e-4dc9-9521-11521efacaf8
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -15,9 +15,9 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"

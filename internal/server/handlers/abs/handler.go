@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.34.0
+// version: 1.34.1
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )

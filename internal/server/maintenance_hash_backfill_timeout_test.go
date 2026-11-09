@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_hash_backfill_timeout_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b3f7d21-5e8a-4c06-a4d9-0f1b6e2c8a73
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"

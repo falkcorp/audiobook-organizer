@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_window.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a9d2e71-6c35-4f08-b1d7-8e3a5c20f946
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // combineJournalScanner is the one raw-key read UnreversedCombineShells needs.

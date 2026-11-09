@@ -1,14 +1,14 @@
 // file: internal/applygate/booknum_pin_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 5e8a1c47-9d20-4b36-a7f1-2c6d0b93e815
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

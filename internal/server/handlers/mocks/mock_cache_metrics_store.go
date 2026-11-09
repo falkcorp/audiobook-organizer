@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,23 +48,23 @@ func (_m *MockCacheMetricsStore) EXPECT() *MockCacheMetricsStore_Expecter {
 }
 
 // GetCacheStatsHistory provides a mock function for the type MockCacheMetricsStore
-func (_mock *MockCacheMetricsStore) GetCacheStatsHistory(cacheName string, since time.Time, limit int) ([]database.CacheStatsSnapshot, error) {
+func (_mock *MockCacheMetricsStore) GetCacheStatsHistory(cacheName string, since time.Time, limit int) ([]store.CacheStatsSnapshot, error) {
 	ret := _mock.Called(cacheName, since, limit)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetCacheStatsHistory")
 	}
 
-	var r0 []database.CacheStatsSnapshot
+	var r0 []store.CacheStatsSnapshot
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, time.Time, int) ([]database.CacheStatsSnapshot, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, time.Time, int) ([]store.CacheStatsSnapshot, error)); ok {
 		return returnFunc(cacheName, since, limit)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, time.Time, int) []database.CacheStatsSnapshot); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, time.Time, int) []store.CacheStatsSnapshot); ok {
 		r0 = returnFunc(cacheName, since, limit)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.CacheStatsSnapshot)
+			r0 = ret.Get(0).([]store.CacheStatsSnapshot)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, time.Time, int) error); ok {
@@ -111,12 +111,12 @@ func (_c *MockCacheMetricsStore_GetCacheStatsHistory_Call) Run(run func(cacheNam
 	return _c
 }
 
-func (_c *MockCacheMetricsStore_GetCacheStatsHistory_Call) Return(cacheStatsSnapshots []database.CacheStatsSnapshot, err error) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
+func (_c *MockCacheMetricsStore_GetCacheStatsHistory_Call) Return(cacheStatsSnapshots []store.CacheStatsSnapshot, err error) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
 	_c.Call.Return(cacheStatsSnapshots, err)
 	return _c
 }
 
-func (_c *MockCacheMetricsStore_GetCacheStatsHistory_Call) RunAndReturn(run func(cacheName string, since time.Time, limit int) ([]database.CacheStatsSnapshot, error)) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
+func (_c *MockCacheMetricsStore_GetCacheStatsHistory_Call) RunAndReturn(run func(cacheName string, since time.Time, limit int) ([]store.CacheStatsSnapshot, error)) *MockCacheMetricsStore_GetCacheStatsHistory_Call {
 	_c.Call.Return(run)
 	return _c
 }

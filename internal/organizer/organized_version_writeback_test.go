@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_writeback_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8eea5b3c-7be2-4f84-a629-aca6c5044dbb
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newWritebackTestBook seeds one book in store with denormalized Author and

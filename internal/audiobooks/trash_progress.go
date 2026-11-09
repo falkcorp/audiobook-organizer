@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.12.7
+// version: 1.12.8
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-11-01
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

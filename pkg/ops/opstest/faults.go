@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/faults.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f7b1d94-6a25-4c08-9e3f-8d2b6a4c1e73
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

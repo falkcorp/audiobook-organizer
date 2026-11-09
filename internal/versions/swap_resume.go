@@ -1,7 +1,7 @@
 // file: internal/versions/swap_resume.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: df1395df-3cdf-4ee8-ab8b-92528f30360c
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // Finding and resuming a version swap that did not finish.
 //
@@ -62,7 +62,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.10.3
+// version: 1.10.4
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -53,7 +53,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/activity/service_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Ported from SQLite ActivityStore to the Pebble activity
 // store. Tier names match its supported tiers
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

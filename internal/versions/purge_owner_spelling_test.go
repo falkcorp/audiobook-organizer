@@ -1,7 +1,7 @@
 // file: internal/versions/purge_owner_spelling_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c9e2b7a-1d53-4f08-a6e4-8b0d3c71f952
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The owner checks (another book_file row, another book row) match path

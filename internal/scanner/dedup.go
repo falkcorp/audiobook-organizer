@@ -1,5 +1,5 @@
 // file: internal/scanner/dedup.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: match-4-dedup-001
 
 package scanner
@@ -8,7 +8,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // computeMetadataSourceHash computes the metadata_source_hash for a book

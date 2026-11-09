@@ -1,0 +1,668 @@
+// file: internal/books/store/pebble_store_atpath_index.go
+// version: 1.8.1
+// guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
+// last-edited: 2026-11-09
+
+// The book_atpath: multi-valued path index.
+//
+//	book_atpath:<path bytes>\x00<book id>  ->  (empty value)
+//
+// book:path:<path> holds exactly one id and the last writer wins, so two books
+// at one path share a key that names whichever wrote last, and the key is
+// deleted when either one moves away. book_atpath: holds one key per (path,
+// book) pair instead, so every book at a path is findable.
+//
+// Invariant (completeness): for every book:<id> row with FilePath == P, the key
+// book_atpath:P\x00<id> exists, whether the row is live or soft-deleted. Extras
+// are allowed: a key whose row is gone or has moved is dropped by the readers'
+// point-verify (and one whose row is soft-deleted is dropped by
+// LiveBookIDsAtPath only). A MISSING key can report a taken path as free, to
+// BOTH readers: LiveBookIDsAtPath for a live row, BookIDsAtPath (which keeps
+// trashed rows, and which a purge asks before it removes a file) for any row.
+// An extra costs one point read.
+//
+// Maintained by CreateBook (Set), UpdateBook (Delete the old pair only when the
+// path changed; Set the new pair UNCONDITIONALLY, so any write self-heals and a
+// lost-update revert cannot strip a book's own entry) and DeleteBook (Delete),
+// each in the same batch as the row. Every book is indexed regardless of
+// MarkedForDeletion; liveness is checked on read, so soft-delete and restore
+// toggles need no index work.
+//
+// The family sits outside the "book:" scan range on purpose ('_' sorts after
+// ';'), so full book scans and memdb warmup do not walk ~60k more keys.
+//
+// Design: .claude/notes/book-pathset-index-design-2026-09-12.md.
+
+package store
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"golang.org/x/sync/errgroup"
+)
+
+const bookAtPathPrefix = "book_atpath:"
+
+// bookAtPathBackfillKey marks the index complete. The reader trusts the index
+// only once it exists. Bump the suffix if the key format or the set of indexed
+// books ever changes.
+//
+// ROLLBACK HAZARD: a binary that predates this index does not maintain it. If
+// one runs against the database after this sentinel is set, books it moves have
+// no entry at their new path and the index silently under-reports. After any
+// rollback-then-roll-forward, run maintenance.book-atpath-index-backfill (which
+// rebuilds unconditionally) and then maintenance.book-atpath-index-verify.
+const bookAtPathBackfillKey = "system:backfill:book_atpath_index_v1_done"
+
+// bookAtPathUndecodablePrefix holds one marker per book row the backfill could
+// not decode: book_atpath_undecodable:<id> -> (empty value). Like book_atpath:
+// it sorts outside the book: scan range ("_" is not ":"), and it is not inside
+// book_atpath:'s range either. A decoded row has a path and gets an index key;
+// an undecodable one has neither, so without a marker the index could not tell
+// "no book here" from "a book here whose path nobody can read".
+// LiveBookIDsAtPath fails closed while any marker names a row that is still
+// present and still undecodable (see undecodableMarkedAtPath).
+const bookAtPathUndecodablePrefix = "book_atpath_undecodable:"
+
+// bookAtPathUndecodableKey is the marker key for one undecodable book row.
+func bookAtPathUndecodableKey(id string) []byte {
+	return []byte(bookAtPathUndecodablePrefix + id)
+}
+
+// bookAtPathBackfillChunk is how many index keys one worker buffers per commit.
+// A var only so tests can exercise the multi-chunk path; never reassign in prod
+// code.
+var bookAtPathBackfillChunk = 10_000
+
+// bookAtPathBackfillWorkers is how many goroutines decode rows and stage index
+// keys during a backfill. A var only so tests can pin the pool size regardless
+// of the machine's core count; never reassign in prod code.
+var bookAtPathBackfillWorkers = runtime.NumCPU()
+
+// bookAtPathBackfillLogEvery is how many rows are scanned between progress logs.
+const bookAtPathBackfillLogEvery = 10_000
+
+// bookAtPathBackfillAfterChunk, when non-nil, runs after each durable chunk
+// commit, with the run's commit count so far. Test-only hook for the resume and
+// race cases; nil in production. It is called from the backfill's worker
+// goroutines, concurrently, so it must be goroutine-safe.
+var bookAtPathBackfillAfterChunk func(commits int)
+
+// updateBookAfterOldReadHook, when non-nil, runs inside UpdateBook right after
+// it reads oldBook and before it commits -- with the book's write stripe HELD.
+// Test-only; nil in production. A hook must not write the same book
+// synchronously (it would deadlock on the stripe); start the competing write
+// on another goroutine instead, which is what proves it now waits.
+var updateBookAfterOldReadHook func(id string)
+
+// bookAtPathKey is the index key for one (path, book) pair.
+func bookAtPathKey(path, id string) []byte {
+	k := make([]byte, 0, len(bookAtPathPrefix)+len(path)+1+len(id))
+	k = append(k, bookAtPathPrefix...)
+	k = append(k, path...)
+	k = append(k, 0)
+	k = append(k, id...)
+	return k
+}
+
+// bookAtPathBounds is the scan range holding exactly path's keys:
+// [book_atpath:P\x00, book_atpath:P\x01). POSIX paths cannot contain NUL, so no
+// other real path's key falls inside it; a corrupt NUL-bearing path can only
+// add a spurious candidate, which the reader recognises and skips.
+func bookAtPathBounds(path string) (lower, upper []byte) {
+	lower = make([]byte, 0, len(bookAtPathPrefix)+len(path)+1)
+	lower = append(lower, bookAtPathPrefix...)
+	lower = append(lower, path...)
+	upper = append(append([]byte{}, lower...), 1)
+	lower = append(lower, 0)
+	return lower, upper
+}
+
+// splitBookAtPathKey recovers (path, id) from a full index key. Book ids never
+// contain NUL, so the LAST NUL is the separator. ok is false for a key with no
+// separator or an empty id.
+func splitBookAtPathKey(key []byte) (path, id string, ok bool) {
+	rest := key[len(bookAtPathPrefix):]
+	i := bytes.LastIndexByte(rest, 0)
+	if i < 0 || i == len(rest)-1 {
+		return "", "", false
+	}
+	return string(rest[:i]), string(rest[i+1:]), true
+}
+
+// BookAtPathIndexBuilt is the exported form of bookAtPathIndexBuilt (see
+// BookPathSetReader).
+func (p *PebbleStore) BookAtPathIndexBuilt() (bool, error) { return p.bookAtPathIndexBuilt() }
+
+// bookAtPathIndexBuilt reports whether the backfill sentinel exists. Only true
+// is cached, so a long-lived process picks up a completion without a restart.
+// A read error other than ErrNotFound is returned, never read as "not built"
+// (which would be harmless but slow) nor as "built" (which could be a lie).
+func (p *PebbleStore) bookAtPathIndexBuilt() (bool, error) {
+	if p.bookAtPathBuilt.Load() {
+		return true, nil
+	}
+	_, closer, err := p.db.Get([]byte(bookAtPathBackfillKey))
+	switch {
+	case err == nil:
+		closer.Close()
+		p.bookAtPathBuilt.Store(true)
+		return true, nil
+	case errors.Is(err, pebble.ErrNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("read %s: %w", bookAtPathBackfillKey, err)
+	}
+}
+
+// bookAtPathBackfillRow is one book row handed from the backfill's iterator to
+// a worker. v is a copy the worker owns.
+type bookAtPathBackfillRow struct {
+	id string
+	v  []byte
+}
+
+// BookAtPathBackfillResult summarises one backfill run.
+type BookAtPathBackfillResult struct {
+	// Skipped is true when the sentinel was already set and nothing was done.
+	Skipped bool
+	Scanned int
+	Commits int
+	// UndecodableRows are book rows whose JSON did not decode, counted the
+	// same way VerifyBookAtPathIndex counts them. No path can be read from
+	// them, so they get no index key; each gets a
+	// book_atpath_undecodable:<id> marker instead, in the same worker batches,
+	// and LiveBookIDsAtPath FAILS CLOSED (returns an error, never an empty or
+	// partial set) while any such row is still present and still undecodable,
+	// exactly as the pre-sentinel full scan does. SampleUndecodable holds up
+	// to bookAtPathSampleCap of their ids, sorted.
+	UndecodableRows   int      `json:"undecodable_rows"`
+	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
+}
+
+// BookAtPathProgress receives progress from a book_atpath: backfill or rebuild
+// so the op running it can keep its liveness clock fresh through a long first
+// build. scanned is how many book rows the pass has staged so far. It is
+// called from the pass's worker goroutines (so it must be safe for concurrent
+// use), every bookAtPathBackfillLogEvery rows and after every chunk commit,
+// and may be nil.
+type BookAtPathProgress func(scanned int)
+
+// BackfillBookAtPathIndex builds the book_atpath: index once, gated by its
+// sentinel. It is the startup repair: after the first successful run it is a
+// logged no-op. progress may be nil.
+//
+// The wait for the store-wide run lock reports no progress: every caller is a
+// registered op, and the verify and rebuild ops share one ConcurrencyKey, so
+// the registry has already serialized them and the lock is never contended.
+func (p *PebbleStore) BackfillBookAtPathIndex(ctx context.Context, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
+	return p.backfillBookAtPath(ctx, false, progress)
+}
+
+// RebuildBookAtPathIndex rewrites every book's index key regardless of the
+// sentinel, then sets it. For the rollback runbook: a pre-index binary may have
+// moved books without maintaining the index. It only ever Sets keys, so running
+// it on a live store is safe; stale keys it cannot see stay as harmless extras.
+func (p *PebbleStore) RebuildBookAtPathIndex(ctx context.Context, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
+	return p.backfillBookAtPath(ctx, true, progress)
+}
+
+// backfillBookAtPath is one pass over the book rows, fanned out over a bounded
+// worker pool.
+//
+// CONCURRENCY: one producer goroutine owns the single Pebble iterator
+// (forEachBookRow) and hands each row, copied, to exactly one of
+// bookAtPathBackfillWorkers workers over a bounded channel. Each worker decodes
+// its rows (the JSON decode is the per-row cost) and stages Sets into its OWN
+// *GatedBatch, which is not goroutine-safe and so is never shared, committing
+// every bookAtPathBackfillChunk keys. The rows a worker sees are disjoint from
+// every other worker's, and each key is derived from one row's id, so no two
+// workers ever write the same key. The counters are atomics.
+//
+// Race with live writes: the pass only Sets index keys and never writes a row
+// or deletes a key. Any row changed after the iterator opened was written by
+// this binary, which maintains its own entry in the row's batch; any row not
+// changed is visited. So completeness holds at the end. The one artefact is an
+// extra (a book seen at A, moved to B, then re-added at A by this pass), which
+// the reader drops. The pool widens that window but cannot turn it into a gap.
+//
+// Restart-from-zero: every chunk is committed with pebble.Sync, and the
+// sentinel is committed only after every worker's last commit has returned, so
+// the sentinel can never outlive a key it vouches for, an interrupted run loses
+// no correctness, and the next run simply rescans. A checkpoint cursor would
+// miss rows a pre-index binary moved between attempts.
+func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progress BookAtPathProgress) (BookAtPathBackfillResult, error) {
+	var res BookAtPathBackfillResult
+	start := time.Now()
+	mode := "backfill"
+	if force {
+		mode = "rebuild"
+	}
+
+	// One run at a time, store-wide (atpathRunLock). Every caller is a
+	// registered op now (the startup build stopped being a goroutine in 04-P6
+	// part 2) and the ops share ConcurrencyKey maintenance.book-atpath-index,
+	// so the registry already serializes them and this lock is never
+	// contended in production; it remains the backstop for a direct caller.
+	unlockRun, err := p.atpathRuns.lock(ctx)
+	if err != nil {
+		return res, fmt.Errorf("wait for book_atpath run lock: %w", err)
+	}
+	defer unlockRun()
+
+	if !force {
+		switch _, closer, err := p.db.Get([]byte(bookAtPathBackfillKey)); {
+		case err == nil:
+			closer.Close()
+			p.bookAtPathBuilt.Store(true)
+			slog.Info("book-atpath-backfill: already complete, skipping", "sentinel", bookAtPathBackfillKey)
+			res.Skipped = true
+			return res, nil
+		case errors.Is(err, pebble.ErrNotFound):
+		default:
+			slog.Error("book-atpath-backfill: cannot read sentinel, aborting",
+				"sentinel", bookAtPathBackfillKey, "err", err)
+			return res, fmt.Errorf("read backfill sentinel: %w", err)
+		}
+	}
+
+	// Recompute the undecodable markers from scratch: a marker for a row that
+	// has since been repaired or removed would block lookups for no reason.
+	// Rows that are still undecodable get their marker back below, before the
+	// sentinel is written. A Set by a concurrent writer is never lost here
+	// (only the backfill writes markers); a concurrent UpdateBook/DeleteBook
+	// only ever deletes one.
+	//
+	// The in-memory marker set (pebble_store_atpath_markers.go) drops only the
+	// ids last added at or before the generation captured here, and only once
+	// the range delete has committed: an id a concurrent backfill added after
+	// the capture may have a marker committed after the range delete.
+	markerGen, err := p.undecodableMarkerGeneration()
+	if err != nil {
+		atpathMarkerLog.Error("book-atpath-backfill: cannot load undecodable-marker set, aborting: %v", err)
+		return res, err
+	}
+	if err := p.db.DeleteRange([]byte(bookAtPathUndecodablePrefix),
+		bareRowUpperBound(bookAtPathUndecodablePrefix), pebble.Sync); err != nil {
+		slog.Error("book-atpath-backfill: cannot clear undecodable markers, aborting", "err", err)
+		return res, fmt.Errorf("clear undecodable markers: %w", err)
+	}
+	p.clearUndecodableMarkersUpTo(markerGen)
+
+	workers := max(bookAtPathBackfillWorkers, 1)
+	slog.Info("book-atpath-backfill: starting", "mode", mode,
+		"chunk", bookAtPathBackfillChunk, "workers", workers)
+
+	var scanned, commits atomic.Int64
+	// undecodable is appended to by every worker, so it has its own lock.
+	var (
+		undecMu     sync.Mutex
+		undecodable []string
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	rows := make(chan bookAtPathBackfillRow, workers*64)
+
+	// Producer: the single iterator. forEachBookRow's value slice is only valid
+	// until the iterator advances, so each value is copied before it is handed
+	// to a worker.
+	g.Go(func() error {
+		defer close(rows)
+		return forEachBookRow(p.db, func(id string, v []byte) error {
+			select {
+			case rows <- bookAtPathBackfillRow{id: id, v: bytes.Clone(v)}:
+				return nil
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		})
+	})
+
+	for range workers {
+		g.Go(func() error {
+			batch := p.db.NewBatch()
+			defer func() { batch.Close() }()
+			buffered := 0
+			// Marker ids staged in the current batch. Each is noted in the
+			// in-memory set before it is staged and again after its batch
+			// commits, so an UpdateBook/DeleteBook that looked in between
+			// (and may have committed its marker Delete before this commit)
+			// cannot drop it from the set (pebble_store_atpath_markers.go).
+			var stagedMarkers []string
+			flush := func() error {
+				if buffered == 0 {
+					return nil
+				}
+				if bookAtPathBackfillBeforeChunkCommit != nil {
+					bookAtPathBackfillBeforeChunkCommit()
+				}
+				if err := batch.Commit(pebble.Sync); err != nil {
+					return fmt.Errorf("chunk commit: %w", err)
+				}
+				for _, id := range stagedMarkers {
+					if err := p.noteUndecodableMarker(id); err != nil {
+						return fmt.Errorf("record undecodable marker for %s: %w", id, err)
+					}
+				}
+				stagedMarkers = stagedMarkers[:0]
+				batch.Close()
+				batch = p.db.NewBatch()
+				buffered = 0
+				n := commits.Add(1)
+				if progress != nil {
+					progress(int(scanned.Load()))
+				}
+				if bookAtPathBackfillAfterChunk != nil {
+					bookAtPathBackfillAfterChunk(int(n))
+				}
+				// The caller's ctx, not gctx, so a cancel surfaces as
+				// context.Canceled rather than as another worker's error.
+				return ctx.Err()
+			}
+			for r := range rows {
+				if err := gctx.Err(); err != nil {
+					return err
+				}
+				var row bookAtPathRow
+				if err := json.Unmarshal(r.v, &row); err != nil {
+					// A row that cannot be decoded has no readable path, so it
+					// cannot be indexed. Failing the run on it would leave
+					// every boot on the full-scan path forever over one bad
+					// row. Instead stage its marker, which keeps
+					// LiveBookIDsAtPath failing closed while the row stays
+					// broken, and report it at Error below.
+					if err := p.noteUndecodableMarker(r.id); err != nil {
+						return fmt.Errorf("record undecodable marker for %s: %w", r.id, err)
+					}
+					stagedMarkers = append(stagedMarkers, r.id)
+					if err := batch.Set(bookAtPathUndecodableKey(r.id), []byte{}, nil); err != nil {
+						return fmt.Errorf("stage undecodable marker for %s: %w", r.id, err)
+					}
+					buffered++
+					undecMu.Lock()
+					undecodable = append(undecodable, r.id)
+					undecMu.Unlock()
+					if buffered >= bookAtPathBackfillChunk {
+						if err := flush(); err != nil {
+							return err
+						}
+					}
+					continue
+				}
+				if err := batch.Set(bookAtPathKey(row.FilePath, r.id), []byte{}, nil); err != nil {
+					return fmt.Errorf("stage index key for %s: %w", r.id, err)
+				}
+				buffered++
+				if n := scanned.Add(1); n%bookAtPathBackfillLogEvery == 0 {
+					if progress != nil {
+						progress(int(n))
+					}
+					slog.Info("book-atpath-backfill: progress", "scanned", n,
+						"elapsed", time.Since(start).Round(time.Second).String())
+				}
+				if buffered >= bookAtPathBackfillChunk {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+			return flush()
+		})
+	}
+
+	err = g.Wait()
+	res.Scanned = int(scanned.Load())
+	res.Commits = int(commits.Load())
+	res.UndecodableRows = len(undecodable)
+	res.SampleUndecodable = sampleSorted(undecodable)
+	if res.UndecodableRows > 0 {
+		slog.Error("book-atpath-backfill: book:<id> cannot be decoded; LiveBookIDsAtPath refuses "+
+			"until it is rewritten or removed out of band, then run maintenance.book-atpath-index-backfill",
+			"mode", mode, "undecodable", res.UndecodableRows, "sample_ids", res.SampleUndecodable)
+	}
+	if err == nil {
+		// A cancel that landed after the last row was handed out is still a
+		// cancel: do not vouch for the index on a run the caller abandoned.
+		err = ctx.Err()
+	}
+	if err != nil {
+		slog.Error("book-atpath-backfill: failed, sentinel NOT set", "mode", mode,
+			"scanned", res.Scanned, "commits", res.Commits, "err", err)
+		return res, err
+	}
+
+	// Every worker's commits were Sync and have returned, so every key is
+	// durable before the sentinel that vouches for them is written.
+	if err := p.db.Set([]byte(bookAtPathBackfillKey), []byte("1"), pebble.Sync); err != nil {
+		slog.Error("book-atpath-backfill: sentinel commit failed", "scanned", res.Scanned, "err", err)
+		return res, err
+	}
+	res.Commits++
+	p.bookAtPathBuilt.Store(true)
+	slog.Info("book-atpath-backfill: complete", "mode", mode, "scanned", res.Scanned,
+		"commits", res.Commits, "undecodable", res.UndecodableRows, "duration", time.Since(start).Round(time.Millisecond).String())
+	return res, nil
+}
+
+// bookAtPathSampleCap bounds each sample list in the verify report.
+const bookAtPathSampleCap = 50
+
+// BookAtPathIndexReport is the result of VerifyBookAtPathIndex.
+type BookAtPathIndexReport struct {
+	SentinelSet      bool `json:"sentinel_set"`
+	BooksScanned     int  `json:"books_scanned"`
+	IndexKeysScanned int  `json:"index_keys_scanned"`
+	// UndecodableRows are book rows whose JSON did not decode. They cannot be
+	// checked, so a report with any is incomplete.
+	UndecodableRows int `json:"undecodable_rows"`
+
+	// MissingLive is the bug class: a live book with no key at its path, which
+	// LiveBookIDsAtPath and BookIDsAtPath would report as free once the
+	// sentinel is set.
+	MissingLive int `json:"missing_live"`
+	// MissingTrashed is a soft-deleted book with no key. LiveBookIDsAtPath
+	// excludes trashed books, but BookIDsAtPath does not: the purge asks it
+	// whether any row, trashed ones included, still names a file before it
+	// removes the file, so a trashed book with no key reads as "free" there and
+	// loses its audio while it is still restorable. It is the same bug class
+	// as MissingLive and fails the verify op.
+	MissingTrashed int `json:"missing_trashed"`
+	// ExtraRowGone / ExtraRowMoved are keys with no matching row. Benign.
+	ExtraRowGone  int `json:"extra_row_gone"`
+	ExtraRowMoved int `json:"extra_row_moved"`
+	// Malformed keys have no NUL separator or an empty id. Informational.
+	Malformed int `json:"malformed"`
+	// Undecodable-row marker drift. Verify never writes markers to disk; only
+	// the backfill and rebuild recompute them. StaleMarkers name a row that is gone or
+	// now decodes (harmless: the reader handles both). UnmarkedUndecodable
+	// rows have no marker, so once the sentinel is set the reader cannot see
+	// them and their path can read as free: run the rebuild.
+	StaleMarkers        int `json:"stale_markers"`
+	UnmarkedUndecodable int `json:"unmarked_undecodable"`
+	// MarkersNotInSet are markers on disk that the in-memory marker set
+	// (pebble_store_atpath_markers.go) does not hold. The readers consult only
+	// the set, so for these the lookup fails OPEN: a row that cannot be
+	// decoded is invisible and its path can read as free. The set must be a
+	// superset of disk, so any count here is a bug. Verify only reports them;
+	// the rebuild op (maintenance.book-atpath-index-backfill) re-notes every
+	// still-undecodable row and so restores the set.
+	MarkersNotInSet int `json:"markers_not_in_set"`
+
+	// Samples are "<id> <path>" strings (keys, quoted, for malformed), at most
+	// bookAtPathSampleCap per class, sorted.
+	SampleMissingLive    []string `json:"sample_missing_live,omitempty"`
+	SampleMissingTrashed []string `json:"sample_missing_trashed,omitempty"`
+	SampleExtra          []string `json:"sample_extra,omitempty"`
+	SampleMalformed      []string `json:"sample_malformed,omitempty"`
+	SampleUnmarked       []string `json:"sample_unmarked_undecodable,omitempty"`
+	SampleNotInSet       []string `json:"sample_markers_not_in_set,omitempty"`
+}
+
+// Complete reports whether every book row was decodable and therefore checked.
+func (r BookAtPathIndexReport) Complete() bool { return r.UndecodableRows == 0 }
+
+// VerifyBookAtPathIndex diffs the book_atpath: index against the book rows
+// from one snapshot. Read-only.
+//
+// Sequential for the same reason as the backfill: two single-cursor scans with
+// a map lookup per key. A few hundred milliseconds at library scale.
+func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathIndexReport, error) {
+	var rep BookAtPathIndexReport
+
+	// No backfill/rebuild may run meanwhile: a worker opens a brief window in
+	// which its marker is on disk but not yet re-noted in the set, which would
+	// show up below as a false MarkersNotInSet (atpathRunLock).
+	unlockRun, err := p.atpathRuns.lock(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: wait for run lock: %w", err)
+	}
+	defer unlockRun()
+
+	// Read the sentinel only after the lock: a verify that waited on the first
+	// backfill must see the sentinel that run wrote, or it would report
+	// sentinel_set=false and the op would skip its UnmarkedUndecodable gate.
+	built, err := p.bookAtPathIndexBuilt()
+	if err != nil {
+		return rep, err
+	}
+	rep.SentinelSet = built
+
+	// The in-memory marker set is copied with the snapshot so the two can be
+	// compared. Unlike the readers, verify range-scans the marker family on
+	// disk: it is a cold maintenance op, and a marker missing from the set is
+	// exactly the drift in which the readers fail open, which a point read of
+	// the set's own ids could never see.
+	snap, markerIDs, err := p.undecodableMarkerSnapshot()
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: %w", err)
+	}
+	defer snap.Close()
+
+	type pair struct{ path, id string }
+	expected := make(map[pair]bool) // value: trashed
+	rowPath := make(map[string]string)
+	undecodable := make(map[string]bool)
+	n := 0
+	if err := forEachBookRow(snap, func(id string, v []byte) error {
+		n++
+		if n%10_000 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		rep.BooksScanned++
+		var row bookAtPathRow
+		if err := json.Unmarshal(v, &row); err != nil {
+			rep.UndecodableRows++
+			undecodable[id] = true
+			return nil
+		}
+		expected[pair{row.FilePath, id}] = markedForDeletionFlag(row.MarkedForDeletion)
+		rowPath[id] = row.FilePath
+		return nil
+	}); err != nil {
+		return rep, fmt.Errorf("verify book_atpath: scan books: %w", err)
+	}
+
+	var extra, malformed []string
+	lower := []byte(bookAtPathPrefix)
+	upper := bareRowUpperBound(bookAtPathPrefix)
+	if err := forEachKeyInRange(snap, lower, upper, func(key, _ []byte) error {
+		rep.IndexKeysScanned++
+		if rep.IndexKeysScanned%10_000 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		path, id, ok := splitBookAtPathKey(key)
+		if !ok {
+			rep.Malformed++
+			malformed = append(malformed, fmt.Sprintf("%q", key))
+			return nil
+		}
+		k := pair{path, id}
+		if _, found := expected[k]; found {
+			delete(expected, k)
+			return nil
+		}
+		if _, exists := rowPath[id]; exists {
+			rep.ExtraRowMoved++
+		} else {
+			rep.ExtraRowGone++
+		}
+		extra = append(extra, id+" "+path)
+		return nil
+	}); err != nil {
+		return rep, fmt.Errorf("verify book_atpath: scan index: %w", err)
+	}
+
+	inSet := make(map[string]bool, len(markerIDs))
+	for _, id := range markerIDs {
+		inSet[id] = true
+	}
+	markers := make(map[string]bool)
+	onDisk, err := markersInRange(snap)
+	if err != nil {
+		return rep, fmt.Errorf("verify book_atpath: scan undecodable markers: %w", err)
+	}
+	var notInSet []string
+	for _, id := range onDisk {
+		markers[id] = true
+		if !undecodable[id] {
+			rep.StaleMarkers++
+		}
+		if !inSet[id] {
+			rep.MarkersNotInSet++
+			notInSet = append(notInSet, id)
+		}
+	}
+	rep.SampleNotInSet = sampleSorted(append([]string(nil), notInSet...))
+	if len(notInSet) > 0 {
+		atpathMarkerLog.Error("verify book_atpath: %d undecodable marker(s) on disk are missing from the in-memory "+
+			"set, so lookups fail open for them; run maintenance.book-atpath-index-backfill (sample %v)",
+			len(notInSet), logger.SanitizeLogValue(fmt.Sprint(rep.SampleNotInSet)))
+	}
+	var unmarked []string
+	for id := range undecodable {
+		if !markers[id] {
+			rep.UnmarkedUndecodable++
+			unmarked = append(unmarked, id)
+		}
+	}
+	rep.SampleUnmarked = sampleSorted(unmarked)
+
+	var missLive, missTrashed []string
+	for k, trashed := range expected {
+		if trashed {
+			rep.MissingTrashed++
+			missTrashed = append(missTrashed, k.id+" "+k.path)
+		} else {
+			rep.MissingLive++
+			missLive = append(missLive, k.id+" "+k.path)
+		}
+	}
+	rep.SampleMissingLive = sampleSorted(missLive)
+	rep.SampleMissingTrashed = sampleSorted(missTrashed)
+	rep.SampleExtra = sampleSorted(extra)
+	rep.SampleMalformed = sampleSorted(malformed)
+	return rep, nil
+}
+
+func sampleSorted(s []string) []string {
+	sort.Strings(s)
+	if len(s) > bookAtPathSampleCap {
+		s = s[:bookAtPathSampleCap]
+	}
+	return s
+}

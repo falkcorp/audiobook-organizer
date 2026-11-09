@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

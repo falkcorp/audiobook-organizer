@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"

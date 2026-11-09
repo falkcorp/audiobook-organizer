@@ -1,7 +1,7 @@
 // file: internal/server/scan_cache_backfill.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b7f21c4-6a58-4e19-9d02-8c4f5e1a77b3
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 

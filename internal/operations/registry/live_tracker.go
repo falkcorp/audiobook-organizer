@@ -1,7 +1,7 @@
 // file: internal/operations/registry/live_tracker.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f8a3d21-9c47-4e06-b1d2-8e6f0a4c7b39
-// last-edited: 2026-07-03
+// last-edited: 2026-11-09
 
 // live_tracker.go tracks every Registry that has been Start()ed and not yet
 // Shutdown() so that a store owner can drain leaked registries BEFORE closing
@@ -29,7 +29,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 var (

@@ -1,7 +1,7 @@
 // file: internal/fileops/book_file_row_at_path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3e0d58-1a94-4f26-b6d9-a58e2f7c1b03
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package fileops
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // opaqueRecorder answers only the live-only path read and declares nothing

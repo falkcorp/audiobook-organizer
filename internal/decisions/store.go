@@ -1,7 +1,7 @@
 // file: internal/decisions/store.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"
 )
 

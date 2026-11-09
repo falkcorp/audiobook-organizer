@@ -1,7 +1,7 @@
 // file: internal/decisions/retired_versions_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2f8b05d3-7a19-4c64-9e50-c13d6a84b7e9
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredBooks is a fake store of books, retired versions and the retired rows

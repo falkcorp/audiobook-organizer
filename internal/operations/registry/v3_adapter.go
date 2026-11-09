@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package registry
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"

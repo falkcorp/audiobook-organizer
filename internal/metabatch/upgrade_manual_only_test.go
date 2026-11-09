@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_manual_only_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f6b1d8e-27c4-4a95-b0e3-8d5c2f7a1e46
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The metadata upgrade's owner-manual check is the full bulk guard: a

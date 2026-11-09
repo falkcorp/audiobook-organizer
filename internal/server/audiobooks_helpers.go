@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -40,8 +40,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"

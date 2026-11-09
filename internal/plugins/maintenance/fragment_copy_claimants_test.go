@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_copy_claimants_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f8b2c61-7d4e-4a19-9c05-e2b6a8d17f43
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // copyClaimantsFixture seeds the owner's 2026-10-06 shape, synthetically: a

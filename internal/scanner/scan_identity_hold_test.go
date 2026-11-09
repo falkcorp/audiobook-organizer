@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_identity_hold_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 98f7a755-16bc-4938-92bb-a032c55d1b10
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // readScanProposal returns bookID's stored scan identity proposal, nil when

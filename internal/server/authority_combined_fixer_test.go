@@ -1,7 +1,7 @@
 // file: internal/server/authority_combined_fixer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7e3f52-9c1d-4a8e-b6f4-2d5c8a1e7f93
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

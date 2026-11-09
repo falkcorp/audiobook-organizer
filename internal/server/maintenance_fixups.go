@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_fixups.go
-// version: 2.24.0
+// version: 2.24.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"

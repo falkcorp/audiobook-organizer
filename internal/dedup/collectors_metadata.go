@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_metadata.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e1f2a3b4-c5d6-4e7f-8a0b-1c2d3e4f5a6b
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // Package dedup — metadata-based collector family (fable5 T014).
 //
@@ -39,7 +39,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

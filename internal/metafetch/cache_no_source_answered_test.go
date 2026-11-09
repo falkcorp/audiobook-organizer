@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_no_source_answered_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c72e2bf-8a2c-461b-a89a-931d1cecdcc2
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 // A search where every provider errored used to be recorded as an empty
 // answer: the search core returns a nil error when all sources fail, and
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

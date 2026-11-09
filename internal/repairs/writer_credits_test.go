@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 1b72196d-b654-4270-bd15-c54923102210
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

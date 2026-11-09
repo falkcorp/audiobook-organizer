@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_primary_handoff_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6f2a8c35-9d41-4e7b-a0c6-3b5e7d1f9a24
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"

@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_ownership.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: febbcbf3-dd0e-4f14-b704-ef979dcf2873
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

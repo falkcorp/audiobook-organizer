@@ -1,7 +1,7 @@
 // file: internal/usermerge/service.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7b3e91d4-2c58-4a07-b6f1-0e94d5a8c3b2
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 // Package usermerge is the admin "merge user B into user A" tool: it plans a
 // merge of one account's per-user data into another (a read-only preview with a
@@ -35,8 +35,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

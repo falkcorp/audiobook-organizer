@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tag_facets_bench_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b1c5e7a-3f2d-4a68-8c94-e0d6b2f8a417
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // BenchmarkScopedTagFacets_Cold measures one UNCACHED scoped-facets

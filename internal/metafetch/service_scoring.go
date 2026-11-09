@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"log/slog"

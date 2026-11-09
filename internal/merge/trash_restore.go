@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )

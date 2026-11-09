@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_result_path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d27a5e90-1b64-4c83-9e0f-6a3b8d5c4e21
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // GET /operations/:id/result needs only library.view, and a diagnostics export's

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/split_book_bulk_merge_recheck_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b9e7c13-a5d2-4e68-9f40-c1d8e3a72b56
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -16,8 +16,8 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

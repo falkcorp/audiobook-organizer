@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tags.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f8c2a7b6-c9d0-1e23-df4a-5b6c7d8e9f0a
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ListAllUserTags returns all unique user tags with usage counts.

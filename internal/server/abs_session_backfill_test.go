@@ -1,7 +1,7 @@
 // file: internal/server/abs_session_backfill_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d1fc921f-b28d-416b-840d-a23c93b17c6c
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

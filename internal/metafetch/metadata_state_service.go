@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_state_service.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // metadataStateStore is the narrow slice of database.Store that

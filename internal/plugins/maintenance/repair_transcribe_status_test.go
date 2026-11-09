@@ -1,14 +1,14 @@
 // file: internal/plugins/maintenance/repair_transcribe_status_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: cf20a915-6b83-4e47-a0d2-38f1e75c9b60
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package maintenance
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 

@@ -1,14 +1,14 @@
 // file: internal/audiobooks/duration_unit_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4d9e2a71-6b58-4c03-9f14-8e7a05b3d62c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // 🔴 TestAggregateFileMetadata_DoesNotDivideCorrectSeconds is the library-list

@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_history.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c348220-2f70-479f-a3fc-458c64478032
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 //
 // Records the scanner's own book writes in the metadata change history.
 
@@ -10,7 +10,7 @@ package scanner
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Sources of the scanner's history rows (change type database.ChangeTypeScan).

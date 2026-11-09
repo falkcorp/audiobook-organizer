@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_coverage_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b0e2a0e-6b8e-4d63-9c1e-7f7c5c1a2d31
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Tests for round 5 of the review of PR #4200 (credits backfill): a split

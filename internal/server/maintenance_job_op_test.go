@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d6fc8245-22c3-4636-a194-c57f613cf3af
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"

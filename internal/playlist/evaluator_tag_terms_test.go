@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_tag_terms_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2f9c6b13-84d7-4a50-b1e8-d3a07c5f9e46
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package playlist
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

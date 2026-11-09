@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

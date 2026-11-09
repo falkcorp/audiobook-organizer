@@ -1,7 +1,7 @@
 // file: internal/batch/membership_lock_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8b1f6a-7c2d-4a95-9e04-b6d1c8f2a573
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package batch
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

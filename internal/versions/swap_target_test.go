@@ -1,7 +1,7 @@
 // file: internal/versions/swap_target_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c9e1b7d-52a4-4e68-b0f3-8d6a2c4e9175
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // swapFixture is a book ("The Long Halloween") whose active version plays one

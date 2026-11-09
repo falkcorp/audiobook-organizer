@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -19,8 +19,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

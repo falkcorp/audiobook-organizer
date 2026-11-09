@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -62,8 +62,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

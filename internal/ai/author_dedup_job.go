@@ -1,7 +1,7 @@
 // file: internal/ai/author_dedup_job.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 41243eb9-5540-41ac-8494-d0b58348a093
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package ai
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

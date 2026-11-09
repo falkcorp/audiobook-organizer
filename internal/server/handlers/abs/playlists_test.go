@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/playlists_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e2f4a08-b165-4c39-8de2-91f0a3b74c6e
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

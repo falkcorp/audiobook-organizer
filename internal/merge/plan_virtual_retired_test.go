@@ -1,7 +1,7 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireRowOnto creates a row for path under a fresh shell book and retires it

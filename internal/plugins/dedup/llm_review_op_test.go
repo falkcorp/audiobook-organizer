@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review_op_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8a1c64-7d02-4b95-a1f6-5c9d2e07b831
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.6.2
+// version: 4.6.3
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -29,8 +29,8 @@ import (
 	"github.com/falkcorp/mediacore/library"
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"

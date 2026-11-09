@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: b2e7c3d1-4a58-4f96-9e0b-7d3a1c8f5b24
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package ai
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"log/slog"
 )
 

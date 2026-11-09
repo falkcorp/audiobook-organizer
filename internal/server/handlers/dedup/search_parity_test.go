@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ef2c6990-c652-43b3-b12e-5a7ebc5309cb
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Parity and cost tests for resolveBookIDsMatching's move from
 // GetAllBooksCore(0, 0) + GetAllAuthors to the store-side ListBookSearchRows
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // legacyBookIDsMatching is resolveBookIDsMatching exactly as it was before the

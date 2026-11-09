@@ -1,7 +1,7 @@
 // file: internal/server/library_list_warmer_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5b0c8f4e-2d7a-4c1e-9a63-7e1f0b3d8a52
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 

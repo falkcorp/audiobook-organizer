@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/plugin.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Package deluge implements the UOS plugin for Deluge integration operations.
 package deluge
@@ -9,7 +9,7 @@ package deluge
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

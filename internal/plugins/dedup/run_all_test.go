@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: ef555d0e-38d5-4c56-ae25-d1de6f868f64
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

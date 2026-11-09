@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

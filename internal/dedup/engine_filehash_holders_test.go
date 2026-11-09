@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_filehash_holders_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8e2d71-9c40-4f13-a6d8-3e7a0c1b9f52
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/head_routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c4e17b0-3a58-4d2f-8e61-b0d5c7a92f14
-// last-edited: 2026-08-17
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // 🔴 WHY THESE TESTS EXIST. gin registers one method per call, so a GET-only

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_handoff_void_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b0d1f4e-3a2c-4e71-9c58-2f7d8a1e0b93
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

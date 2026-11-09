@@ -1,14 +1,14 @@
 // file: internal/server/server_maintenance_store_accessors_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c3e9a15-2d48-4b6f-9e01-5a8c7d3b2f64
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The maintenance plugin's capability accessors run at OP-RUN time, when

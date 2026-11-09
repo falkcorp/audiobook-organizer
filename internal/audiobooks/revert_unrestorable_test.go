@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ledgerStub is a revertServiceStore that records exactly which change IDs the

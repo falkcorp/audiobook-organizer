@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_pcache_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4f9b2d61-8e07-4c5a-a3f1-7d26c0b95e18
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics/metricstest"
 )

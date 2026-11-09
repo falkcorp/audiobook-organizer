@@ -1,6 +1,6 @@
 // file: internal/server/undo_engine_prop_test.go
-// version: 1.5.2
-// last-edited: 2026-10-25
+// version: 1.5.3
+// last-edited: 2026-11-09
 // guid: 1ff3d071-4c60-4bb0-92ed-d197fe8ad9d0
 //
 // Property-based tests for the undo engine (plan 4.5 task 8).
@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"pgregory.net/rapid"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_converge_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7d1f0c52-3a9e-4b6c-8e04-5f2a9c6b1d73
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

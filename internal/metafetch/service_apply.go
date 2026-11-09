@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.5
+// version: 1.55.6
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

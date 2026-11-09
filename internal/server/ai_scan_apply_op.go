@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -22,7 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

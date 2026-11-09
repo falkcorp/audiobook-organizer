@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b2e9c47-1a08-4d63-8f92-3c7a0e6b1d54
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 //
 // The 4-state iTunes library model + its config-load Resolve/Validate. Two physical
 // libraries (Original = the real hands-off tree under books/itunes/**; AO = the
@@ -84,7 +84,7 @@ func (c *ITunesConfig) Resolve() {
 
 // The frozen-tree predicate (books/itunes/**) lives in
 // pathutil.UnderFrozenITunesTree, the one spelling every caller shares,
-// including internal/database, which cannot import this package.
+// including internal/books/store, which cannot import this package.
 
 func pathCoveredByProtected(p string, protected []string) bool {
 	if p == "" {

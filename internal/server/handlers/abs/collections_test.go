@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0f5a92c3-71b8-4d26-9e04-3ca8175bd6e1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
@@ -101,7 +101,7 @@ func (f *abscolFakeStore) CreateCollection(col *database.Collection) (*database.
 }
 
 // UpdateCollection mirrors PebbleStore.UpdateCollection's compare-and-swap on
-// Version (internal/database/pebble_store_collections.go): a write built from
+// Version (internal/books/store/pebble_store_collections.go): a write built from
 // a stale read — col.Version not matching the currently-stored row's Version —
 // is rejected instead of silently clobbering whatever landed since. The
 // handlers detect the conflict with errors.Is, so the fake must wrap the real

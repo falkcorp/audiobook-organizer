@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_hydration_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9f0a1b2c-3d4e-5f60-7182-93a4b5c6d7e8
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Tests for the searchWithBleve batch-hydration fail-open path (INIT-4 T3).
 // GetBookByID's per-hit loop was replaced with a single GetBooksByIDs call
@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

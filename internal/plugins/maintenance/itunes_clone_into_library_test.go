@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

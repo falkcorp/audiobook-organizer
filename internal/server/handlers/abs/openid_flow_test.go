@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )

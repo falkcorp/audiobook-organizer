@@ -1,7 +1,7 @@
 // file: internal/batch/trash_effects_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f183a58d-743d-4d9b-86cd-7f26999abaab
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestTrashEffects_Operations(t *testing.T) {

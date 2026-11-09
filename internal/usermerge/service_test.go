@@ -1,7 +1,7 @@
 // file: internal/usermerge/service_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b17d4c90-3e62-4a85-9d0f-4c8a2e6b7153
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const ownerAddr = "owner@example.com"

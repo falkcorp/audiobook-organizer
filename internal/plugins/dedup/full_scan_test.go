@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c3d4e5f6-a7b8-49c0-b1d2-e3f4a5b6c7d8
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Tests for the dedup.full-scan op's dual-phase progress reporting.
 //
@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

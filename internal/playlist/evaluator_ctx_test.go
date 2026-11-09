@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_ctx_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4f9a1d36-8c52-4e70-b3a9-6d0e8c2f7b14
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package playlist
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // N-12: the viewer-state scan stops for a request that went away, and the answer is

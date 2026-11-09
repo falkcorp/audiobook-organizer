@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -215,7 +215,7 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 // ThrottleStore persists holds so they survive a restart.
 //
 // Deliberately a typed KV over JSON payloads rather than an interface in terms
-// of ProviderThrottle. internal/metadata already imports internal/database, so
+// of ProviderThrottle. internal/metadata already imports internal/books/store, so
 // a database-side implementation cannot name this package's types without a
 // cycle. Keeping the port at []byte leaves the domain type here, where it
 // belongs, and leaves the store a dumb keyspace -- and it adds NOTHING to

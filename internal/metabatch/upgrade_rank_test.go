@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_rank_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e0b7c3a-91d4-4f6e-8a2b-c7d1e9f40a63
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 //
 // Owner decision 2026-09-27: the nightly metadata upgrade REPLACES a book's
 // metadata when it came from a lower-ranked source and a strictly
@@ -20,7 +20,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/require"
 )

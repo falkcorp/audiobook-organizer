@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2d552bb6-33a3-4168-9c64-c78bec530ec4
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

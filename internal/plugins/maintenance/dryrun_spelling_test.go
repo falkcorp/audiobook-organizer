@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dryrun_spelling_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0d6b52-8c1e-4a97-b5d4-71e2a9c04f68
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/ai/register.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3f6c1e2a-8b4d-4c7e-9a1f-2d5b6e7c8f90
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Service registry registrations for the AI cluster (W4).
 //
@@ -19,8 +19,8 @@ package ai
 import (
 	"log/slog"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

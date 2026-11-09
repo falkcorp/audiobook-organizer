@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_combine_override_coauthor_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 81557a7d-bf1f-4979-a259-566cb53ce578
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

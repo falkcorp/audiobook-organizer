@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops_batch_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d3a390db-7a5a-41df-ba14-226aeb15655c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/class_lists_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4f1c7a92-0b3e-4d68-8a15-d27e6c9b30f1
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"

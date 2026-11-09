@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_scorer.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f7a2c841-3b5e-4d9f-82c6-1e0d7f3a9b4c
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package ai
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // embeddingAPI is the minimal surface EmbeddingScorer needs from an embedding

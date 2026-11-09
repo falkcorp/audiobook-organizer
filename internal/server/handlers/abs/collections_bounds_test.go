@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_bounds_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f8a6c41-9d03-4e57-b1a8-7c5e0d3f6b92
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

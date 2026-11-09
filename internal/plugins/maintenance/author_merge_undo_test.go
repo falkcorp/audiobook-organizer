@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

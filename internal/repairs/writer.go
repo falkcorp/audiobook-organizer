@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"

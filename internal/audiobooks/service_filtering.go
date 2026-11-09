@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"math"
 )

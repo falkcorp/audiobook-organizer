@@ -1,12 +1,12 @@
 // file: internal/server/handlers/entities/author_refcount.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2bde50e3-abc9-4f90-ba06-db303a3776f2
-// last-edited: 2026-08-23
+// last-edited: 2026-11-09
 
 package entities
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // authorRefCounts returns, per author ID, how many book rows reference it in

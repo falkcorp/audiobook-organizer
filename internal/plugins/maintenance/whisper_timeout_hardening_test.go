@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_timeout_hardening_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3c9d7e41-5b28-4f06-a1d3-8e2f60b4c715
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )

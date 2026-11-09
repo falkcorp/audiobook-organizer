@@ -1,7 +1,7 @@
 // file: internal/server/quarantine_known_bad_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2e7c9b51-8a4f-4d36-b1e0-6f3a5d8c2b94
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"

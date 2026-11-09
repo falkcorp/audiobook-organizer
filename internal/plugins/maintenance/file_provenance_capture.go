@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

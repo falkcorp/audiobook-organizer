@@ -1,7 +1,7 @@
 // file: internal/catalog/alias.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f6b2d84-9a3c-4e17-8c5d-b1e7a2f40d69
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -10,7 +10,7 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // minAliasFold is the shortest alias fold worth filing: "jlee" would name

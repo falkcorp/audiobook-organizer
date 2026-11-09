@@ -1,7 +1,7 @@
 // file: internal/books/boot.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f6a21-5c4e-4b9a-9e17-2f6c0b8d4a53
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -11,8 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 )
 

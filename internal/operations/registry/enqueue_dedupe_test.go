@@ -1,7 +1,7 @@
 // file: internal/operations/registry/enqueue_dedupe_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4352733d-985f-4541-87ce-22f4698d67cc
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // ENQ-DEDUP-1 regression suite.
 //
@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5e2a9c41-7b30-4d68-8f12-3a6e0c9d5b27
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package deduphandler
 
@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"

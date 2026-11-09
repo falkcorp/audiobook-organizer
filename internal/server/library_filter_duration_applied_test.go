@@ -1,7 +1,7 @@
 // file: internal/server/library_filter_duration_applied_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f2c8b73-1d9e-4a06-b7c4-3e8a0d6f2b91
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // End to end through GET /api/v1/audiobooks with the `filters` parameter the

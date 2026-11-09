@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_part_vs_whole_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 6d3a9f21-4b7c-4e58-9a01-2f5c8d6e7b34
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Regression guard for CONS-15: upsertExactCandidate must reject a pair where
 // one side is a single-file book whose duration is a small fraction of the
@@ -15,7 +15,7 @@ package dedup
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestUpsertExactCandidate_PartVsWholeGuard(t *testing.T) {

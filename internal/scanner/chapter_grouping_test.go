@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_grouping_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 950c3ace-c8d3-4885-9a1d-d90682d41415
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_apply_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2f6a9c13-d874-4e05-b1a7-83c5e0d94f68
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

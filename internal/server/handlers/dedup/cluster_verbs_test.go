@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/cluster_verbs_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 94c1d7e3-6a20-4f58-b3e9-2d8a5c0f7b14
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
 )

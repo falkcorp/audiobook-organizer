@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -17,8 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

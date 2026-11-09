@@ -1,7 +1,7 @@
 // file: internal/server/server_queue_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: b1c2d3e4-f5a6-7890-bcde-f01234567890
-// last-edited: 2026-08-16
+// last-edited: 2026-11-09
 
 package server
 
@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_fieldset_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // batch_fieldset_test.go is the TDD regression test for C1 (C1 = "give the
 // registry a real book-aware store for dep evaluation").
@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

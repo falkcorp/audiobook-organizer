@@ -1,7 +1,7 @@
 // file: internal/server/handlers/db_health_pebble_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8d3e51b7-0c94-4a26-b8f1-53a70e6d29cc
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The Pebble section of /db-health is gated on a CAPABILITY, not on an error

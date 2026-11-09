@@ -1,7 +1,7 @@
 // file: internal/scanner/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b2c3d4e5-f6a7-b8c9-d0e1-f2a3b4c5d6e7
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

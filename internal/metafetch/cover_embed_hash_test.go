@@ -1,7 +1,7 @@
 // file: internal/metafetch/cover_embed_hash_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4d8b2f60-1a97-4e3c-8c52-b6e9a0d7f314
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_itunes_positions.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 19a97553-68fc-4ef6-a326-cc9e694d8698
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
@@ -52,7 +52,7 @@ const ITunesPositionBackfillUserIDEnv = "ABS_ITUNES_POSITION_BACKFILL_USER_ID"
 // Exactly one, and only at the migrated offset. Book.ITunesBookmark is a single
 // scalar resume position — the farthest point read — not a bookmark collection,
 // so there is nothing to synthesize a list from. The ABS named-bookmark feature
-// (internal/database/pebble_store_bookmarks.go, whose own doc comment makes the
+// (internal/books/store/pebble_store_bookmarks.go, whose own doc comment makes the
 // same distinction) is an independent system that clients populate themselves;
 // this job must not backfill that keyspace beyond this single courtesy marker.
 const ITunesPositionBookmarkTitle = "Imported from Apple Books"

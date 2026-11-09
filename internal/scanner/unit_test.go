@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.19.4
+// version: 1.19.5
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,9 +15,9 @@ import (
 
 	"errors"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

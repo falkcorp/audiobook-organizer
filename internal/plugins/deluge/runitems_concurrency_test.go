@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/runitems_concurrency_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7a3d9c15-8e42-4b60-a1f7-d5e2c8b94f03
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // overlapProbe proves that a pool really ran items side by side. Each caller

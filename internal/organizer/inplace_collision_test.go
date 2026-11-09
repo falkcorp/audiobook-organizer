@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 99027475-b084-4603-adf4-4061987f30b0
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // These run against a real PebbleStore: the behaviour under test is how the

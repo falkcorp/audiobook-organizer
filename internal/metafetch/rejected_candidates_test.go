@@ -1,7 +1,7 @@
 // file: internal/metafetch/rejected_candidates_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f0c9a51-7e2d-4b8a-9c16-5d4e8f2a7b30
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // memRejections is an in-memory RejectionStore.

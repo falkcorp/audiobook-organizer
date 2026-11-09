@@ -1,7 +1,7 @@
 // file: internal/organizer/stamp_library_state_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6d2b8f04-3a71-4e59-b8c2-1f7a09e4d35c
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/mock"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a9c1f27-8b3e-4d05-9a61-2f7c0d3e6b58
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // F6 regression test: the dedup.book-merge op (started via POST /audiobooks/link; the
 // old POST /audiobooks/merge route is gone) was
@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 )

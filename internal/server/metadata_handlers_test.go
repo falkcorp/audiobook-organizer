@@ -1,7 +1,7 @@
 // file: internal/server/metadata_handlers_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7a3e2f1b-9c4d-4e8a-b6f0-1d5c2a0e3b7f
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

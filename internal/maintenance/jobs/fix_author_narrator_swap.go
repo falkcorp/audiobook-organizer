@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: a1000003-0000-0000-0000-000000000003
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 
 	"log/slog"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

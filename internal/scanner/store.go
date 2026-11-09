@@ -1,14 +1,14 @@
 // file: internal/scanner/store.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -150,7 +150,7 @@ type scannerStore interface {
 	scanEntityStore
 	scanProgressStore
 	// The lock guard's surface (field-state rows + the legacy blob), owned by
-	// internal/database so the scanner and every metafetch apply path read
+	// internal/books/store so the scanner and every metafetch apply path read
 	// locks the same way.
 	database.MetadataFieldStateReader
 

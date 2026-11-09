@@ -1,7 +1,7 @@
 // file: internal/repairs/wire_null_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 9a4e1d62-3b85-4c07-8d19-f26c0e7a5b43
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/require"
 )

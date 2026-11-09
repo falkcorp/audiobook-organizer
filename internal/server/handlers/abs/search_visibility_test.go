@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_visibility_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 18fe3a64-0852-45a6-a04b-e847d0ab2d21
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Item-6 B6 (2026-09-19): the ABS search rendered books /items hides — merge

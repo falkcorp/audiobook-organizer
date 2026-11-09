@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 91e4c07b-5a63-4d28-8f10-2b74e9d6a35c
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestApplyBookIntroFieldsTouchesNothingElse is THE guard on this migration.

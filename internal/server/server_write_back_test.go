@@ -1,5 +1,5 @@
 // file: internal/server/server_write_back_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d2e3f4a5-b6c7-8d9e-0f1a-2b3c4d5e6f7a
 
 package server
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/batch_hard_delete_permission_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: e0a974ef-0780-48c3-921a-e32b2e124b6c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const batchOpsPath = "/api/v1/audiobooks/batch-operations"

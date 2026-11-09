@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_classes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b8f3a1e-6c47-4d92-9e0b-2f7a41c8d6e3
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -21,7 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

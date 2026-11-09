@@ -1,7 +1,7 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The trash purge must never delete a file the version's own live book still

@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_keeps_candidate_cache_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a538ab02-6cfc-4650-9912-228a382db99d
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // An apply that leaves the book's title and author as they were -- here it

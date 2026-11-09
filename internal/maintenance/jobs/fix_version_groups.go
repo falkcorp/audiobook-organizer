@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.6.1
+// version: 3.6.2
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

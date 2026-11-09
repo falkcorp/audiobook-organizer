@@ -1,7 +1,7 @@
 // file: internal/telemetrypolicy/series_contract_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package telemetrypolicy (internal/telemetry/contract until R1-10) pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -47,7 +47,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/server"

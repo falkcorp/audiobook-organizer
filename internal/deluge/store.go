@@ -1,11 +1,11 @@
 // file: internal/deluge/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f7a2c98-6e34-4b05-9d81-3a5c0e27b6d4
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package deluge
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // Store is the store surface this package needs, measured with an
 // empty-interface compiler probe under -gcflags=-e: two methods, no forwarding

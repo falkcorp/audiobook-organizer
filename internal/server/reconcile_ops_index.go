@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_index.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8f5b91-7a34-4e60-b9d2-1f6e0a83c574
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Reconcile runs used to live on a v1 operations row that the HTTP handler

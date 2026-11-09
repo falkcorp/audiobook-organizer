@@ -1,0 +1,188 @@
+// file: internal/books/store/pebble_store_itunes.go
+// version: 1.3.1
+// guid: f359d1ff-32ad-45c2-b58c-bd254479a552
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+)
+
+// SetLastWrittenAt stamps the last_written_at timestamp for book id.
+// A missing book is not an error (ModifyBook returns nil, nil for it).
+func (p *PebbleStore) SetLastWrittenAt(id string, t time.Time) error {
+	_, err := p.ModifyBook(id, func(book *Book) error {
+		book.LastWrittenAt = &t
+		return nil
+	})
+	return err
+}
+
+// MarkITunesSynced sets itunes_sync_status to "synced" for the given book IDs.
+// Each book is read and written under its own stripe, one at a time.
+func (p *PebbleStore) MarkITunesSynced(bookIDs []string) (int64, error) {
+	var count int64
+	for _, id := range bookIDs {
+		book, err := p.ModifyBook(id, func(book *Book) error {
+			synced := "synced"
+			book.ITunesSyncStatus = &synced
+			return nil
+		})
+		if err == nil && book != nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// GetITunesPurgePendingBooks returns books with itunes_sync_status = "purge_pending" and a PID.
+func (p *PebbleStore) GetITunesPurgePendingBooks() ([]Book, error) {
+	// Scan book:* index and filter by iTunes sync status without loading all books
+	var pending []Book
+
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		var b Book
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
+		}
+		if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "purge_pending" && b.ITunesPersistentID != nil {
+			pending = append(pending, b)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+// GetITunesDirtyBooks returns all primary books with itunes_sync_status = "dirty".
+func (p *PebbleStore) GetITunesDirtyBooks() ([]Book, error) {
+	// Scan book:* index and filter by iTunes sync status without loading all books
+	var dirty []Book
+
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		var b Book
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
+		}
+		if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "dirty" {
+			if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+				dirty = append(dirty, b)
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return dirty, nil
+}
+
+// CreateDeferredITunesUpdate stores a deferred iTunes path update.
+func (p *PebbleStore) CreateDeferredITunesUpdate(bookID, persistentID, oldPath, newPath, updateType string) error {
+	id := time.Now().UnixNano()
+	rec := DeferredITunesUpdate{
+		ID:           int(id),
+		BookID:       bookID,
+		PersistentID: persistentID,
+		OldPath:      oldPath,
+		NewPath:      newPath,
+		UpdateType:   updateType,
+		CreatedAt:    time.Now(),
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	key := []byte(fmt.Sprintf("deferred_itunes:%019d", id))
+	return p.db.Set(key, data, pebble.Sync)
+}
+
+// GetPendingDeferredITunesUpdates returns all deferred updates that haven't been applied yet.
+func (p *PebbleStore) GetPendingDeferredITunesUpdates() ([]DeferredITunesUpdate, error) {
+	prefix := []byte("deferred_itunes:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: append(prefix, 0xff),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var results []DeferredITunesUpdate
+	for iter.First(); iter.Valid(); iter.Next() {
+		var rec DeferredITunesUpdate
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		if rec.AppliedAt == nil {
+			results = append(results, rec)
+		}
+	}
+	return results, nil
+}
+
+// MarkDeferredITunesUpdateApplied sets the applied_at timestamp on a deferred update.
+func (p *PebbleStore) MarkDeferredITunesUpdateApplied(id int) error {
+	key := []byte(fmt.Sprintf("deferred_itunes:%019d", id))
+	data, closer, err := p.db.Get(key)
+	if err != nil {
+		return err
+	}
+	var rec DeferredITunesUpdate
+	if err := json.Unmarshal(data, &rec); err != nil {
+		closer.Close()
+		return err
+	}
+	closer.Close()
+
+	now := time.Now()
+	rec.AppliedAt = &now
+	updated, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return p.db.Set(key, updated, pebble.Sync)
+}
+
+// GetDeferredITunesUpdatesByBookID returns all deferred updates for a specific book.
+func (p *PebbleStore) GetDeferredITunesUpdatesByBookID(bookID string) ([]DeferredITunesUpdate, error) {
+	all, err := p.getPendingAndAppliedDeferredUpdates()
+	if err != nil {
+		return nil, err
+	}
+	var results []DeferredITunesUpdate
+	for _, rec := range all {
+		if rec.BookID == bookID {
+			results = append(results, rec)
+		}
+	}
+	return results, nil
+}
+
+func (p *PebbleStore) getPendingAndAppliedDeferredUpdates() ([]DeferredITunesUpdate, error) {
+	prefix := []byte("deferred_itunes:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: append(prefix, 0xff),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var results []DeferredITunesUpdate
+	for iter.First(); iter.Valid(); iter.Next() {
+		var rec DeferredITunesUpdate
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		results = append(results, rec)
+	}
+	return results, nil
+}

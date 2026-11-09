@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a
@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newExportFixture(t *testing.T) (*Plugin, *database.PebbleStore, string) {

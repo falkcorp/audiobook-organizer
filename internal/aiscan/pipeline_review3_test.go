@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/mediacore/lifecycle"
 	"github.com/stretchr/testify/require"
 )

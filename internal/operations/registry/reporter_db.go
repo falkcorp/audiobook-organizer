@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package registry
 
@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 )

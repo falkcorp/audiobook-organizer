@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback_duprows_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2c65b832-5fea-41f4-9b1e-551dd05d7eb8
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Tests for dedupeBookFilesByPath (DUPROW-1).

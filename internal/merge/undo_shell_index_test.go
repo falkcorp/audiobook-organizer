@@ -1,7 +1,7 @@
 // file: internal/merge/undo_shell_index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e4b1d60-7a35-4c82-b0f9-2d6e8a3c5b17
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

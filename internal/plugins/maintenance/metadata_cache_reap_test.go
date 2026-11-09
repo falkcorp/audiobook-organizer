@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
-// last-edited: 2026-08-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/require"
 )

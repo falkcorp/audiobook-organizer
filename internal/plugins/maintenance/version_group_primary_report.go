@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_report.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8b1d64-9c2e-4a57-b0d3-6e41a9c8f215
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

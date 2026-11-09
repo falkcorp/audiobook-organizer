@@ -1,7 +1,7 @@
 // file: internal/audiobooks/detail_read_fresh_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1b5bf471-f635-478e-bf3f-1cd0837c914d
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A write that does not go through the AudiobookService -- a Repairs fixer,

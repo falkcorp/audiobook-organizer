@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_operations_single_pass_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3c81f27a-5d94-4e60-b1a8-7f26c0d95ab3
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // deleteOldOperations used to walk ListOperations in 500-row pages. Two things

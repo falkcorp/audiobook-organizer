@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_title_relink_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6dda78bf-049e-4911-b7d4-eea7bb31d0b7
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

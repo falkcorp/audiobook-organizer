@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6add5bfa-b425-4289-9274-72a2ee56ed84
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
