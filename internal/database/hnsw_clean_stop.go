@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-09
 
@@ -654,11 +654,15 @@ func takeCleanStop(dir string) (*cleanStopRecord, error) {
 			// too (R1-15 round-8 verification review, SF2). A directory
 			// that does not exist holds no marker.
 			if err := fsyncDir(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("%w: clean-stop marker %s: the directory could not be synced, so a marker removed without a sync could come back: %w", ErrCleanStopNotDiscarded, p, err)
+				return nil, fmt.Errorf("%w: clean-stop marker %s: the directory could not be synced, so a marker removed without a sync could come back; "+
+					"run this as the user the service runs as (the sync opens the directory), or, if it already is, check the directory's filesystem, and run again: %w",
+					ErrCleanStopNotDiscarded, p, err)
 			}
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: clean-stop marker %s: %w", ErrCleanStopNotDiscarded, p, err)
+		return nil, fmt.Errorf("%w: clean-stop marker %s could not be looked up, so one may be there and vouch; "+
+			"run this as the user the service runs as (it must be able to search the directory), or delete the marker by hand, and run again: %w",
+			ErrCleanStopNotDiscarded, p, err)
 	}
 	rec, readErr := readCleanStop(p)
 	if err := discardCleanStop(p); err != nil {
