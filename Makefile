@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.52.2
+# version: 2.53.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-11-09
 
@@ -66,6 +66,30 @@ DEPLOY_DB   ?=
 # ~/.ssh/config (Host/HostName) does not, so set DEPLOY_URL or API_URL then.
 DEPLOY_URL  ?= $(if $(API_URL),$(patsubst %/api/v1,%,$(patsubst %/,%,$(API_URL))),$(if $(DEPLOY_HOST),https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484))
 BACKUP_DIR  ?= $(CURDIR)/backups
+# Seconds scripts/deploy-wait-ready.sh waits for "ready":true after a restart,
+# counted from when the unit leaves `activating` (09 §9.4 R1): a first boot
+# that migrates stays activating while its steps extend the start timeout, and
+# that time is not counted. Raise it for a release whose first boot is slow
+# after it is serving (R2's runbook: the measured first-boot time).
+DEPLOY_READY_TIMEOUT ?= 300
+# The systemd unit the rollback recipes stop, start and watch.
+DEPLOY_UNIT ?= audiobook-organizer.service
+# The service's state directory on DEPLOY_HOST (ABK_STATE_DIR, else the
+# compiled default): the in-flight probe looks for restore/<id>/inflight.json
+# under it, and storage restore-offline runs with it.
+DEPLOY_STATE_DIR ?= /var/lib/audiobook-organizer
+# The user the service runs as (the unit's User=): storage restore-offline and
+# the checkpoint reads run as this user, never as root, so every file they
+# write keeps the service's ownership.
+DEPLOY_SERVICE_USER ?= audiobook
+# core.storage.checkpoint_dir when it is set; empty means the store's parent
+# directory, where checkpoints live by default (<db parent>/.mediacore-checkpoints).
+DEPLOY_CHECKPOINT_DIR ?=
+# The environment storage restore-offline runs with, matching the committed
+# unit's (HOME and the state directory). Space-separated NAME=value tokens.
+DEPLOY_OFFLINE_ENV ?= HOME=$(DEPLOY_STATE_DIR) ABK_STATE_DIR=$(DEPLOY_STATE_DIR)
+# The rollback guard (a variable so the recipe tests can run a mutated copy).
+ROLLBACK_GUARD ?= scripts/storage_format_guard.py
 
 # Generic build flags (owner decision D37). The committed Makefile owns these so
 # every Makefile build target, including `make build-linux` (and so every
@@ -980,19 +1004,26 @@ backup:
 
 ## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
 #
-# Storage-format guard (docs/system/runbooks.md#storage-format-restore): the
-# swap happens only when the store's storage format (DEPLOY_DB.storage-format)
-# is not above the format DEPLOY_BIN.prev supports. Past a format change it
-# refuses, swaps nothing and prints the restore-from-checkpoint steps.
-# ROLLBACK_IGNORE_FORMAT=1 only covers an unreadable sidecar; it never
-# overrides a format change, and even then the guard refuses when the CURRENT
-# binary reports a format above .prev's.
+# The store guard (scripts/storage_format_guard.py rollback; 05-storage
+# §5S.3.7 "The binary-swap guard"): before anything is swapped it
+#   - refuses while a restore or reset swap is in flight: one probe,
+#     restore/<id>/inflight.json under DEPLOY_STATE_DIR, shared with
+#     rollback-restore, no override ("boot the current build once to finish
+#     it"); a pending intent passes, because the older build rejects it;
+#   - reads the store's levels (DEPLOY_DB.storage-levels) and what
+#     DEPLOY_BIN.prev serves (--print-storage-levels; an R0 binary falls back
+#     to --print-storage-format), and refuses when any owner's store level is
+#     above .prev's, naming `make rollback-restore`: a binary swap cannot go
+#     back past a level step. A store no core build has opened has no levels
+#     sidecar and keeps HEAD's projection rule (DEPLOY_DB.storage-format);
+#     ROLLBACK_IGNORE_FORMAT=1 only covers an unreadable projection sidecar,
+#     never levels and never the probe.
+# Every read uses `sudo -n` (no tty to type a password); a refusal names the
+# missing sudoers line (docs/system/deploy-and-gpu-ops.md).
 #
-# The sidecar and checkpoint record are read with `sudo -n cat` (the store's
-# parent directory belongs to the service user); `-n` fails at once instead
-# of waiting for a password no tty can type. Each ssh command's stderr is
-# captured and handed to the guard, so a refusal names its cause. The sudoers
-# lines this needs are in docs/system/deploy-and-gpu-ops.md.
+# The restart is a blocking `systemctl restart`, whose failure does not stop
+# the recipe: scripts/deploy-wait-ready.sh then reads the unit and names the
+# cause (exit 78: the binary refused the store; a crash; a timeout).
 #
 # Unit type: before the swap, scripts/deploy-match-unit-type.sh asks .prev
 # for --print-capabilities. A .prev without sd_notify (any build older than
@@ -1008,25 +1039,76 @@ rollback:
 	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
 	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
 	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
-	@errs=$$(mktemp -d) && trap 'rm -rf "$$errs"' EXIT; \
-	  prev_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN).prev --print-storage-format' 2>"$$errs/prev"); \
-	  current_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN) --print-storage-format' 2>"$$errs/current"); \
-	  sidecar=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).storage-format' 2>"$$errs/sidecar"); \
-	  checkpoint=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).migration-checkpoint' 2>"$$errs/checkpoint"); \
-	  ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 scripts/storage_format_guard.py \
-	    --db="$(DEPLOY_DB)" --bin="$(DEPLOY_BIN)" \
-	    --prev="$$prev_fmt" --prev-err="$$(cat "$$errs/prev")" \
-	    --current="$$current_fmt" --current-err="$$(cat "$$errs/current")" \
-	    --sidecar="$$sidecar" --sidecar-err="$$(cat "$$errs/sidecar")" \
-	    --checkpoint="$$checkpoint" --checkpoint-err="$$(cat "$$errs/checkpoint")"
+	@ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 $(ROLLBACK_GUARD) rollback \
+	  --host="$(DEPLOY_HOST)" --db="$(DEPLOY_DB)" --bin="$(DEPLOY_BIN)" \
+	  --state-dir="$(DEPLOY_STATE_DIR)" --unit="$(DEPLOY_UNIT)"
 	@echo "→ Matching the service type to $(DEPLOY_BIN).prev..."
 	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) $(DEPLOY_BIN).prev
-	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
-	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
-	  sudo systemctl restart audiobook-organizer.service'
-	@echo "→ Restarted on the previous binary; waiting for /health to report ready (up to 300s)..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300 || (echo "ERROR: the swap and restart are done, but the server did not report ready. A previous binary older than readiness reporting has no ready field; check it by hand."; exit 1)
+	ssh $(DEPLOY_HOST) 'sudo -n cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
+	  sudo -n cp $(DEPLOY_BIN).prev $(DEPLOY_BIN)'
+	@ssh $(DEPLOY_HOST) 'sudo -n systemctl restart $(DEPLOY_UNIT)' || echo "   systemctl restart reported a failure; the wait below reads the unit and names the cause."
+	@echo "→ Restarted on the previous binary; waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating)..."
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT) || (echo "ERROR: the swap is done, but the server did not report ready (the reason is above). A previous binary older than readiness reporting has no ready field; check it by hand."; exit 1)
 	@echo "✅ Rolled back $(DEPLOY_BIN) to previous version and restarted."
+
+## rollback-restore: Restore the pre-upgrade checkpoint (or ROLLBACK_ARCHIVE=<file on the host>) with the current binary, then reinstall .prev and start (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL as for rollback)
+#
+# The rollback of a release whose boot ran a level step (R2), where a binary
+# swap is refused (05-storage §5S.3.12 row `make rollback-restore`, 09 §9.2.1
+# "Rollback"). In order:
+#   1. RELEASE set: refuse. Fetching a named release is F8's
+#      `updater fetch-release`, which this build does not have.
+#   2. Read-only checks, while the service still runs, so a refusal leaves it
+#      running (scripts/storage_format_guard.py restore): the in-flight probe
+#      (the one `make rollback` runs, no override); the source's levels, the
+#      latest checkpoint record's from_vector, or with ROLLBACK_ARCHIVE the
+#      levels of the archived store itself, read from a scratch copy the
+#      current binary extracts (storage restore-offline --into) and deletes
+#      again; and DEPLOY_BIN.prev --print-storage-levels, which must EQUAL the
+#      source's levels, else it refuses naming the release to install. It
+#      prints the source's time, the loss and the credential warning.
+#   3. Stop the unit; check that it stays stopped (inactive or failed); run
+#      the in-flight probe again.
+#   4. The CURRENT binary's `storage restore-offline --checkpoint <latest>
+#      --accept-loss` (or `--archive <file> --accept-loss`), as
+#      DEPLOY_SERVICE_USER, never root. It takes the swap lock itself and
+#      refuses while a service is running or starting; nothing retries it.
+#      Then check again that the unit stayed stopped.
+#   5. Match the unit type to .prev, keep the current binary as
+#      DEPLOY_BIN.rolled-back, install .prev, start (blocking; a failure is
+#      left to the wait), and wait with scripts/deploy-wait-ready.sh.
+# Nothing is stopped, restored or swapped before step 2 passes. The unit is
+# not masked (systemctl mask refuses a unit file installed in
+# /etc/systemd/system): the swap lock is the exclusion, and the two "still
+# stopped" checks report a start that happened anyway.
+.PHONY: rollback-restore
+rollback-restore:
+	@[ -z "$(RELEASE)" ] || (echo "ERROR: RELEASE=$(RELEASE): fetching a named release needs F8's updater fetch-release, which this build does not have. Install that release's binary as $(DEPLOY_BIN).prev on $(DEPLOY_HOST) by hand, then run make rollback-restore without RELEASE."; exit 1)
+	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
+	@echo "→ Rollback-restore of $(DEPLOY_DB) on $(DEPLOY_HOST)$(if $(ROLLBACK_ARCHIVE), from $(ROLLBACK_ARCHIVE),)..."
+	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST): install the release to roll back to as $(DEPLOY_BIN).prev first."; exit 1)
+	@restore=$$(python3 $(ROLLBACK_GUARD) restore --host="$(DEPLOY_HOST)" --db="$(DEPLOY_DB)" \
+	    --bin="$(DEPLOY_BIN)" --state-dir="$(DEPLOY_STATE_DIR)" --unit="$(DEPLOY_UNIT)" \
+	    --service-user="$(DEPLOY_SERVICE_USER)" --checkpoint-dir="$(DEPLOY_CHECKPOINT_DIR)" \
+	    --archive="$(ROLLBACK_ARCHIVE)" --offline-env="$(DEPLOY_OFFLINE_ENV)") || exit 1; \
+	  echo "→ Stopping $(DEPLOY_UNIT)..."; \
+	  ssh $(DEPLOY_HOST) 'sudo -n systemctl stop $(DEPLOY_UNIT)' || { echo "ERROR: could not stop $(DEPLOY_UNIT); nothing was restored."; exit 1; }; \
+	  python3 $(ROLLBACK_GUARD) stopped --host="$(DEPLOY_HOST)" --state-dir="$(DEPLOY_STATE_DIR)" --unit="$(DEPLOY_UNIT)" || exit 1; \
+	  python3 $(ROLLBACK_GUARD) inflight --host="$(DEPLOY_HOST)" --state-dir="$(DEPLOY_STATE_DIR)" --unit="$(DEPLOY_UNIT)" || { echo "   $(DEPLOY_UNIT) is stopped; nothing was restored."; exit 1; }; \
+	  echo "→ Restoring with the current binary: $$restore"; \
+	  ssh $(DEPLOY_HOST) "$$restore" || { echo "ERROR: storage restore-offline failed (its message is above) and was not retried. $(DEPLOY_UNIT) is stopped and $(DEPLOY_BIN) is still the current binary. If it says the service is running or starting, something started $(DEPLOY_UNIT) during the rollback: find it (systemctl status $(DEPLOY_UNIT)), stop it, and run make rollback-restore again."; exit 1; }; \
+	  python3 $(ROLLBACK_GUARD) stopped --host="$(DEPLOY_HOST)" --state-dir="$(DEPLOY_STATE_DIR)" --unit="$(DEPLOY_UNIT)" || exit 1
+	@echo "→ Matching the service type to $(DEPLOY_BIN).prev..."
+	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) $(DEPLOY_BIN).prev
+	ssh $(DEPLOY_HOST) 'sudo -n cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
+	  sudo -n cp $(DEPLOY_BIN).prev $(DEPLOY_BIN)'
+	@ssh $(DEPLOY_HOST) 'sudo -n systemctl start $(DEPLOY_UNIT)' || echo "   systemctl start reported a failure; the wait below reads the unit and names the cause."
+	@echo "→ Started the previous binary on the restored store; waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating)..."
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT) || (echo "ERROR: the restore and the swap are done, but the server did not report ready (the reason is above)."; exit 1)
+	@echo "✅ Restored $(DEPLOY_DB) and rolled $(DEPLOY_BIN) back to the previous binary. Repeat any credential revocations made since the restored point."
 
 # Quick aliases
 .PHONY: t c b v
