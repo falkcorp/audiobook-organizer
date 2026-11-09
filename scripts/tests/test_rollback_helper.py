@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.6.0
+# version: 1.7.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -1303,6 +1303,33 @@ class InstallStaged(unittest.TestCase):
         self.stage_conf("[Service]\nEnvironment=A=1\n")
         code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 0, err)
+
+    # -- a staged path that is not a regular file -------------------------
+
+    def test_a_fifo_or_directory_staged_local_conf_is_refused(self):
+        for kind in ("fifo", "directory"):
+            with self.subTest(kind=kind):
+                h = self.host()
+                p = self.stage / "audiobook-organizer-local.conf"
+                os.mkfifo(p) if kind == "fifo" else p.mkdir()
+                code, _, err = h.run("install", "local-conf")
+                self.assertEqual(code, 1, err)
+                self.assertIn("is not a regular file", err)
+                self.assertFalse(self.conf_path(h).exists())
+                self.assertEqual(h.tools(), [])
+
+    def test_a_fifo_or_directory_staged_binary_is_refused(self):
+        for kind in ("fifo", "directory"):
+            with self.subTest(kind=kind):
+                h, b = self.bin_host()
+                b.write_text("current")
+                p = self.stage / "audiobook-organizer"
+                os.mkfifo(p) if kind == "fifo" else p.mkdir()
+                code, _, err = h.run("install", "binary")
+                self.assertEqual(code, 1, err)
+                self.assertIn("is not a regular file", err)
+                self.assertEqual(b.read_text(), "current")
+                self.assertFalse(Path(f"{b}.prev").exists())
 
     def bin_host(self) -> tuple[Host, Path]:
         bindir = Path(tempfile.mkdtemp()).resolve()
