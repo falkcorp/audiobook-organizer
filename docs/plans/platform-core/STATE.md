@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.50.0 -->
+<!-- version: 1.51.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-08 -->
 
@@ -108,6 +108,10 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W19 | R1-34 | #4477 `c78a9f681` | T3: explicit ServiceDefs lists replace init() registration. Independent review proved production parity (identical def and resolution-order dumps, base vs head); follow-ups pinned the resolution order, made the link test require every ServiceDefs package in the list, removed the vestigial Container.Include and bannered two stale architecture docs. Re-cut for R1-15 and R1-16 (#4472 closed). Deployed 2026-11-08 |
 | W20 | R1-21 | #4480 `6dc509670` | T4: journaled restore swap (P0a) in core. Reviewed MERGEABLE; test-gap commits pin the Lstat, directory check and mode-first order, refuse device queries on an unknown filesystem and fail closed on a filesystem neither real nor in-memory. Re-cut onto main after the R1-15 conflict (#4466 closed). Not wired into the books boot yet. Deployed 2026-11-08 |
 | W21 | R1-18 | #4485 `7d7a3474c` | T3: logging stages into core (redaction, file output, metrics bridge). Deviations: `subsystem` is a log attribute, not a message prefix (grep `subsystem=db-optimize`); context attributes follow the record's own; `kernel.Config.LogDir` is separate from R1-21's StateDir. Two CI rounds folded into the introducing commits (op-context attrs on the stdout default, one `database.Store` reference, metrics contract with a new `sink` key); #4481 and #4484 closed. Deployed 2026-11-08 |
+| W22 | R1-17 | #4487 `9be9adc96` | T4: perimeter into core stages (peer, request ID, telemetry, recovery, access log, headers, CORS, cross-origin, compression) plus gin leaves. Two review rounds and a delta review (MERGEABLE, 0 blockers); deviation 16 gin half fixed (Basic gate 401 keeps `Vary: Origin` under gzip); deviation 15 accepted until F3. Reconciled with R1-18's Activity tap (access lines stay off the feed). Re-cut so every commit is green (#4478 closed). Deployed 2026-11-08 |
+| W23 | R1-19 | #4488 `af4432e3c` | T2: build identity: `--version-json`, `--print-upgrade-floor`, `app.BinaryID`, UI build-ID meta and the stale-build banner; the docker-image job's `PROBE_BUILD_ID` probe is on and passed on the real image. Re-cut for R1-17 (#4482 closed). Deployed 2026-11-08; `--version-json` verified on the deployed binary |
+| W24 | R1-30 | #4495 `f6f57bc7f` | T2: `core/web` npm workspace with `@mediacore/api-client` 0.1.0, consumed by `web/` through `file:`; both Docker frontend stages build it. Three CI rounds: CI's frontend job now builds the package first (`scripts/ci/ensure_core_web.sh`), minimatch overridden to 11.x under eslint only (GHSA-g3hv-75wg-m249), four permissive dev-dependency licences named in `allow-dependencies-licenses`, ruff format (#4483, #4491, #4494 closed). Deployed 2026-11-08 |
+| W25 | R1-06 | #4498 `de0ab0a1d` | T2: report-only core version check in core's merge gate, `core-checkpoint` job in the production release, `make -C core readiness` with the SC scripts, and a nightly split-readiness fold-in through the CI bot app (not a PAT). Draft #4489 closed after the re-cut |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -126,7 +130,7 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 26 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18).
+None for agents. R0 complete (6/6). R1: 30 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06).
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
@@ -134,13 +138,13 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
 
-W14 to W21 merged 2026-11-08: R1-37 (coretest harness), R1-20 (core storage engine, dark), R1-15 (composition root), R1-16 (sdnotify), R1-33 (stop settings), R1-34 (explicit service registry), R1-21 (journaled swap) and R1-18 (logging stages). The remaining in-flight rows conflict pairwise, so they merge serially:
-- R1-17 (T4, perimeter into core stages; delta review MERGEABLE; re-cutting onto main), then
-- R1-19 (T2, build identity; draft #4482 stacked on R1-17), then
-- R1-30 (T2, core web API client; draft #4483 stacked on R1-19), then
-- the R1-15 follow-up (#4476: HNSW clean-stop marker; round-two review found one blocker, a backup restore bypassing the write gate, being fixed).
+W14 to W25 merged 2026-11-08: R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30 and R1-06. Remaining:
+- R1-23 (T4, storage flip with strict claims; review NOT MERGEABLE: six key families production writes were never registered, so merges, merge undo and scan identity proposals would be refused; being fixed with a registry-independent claim-violation guard). Prod deploys after R1-23 merges are held until R1-24 (checkpoint retention) merges too: the first R1 boot's checkpoint holds plaintext secrets.
+- R1-24 (T3, checkpoint sweeper) and R1-25 (T4, offline restore and reset) building, stacked on R1-23; then R1-26, R1-27, R1-28.
+- The R1-15 follow-up (#4496, HNSW clean-stop marker; round-4 verification found a crafted restore archive can still place a marker in the live snapshot directory; being fixed).
+- R1-31 (executive summary) last.
 
-In parallel: R1-23 (T4, storage flip) building. Next: R1-06 after R1-30; the storage chain R1-25, then R1-24/R1-26, then R1-27, then R1-28 after R1-23; R1-31 last. Cross-seam note: whichever PR wires the P0a swap into the books boot must remove the HNSW clean-stop marker as part of the swap. In plain terms: the server now starts, stops and logs through the new framework, and the new storage engine is in the build but not switched on; nothing users see has changed, except that log lines carry `subsystem=` as a field.
+R1-23's deferred step 3 (engine re-home into core, the `database.Store` split, the Pebble collector move) and its kernel write gate (D14) become follow-up rows; its review confirmed no remaining R1 row depends on them. In plain terms: the server now starts, stops, logs and serves its web surface through the new framework, and reports its build identity; the new storage engine is built but not switched on yet.
 
 Side PRs 2026-11-07 (not plan rows): CI flake fixes #4427, #4428, #4429, #4431 (memdb/Pebble listing tie-break), #4432;
 CI bot app migration #4423 and github-common repin #4426 `6e7958c05`; Woodpecker cut to unique jobs #4439.
