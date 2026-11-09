@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.12
+// version: 1.29.13
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -1004,6 +1004,19 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		cleanTarget, err := library.CleanAbsolutePath(req.TargetPath)
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "invalid target_path: "+err.Error())
+			return
+		}
+		// CleanAbsolutePath's checks are comparisons CodeQL's
+		// go/path-injection does not read, so every path built from the
+		// target was reported (R1-15 round-6 verification review, SF2).
+		// This restates its absoluteness as a prefix check on the cleaned
+		// path, which it does read. A target_path is an absolute directory
+		// the operator chooses, so the only base it has is its volume's
+		// root, and this check adds no containment: what keeps a restore
+		// where it belongs is the route's permission (settings manage),
+		// IsDangerousRoot and CheckPathsApart below.
+		if !strings.HasPrefix(cleanTarget, filepath.VolumeName(cleanTarget)+string(filepath.Separator)) {
+			httputil.RespondWithBadRequest(c, "invalid target_path: not an absolute path")
 			return
 		}
 		if library.IsDangerousRoot(cleanTarget) {
