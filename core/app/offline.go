@@ -1,5 +1,5 @@
 // file: core/app/offline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 418dd945-667d-43dc-a795-d22188dd4b58
 // last-edited: 2026-11-08
 
@@ -29,8 +29,10 @@ type Command struct {
 // which wraps each one (06 §6.4.5). A command whose owner has not landed is
 // absent (R9-9, COR9-6), so at this build the list holds storage
 // prune-checkpoints (R1-24), which opens no store and works while the
-// server runs (SEC10-9); storage restore-offline and storage reset join it
-// with R1-25, and R2's flips add theirs (06 §6.4.10).
+// server runs (SEC10-9), and storage restore-offline (05-storage §5S.3.12)
+// and storage reset (§5S.3.15) (R1-25), which run with the service stopped
+// through the kernel's own swap path, so none needs an import of kernel or
+// core/internal/restoreswap; R2's flips add theirs (06 §6.4.10).
 func OfflineCommands(opts Options, mods ...module.Module) []Command {
-	return []Command{pruneCheckpointsCommand(opts, mods)}
+	return []Command{pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods)}
 }

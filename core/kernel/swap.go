@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-08
 
@@ -50,6 +50,9 @@ var ErrCheckpointRestoreFailedHere = restoreswap.ErrCheckpointRestoreFailedHere 
 type kernelSwap struct {
 	s   *restoreswap.Swapper
 	out restoreswap.Outcome
+	// hookOwed: a ResetFactory swap whose app declares a reset hook reached
+	// P4b, so hook_done is the hook's (Run step (2), reset.go), not P4b's.
+	hookOwed bool
 }
 
 // swapWanted gates P0a: a state directory, and not Describe, which performs
@@ -227,9 +230,12 @@ func (k *Kernel) swapPhase(ctx context.Context, phase string, fn func() error) f
 //   - reset, after P4a's fresh install: applied (R1 has no keyring, so at
 //     the point secrets.Open would rewrite its header, the start of P4b);
 //   - reset, after P4b (P4d step 1, after the migration list; R1 has no
-//     P4c or P4d phase and no reset hook): the delete entries removed, then
-//     hook_done and the in-flight file deleted (COR8-4). A boot that
-//     resumes a journal at applied does only this step.
+//     P4c or P4d phase): a ResetStore swap, or any reset of an app with no
+//     reset hook, has the delete entries removed, then hook_done and the
+//     in-flight file deleted (COR8-4); a ResetFactory swap of an app with a
+//     reset hook leaves hook_done to the hook, which runs at Run step (2)
+//     (runResetHook). A boot that resumes a journal at applied does only
+//     this step.
 //
 // A journal write that fails halts boot; the next boot resumes the journal.
 func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
@@ -243,6 +249,10 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
 		err = s.ResetApplied(ctx, out.ID)
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
+		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
+			k.swap.hookOwed = true
+			break
+		}
 		err = s.ResetDone(ctx, out.ID)
 	}
 	if err != nil {
