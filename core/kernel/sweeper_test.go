@@ -1,5 +1,5 @@
 // file: core/kernel/sweeper_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8b1c37-92d5-4a60-b7f3-0d6c58e21a94
 // last-edited: 2026-11-08
 
@@ -43,8 +43,8 @@ func (s *syncBuffer) String() string {
 }
 
 // TestSweeperRunsAtOnceThenHourly (05-storage §5S.4 step 15; 06 §6.5.1
-// "After readiness"): start runs the first sweep before it returns, then
-// one per interval; a sweep prune holds the lock for is logged at Info and
+// "After readiness"): start's goroutine runs the first sweep at once and
+// then the first callback, then one sweep per interval; a sweep prune holds the lock for is logged at Info and
 // keeps the last findings, a failed one at Error and keeps them too; a mode
 // finding is logged at Error and served by findings; stop ends the loop and
 // no sweep runs after it.
@@ -74,9 +74,11 @@ func TestSweeperRunsAtOnceThenHourly(t *testing.T) {
 		}
 		count := func() int { mu.Lock(); defer mu.Unlock(); return calls }
 
-		s.start(t.Context())
-		if got := count(); got != 1 {
-			t.Fatalf("after start: %d sweeps, want the first one run before start returns", got)
+		var firstAfter int
+		s.start(t.Context(), func(context.Context) { firstAfter = count() })
+		synctest.Wait()
+		if got := count(); got != 1 || firstAfter != 1 {
+			t.Fatalf("after start: %d sweeps, first callback after %d; want the first sweep at once, then the callback", got, firstAfter)
 		}
 		if loose, total := s.findings(); total != 1 || len(loose) != 1 {
 			t.Fatalf("findings after the first sweep = %v, %d; want its one mode finding", loose, total)
@@ -127,15 +129,35 @@ func TestSweeperRunsAtOnceThenHourly(t *testing.T) {
 	})
 }
 
-// TestSweeperStop: a sweeper that never started stops at once, and one
-// whose sweep outlives the shutdown budget is abandoned with
-// context.DeadlineExceeded rather than holding the stop order.
+// TestSweeperStop: a sweeper that never started stops at once; a stop
+// during a slow first sweep cancels it, returns once the sweep sees the
+// cancellation, and skips the first callback; and one whose sweep outlives
+// the shutdown budget is abandoned with context.DeadlineExceeded rather
+// than holding the stop order.
 func TestSweeperStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		quiet := slog.New(slog.DiscardHandler)
 		if err := (&sweeper{log: quiet}).stop(time.Now()); err != nil {
 			t.Fatalf("stop before start = %v", err)
 		}
+		slowFirst := &sweeper{
+			sweep: func(ctx context.Context) (storage.SweepReport, error) {
+				<-ctx.Done() // storage checks ctx between checkpoints
+				return storage.SweepReport{}, ctx.Err()
+			},
+			log:      quiet,
+			interval: checkpointSweepInterval,
+		}
+		called := false
+		slowFirst.start(t.Context(), func(context.Context) { called = true })
+		synctest.Wait()
+		if err := slowFirst.stop(time.Now().Add(time.Minute)); err != nil {
+			t.Fatalf("stop during a slow first sweep = %v", err)
+		}
+		if called {
+			t.Fatal("the first callback ran after a stop cancelled the first sweep")
+		}
+
 		release := make(chan struct{})
 		var n int
 		var mu sync.Mutex
@@ -153,7 +175,7 @@ func TestSweeperStop(t *testing.T) {
 			log:      quiet,
 			interval: checkpointSweepInterval,
 		}
-		s.start(t.Context())
+		s.start(t.Context(), nil)
 		time.Sleep(checkpointSweepInterval)
 		synctest.Wait()
 		if err := s.stop(time.Now().Add(time.Minute)); !errors.Is(err, context.DeadlineExceeded) {
@@ -210,8 +232,8 @@ func TestRunSweepsCheckpointsAfterReadiness(t *testing.T) {
 	if atReady != nil {
 		t.Fatalf("the checkpoint was gone at READY=1 (%v): the sweep runs after readiness", atReady)
 	}
-	// The first sweep is synchronous in Run; CheckpointHealth reads the
-	// directory as it is now, so poll briefly for the start sequence's end.
+	// The first sweep runs on the sweeper's goroutine; CheckpointHealth
+	// reads the directory as it is now, so poll briefly for its end.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		h, err := k.CheckpointHealth()
@@ -234,6 +256,48 @@ func TestRunSweepsCheckpointsAfterReadiness(t *testing.T) {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s survived the first sweep (%v)", filepath.Base(p), err)
 		}
+	}
+}
+
+// TestRunStopsDuringASlowFirstSweep: the first sweep runs on the sweeper's
+// goroutine, so Run's select is live while it runs. A stop (here Run's
+// context ending, as on SIGTERM) is acted on at once: the stop order
+// cancels the sweep and Run returns, without logging the start-complete
+// record the sweep never reached.
+func TestRunStopsDuringASlowFirstSweep(t *testing.T) {
+	rec := &recorder{}
+	logs := &syncBuffer{}
+	sc := supervised(t, rec, storageMod("alfred", nil, seedStep(1, "cave")))
+	sc.StoragePath = tempStoragePath(t)
+	sc.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	k := mustNew(t, sc)
+	if k.store == nil || k.store.sweeper == nil {
+		t.Fatal("no checkpoint sweeper on a kernel with a store")
+	}
+	sweeping := make(chan struct{})
+	k.store.sweeper.sweep = func(ctx context.Context) (storage.SweepReport, error) {
+		close(sweeping)
+		<-ctx.Done() // a large copy whose deletion storage stops between checkpoints
+		return storage.SweepReport{}, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := run(ctx, k)
+	select {
+	case <-sweeping:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first sweep never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop while the first sweep was running: the sweep holds Run's select")
+	}
+	if strings.Contains(logs.String(), startCompleteMessage) {
+		t.Fatalf("%q was logged although the stop cancelled the first sweep:\n%s", startCompleteMessage, logs)
 	}
 }
 
