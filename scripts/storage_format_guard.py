@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
 # last-edited: 2026-11-09
 
@@ -159,7 +159,10 @@ class Opts:
 
 
 def commands(o: Opts, name: str = "") -> dict[str, str]:
-    """Every remote command the rollback recipes run, by key. `name` is the
+    """Every remote command the rollback recipes run, by key, plus the
+    helpers Makefile.local.example's deploy, deploy-debug and pprof-off run
+    (the install_* and pprof_* keys; their recipes spell them out, and
+    test_make_rollback.py checks those against sudoers()). `name` is the
     checkpoint name for the record and restore keys."""
     h = HELPER_DIR
     return {
@@ -185,11 +188,17 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "unit_type_simple": f"sudo -n {h}/unit-type simple",
         "unit_type_notify": f"sudo -n {h}/unit-type notify",
         "swap": f"sudo -n {h}/swap-prev",
+        "install_binary": f"sudo -n {h}/install-staged binary",
+        "install_unit": f"sudo -n {h}/install-staged unit",
+        "install_local_conf": f"sudo -n {h}/install-staged local-conf",
+        "pprof_on": f"sudo -n {h}/pprof on",
+        "pprof_off": f"sudo -n {h}/pprof off",
     }
 
 
 def sudoers(o: Opts, deploy_user: str) -> str:
-    """The deploy user's sudoers drop-in, rendered from commands(): one line
+    """The deploy user's sudoers drop-in for deploy, deploy-debug, pprof-off
+    and both rollbacks, rendered from commands(): one line
     per command with fixed arguments (sudo matches them exactly), each helper
     that takes arguments granted bare (in sudoers that admits any arguments:
     the helper validates them), each helper that takes none granted with ""
@@ -209,6 +218,8 @@ def sudoers(o: Opts, deploy_user: str) -> str:
         "swap",
         "restore_checkpoint",
         "unit_type_simple",
+        "install_unit",
+        "pprof_on",
         "record",
     ):
         argv = shlex.split(c[key])
@@ -219,7 +230,8 @@ def sudoers(o: Opts, deploy_user: str) -> str:
         if argv[0].startswith(HELPER_DIR + "/"):
             spec = (
                 argv[0]
-                if key in ("restore_checkpoint", "unit_type_simple", "record")
+                if key
+                in ("restore_checkpoint", "unit_type_simple", "install_unit", "pprof_on", "record")
                 else f'{argv[0]} ""'
             )
         else:
