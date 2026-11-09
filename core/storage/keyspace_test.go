@@ -1,5 +1,5 @@
 // file: core/storage/keyspace_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 33d270b9-deec-461f-a288-8e9c004fa4a1
 // last-edited: 2026-11-09
 
@@ -8,7 +8,6 @@ package storage
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"iter"
@@ -223,8 +222,9 @@ func TestFirstBootRefusesForeignKeys(t *testing.T) {
 // store an older release wrote counts the keys outside every claim and logs
 // the count with a sample. It refuses nothing, the keys stay where they are,
 // and a later boot (the install marker present) does not count again. The
-// sample names each key by its length and hash only, never any of its bytes
-// (R1-23 review SF1): an unclaimed key has no claim for keyRef to name.
+// sample describes each key by its length only, never any of its bytes or a
+// hash of them (R1-23 review SF1): an unclaimed key has no claim for keyRef
+// to name.
 func TestFirstBootLogsUnclaimedKeys(t *testing.T) {
 	e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}})
 	e.seedRaw("joker:1", "a", "joker_counter", "1", "bane:1", "b", "bane:2", "c", "riddler", "d", "zsasz:1", "e")
@@ -235,17 +235,22 @@ func TestFirstBootLogsUnclaimedKeys(t *testing.T) {
 	if !strings.Contains(out, "first boot found keys outside every claim") || !strings.Contains(out, "count=4") {
 		t.Fatalf("first boot log = %q, want the unclaimed count 4", out)
 	}
-	hashOf := func(k string) string { sum := sha256.Sum256([]byte(k)); return fmt.Sprintf("sha256:%x", sum[:4]) }
-	for _, k := range []string{"bane:1", "bane:2", "riddler", "zsasz:1"} {
-		if !strings.Contains(out, hashOf(k)) {
-			t.Errorf("sample %q does not name %s", out, k)
-		}
-		if strings.Contains(out, k) || strings.Contains(out, `"`+k[:4]) {
-			t.Errorf("sample %q carries the bytes of %s", out, k)
+	// Sorted, the unclaimed keys are bane:1, bane:2 (6 bytes each), riddler
+	// and zsasz:1 (7 each): each pair shares a description, so an ordinal
+	// tells its keys apart. The claimed joker:1 and joker_counter are not in
+	// the sample.
+	for _, want := range []string{"unclaimed key len=6 #1", "unclaimed key len=6 #2", "unclaimed key len=7 #1", "unclaimed key len=7 #2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sample %q does not contain %q", out, want)
 		}
 	}
-	if strings.Contains(out, hashOf("joker:1")) || strings.Contains(out, hashOf("joker_counter")) {
-		t.Errorf("sample %q names a claimed key", out)
+	if n := strings.Count(out, "unclaimed key len="); n != 4 {
+		t.Errorf("sample %q describes %d keys, want the 4 unclaimed ones", out, n)
+	}
+	for _, k := range []string{"bane", "riddler", "zsasz", "joker", "sha256"} {
+		if strings.Contains(out, k) {
+			t.Errorf("sample %q carries %q (a key's bytes or a hash of them)", out, k)
+		}
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)

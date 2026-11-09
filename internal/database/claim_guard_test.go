@@ -1,5 +1,5 @@
 // file: internal/database/claim_guard_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ecd879ea-72b8-4adc-a3a5-5b0bfd525c33
 // last-edited: 2026-11-09
 
@@ -51,15 +51,15 @@ func TestStandaloneClaimGuard(t *testing.T) {
 			t.Fatalf("Set outside books' claims = %v, want ErrOutsideKeyspace", err)
 		}
 		msg := closeRecovering(s)
-		// The key appears as core's keyRef names it. It is in no claim, so
-		// that is its length and hash and nothing of the key itself (R1-23
-		// review SF1); the test author finds the write by the series.
-		for _, want := range []string{"storage claim guard", "books write refused x1", "unclaimed key (21 bytes, sha256:", "keyfamilies.go"} {
+		// The key appears as core describes it. It is in no claim, so that is
+		// its length and its access count, and nothing of the key itself
+		// (R1-23 review SF1); the test author finds the write by the series.
+		for _, want := range []string{"storage claim guard", "books write refused x1: unclaimed key len=21 x1", "keyfamilies.go"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("guard panic %q does not contain %q", msg, want)
 			}
 		}
-		if strings.Contains(msg, "arkham") {
+		if strings.Contains(msg, "arkham") || strings.Contains(msg, "sha256") {
 			t.Errorf("guard panic %q carries the key's bytes", msg)
 		}
 	})

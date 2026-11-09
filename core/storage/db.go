@@ -1,5 +1,5 @@
 // file: core/storage/db.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
 // last-edited: 2026-11-09
 
@@ -8,7 +8,6 @@ package storage
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -110,11 +109,11 @@ type DB struct {
 	// (violation); the kernel serves them as
 	// <namespace>_storage_claim_violations_total (§5S.8, §5S.9.4 step 2).
 	// violationKeys holds the first few distinct keys of each series
-	// (ClaimViolationKeys), so a count can be traced to the family that made
+	// (ClaimViolationKeys), so a count can be traced to the claim that made
 	// it even when the caller swallowed the error.
 	violationsMu  sync.Mutex
 	violations    map[ClaimViolation]uint64
-	violationKeys map[ClaimViolation][]string
+	violationKeys map[ClaimViolation][]violationKey
 
 	// boot is the boot state Open read and Prepare and Migrate advance; nil
 	// for a read-only DB.
@@ -311,7 +310,7 @@ func (s handleOf) absolute(key []byte, op opKind) (abs []byte, serialized bool, 
 // 4th, 8th, ... access (a power of two) and carries the series count, so a
 // hot unclaimed family cannot flood the log. The counter and
 // ClaimViolationKeys see every access. Neither the Warn nor the error carries
-// any of the key's bytes, only keyRef's claim name, length and hash.
+// any of the key's bytes, only keyRef's claim name and length.
 func (db *DB) violation(owner Owner, op opKind, key []byte) error {
 	reserved := bytes.HasPrefix(key, []byte("c/")) || bytes.HasPrefix(key, []byte("m/"))
 	v := ClaimViolation{Owner: owner, Op: "write", Mode: "refused"}
@@ -330,16 +329,18 @@ func (db *DB) violation(owner Owner, op opKind, key []byte) error {
 	return nil
 }
 
-// keyRef names key in an error or a log line without any of its bytes. A key
-// can carry a secret (books' session rows are sess:<bearer token>) and
+// keyRef describes key in an error or a log line without any of its bytes. A
+// key can carry a secret (books' session rows are sess:<bearer token>) and
 // storage's errors and Warns reach logs, so no message in this package carries
-// a data key or any part of one (R1-23 review SF1, CodeQL
-// go/clear-text-logging). It names the declared claim that holds the key, by
-// longest match (`key under claim "joker:"`, `claimed key "joker_counter"`):
-// strings from an owner's spec, chosen by comparing the key and never cut from
-// it. A key under the reserved roots is named by its root, and a key in no
-// claim only as "unclaimed key". Then come the key's length and the first four
-// bytes of its SHA-256, so two reports of one key can be matched.
+// a data key, any part of one, or anything computed from its bytes (R1-23
+// review SF1; CodeQL go/clear-text-logging and go/weak-sensitive-data-hashing).
+// It names the declared claim that holds the key, by longest match
+// (`key under claim "joker:"`, `claimed key "joker_counter"`): strings from an
+// owner's spec, chosen by comparing the key and never cut from it. A key under
+// the reserved roots is named by its root, and a key in no claim only as
+// "unclaimed key". Then comes the key's length: `key under claim "sess:" len=21`.
+// Two keys can share a description; where a report lists distinct keys,
+// numberShared keeps them apart.
 func (db *DB) keyRef(key []byte) string {
 	where := "unclaimed key"
 	switch {
@@ -352,8 +353,28 @@ func (db *DB) keyRef(key []byte) string {
 			where = c
 		}
 	}
-	sum := sha256.Sum256(key)
-	return fmt.Sprintf("%s (%d bytes, sha256:%x)", where, len(key), sum[:4])
+	return fmt.Sprintf("%s len=%d", where, len(key))
+}
+
+// numberShared returns descs with an ordinal (#1, #2, ...) appended to each
+// description more than one entry shares, numbered in order. Each entry
+// describes a distinct key, and keyRef's description (a claim and a length)
+// can be the same for two keys, so the ordinal is what tells them apart.
+func numberShared(descs []string) []string {
+	shared := make(map[string]int, len(descs))
+	for _, d := range descs {
+		shared[d]++
+	}
+	next := make(map[string]int, len(descs))
+	out := make([]string, len(descs))
+	for i, d := range descs {
+		if shared[d] > 1 {
+			next[d]++
+			d = fmt.Sprintf("%s #%d", d, next[d])
+		}
+		out[i] = d
+	}
+	return out
 }
 
 // ClaimViolation is one series of <namespace>_storage_claim_violations_total
@@ -370,6 +391,16 @@ type ClaimViolation struct {
 // series.
 const maxViolationKeys = 4
 
+// violationKey is one distinct key of a violation series and how many of the
+// series' accesses it made. raw is the key itself, held only to tell distinct
+// keys apart: it is never logged, printed or returned. ClaimViolationKeys
+// reports desc (keyRef's description) instead.
+type violationKey struct {
+	raw  string
+	desc string
+	n    uint64
+}
+
 // countViolation counts one access of series v at key and returns the
 // series' new count.
 func (db *DB) countViolation(v ClaimViolation, key []byte) uint64 {
@@ -377,14 +408,14 @@ func (db *DB) countViolation(v ClaimViolation, key []byte) uint64 {
 	defer db.violationsMu.Unlock()
 	if db.violations == nil {
 		db.violations = make(map[ClaimViolation]uint64)
-		db.violationKeys = make(map[ClaimViolation][]string)
+		db.violationKeys = make(map[ClaimViolation][]violationKey)
 	}
 	db.violations[v]++
-	if ks := db.violationKeys[v]; len(ks) < maxViolationKeys {
-		q := db.keyRef(key)
-		if !slices.Contains(ks, q) {
-			db.violationKeys[v] = append(ks, q)
-		}
+	ks := db.violationKeys[v]
+	if i := slices.IndexFunc(ks, func(k violationKey) bool { return k.raw == string(key) }); i >= 0 {
+		ks[i].n++
+	} else if len(ks) < maxViolationKeys {
+		db.violationKeys[v] = append(ks, violationKey{raw: string(key), desc: db.keyRef(key), n: 1})
 	}
 	return db.violations[v]
 }
@@ -397,15 +428,26 @@ func (db *DB) ClaimViolations() map[ClaimViolation]uint64 {
 	return maps.Clone(db.violations)
 }
 
-// ClaimViolationKeys is the first few distinct keys (as keyRef names them,
-// never their bytes; at most maxViolationKeys) of each series
-// ClaimViolations counts.
+// ClaimViolationKeys describes the first few distinct keys (at most
+// maxViolationKeys) of each series ClaimViolations counts, in the order they
+// were first seen: keyRef's description, an ordinal when two of the keys
+// share one, and how many of the series' accesses the key made, as in
+// `unclaimed key len=6 #2 x3`. It never carries a key's bytes. Accesses by
+// keys past the first few count in the series but in no entry here.
 func (db *DB) ClaimViolationKeys() map[ClaimViolation][]string {
 	db.violationsMu.Lock()
 	defer db.violationsMu.Unlock()
 	out := make(map[ClaimViolation][]string, len(db.violationKeys))
 	for v, ks := range db.violationKeys {
-		out[v] = slices.Clone(ks)
+		descs := make([]string, len(ks))
+		for i, k := range ks {
+			descs[i] = k.desc
+		}
+		descs = numberShared(descs)
+		for i, k := range ks {
+			descs[i] = fmt.Sprintf("%s x%d", descs[i], k.n)
+		}
+		out[v] = descs
 	}
 	return out
 }

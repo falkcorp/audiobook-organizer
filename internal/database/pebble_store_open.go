@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -130,7 +130,7 @@ func claimGuardedClose(db *storage.DB, expect bool) func() error {
 func claimViolationReport(counts map[storage.ClaimViolation]uint64, keys map[storage.ClaimViolation][]string) string {
 	lines := make([]string, 0, len(counts))
 	for v, n := range counts {
-		lines = append(lines, fmt.Sprintf("  %s %s %s x%d: %s", v.Owner, v.Op, v.Mode, n, strings.Join(keys[v], " ")))
+		lines = append(lines, fmt.Sprintf("  %s %s %s x%d: %s", v.Owner, v.Op, v.Mode, n, strings.Join(keys[v], "; ")))
 	}
 	slices.Sort(lines)
 	return "storage claim guard: out-of-claim accesses through a standalone store this test did not expect " +
