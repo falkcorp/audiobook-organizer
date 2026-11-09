@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.16
+// version: 1.0.17
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-08
 
@@ -448,7 +448,35 @@ func (k *Kernel) catalog(describe bool) error {
 		k.entries = append(k.entries, &entry{mod: m, man: man, enabled: describe || man.DefaultEnabled})
 	}
 	slices.SortFunc(k.entries, func(a, b *entry) int { return strings.Compare(string(a.man.ID), string(b.man.ID)) })
+	probs = append(probs, resetHookProblems(k.entries)...)
 	return joined(probs)
+}
+
+// resetHookProblems is P1's one-hook rule (05-storage §5S.3.15: at most one
+// module of an App declares a reset hook, so a reset boot never orders two
+// file wipes): every declaring module after the first, in ID order, is a
+// ProblemResetHook; so is a declared hook without Plan or Run. A disabled
+// module's hook counts: the manifest stays known while the module is off.
+func resetHookProblems(entries []*entry) []module.Problem {
+	var probs []module.Problem
+	var first module.ID
+	for _, e := range entries {
+		h := e.man.ResetHook
+		if h == nil {
+			continue
+		}
+		if h.Plan == nil || h.Run == nil {
+			probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemResetHook,
+				Detail: "ResetHook declares no Plan or no Run"})
+		}
+		if first != "" {
+			probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemResetHook,
+				Detail: fmt.Sprintf("module %s already declares the App's one ResetHook", first)})
+			continue
+		}
+		first = e.man.ID
+	}
+	return probs
 }
 
 // register is P6: for each enabled module in ID order, its Registrar and
