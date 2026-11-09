@@ -1,7 +1,7 @@
 // file: core/storage/claims.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c26edbe-b7d5-48b8-91d5-7abe4ad6f7de
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package storage
 
@@ -132,6 +132,15 @@ func (r claimRef) name() string {
 	return fmt.Sprintf("%s prefix %q", r.owner, r.c.Prefix)
 }
 
+// label names r in keyRef's output. It is built from the declaration alone,
+// so naming a key by the claim that holds it shows none of the key's bytes.
+func (r claimRef) label() string {
+	if r.c.Key != "" {
+		return fmt.Sprintf("claimed key %q", r.c.Key)
+	}
+	return fmt.Sprintf("key under claim %q", r.c.Prefix)
+}
+
 func (r claimRef) target() string {
 	if r.c.Key != "" {
 		return r.c.Key
@@ -159,12 +168,22 @@ type interval struct {
 	serialized bool
 }
 
+// namedSpan is one elementary interval of the claim map labelled with the
+// declared claim that holds it (claimRef.label), for keyRef. Unlike the
+// intervals, adjacent spans merge only within one claim, so two neighbouring
+// claims of one owner keep their own names.
+type namedSpan struct {
+	span
+	name string
+}
+
 // claimIndex resolves an absolute legacy key to its claim by longest match.
 // It is built once from every owner's claims, enabled or not, so a disabled
 // module's claims stay reserved (§5S.4).
 type claimIndex struct {
 	intervals []interval           // sorted, disjoint
 	byOwner   map[Owner][]interval // the same intervals, per owner
+	named     []namedSpan          // sorted, disjoint: which declared claim holds a key
 }
 
 // resolve returns the interval holding k, or false when no claim does.
@@ -174,6 +193,20 @@ func (ci *claimIndex) resolve(k []byte) (interval, bool) {
 		return ci.intervals[i], true
 	}
 	return interval{}, false
+}
+
+// claimOf names the declared claim that holds k, by longest match, or
+// returns "" when no claim does (or there is no index). The name comes from
+// the claim's declaration: k is only compared, never copied into it.
+func (ci *claimIndex) claimOf(k []byte) string {
+	if ci == nil {
+		return ""
+	}
+	i := sort.Search(len(ci.named), func(i int) bool { return bytes.Compare(ci.named[i].end, k) > 0 })
+	if i < len(ci.named) && ci.named[i].contains(k) {
+		return ci.named[i].name
+	}
+	return ""
 }
 
 // buildClaimIndex computes the elementary intervals of every claim: between
@@ -201,6 +234,11 @@ func buildClaimIndex(refs []claimRef) *claimIndex {
 			continue
 		}
 		r := refs[best]
+		if name, n := r.label(), len(ci.named); n > 0 && bytes.Equal(ci.named[n-1].end, lo) && ci.named[n-1].name == name {
+			ci.named[n-1].end = hi
+		} else {
+			ci.named = append(ci.named, namedSpan{start: lo, end: hi, name: name})
+		}
 		iv := interval{start: lo, end: hi, owner: r.owner, mode: r.c.Mode, serialized: r.c.Serialized}
 		if n := len(ci.intervals); n > 0 {
 			last := &ci.intervals[n-1]

@@ -1,7 +1,7 @@
 // file: core/storage/keyspace_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 33d270b9-deec-461f-a288-8e9c004fa4a1
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -223,8 +223,8 @@ func TestFirstBootRefusesForeignKeys(t *testing.T) {
 // store an older release wrote counts the keys outside every claim and logs
 // the count with a sample. It refuses nothing, the keys stay where they are,
 // and a later boot (the install marker present) does not count again. The
-// sample names each key by keyRef's family, length and hash, never its bytes
-// (R1-23 review SF1).
+// sample names each key by its length and hash only, never any of its bytes
+// (R1-23 review SF1): an unclaimed key has no claim for keyRef to name.
 func TestFirstBootLogsUnclaimedKeys(t *testing.T) {
 	e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}})
 	e.seedRaw("joker:1", "a", "joker_counter", "1", "bane:1", "b", "bane:2", "c", "riddler", "d", "zsasz:1", "e")
@@ -240,7 +240,7 @@ func TestFirstBootLogsUnclaimedKeys(t *testing.T) {
 		if !strings.Contains(out, hashOf(k)) {
 			t.Errorf("sample %q does not name %s", out, k)
 		}
-		if strings.Contains(out, k) {
+		if strings.Contains(out, k) || strings.Contains(out, `"`+k[:4]) {
 			t.Errorf("sample %q carries the bytes of %s", out, k)
 		}
 	}

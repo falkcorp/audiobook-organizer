@@ -1,7 +1,7 @@
 // file: core/storage/engine_sample_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e2f4a71-3c6b-4d90-a5e1-7b0d9c2f4a68
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -149,7 +149,7 @@ func TestShadowWarnRateLimited(t *testing.T) {
 	if n := db.ClaimViolations()[v]; n != 9 {
 		t.Errorf("counted %d accesses, want 9", n)
 	}
-	want := []string{keyRef([]byte("bane:1")), keyRef([]byte("bane:2")), keyRef([]byte("bane:3")), keyRef([]byte("bane:4"))}
+	want := []string{db.keyRef([]byte("bane:1")), db.keyRef([]byte("bane:2")), db.keyRef([]byte("bane:3")), db.keyRef([]byte("bane:4"))}
 	if got := db.ClaimViolationKeys()[v]; !slices.Equal(got, want) {
 		t.Errorf("ClaimViolationKeys = %v, want the first %d distinct keys %v", got, maxViolationKeys, want)
 	}
@@ -159,35 +159,51 @@ func TestShadowWarnRateLimited(t *testing.T) {
 }
 
 // TestKeyRefCarriesNoKeyBytes (R1-23 review SF1, CodeQL clear-text logging):
-// keyRef names a key by its family, length and hash, never its bytes, so a
-// session row's bearer token cannot reach a log through a claim refusal, a
-// shadow Warn or ClaimViolationKeys.
+// keyRef names a key by the declared claim that holds it, its length and its
+// hash, never by any of its bytes, so a session token in a key cannot reach a
+// log or an error through storage (R1-23 review SF1, CodeQL
+// go/clear-text-logging). A key in no claim is named by length and hash alone.
 func TestKeyRefCarriesNoKeyBytes(t *testing.T) {
 	const token = "the-batcave-door-code"
-	ref := keyRef([]byte("sess:" + token))
-	if strings.Contains(ref, token) || strings.Contains(ref, token[:8]) {
-		t.Fatalf("keyRef(sess:<token>) = %s, carries the token", ref)
-	}
-	sum := sha256.Sum256([]byte("sess:" + token))
-	for _, want := range []string{`"sess:"`, fmt.Sprintf("%d bytes", len(token)+5), fmt.Sprintf("sha256:%x", sum[:4])} {
-		if !strings.Contains(ref, want) {
-			t.Errorf("keyRef = %s, want %s in it", ref, want)
-		}
-	}
-	// No separator, or one past maxKeyRefFamily: no family at all, so an
-	// opaque key used whole shows nothing of itself.
-	for _, k := range []string{token, strings.Repeat("a", maxKeyRefFamily) + ":tail"} {
-		if ref := keyRef([]byte(k)); !strings.HasPrefix(ref, `""...`) || strings.Contains(ref, k[:8]) {
-			t.Errorf("keyRef(%d-byte opaque key) = %s, want no family and no key bytes", len(k), ref)
-		}
-	}
-	// The refusal error names the key the same way.
-	e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}})
+	e := newEnv(t,
+		OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims()}},
+		OwnerSpec{Owner: "penguin", Enabled: true, Spec: Spec{Claims: []Claim{{Prefix: "umbrella:", Mode: ClaimReadWrite}}}},
+	)
 	db := e.open()
+	hash := func(k string) string { sum := sha256.Sum256([]byte(k)); return fmt.Sprintf("sha256:%x", sum[:4]) }
+	cases := []struct{ key, where string }{
+		{"joker:" + token, `key under claim "joker:"`},
+		{"joker:retired:" + token, `key under claim "joker:retired:"`}, // longest match
+		{"joker_counter", `claimed key "joker_counter"`},               // an exact claim's key is its declaration
+		{"umbrella:" + token, `key under claim "umbrella:"`},           // another owner's claim
+		{"c/" + token, `key under reserved "c/"`},
+		{"m/" + token, `key under reserved "m/"`},
+		// In no claim: nothing of the key but its length and hash, not even
+		// what looks like its family.
+		{"sess:" + token, "unclaimed key"},
+		{token, "unclaimed key"},
+	}
+	for _, c := range cases {
+		ref := db.keyRef([]byte(c.key))
+		want := fmt.Sprintf("%s (%d bytes, %s)", c.where, len(c.key), hash(c.key))
+		if ref != want {
+			t.Errorf("keyRef of a %d-byte key = %s, want %s", len(c.key), ref, want)
+		}
+		if strings.Contains(ref, token[:8]) {
+			t.Errorf("keyRef of a %d-byte key = %s, carries the key's bytes", len(c.key), ref)
+		}
+	}
+	if ref := db.keyRef([]byte("sess:" + token)); strings.Contains(ref, "sess") {
+		t.Errorf("keyRef of sess:<token> = %s, shows part of an unclaimed key", ref)
+	}
+	// The refusal error names the key the same way: an unclaimed key and a
+	// key in another owner's claim.
 	g, _ := db.Legacy("gotham")
-	_, err := g.Get(context.Background(), []byte("sess:"+token))
-	if !errors.Is(err, ErrOutsideKeyspace) || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), ref) {
-		t.Errorf("refused Get = %v, want ErrOutsideKeyspace naming %s and not the token", err, ref)
+	for _, k := range []string{"sess:" + token, "umbrella:" + token} {
+		_, err := g.Get(context.Background(), []byte(k))
+		if !errors.Is(err, ErrOutsideKeyspace) || strings.Contains(err.Error(), token[:8]) || !strings.Contains(err.Error(), db.keyRef([]byte(k))) {
+			t.Errorf("refused Get = %v, want ErrOutsideKeyspace naming %s and none of the key", err, db.keyRef([]byte(k)))
+		}
 	}
 }
 
@@ -205,7 +221,7 @@ func TestClaimViolationKeysUnderStrict(t *testing.T) {
 		}
 	}
 	v := ClaimViolation{Owner: "gotham", Op: "read", Mode: "refused"}
-	if got := db.ClaimViolationKeys()[v]; !slices.Equal(got, []string{keyRef([]byte("penguin:1"))}) {
+	if got := db.ClaimViolationKeys()[v]; !slices.Equal(got, []string{db.keyRef([]byte("penguin:1"))}) {
 		t.Errorf("ClaimViolationKeys = %v, want one distinct key", got)
 	}
 	if n := db.ClaimViolations()[v]; n != 3 {
@@ -219,7 +235,7 @@ func TestClaimViolationKeysUnderStrict(t *testing.T) {
 	if n := a.ClaimViolations()[v]; n != 3 {
 		t.Errorf("Admin.ClaimViolations after Close = %d, want 3", n)
 	}
-	if got := a.ClaimViolationKeys()[v]; !slices.Equal(got, []string{keyRef([]byte("penguin:1"))}) {
+	if got := a.ClaimViolationKeys()[v]; !slices.Equal(got, []string{db.keyRef([]byte("penguin:1"))}) {
 		t.Errorf("Admin.ClaimViolationKeys after Close = %v", got)
 	}
 }
