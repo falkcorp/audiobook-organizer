@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler_health_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6f1b9d30-2c85-4e7a-9a43-b0d8e5c71f26
 // last-edited: 2026-11-08
 
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
@@ -143,4 +144,23 @@ func TestHealthCheck_NilDegradedSource(t *testing.T) {
 	body, _ := healthBodyWith(t, m, func() system.DegradedSource { return nil })
 
 	assert.JSONEq(t, `{"status":"ok","ready":true,"memdb_ready":true,"degraded":[]}`, body)
+}
+
+// TestHealthCheck_TimestampFollowsInstalledClock: WithClock pins the one
+// volatile field of /health, which the perimeter parity tests rely on.
+func TestHealthCheck_TimestampFollowsInstalledClock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := system.New(func() system.SystemStore { return nil },
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).WithClock(func() time.Time { return time.Unix(1794193930, 0) })
+	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
+		r.GET("/health", h.HealthCheck)
+	})
+	var resp struct {
+		Data struct {
+			Timestamp int64 `json:"timestamp"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, int64(1794193930), resp.Data.Timestamp)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
 // last-edited: 2026-11-08
 
@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -39,6 +40,13 @@ import (
 func perimeterStacks(t *testing.T, f *credGuardFixture, altSvc string) (router *httpapi.Router, head, r1 http.Handler) {
 	t.Helper()
 	router, mounted := booksMount(t, f)
+	// /health stamps its body with the wall clock's second, and the two
+	// stacks answer one request after the other, so a second boundary between
+	// them made the byte-for-byte body comparison fail (1794193930 vs
+	// 1794193931). Both stacks reach the same handler, so one pinned clock
+	// keeps the timestamp in the comparison, equal on both sides, with every
+	// other field still compared exactly.
+	f.srv.systemHandler.WithClock(func() time.Time { return time.Unix(1794193930, 0) })
 	return router, newPeerAllowListHandler(headPerimeter(f.srv.router)), f.srv.perimeterShim(mounted, altSvc)
 }
 

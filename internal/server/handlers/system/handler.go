@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.4
+// version: 1.28.5
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -78,6 +78,11 @@ type Handler struct {
 	// non-nil interface. Mirrors the operations handler's getScheduler seam.
 	getHub func() EventStreamer
 
+	// now is the clock HealthCheck stamps its answer with; nil is time.Now.
+	// Set by WithClock, so a test can pin the one volatile field of an
+	// otherwise static body.
+	now func() time.Time
+
 	// olService is taken as a concrete pointer (not an interface) because
 	// factoryReset takes its .Mu (mutex) field and calls CloseStoreLocked under
 	// it; field access cannot go through an interface. A nil concrete pointer is fine — the
@@ -127,6 +132,23 @@ type Handler struct {
 func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
 	h.repairsAccess = a
 	return h
+}
+
+// WithClock installs the clock HealthCheck reads its `timestamp` from (nil
+// restores time.Now). A setter rather than a New parameter for the same reason
+// as WithRepairsOpAccess. Production never calls it; the perimeter parity
+// tests pin it so two probes of /health cannot straddle a second boundary.
+func (h *Handler) WithClock(now func() time.Time) *Handler {
+	h.now = now
+	return h
+}
+
+// clock is the current time from the installed clock, or time.Now.
+func (h *Handler) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 // DegradedSource reports the fixed tokens of startup steps that failed but
@@ -233,7 +255,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 
 	resp := gin.H{
 		"status":    "ok",
-		"timestamp": time.Now().Unix(),
+		"timestamp": h.clock().Unix(),
 	}
 	if store := h.resolveStore(); store != nil {
 		// A store with no warmup to report on has nothing to wait for, so it is
