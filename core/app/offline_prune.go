@@ -1,5 +1,5 @@
 // file: core/app/offline_prune.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7435e2a1-aaaa-450e-96a6-35082ffd5d60
 // last-edited: 2026-11-08
 
@@ -93,7 +93,7 @@ func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, i
 	}
 	if err == nil {
 		for _, n := range res.KeptOpen {
-			fmt.Fprintf(&report, "kept open checkpoint %s: it is the live store's rollback; --include-open --confirm deletes it\n", n)
+			fmt.Fprintf(&report, "kept open checkpoint %s: pending record (may be a store's rollback); --include-open --confirm deletes it\n", n)
 		}
 		if len(res.Deleted)+len(res.KeptOpen) == 0 {
 			report.WriteString("no checkpoints to delete\n")
