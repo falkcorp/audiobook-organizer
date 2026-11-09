@@ -1,5 +1,5 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
 // last-edited: 2026-11-08
 
@@ -260,7 +260,8 @@ func (k *Kernel) Run(ctx context.Context) error {
 	k.log.InfoContext(ctx, "kernel: ready")
 	k.lifecycle.ready.Store(true)
 	// 05-storage §5S.4 step 15, after readiness: the checkpoint sweeper's
-	// first sweep, then hourly until the stop order stops it.
+	// first sweep, then hourly until the stop order stops it. It runs on
+	// the sweeper's goroutine, so the select below is not held by it.
 	k.startSweeper(ctx)
 
 	var cause error

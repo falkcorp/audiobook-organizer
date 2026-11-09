@@ -1,5 +1,5 @@
 // file: core/kernel/sweeper.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7d2e91-58c4-4b0f-9e16-c2f8a05d47b9
 // last-edited: 2026-11-08
 
@@ -26,15 +26,17 @@ const checkpointSweepInterval = time.Hour
 // startCompleteMessage is the kernel's record that Run's start sequence is
 // done: readiness (start step 8), then 05-storage §5S.4 step 15's first
 // checkpoint sweep. It is logged on every Run that reaches readiness, with
-// or without a store. The crash-matrix kit stops recording there, so the
-// first sweep's writes are part of the writer table's range (06 §6.5.1, the
-// "After readiness" row).
+// or without a store, unless a stop cancels the first sweep. The first
+// sweep runs on the sweeper's goroutine, so the record can follow Run's
+// own records. The crash-matrix kit stops recording there and only then
+// stops Run, so the first sweep's writes are part of the writer table's
+// range (06 §6.5.1, the "After readiness" row).
 const startCompleteMessage = "kernel: start complete"
 
 // sweeper is the checkpoint sweeper, a kernel lifecycle component (06
 // §6.5.1 writer table, "After readiness"; 05-storage §5S.4 step 15): Run
-// starts it after readiness with one sweep at once, then one per interval
-// while serving, and the stop order stops it first. It is unexported
+// starts it after readiness, and its goroutine sweeps once at once, then
+// once per interval while serving. The stop order stops it first. It is unexported
 // kernel machinery (R1-24 code contract): apps see only its findings,
 // through Kernel.CheckpointHealth.
 //
@@ -84,19 +86,31 @@ func (s *sweeper) runOnce(ctx context.Context) {
 	}
 }
 
-// start runs the first sweep and then starts the periodic loop. The first
-// sweep finishes even when ctx is already done (a boot stopped at once
-// still keeps the 7-day promise); the loop ends at stop.
-func (s *sweeper) start(ctx context.Context) {
-	base := context.WithoutCancel(ctx)
-	s.runOnce(base)
-	loop, cancel := context.WithCancel(base)
+// start starts the sweeper's goroutine, which runs the first sweep at once
+// and then one per interval until stop. It returns without waiting for the
+// first sweep, so a slow one (a large copy to delete) never holds Run's
+// select: SIGTERM, a listener failure or a restart request is seen at once
+// and the stop order cancels the sweep. first, when set, runs after the
+// first sweep unless stop came first (the kernel logs startCompleteMessage
+// there).
+//
+// The loop's context keeps ctx's values but not its cancellation
+// (context.WithoutCancel): Run's ctx ending is not the sweeper's stop. The
+// stop order cancels it through stop, so the sweeper stops first in that
+// order and a deletion in progress finishes (storage checks ctx between
+// checkpoints).
+func (s *sweeper) start(ctx context.Context, first func(context.Context)) {
+	loop, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.mu.Lock()
 	s.cancel, s.done = cancel, make(chan struct{})
 	done := s.done
 	s.mu.Unlock()
 	go func() {
 		defer close(done)
+		s.runOnce(loop)
+		if first != nil && loop.Err() == nil {
+			first(loop)
+		}
 		t := time.NewTicker(s.interval)
 		defer t.Stop()
 		for {
@@ -158,12 +172,15 @@ func (k *Kernel) newSweeper() {
 	}
 }
 
-// startSweeper is 05-storage §5S.4 step 15, after readiness: the first
-// sweep, then the hourly loop. It then logs startCompleteMessage, on every
-// Run that reached readiness.
+// startSweeper is 05-storage §5S.4 step 15, after readiness: it starts the
+// sweeper, whose goroutine runs the first sweep and then the hourly loop,
+// and returns at once. startCompleteMessage is logged after the first sweep
+// (from the sweeper's goroutine), or here when there is no store; a stop
+// that cancels the first sweep leaves it unlogged.
 func (k *Kernel) startSweeper(ctx context.Context) {
 	if k.store != nil && k.store.sweeper != nil {
-		k.store.sweeper.start(ctx)
+		k.store.sweeper.start(ctx, func(ctx context.Context) { k.log.InfoContext(ctx, startCompleteMessage) })
+		return
 	}
 	k.log.InfoContext(ctx, startCompleteMessage)
 }
