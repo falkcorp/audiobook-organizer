@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -29,6 +29,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -766,12 +767,118 @@ class InstallStaged(unittest.TestCase):
         (self.stage / "audiobook-organizer.service").write_text(text)
         self.assertEqual(h.run("install", "unit")[0], 0)
 
-    def test_an_unknown_directive_is_named(self):
+    def test_an_unknown_directive_is_refused_by_line_without_echoing_it(self):
+        """A refusal names the line, never the file's text: root read it."""
         h = self.host()
-        (self.stage / "audiobook-organizer-local.conf").write_text("[Service]\nBatSignal=on\n")
+        (self.stage / "audiobook-organizer-local.conf").write_text(
+            "[Service]\nEnvironment=A=1\nBatSignal=hunter2\n"
+        )
         code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 1)
-        self.assertIn("BatSignal", err)
+        self.assertIn("line 3", err)
+        self.assertNotIn("BatSignal", err)
+        self.assertNotIn("hunter2", err)
+
+    def test_no_refusal_echoes_a_value(self):
+        for text in (
+            "[Service]\nUser=hunter2\n",
+            "[Service]\nExecStart=+/hunter2\n",
+            "[Service]\nStandardOutput=file:/hunter2\n",
+            "hunter2\n",
+            "[hunter2]\n",
+        ):
+            with self.subTest(text=text):
+                h = self.host()
+                (self.stage / "audiobook-organizer-local.conf").write_text(text)
+                code, _, err = h.run("install", "local-conf")
+                self.assertEqual(code, 1, err)
+                self.assertNotIn("hunter2", err)
+
+    def test_characters_systemd_does_not_strip_are_refused(self):
+        """Python's str.strip() and splitlines() treat these as whitespace or
+        line breaks and systemd does not, so `User=alfred<VT>` would pass a
+        Python check and be an invalid User= to systemd, which then runs the
+        unit as root. Outside comments only printable ASCII and tab pass."""
+        for ch in (
+            "\v",
+            "\f",
+            "\x1c",
+            "\x1d",
+            "\x1e",
+            "\x1f",
+            "\x85",
+            "\u2028",
+            "\u2029",
+            "\xa0",
+            "\x7f",
+            "\x00",
+            "\x1b",
+            "é",
+        ):
+            with self.subTest(ch=repr(ch)):
+                h = self.host()
+                text = committed_unit().replace("User=alfred\n", f"User=alfred{ch}\n")
+                (self.stage / "audiobook-organizer.service").write_text(text)
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, (repr(ch), err))
+                self.assertFalse(self.unit_path(h).exists())
+                h2 = self.host()
+                text = f"[Service]\nEnvironment=A=1{ch}ExecStartPre=/bin/sh\n"
+                (self.stage / "audiobook-organizer-local.conf").write_text(text)
+                self.assertEqual(h2.run("install", "local-conf")[0], 1, repr(ch))
+
+    def test_non_ascii_in_a_comment_is_accepted(self):
+        h = self.host()
+        text = "# Wayne Manor \u2014 the Batcave\u2019s drop-in\n[Service]\nTimeoutStopSec=90\n"
+        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_a_semicolon_in_execstart_is_refused(self):
+        """systemd reads a lone `;` in ExecStart= as a second command line,
+        whose own `+` prefix would run it as root."""
+        for v in ("/bin/true ; +/bin/sh -c id", "/bin/true;/bin/sh"):
+            with self.subTest(v=v):
+                h = self.host()
+                (self.stage / "audiobook-organizer-local.conf").write_text(
+                    f"[Service]\nExecStart=\nExecStart={v}\n"
+                )
+                self.assertEqual(h.run("install", "local-conf")[0], 1, v)
+
+    def test_a_staged_file_with_another_link_or_owner_is_refused(self):
+        """Root opens the staged file: a hard link (to /etc/shadow, say) is
+        refused, and so is a file the deploy user (SUDO_UID) does not own."""
+        h = self.host()
+        conf = self.stage / "audiobook-organizer-local.conf"
+        other = h.root / "elsewhere.conf"
+        other.write_text("[Service]\nTimeoutStopSec=90\n")
+        os.link(other, conf)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn("link", err)
+        conf.unlink()
+        conf.write_text("[Service]\nTimeoutStopSec=90\n")
+        self.assertEqual(h.run("install", "local-conf")[0], 0)
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn("own", err)
+
+    def test_a_staged_binary_with_another_link_or_owner_is_refused(self):
+        h = self.host()
+        h.bin.write_text("current")
+        staged = self.stage / "audiobook-organizer"
+        other = h.root / "elsewhere"
+        other.write_text("new")
+        os.link(other, staged)
+        self.assertEqual(h.run("install", "binary")[0], 1)
+        self.assertEqual(h.bin.read_text(), "current")
+        staged.unlink()
+        staged.write_text("new")
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            self.assertEqual(h.run("install", "binary")[0], 1)
+        self.assertEqual(h.bin.read_text(), "current")
+        self.assertFalse(Path(f"{h.bin}.prev").exists())
 
     def test_a_symlinked_or_oversize_or_missing_source_is_refused(self):
         h = self.host()
