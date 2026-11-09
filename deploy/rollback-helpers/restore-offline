@@ -1,0 +1,12 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/restore-offline
+# version: 1.0.0
+# guid: ff94919f-56bd-4611-87ee-4117df8aa16a
+# last-edited: 2026-11-09
+#
+# storage restore-offline (checkpoint NAME | archive BASENAME | into-check BASENAME), as root; the restore itself runs as the service user.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py restore "$@"
