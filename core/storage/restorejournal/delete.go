@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/delete.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 585f6cae-e0dd-43fe-9ba2-47dc5e313ba9
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package restorejournal
 
@@ -36,6 +36,9 @@ func InTree(p, root string) bool {
 // keeps. That is p being or containing <db parent> or the state directory,
 // or p being, containing or lying inside one of these trees:
 //   - restore/, the slot and every swap's journal directory;
+//   - the swap lock (SwapLockPath), which a running opener or offline swap
+//     may hold: removed, the next taker would lock a new file the holder
+//     never sees (R1-25 review B1);
 //   - every swap's private directory .mediacore-restore beside <db parent>
 //     and beside each of the intent's targets, where previous/ (the only
 //     undo) and failed/ live;
@@ -55,7 +58,7 @@ func Kept(stateDir string, in Intent, legacySuffixes []string, p string) bool {
 			return true
 		}
 	}
-	trees := []string{Dir(stateDir), filepath.Join(dbParent, asideDir), db}
+	trees := []string{Dir(stateDir), SwapLockPath(stateDir), filepath.Join(dbParent, asideDir), db}
 	for _, s := range append(CoreSidecarSuffixes(), legacySuffixes...) {
 		trees = append(trees, db+s)
 	}

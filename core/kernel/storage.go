@@ -1,5 +1,5 @@
 // file: core/kernel/storage.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
 // last-edited: 2026-11-08
 
@@ -83,22 +83,9 @@ func (k *Kernel) storageWanted(describe bool) (bool, error) {
 // upgrade floors, validate every spec and claim, check a marker-less store
 // for foreign keys and plan the migrations. It writes nothing to the store.
 func (k *Kernel) openStorage(ctx context.Context) error {
-	// Every build field of the store names the binary ID, never the core
-	// version constant (05-storage §5S.3.7 "Binary ID"); once per process.
-	build, err := k.binaryID(ctx)
+	opts, err := k.storageOptions(ctx)
 	if err != nil {
-		return fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
-	}
-	opts := storage.OpenOptions{
-		Path:         k.cfg.StoragePath,
-		FS:           k.cfg.StorageFS,
-		Owners:       k.storageOwners(),
-		Build:        build,
-		Logger:       k.coreLog("storage"),
-		ExtendStart:  k.extendStart(coreOwner),
-		Clock:        bootClock(ctx),
-		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
-		ClaimsShadow: k.cfg.StorageClaimsShadow,
+		return err
 	}
 	if opts.ClaimsShadow {
 		k.log.Warn("kernel: core.storage.claims.mode=shadow: out-of-claim storage accesses are logged and allowed, not refused (the emergency dial; strict is the default)")
@@ -112,6 +99,29 @@ func (k *Kernel) openStorage(ctx context.Context) error {
 	}
 	k.store = &kernelStore{opened: o}
 	return nil
+}
+
+// storageOptions are the options of every open of the store at
+// core.storage.path: P2's, and the offline opens' (offline.go), which add
+// ReadOnly and MustExist.
+func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error) {
+	// Every build field of the store names the binary ID, never the core
+	// version constant (05-storage §5S.3.7 "Binary ID"); once per process.
+	build, err := k.binaryID(ctx)
+	if err != nil {
+		return storage.OpenOptions{}, fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
+	}
+	return storage.OpenOptions{
+		Path:         k.cfg.StoragePath,
+		FS:           k.cfg.StorageFS,
+		Owners:       k.storageOwners(),
+		Build:        build,
+		Logger:       k.coreLog("storage"),
+		ExtendStart:  k.extendStart(coreOwner),
+		Clock:        bootClock(ctx),
+		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
+		ClaimsShadow: k.cfg.StorageClaimsShadow,
+	}, nil
 }
 
 // prepareStorage is P4a (06 §6.5.1; 05-storage §5S.4 steps 6-7): on an
@@ -162,13 +172,10 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 // from P4a's store; zero values, whose every method fails, when no store is
 // open (Describe, or no path) or the module declared neither.
 func (k *Kernel) storageHandles(id module.ID) module.StorageHandles {
-	var h module.StorageHandles
 	if k.store == nil || k.store.db == nil {
-		return h
+		return module.StorageHandles{}
 	}
-	h.Keyspace, _ = k.store.db.Keyspace(storage.Owner(id))
-	h.Legacy, _ = k.store.db.Legacy(storage.Owner(id))
-	return h
+	return handlesOf(k.store.db, id)
 }
 
 // StorageAdmin is the open store's admin surface, nil when no store is open.

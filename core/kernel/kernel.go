@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.17
+// version: 1.0.18
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -141,6 +141,24 @@ type Config struct {
 	// New refuses it without StoragePath. "" = no swap. Describe never runs
 	// P0a.
 	StateDir string
+	// BeforeSwap runs in the offline restore and the offline reset after
+	// every check passed and before the first write that stages or moves
+	// anything, with core.storage.path. ABO's books removes its HNSW
+	// clean-stop marker there, so the boot after the swap rebuilds the
+	// vector graph instead of trusting one of the store being replaced. An
+	// error stops the command with nothing staged or moved. Never called for
+	// an --into copy, which replaces nothing. nil = none. Release R1 only:
+	// the vector index becomes a derived index with the store's generation.
+	BeforeSwap func(dbPath string) error
+	// ArchiveExtract extracts an archive's store into storeDir, an empty
+	// directory, for storage restore-offline --archive, and returns the
+	// archive's ID for the intent (ABO: HEAD's backup format). nil refuses
+	// --archive. Release R1 only: F8's backup extractor replaces it.
+	ArchiveExtract func(ctx context.Context, archive, storeDir string) (string, error)
+	// ResetHookTimeout bounds the reset hook's Run (05-storage §5S.3.15,
+	// core.storage.swap.reset_hook_timeout); 0 = defaultResetHookTimeout.
+	// Tests only until config lands (F3).
+	ResetHookTimeout time.Duration
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
@@ -220,6 +238,11 @@ type Kernel struct {
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
 	swap  *kernelSwap  // P0a on; nil when P0a did not run (swap.go)
 	build string       // the binary ID, once computed (swap.go)
+	// swapLock is the swap lock this kernel holds (exclusive through P0a
+	// and shared from its end, storage.LockSwapShared for an offline open,
+	// storage.LockSwapExclusive for an offline swap), released by closeCore
+	// after the store closed; nil when none.
+	swapLock io.Closer
 	// logClosers close the file output and its os.Root, after logging.
 	logClosers []io.Closer
 
