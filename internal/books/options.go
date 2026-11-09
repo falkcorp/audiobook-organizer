@@ -1,11 +1,12 @@
 // file: internal/books/options.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
 package books
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
@@ -115,26 +117,11 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	}); err != nil {
 		return app.Options{}, err
 	}
+	dbPath, err := storeLocation(m.stateDir)
+	if err != nil {
+		return app.Options{}, err
+	}
 	snap := config.Snapshot()
-	if err := database.ValidateDatabaseType(snap.DatabaseType); err != nil {
-		return app.Options{}, err
-	}
-	dbPath, err := storagePath(snap.DatabasePath)
-	if err != nil {
-		return app.Options{}, err
-	}
-	// One state directory per process (OPS4-8): core resolves it again in
-	// New (its explicit ABO_CORE_PATHS_STATE_DIR first, then this default),
-	// and HEAD's key, the checkpoint's state files and core's own state
-	// files must not land in two places.
-	coreDir, err := app.ResolveStateDir(app.Options{AppID: AppID, StateDir: m.stateDir})
-	if err != nil {
-		return app.Options{}, err
-	}
-	if filepath.Clean(coreDir) != filepath.Clean(m.stateDir) {
-		return app.Options{}, fmt.Errorf("books: core's state directory %q is not ABO's %q (%s); set one, or set both to the same path",
-			coreDir, m.stateDir, config.SecureStateDirEnv)
-	}
 	// ABO's log file lives under the state directory (core.log.file.path,
 	// 05-logging section 11 item 1).
 	logCfg, warn := logSettings(snap.LogLevel, m.stateDir)
@@ -158,6 +145,58 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		StateDir:              m.stateDir,
 		R1StoragePath:         dbPath,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
+	}, nil
+}
+
+// storeLocation is HEAD's database path as core.storage.path, checked
+// against the state directory ABO resolved: a database_type other than
+// Pebble or an empty path refuses, and so does a core state directory that
+// is not stateDir. One state directory per process (OPS4-8): core resolves
+// it again in New (its explicit ABO_CORE_PATHS_STATE_DIR first, then this
+// default), and HEAD's key, the checkpoint's state files and core's own
+// state files must not land in two places.
+func storeLocation(stateDir string) (string, error) {
+	snap := config.Snapshot()
+	if err := database.ValidateDatabaseType(snap.DatabaseType); err != nil {
+		return "", err
+	}
+	dbPath, err := storagePath(snap.DatabasePath)
+	if err != nil {
+		return "", err
+	}
+	coreDir, err := app.ResolveStateDir(app.Options{AppID: AppID, StateDir: stateDir})
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(coreDir) != filepath.Clean(stateDir) {
+		return "", fmt.Errorf("books: core's state directory %q is not ABO's %q (%s); set one, or set both to the same path",
+			coreDir, stateDir, config.SecureStateDirEnv)
+	}
+	return dbPath, nil
+}
+
+// OfflineOptions is ABO's app.Options for core's offline commands
+// (app.OfflineCommands, 06 §6.4.5), which cmd wraps as cobra commands: the
+// identity, and the store and state directory serve's Options names, so an
+// offline command and serve always reach the same database. It reads the
+// loaded config (the root command's PersistentPreRun loads it) and builds
+// no server, logging pipeline or telemetry.
+func OfflineOptions() (app.Options, error) {
+	stateDir, err := config.EnsureSecureStateDir()
+	if err != nil {
+		return app.Options{}, fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
+	}
+	dbPath, err := storeLocation(stateDir)
+	if err != nil {
+		return app.Options{}, err
+	}
+	return app.Options{
+		AppID:         AppID,
+		StateDir:      stateDir,
+		R1StoragePath: dbPath,
+		// The process logger, through internal/logger (the slog guard):
+		// prune-checkpoints logs each deletion beside its stdout report.
+		Logger: logger.FromContext(context.Background()).With("subsystem", "offline"),
 	}, nil
 }
 
@@ -301,8 +340,10 @@ func (m *booksModule) r1Listen(o httpapi.ListenOptions, h http.Handler, log *slo
 // estimates, the collector's sample) and becomes the provider throttle
 // registry's process-scoped store; the legacy client_golang families
 // register on the App's Provider registry, which the gin /metrics route then
-// serves (05-metrics §6, §13 item 2), and the activity feed becomes a tap on
-// the App's log pipeline. A disabled books (no store or server built) has
+// serves (05-metrics §6, §13 item 2), the activity feed becomes a tap on
+// the App's log pipeline, and GET /system/status's posture tokens read the
+// App's checkpoint health (the storage_checkpoint_* tokens, 05-health
+// §5H.10 R1). A disabled books (no store or server built) has
 // nothing to attach.
 func Attach(mod module.Module, a *app.App) error {
 	m, err := asBooks(mod)
@@ -325,5 +366,9 @@ func Attach(mod module.Module, a *app.App) error {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
 	tapActivity(a, srv.ActivityLogWriter())
+	srv.SetPostureTokens(func() []system.PostureToken {
+		h, err := a.CheckpointHealth()
+		return checkpointPosture(h, err, time.Now())
+	})
 	return nil
 }

@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package hello_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -71,6 +72,11 @@ func unreachedLabels() map[string]string {
 		// (a stamp commit's failure is fatal in Pebble). The level-step
 		// scenario's error runs at storage.levelstep.sidecars run it.
 		"storage.levelstep.rollback": "runs only after a level step's sidecar write fails",
+		// The kit's clock is fixed (crashmatrix.Now) and a fixture's files
+		// are copied into memory with the host's current time as their
+		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
+		// TestDryRunScratchModeAndSweep deletes one on a fake clock.
+		"storage.sweeper.scratch": "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
 	}
 }
 
@@ -117,6 +123,7 @@ func crashScenarios(t *testing.T) []namedScenario {
 		undecodable(t),
 		checkpointReused(t),
 		attemptStranded(t),
+		checkpointsToSweep(t),
 	}
 	dag := refused(restore(t, "restore-checkpoint-dag-fails", restorejournal.KindCheckpoint, false, withTag("poisoned")))
 	return []namedScenario{
@@ -386,6 +393,50 @@ func attemptStranded(t *testing.T) crashmatrix.Fixture {
 	f := upgradePendingStep(t)
 	f.Name = "attempt-stranded"
 	f.Mutate = crashmatrix.KillAt(t, f, build(hello.New()), "storage.checkpoint.complete", 0)
+	return f
+}
+
+// checkpointsToSweep is a store with nothing to run (so P4a takes no
+// checkpoint and runs no garbage sweep) beside three things the checkpoint
+// sweeper's first sweep after readiness handles (05-storage §5S.3.12
+// "Retention"; §5S.4 step 15): a completed checkpoint past its delete_after,
+// which the pointer names (deleted: record, copy, pointer); another store's
+// open checkpoint (released: delete_after = now + 7 days); and a checkpoint
+// directory without a record (garbage). Each copy is an empty store, so it
+// opens and holds no module row.
+func checkpointsToSweep(t *testing.T) crashmatrix.Fixture {
+	f := crashmatrix.Fixture{Name: "checkpoints-to-sweep", StateDir: t.TempDir()}
+	boot(t, f, hello.New())
+	dir := filepath.Join(filepath.Dir(dbPath(f)), ".mediacore-checkpoints")
+	const (
+		expired  = "20260301T000000Z-e9b1e001"
+		orphaned = "20260302T000000Z-0b1e0002"
+		garbage  = "20260303T000000Z-6a7b0003"
+	)
+	for _, n := range []string{expired, orphaned, garbage} {
+		eng, err := ipebble.Open(filepath.Join(dir, n, "db"), ipebble.Options{FS: vfs.Default})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := eng.Close(10 * time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day := 24 * time.Hour
+	completed, due := crashmatrix.Now().Add(-14*day), crashmatrix.Now().Add(-7*day)
+	records := map[string]string{
+		expired: fmt.Sprintf(`{"install_id":"arkham-install","epoch":1,"taken_at":%q,"completed_at":%q,"delete_after":%q,"status":"completed"}`,
+			completed.Format(time.RFC3339), completed.Format(time.RFC3339), due.Format(time.RFC3339)),
+		orphaned: fmt.Sprintf(`{"install_id":"joker-install","epoch":1,"taken_at":%q,"status":"open"}`, completed.Format(time.RFC3339)),
+	}
+	for n, rec := range records {
+		if err := os.WriteFile(filepath.Join(dir, n+".json"), []byte(rec+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(dbPath(f)+".migration-checkpoint", []byte(`{"name":"`+expired+`","state":"completed"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 

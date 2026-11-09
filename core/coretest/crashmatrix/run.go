@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
 // last-edited: 2026-11-08
 
@@ -58,7 +58,9 @@ func errnos() []error { return []error{syscall.ENOSPC, syscall.EACCES} }
 // and readiness in two modes: a kill, and an error return (ENOSPC, then
 // EACCES) from that one operation with the boot continuing, so a non-crash
 // failure must also leave a legal state (R10-6, DATA10-4). It reboots the
-// current build until readiness, then asserts I1–I6 (invariants.go); the
+// current build until readiness, then asserts I1–I6 (invariants.go), after
+// one more boot where the error hit a writer the next run retries
+// (Row.Retried); the
 // boots after each break are killed again at their swap kill points, one
 // level deep (nested, R1-21 review M6). It
 // fails on any durable operation that carries no writer-table label, and
@@ -100,15 +102,16 @@ const maxReports = 25
 
 func run(tb testing.TB, rep reporter, s Scenario, m mode) map[string]bool {
 	rep.Helper()
-	registered := map[string]bool{}
+	registered, retried := map[string]bool{}, map[string]bool{}
 	for _, r := range append(Rows(), s.Rows...) {
 		for _, l := range r.Labels {
 			registered[l] = true
+			retried[l] = retried[l] || r.Retried
 		}
 	}
 	observed := map[string]bool{}
 	for _, f := range s.Fixtures {
-		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, registered: registered, observed: observed, nestedSeen: map[[sha256.Size]byte]bool{}}
+		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, registered: registered, retried: retried, observed: observed, nestedSeen: map[[sha256.Size]byte]bool{}}
 		fr.run(m)
 	}
 	return observed
@@ -121,6 +124,7 @@ type fixtureRun struct {
 	s          Scenario
 	f          Fixture
 	registered map[string]bool
+	retried    map[string]bool // the labels of Row.Retried writers
 
 	mu       sync.Mutex
 	observed map[string]bool
@@ -433,6 +437,13 @@ func (fr *fixtureRun) inject(b int, ev bootseamtest.Event, errno error) {
 		fr.errorf("%s: the operation was not reached on the rerun: the boot is not deterministic", at)
 		return
 	}
+	if fr.retried[ev.Label] && ch.ready {
+		// The boot logged the failed writer and served (Row.Retried): what
+		// it left is held to I2 and I3 now and to I6 after the retry.
+		fr.checkStore(at, ch)
+		at += ", then a reboot that retries it"
+		ch = ch.then(fr.chain(ch.mem, func(int) bootseamtest.Options { return bootseamtest.Options{} }))
+	}
 	fr.check(at, ch)
 	fr.killNested(at, ch, func(i int) string { return fmt.Sprintf("boot %d", i+1) })
 }
@@ -484,6 +495,13 @@ type bootRun struct {
 	events []bootseamtest.Event
 	clones []bootseamtest.Clone
 	err    error
+}
+
+// then is c followed by next, the chain of boots run on c's filesystem
+// after c ended: next's end and outcome are the run's.
+func (c chain) then(next chain) chain {
+	next.boots = append(slices.Clone(c.boots), next.boots...)
+	return next
 }
 
 func (c chain) errs() []error {

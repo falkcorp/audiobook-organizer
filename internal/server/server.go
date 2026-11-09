@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.115.2
+// version: 2.115.3
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-08
 
@@ -257,7 +257,13 @@ type Server struct {
 	// here and runs its own steps through it. Atomic because /health reads it
 	// through a lazy provider and Start writes it; nil before Start, which
 	// /health renders as "no startup step degraded".
-	startupSteps       atomic.Pointer[startup.Steps]
+	startupSteps atomic.Pointer[startup.Steps]
+	// postureTokens yields GET /system/status's authenticated posture
+	// tokens (the storage_checkpoint_* tokens from R1), installed by books'
+	// Attach once the App exists, after the handlers are wired: atomic for
+	// the same reason as startupSteps. Nil reports none. See
+	// SetPostureTokens.
+	postureTokens      atomic.Pointer[func() []systemhandlers.PostureToken]
 	batchPoller        *BatchPoller
 	mergeService       *merge.Service
 	diagnosticsService *diagnostics.Service
