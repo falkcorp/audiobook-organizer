@@ -1,0 +1,129 @@
+# file: .github/workflows/unit-lifecycle.yml
+# version: 1.0.0
+# guid: 709037c9-f339-475b-8212-8bf6803a5e87
+# last-edited: 2026-11-09
+
+# The `unit-lifecycle` required check (09 §9.2.1; R1-28). On GitHub's Ubuntu
+# runner VM, where systemd is PID 1, scripts/tests/test_unit_lifecycle.py
+# installs the COMMITTED unit (deploy/audiobook-organizer.service) with a
+# drop-in that overrides only ExecStart, the database path and
+# PrivateNetwork=yes, and runs two cells: a 12 minute fake migration is not
+# killed by the unit's start timeout (EXTEND_TIMEOUT_USEC per step), and after
+# a staged restore the service restarts itself and reports ready.
+#
+# Triggers (09 §9.2.1): every PR that changes deploy/**, cmd/**, main.go,
+# internal/backup/**, internal/updater/**, internal/server/server_lifecycle*.go,
+# internal/books/cutover/**, core/kernel/** or core/internal/restoreswap/**,
+# and nightly. The job's own files are added to that list (this workflow, the
+# test, its drop-in, the wait-ready script it runs and the fake-ssh shim): a PR
+# that edits the job must run it. A PR that changes none of them skips through
+# the job-level `if:` below, so the required check reports success; a
+# `paths:` filter would leave it "expected" forever (the classifier rule of
+# 09 §9.2.1). merge_group runs it too (D15).
+#
+# The job is outside the 35 minute budget of 09 §9.2.10: cell 1 alone is about
+# 15 minutes.
+
+name: Unit Lifecycle
+
+on:
+  pull_request:
+    branches: [main, master]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: '17 4 * * *' # nightly, 4:17 UTC
+  workflow_dispatch:
+
+# A merge-queue run is never cancelled by a sibling run (the rule ci.yml
+# states): a cancelled required check reads as failed and the queue drops the
+# PR. PR runs keep the per-ref cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: unit-lifecycle-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.classify.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # schedule and workflow_dispatch always run. A PR or merge-queue run
+      # runs when a changed path is in the trigger list; a range that cannot
+      # be read fails open.
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          MERGE_BASE: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          run=false; range=''
+          case "$EVENT" in
+            pull_request) range="origin/${BASE_REF}...HEAD" ;;
+            merge_group) range="${MERGE_BASE}...${MERGE_HEAD}" ;;
+            *) run=true ;;
+          esac
+          if [ -n "$range" ]; then
+            if files=$(git diff --name-only "$range"); then
+              while IFS= read -r f; do
+                case "$f" in
+                  deploy/*|cmd/*|main.go|internal/backup/*|internal/updater/*|internal/server/server_lifecycle*.go|internal/books/cutover/*|core/kernel/*|core/internal/restoreswap/*) run=true ;;
+                  .github/workflows/unit-lifecycle.yml|scripts/tests/test_unit_lifecycle.py|scripts/tests/unit_lifecycle/*|scripts/tests/fake_ssh.py|scripts/deploy-wait-ready.sh|scripts/deploy_wait_ready.py) run=true ;;
+                esac
+              done <<<"$files"
+            else
+              run=true
+            fi
+          fi
+          echo "run=$run (${range:-$EVENT})"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  unit-lifecycle:
+    name: unit-lifecycle
+    needs: changes
+    if: ${{ needs.changes.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: |
+            go.sum
+            core/go.sum
+
+      # The tag compiles core/kernel/fakemigration_hook.go into this binary
+      # and into no release build (03 §3.5.1 item 4).
+      - name: Build the test binary
+        run: go build -tags unitlifecycle -o /tmp/abo .
+
+      # UNIT_LIFECYCLE_REQUIRED=1 turns every "cannot run here" skip into a
+      # failure, so this job cannot pass by skipping. sudo -E keeps the
+      # runner's GITHUB_ACTIONS, which the test checks before it installs a
+      # unit, a user and directories.
+      - name: Unit lifecycle cells
+        env:
+          UNIT_LIFECYCLE_REQUIRED: '1'
+          UNIT_LIFECYCLE_BINARY: /tmp/abo
+        run: sudo -E python3 -m unittest -v scripts/tests/test_unit_lifecycle.py
+
+      - name: Service journal
+        if: ${{ failure() }}
+        run: sudo journalctl -u audiobook-organizer --no-pager | tail -n 300
