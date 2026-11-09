@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.19.0 -->
+<!-- version: 1.20.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -500,7 +500,9 @@ host.conf, and every other drop-in systemd applies to the unit, must run
 nothing but the service user's `ExecStart=`: no other `Exec*=` line
 (`ExecStartPre=`, `ExecStopPost=`, ...), an `ExecStart=` command that starts
 with an absolute path after only the `@`, `-` and `:` prefixes (so no `+`,
-`!`, `|` or any other), no
+`!`, `|` or any other) and holds one command (no `;` word, which starts a
+second command whose prefix nothing checked; `\;` and a quoted `;` refuse
+too), no `Type=oneshot` (which runs each of them), no
 `PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
 `Group=` other than `service_user` and `service_group`. Every `Environment=`
 line `local.conf` deploys reaches whatever the unit runs, and a deploy user
@@ -537,15 +539,21 @@ anything:
   `/run/systemd/system`, `/usr/local/lib/systemd/system` and
   `/usr/lib/systemd/system`, or a copy in a generator, transient,
   `.control` or `.attached` directory refuses. With no unit file at all,
-  `install-staged local-conf` refuses; `install-staged unit` accepts a
-  missing `/etc` copy, since it is about to write the checked template
-  there.
+  `install-staged local-conf` refuses. `install-staged unit` skips the
+  `/etc` copy, missing or not, since it is about to replace it with the
+  checked template: a bad `/etc` copy never blocks the command that fixes
+  it. Every other copy, such as a shadowed `/usr/lib` one, must still pass.
 
 Lines are checked as systemd joins them: a line ending in an odd number of
 backslashes continues onto the next, the last backslash becoming a space,
-and comment lines inside a continuation are skipped. So `ExecStart=\`
-followed by `+/bin/x` is a `+` prefix, and a line ending in `\\` (an even
-number) does not continue. A refusal names the file and the line, never the
+comment lines inside a continuation are skipped, and an empty line ends
+one. So `ExecStart=\` followed by `+/bin/x` is a `+` prefix, a line ending
+in `\\` (an even number) does not continue, and `Environment=A=b\`
+followed by `User=...` sets no `User=` at all. Every check reads lines this
+way: the rules, the `User=`/`Group=`/`ExecStart=` check of the template and
+of each unit file (where the last assignment wins and an empty one resets
+the setting, so a later empty `User=` means root), and the `local.conf`
+renderer. A refusal names the file and the line, never the
 text. So a host without a good host.conf never gets the
 base unit installed, and can never restart on the base unit's `ExecStart`,
 whether or not the deploy carries a `local.conf`.

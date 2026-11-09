@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.11.0
+# version: 1.12.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -856,7 +856,6 @@ REFUSED_LINES = [
     'Environment="A=1',
     "Environment='A=1\"",
     'Environment="A=1" "B=2"',
-    "Environment=A=1\\",
     "Environment=A=\\x",
     'Environment="A=a\\"b"',
     ".include /etc/evil.conf",
@@ -1065,6 +1064,25 @@ class InstallStaged(unittest.TestCase):
                 self.assertIn("line 3", err)
                 self.assertFalse(self.conf_path(h).exists(), line)
                 self.assertEqual(self.changes(h), [], line)
+
+    def test_a_continued_environment_line_is_checked_as_systemd_joins_it(self):
+        """A trailing backslash folds the next line into the value, so the
+        joined line is what is checked and rendered: a folded User= makes it
+        two words and refuses, and a value continued onto a blank line
+        renders as the one line systemd reads."""
+        h = self.host()
+        self.stage_conf("[Service]\nEnvironment=A=1\\\nUser=root\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn("line 2", err)
+        self.assertFalse(self.conf_path(h).exists())
+        h = self.host()
+        self.stage_conf("[Service]\nEnvironment=A=1\\\n\nEnvironment=B=2\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        rendered = self.conf_path(h).read_text()
+        self.assertIn("Environment=A=1\nEnvironment=B=2\n", rendered)
+        self.assertNotIn("\\", rendered)
 
     def test_environment_before_service_is_refused(self):
         h = self.host()
@@ -1520,6 +1538,30 @@ class InstallStaged(unittest.TestCase):
         err = self.install_refused(h, "local-conf")
         self.assertIn("unit file", err)
 
+    def test_the_unit_install_replaces_a_bad_etc_copy(self):
+        """install-staged unit is the command that fixes a bad /etc copy, so
+        it does not check the copy it is about to replace; a shadowed
+        /usr/lib copy must still pass."""
+        bad = committed_unit().replace("[Service]\n", "[Service]\nExecStartPre=+/usr/bin/true\n", 1)
+        h = self.host()
+        self.unit_path(h).write_text(bad)
+        self.unit_path(h).chmod(0o644)
+        self.fragment_show(h, f"FragmentPath={self.unit_path(h)}\nSourcePath=")
+        self.template()
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.unit_path(h).read_text(), committed_unit())
+        h = self.host()
+        self.unit_path(h).write_text(bad)
+        self.unit_path(h).chmod(0o644)
+        self.lib_unit.write_text(bad)
+        self.template()
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 1, err)
+        self.assertIn(str(self.lib_unit), err)
+        self.assertEqual(self.unit_path(h).read_text(), bad)
+        self.assertNotIn(["daemon-reload"], self.changes(h))
+
     def test_the_unit_install_may_create_the_etc_copy(self):
         """install-staged unit is about to write the checked template to
         /etc, so no unit file anywhere yet is fine for it."""
@@ -1550,7 +1592,7 @@ class InstallStaged(unittest.TestCase):
         for what in ("unit", "local-conf"):
             for name, make in cases.items():
                 if what == "unit" and name == "/etc copy":
-                    continue  # covered below: the template replaces it
+                    continue  # the template replaces it: test_the_unit_install_replaces_a_bad_etc_copy
                 with self.subTest(what=what, case=name):
                     h = self.host()
                     make(h)
@@ -1663,10 +1705,18 @@ class InstallStaged(unittest.TestCase):
         self.assertIn("line 2", err)
 
     def test_comments_inside_a_continuation_are_skipped(self):
-        err = self.rules_refuse(
-            "[Service]\nExecStart=\\\n# a comment\n; another \\\n  !/bin/evil\n"
-        )
+        """A comment line inside a continuation is skipped, not joined and
+        not an end: the line after it still continues the value. Read the
+        other way, each of these would turn out the opposite."""
+        err = self.rules_refuse("[Service]\nType=\\\n# a comment\n; another \\\noneshot\n")
         self.assertIn("line 2", err)
+        self.rules_pass("[Service]\nEnvironment=A=b\\\n# a comment\nExecStartPre=/bin/evil\n")
+
+    def test_an_empty_line_ends_a_continuation(self):
+        """systemd joins an empty line as nothing and ends the line there,
+        so the directive after it stands on its own."""
+        err = self.rules_refuse("[Service]\nEnvironment=A=b\\\n\nExecStartPre=/bin/evil\n")
+        self.assertIn("line 4", err)
 
     def test_an_odd_run_of_backslashes_continues(self):
         """`b\\\\\\` ends in three backslashes: the next line is part of
@@ -1675,6 +1725,65 @@ class InstallStaged(unittest.TestCase):
 
     def test_a_continuation_at_the_end_of_the_file_is_checked(self):
         self.rules_refuse("[Service]\nExecStart=!/bin/evil \\")
+
+    # -- one command only: no `;` word, no Type=oneshot ---------------------
+
+    def test_a_second_command_in_execstart_is_refused(self):
+        """A `;` word separates command lines, and Type=oneshot runs each
+        of them: the second command's prefix was never checked."""
+        for value in (
+            "/usr/local/bin/audiobook-organizer ; +/bin/evil",
+            "/usr/local/bin/audiobook-organizer\t;\t/bin/evil",
+            "/usr/local/bin/audiobook-organizer \\; /bin/evil",
+            "/usr/local/bin/audiobook-organizer ';' /bin/evil",
+            '/usr/local/bin/audiobook-organizer ";" /bin/evil',
+            "/usr/local/bin/audiobook-organizer ;",
+        ):
+            with self.subTest(value=value):
+                self.rules_refuse(f"[Service]\nExecStart=\nExecStart={value}\n")
+        self.rules_refuse(
+            "[Service]\nExecStart=\nExecStart=/usr/local/bin/x \\\n  --robin ; +/bin/evil\n"
+        )
+        self.rules_pass("[Service]\nExecStart=\nExecStart=/usr/local/bin/x --label=a;b c;\n")
+
+    def test_type_oneshot_is_refused(self):
+        for text in (
+            "[Service]\nType=oneshot\n",
+            "[Service]\nType = oneshot\n",
+            "[Service]\nType=\\\noneshot\n",
+        ):
+            with self.subTest(text=text):
+                self.rules_refuse(text)
+        for value in ("notify", "simple", "exec", ""):
+            with self.subTest(value=value):
+                self.rules_pass(f"[Service]\nType={value}\n")
+
+    # -- the template's User=, Group= and ExecStart=, as systemd reads them --
+
+    def test_a_user_line_folded_into_a_value_is_not_the_users(self):
+        """`Environment=A=b\\` then `User=...` is one Environment= line to
+        systemd: the unit sets no User= and runs as root."""
+        folded = committed_unit().replace("User=alfred\n", "Environment=A=b\\\nUser=alfred\n", 1)
+        h = self.host()
+        self.template(folded)
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 1, err)
+        self.assertIn("User=", err)
+        self.assertFalse(self.unit_path(h).exists())
+        h = self.host()
+        self.lib_unit.write_text(folded)
+        self.assertIn("User=", self.install_refused(h, "local-conf"))
+
+    def test_an_empty_assignment_resets_the_template_setting(self):
+        """An empty User=, Group= or ExecStart= resets it in systemd: a
+        later empty User= means root, whatever came before."""
+        for key in ("User", "Group", "ExecStart"):
+            with self.subTest(key=key):
+                h = self.host()
+                self.template(committed_unit() + f"\n[Service]\n{key}=\n")
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, err)
+                self.assertIn(f"{key}=", err)
 
     # -- ExecStart prefixes: only @, - and : -------------------------------
 
