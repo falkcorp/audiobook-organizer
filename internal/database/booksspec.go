@@ -1,7 +1,7 @@
 // file: internal/database/booksspec.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d814793-7285-4757-ae8a-aabc89f7a006
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -33,12 +33,21 @@ import (
 // share it with another's.
 
 // BooksSpec is books' storage.Spec at release R1.
-func BooksSpec() storage.Spec {
+func BooksSpec() storage.Spec { return BooksSpecObserved(nil) }
+
+// BooksSpecObserved is BooksSpec whose every migration step, legacy or
+// versioned, calls ran before it runs (nil: none). An opener passes it to
+// learn that a step wrote the store in this boot: the steps write through
+// their own step stores and batches, so nothing the opener's store counts
+// sees them, and the HNSW clean-stop marker the opener took before them no
+// longer vouches (adoptCleanStop). Books' manifest and OpenStandalone use
+// it.
+func BooksSpecObserved(ran func()) storage.Spec {
 	bk := &booksBookkeeping{}
 	return storage.Spec{
 		Claims:        BooksClaims(),
-		Legacy:        booksLegacySteps(),
-		Migrations:    booksMigrations(),
+		Legacy:        observeLegacySteps(booksLegacySteps(), ran),
+		Migrations:    observeMigrations(booksMigrations(), ran),
 		VersionSource: bk,
 		LegacyGuard: &storage.LegacyGuardProjection{
 			StampKey:        "preference:" + storageFormatPreferenceKey,
@@ -48,6 +57,36 @@ func BooksSpec() storage.Spec {
 			Stage:           bk.stageProjection,
 		},
 	}
+}
+
+// observeLegacySteps makes each step call ran before its Up (nil: as is).
+func observeLegacySteps(steps []storage.LegacyMigration, ran func()) []storage.LegacyMigration {
+	if ran == nil {
+		return steps
+	}
+	for i := range steps {
+		up := steps[i].Up
+		steps[i].Up = func(ctx context.Context, r storage.LegacyRange) error {
+			ran()
+			return up(ctx, r)
+		}
+	}
+	return steps
+}
+
+// observeMigrations makes each step call ran before its Up (nil: as is).
+func observeMigrations(steps []storage.Migration, ran func()) []storage.Migration {
+	if ran == nil {
+		return steps
+	}
+	for i := range steps {
+		up := steps[i].Up
+		steps[i].Up = func(ctx context.Context, tx *storage.MigrationTx) error {
+			ran()
+			return up(ctx, tx)
+		}
+	}
+	return steps
 }
 
 // legacyMaxFormat is the highest SupportedStorageFormat any release before

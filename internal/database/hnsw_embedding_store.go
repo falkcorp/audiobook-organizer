@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_embedding_store.go
-// version: 1.8.9
+// version: 1.8.10
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-11-08
 
@@ -1028,8 +1028,9 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 }
 
 // ImportWithStalenessCheck is Import with a staleness guard (ARCH-1). It first
-// takes the clean-stop marker (TakeHNSWCleanStop, hnsw_clean_stop.go). The
-// snapshot is stale, whatever the row counts say, when there is no marker that
+// takes the clean-stop marker: the one the bound database's open took, or the
+// one in dir (takeCleanStopForImport, hnsw_clean_stop.go). The snapshot is
+// stale, whatever the row counts say, when there is no marker that
 // vouches (the previous process did not end with a clean stop whose snapshot
 // described its graph and Pebble alike: a crash can change rows and leave
 // every count as it was), when the marker records another embedding model than
@@ -1062,10 +1063,11 @@ func (s *HNSWEmbeddingStore) Import(dir string) error {
 // (e.g. callers/tests without a Pebble store handy) and Import's result is
 // returned unchanged; the marker is still taken.
 func (s *HNSWEmbeddingStore) ImportWithStalenessCheck(dir string, truth func(entityType string) (int, error)) error {
-	// The clean-stop marker is taken before anything else, even when the load
-	// below fails, so no run can leave it in place to vouch for a snapshot it
-	// lets fall behind (TakeHNSWCleanStop).
-	rec, cerr := takeCleanStop(dir)
+	// The clean-stop marker is the one this process took when it opened the
+	// database, or failing that the one on disk, taken now, before anything
+	// else, even when the load below fails, so no run can leave it in place
+	// to vouch for a snapshot it lets fall behind (takeCleanStopForImport).
+	rec, cerr := s.takeCleanStopForImport(dir)
 	if cerr != nil {
 		hnswLog.Error("hnsw import: %v; the snapshot is treated as stale", cerr)
 	}

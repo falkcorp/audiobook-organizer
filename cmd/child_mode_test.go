@@ -1,5 +1,5 @@
 // file: cmd/child_mode_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2b9c71-3f4a-4d86-a0e7-8c1f6b2d9a34
 // last-edited: 2026-11-08
 
@@ -66,11 +66,17 @@ func TestChildModeHelperProcess(t *testing.T) {
 
 func runChildModeHelper(t *testing.T, mode string) (int, string) {
 	t.Helper()
+	return runChildModeHelperAt(t, mode, filepath.Join(t.TempDir(), "audiobooks.pebble"))
+}
+
+// runChildModeHelperAt is runChildModeHelper over the database at dbPath.
+func runChildModeHelperAt(t *testing.T, mode, dbPath string) (int, string) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestChildModeHelperProcess$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
 		childModeHelperEnv+"="+mode,
 		registry.EnvChildDBType+"=pebble",
-		registry.EnvChildDBPath+"="+filepath.Join(t.TempDir(), "audiobooks.pebble"),
+		registry.EnvChildDBPath+"="+dbPath,
 		registry.EnvChildRootDir+"="+t.TempDir())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -108,5 +114,26 @@ func TestRunOperationRunner_EmptySettingsProceeds(t *testing.T) {
 	if code != reachedServerExitCode {
 		t.Fatalf("child mode exit code = %d, want %d (reached server construction); output:\n%s",
 			code, reachedServerExitCode, out)
+	}
+}
+
+// A child's store open must not take the HNSW clean-stop marker beside the
+// database: the marker is its parent's (R1-15 follow-up review, MINOR-1).
+func TestRunOperationRunner_LeavesTheCleanStopMarker(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	marker := filepath.Join(database.HNSWSnapshotDir(dbPath), "hnsw.clean-stop")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(`{"version":1,"model":"bge-m3"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runChildModeHelperAt(t, "empty", dbPath)
+	if code != reachedServerExitCode {
+		t.Fatalf("child mode exit code = %d, want %d (reached server construction); output:\n%s",
+			code, reachedServerExitCode, out)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("the child's store open took the parent's clean-stop marker: %v", err)
 	}
 }

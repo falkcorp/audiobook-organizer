@@ -1,7 +1,7 @@
 // file: internal/books/module.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package books is ABO's audiobook module and its composition-root glue (04
 // §2.4, 06 §6.11.1 step 2): Module() is the module.Module ABO's main hands
@@ -87,6 +87,12 @@ type booksModule struct {
 	// them on the same goroutine.
 	steps    *startup.Steps
 	stateDir string
+	// cleanStop is the HNSW clean-stop marker Options took before app.New
+	// (database.ClaimHNSWCleanStop), and migrated is set when one of books'
+	// migration steps runs inside New (the manifest's BooksSpecObserved);
+	// Register hands both to the store it builds.
+	cleanStop *database.HNSWCleanStopClaim
+	migrated  atomic.Bool
 	// beforeSettings, when set (tests), runs on the store Register built,
 	// before the settings boot: a stored settings blob, the seeded roles.
 	beforeSettings func(*database.PebbleStore)
@@ -121,7 +127,9 @@ func (m *booksModule) Manifest() module.Manifest {
 		// Books' claims on HEAD's key families, its legacy migrations and
 		// its versioned ones, and the projection HEAD's guard reads
 		// (05-storage §5S.3.4, §5S.9.3; internal/database booksspec.go).
-		Storage: database.BooksSpec(),
+		// Each step marks this boot migrated, which voids the HNSW
+		// clean-stop marker Options took (AdoptHNSWCleanStopClaim).
+		Storage: database.BooksSpecObserved(func() { m.migrated.Store(true) }),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
@@ -187,6 +195,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}
+	// The marker Options took, before anything writes through the store:
+	// the server's snapshot import asks the store for it.
+	store.AdoptHNSWCleanStopClaim(m.cleanStop, m.migrated.Load())
 	// Stored before any step can fail, so Release closes it when New then
 	// refuses.
 	m.store.Store(store)

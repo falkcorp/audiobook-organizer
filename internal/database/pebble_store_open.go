@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_open.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 2b0b5b99-cf7b-48ef-a8d6-5ff58c6d70db
 // last-edited: 2026-11-09
 
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,10 +146,17 @@ var standaloneBuildID = sync.OnceValues(func() (string, error) { return buildid.
 
 // OpenStandalone opens the store at path through core storage with books as
 // the only owner: Open (the guard, the claim and foreign-key checks, which
-// write nothing), Prepare (a fresh install's one batch, or the pre-migration
-// checkpoint and the install marker), Migrate (books' pending steps), then
-// the store over books' LegacyRange and HEAD's open-time repairs. A failure
-// closes what it opened.
+// write nothing), the HNSW clean-stop marker taken for a database on disk
+// (takeCleanStopClaim), Prepare (a fresh install's one batch, or the
+// pre-migration checkpoint and the install marker), Migrate (books' pending
+// steps), then the store over books' LegacyRange, holding the claim, and
+// HEAD's open-time repairs. A failure closes what it opened.
+//
+// The marker is taken after Open, so an open that fails there (another
+// process holds the database) leaves it, and before Prepare, the first
+// write. A books step that Migrate runs voids the claim (adoptCleanStop).
+// A store on another filesystem than the OS's (FS set: MemFS in tests)
+// takes none.
 func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	ctx := context.Background()
 	abs, err := filepath.Abs(path)
@@ -159,16 +167,22 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pebble store: %w", err)
 	}
+	var migrated atomic.Bool
 	opened, err := storage.Open(ctx, storage.OpenOptions{
 		Path:       abs,
 		FS:         o.FS,
 		Build:      build,
 		StateFiles: o.StateFiles,
-		Owners:     []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true, Spec: BooksSpec()}},
-		Logger:     logger.FromContext(ctx).With("subsystem", "storage"),
+		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true,
+			Spec: BooksSpecObserved(func() { migrated.Store(true) })}},
+		Logger: logger.FromContext(ctx).With("subsystem", "storage"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open PebbleDB: %w", err)
+	}
+	var claim *cleanStopClaim
+	if o.FS == (storage.FS{}) && !hnswCleanStopClaimOff.Load() {
+		claim = takeCleanStopClaim(HNSWSnapshotDir(abs))
 	}
 	db, err := opened.Prepare(ctx)
 	if err != nil {
@@ -189,6 +203,7 @@ func OpenStandalone(path string, o StandaloneOptions) (*PebbleStore, error) {
 	if err != nil {
 		return nil, errors.Join(err, closeDB())
 	}
+	store.db.adoptCleanStop(claim, migrated.Load())
 	store.db.setStorageAdmin(db.Admin())
 	if err := store.runOpenRepairs(); err != nil {
 		return nil, errors.Join(err, store.Close())

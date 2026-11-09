@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -435,6 +435,228 @@ func TestCleanStop_AMarkerThatCannotBeRemovedIsEmptied(t *testing.T) {
 		}
 		if vouches(t, dir) {
 			t.Error("the marker a boot took still vouches for the boot after it")
+		}
+	})
+}
+
+// writeMarker writes a marker that vouches into dir, creating dir.
+func writeMarker(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cleanStopPath(dir), []byte(`{"version":1,"model":"bge-m3"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPebbleStoreOpen_TakesTheCleanStopMarker (R1-15 follow-up review,
+// MINOR-1): opening a database on disk takes the marker in the snapshot
+// directory beside it, and the import pops what the open took, once. An
+// in-memory database, and an open after DisableHNSWCleanStopClaim, leave it.
+func TestPebbleStoreOpen_TakesTheCleanStopMarker(t *testing.T) {
+	t.Run("a database on disk", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if markerExists(t, dir) {
+			t.Fatal("the open left the marker on disk")
+		}
+		s := NewHNSWEmbeddingStore(4)
+		s.BindTruthSource(ps.DB(), "bge-m3")
+		rec, err := s.takeCleanStopForImport(dir)
+		if err != nil || rec == nil || rec.Model != "bge-m3" {
+			t.Fatalf("the import's marker = %+v, %v; want the one the open took", rec, err)
+		}
+		if rec, err := s.takeCleanStopForImport(dir); err != nil || rec != nil {
+			t.Errorf("a second import got %+v, %v; the open's marker is popped once", rec, err)
+		}
+	})
+
+	t.Run("an import from another directory", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		writeMarker(t, HNSWSnapshotDir(dbPath))
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		s := NewHNSWEmbeddingStore(4)
+		s.BindTruthSource(ps.DB(), "bge-m3")
+		if rec, err := s.takeCleanStopForImport(t.TempDir()); err != nil || rec != nil {
+			t.Errorf("an import from a directory the open did not take from got %+v, %v; want that directory's own (none)", rec, err)
+		}
+	})
+
+	t.Run("an in-memory database", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStoreInMemory(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if !markerExists(t, dir) {
+			t.Error("an in-memory open took a marker on disk")
+		}
+	})
+
+	t.Run("claims turned off", func(t *testing.T) {
+		hnswCleanStopClaimOff.Store(true)
+		t.Cleanup(func() { hnswCleanStopClaimOff.Store(false) })
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		ps, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		if !markerExists(t, dir) {
+			t.Error("an open with claims turned off took the marker")
+		}
+	})
+}
+
+// TestOpenStandalone_TakesTheMarkerBeforePrepare: the standalone opener
+// takes the marker once core's Open has succeeded, so an open that fails
+// there (another process holds the database) leaves it, and the store keeps
+// what it took. A books migration that ran after the take voids it: the step
+// wrote through a store of its own, and nothing this store counts saw that.
+func TestOpenStandalone_TakesTheMarkerBeforePrepare(t *testing.T) {
+	t.Run("an open another process holds leaves it", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		holder, err := NewPebbleStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = holder.Close() })
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		if second, err := NewPebbleStore(dbPath); err == nil {
+			_ = second.Close()
+			t.Fatal("a second open of a held database succeeded: the test proves nothing")
+		}
+		if !markerExists(t, dir) {
+			t.Error("an open that core refused took the marker")
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		rewind  bool
+		vouches bool
+	}{
+		"no migration runs: the claim vouches": {rewind: false, vouches: true},
+		"a books migration runs: it is voided": {rewind: true, vouches: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+			first, err := NewPebbleStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.rewind {
+				rewindToR0(t, dbPath, LegacyCap, LegacyCap)
+			}
+			dir := HNSWSnapshotDir(dbPath)
+			writeMarker(t, dir)
+			ps, err := NewPebbleStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ps.Close() })
+			if markerExists(t, dir) {
+				t.Fatal("the open left the marker on disk")
+			}
+			rec, ok := ps.DB().popCleanStop(dir)
+			if !ok {
+				t.Fatal("the store holds no claim for the snapshot directory")
+			}
+			if got := rec != nil; got != tc.vouches {
+				t.Errorf("the store's claim vouches = %v, want %v", got, tc.vouches)
+			}
+		})
+	}
+}
+
+// TestClaimHNSWCleanStop is the served app's take, before app.New, and the
+// hand-over to the store Register builds: the marker leaves the disk at the
+// take, the store's import gets it for the snapshot directory however the
+// database path was spelled, a migration in between voids it, and with
+// claims off nothing is taken.
+func TestClaimHNSWCleanStop(t *testing.T) {
+	adopted := func(t *testing.T, c *HNSWCleanStopClaim, migrated bool) *GatedDB {
+		t.Helper()
+		ps, err := NewPebbleStoreInMemory("served")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ps.Close() })
+		ps.AdoptHNSWCleanStopClaim(c, migrated)
+		return ps.DB()
+	}
+
+	// The opener resolves the database path; the server derives the import's
+	// directory from the configured one, which may be relative. {wd} is the
+	// working directory.
+	for _, tc := range []struct{ claim, pop string }{
+		{"audiobooks.pebble", "hnsw"},
+		{"{wd}/audiobooks.pebble", "hnsw"},
+		{"audiobooks.pebble", "{wd}/hnsw"},
+		{"./data/../audiobooks.pebble", "./hnsw"},
+	} {
+		t.Run("claimed at "+tc.claim+", imported from "+tc.pop, func(t *testing.T) {
+			wd := t.TempDir()
+			t.Chdir(wd)
+			in := func(p string) string { return strings.ReplaceAll(p, "{wd}", wd) }
+			writeMarker(t, filepath.Join(wd, "hnsw"))
+			c := ClaimHNSWCleanStop(in(tc.claim))
+			if c == nil {
+				t.Fatal("no claim")
+			}
+			if markerExists(t, filepath.Join(wd, "hnsw")) {
+				t.Fatal("the take left the marker on disk")
+			}
+			rec, ok := adopted(t, c, false).popCleanStop(in(tc.pop))
+			if !ok || rec == nil || rec.Model != "bge-m3" {
+				t.Errorf("the import got %+v, %v; want the marker the take found", rec, ok)
+			}
+		})
+	}
+
+	t.Run("a migration after the take", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		writeMarker(t, HNSWSnapshotDir(dbPath))
+		rec, ok := adopted(t, ClaimHNSWCleanStop(dbPath), true).popCleanStop(HNSWSnapshotDir(dbPath))
+		if !ok || rec != nil {
+			t.Errorf("after a migration the import got %+v, %v; want a claim that does not vouch", rec, ok)
+		}
+	})
+
+	t.Run("claims turned off", func(t *testing.T) {
+		hnswCleanStopClaimOff.Store(true)
+		t.Cleanup(func() { hnswCleanStopClaimOff.Store(false) })
+		dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+		dir := HNSWSnapshotDir(dbPath)
+		writeMarker(t, dir)
+		c := ClaimHNSWCleanStop(dbPath)
+		if c != nil {
+			t.Error("a take with claims off returned a claim")
+		}
+		if !markerExists(t, dir) {
+			t.Error("a take with claims off removed the marker")
+		}
+		if _, ok := adopted(t, c, false).popCleanStop(dir); ok {
+			t.Error("adopting no claim left the store holding one")
 		}
 	})
 }

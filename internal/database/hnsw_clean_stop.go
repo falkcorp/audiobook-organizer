@@ -1,7 +1,7 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,17 +21,18 @@ import (
 // a crash can change the rows and leave every count as it was: an add and a
 // delete, a re-embed of a key, a merge or primary change that flips a row's
 // hydrate verdict. Such a snapshot used to load as fresh, and the divergence
-// was permanent. The marker closes that gap for the runs it can vouch for: a
-// process writes it at the end of a clean stop, and every boot takes it. A
-// boot that finds no marker reconciles the snapshot against Pebble whatever
-// the counts say.
+// was permanent. The marker closes that gap for the runs it can vouch for: the
+// server writes it as the last step of a clean stop, and every process that
+// opens the database on disk takes it (takeCleanStopClaim). A boot that holds no
+// marker reconciles the snapshot against Pebble whatever the counts say.
 //
 // The marker vouches that the snapshot is the graph AND that the graph is the
 // Pebble rows, so MarkCleanStop refuses unless both hold:
 //
 //   - the graph side: the last snapshot written to (or loaded from) the
 //     directory recorded the current gen, and the graph is complete,
-//     undamaged and not pending a reconcile;
+//     undamaged, not diverged (MarkDiverged: a write it refused, or a mirror
+//     the dedup engine reports failed) and not pending a reconcile;
 //   - the Pebble side: no write since the store opened touched a key the
 //     reconcile's verdict reads (hnsw_verdict_watch.go), which covers writes
 //     that never reach the graph, such as a merge that flips a book's primary
@@ -38,17 +40,145 @@ import (
 //
 // The marker records the embedding model the reconcile classified rows
 // against, and a boot that classifies against another model reconciles. A
-// write the graph refused, or a mirror the dedup engine reports failed
-// (MarkDiverged), also stops the marker for the rest of the process.
+// later write to the graph, or a later verdict write to Pebble, removes it,
+// and a marker that cannot be removed is emptied (discardCleanStop).
 //
-// Not covered: a write to those keys from a process that opens Pebble without
-// a GatedDB (no production path does; the raw-pebble tools under cmd/ write
-// settings or only read), and a graph whose rows were indexed by a rule the
+// Not covered: (1) a write to those keys from a process that opens Pebble
+// without a GatedDB (no production path does; the raw-pebble tools under cmd/
+// write settings or only read); (2) a verdict write by an operation-runner
+// child, which counts in the child's process, not the parent's (no production
+// op runs in a child); (3) a graph whose rows were indexed by a rule the
 // reconcile does not share (the open question in todo.d about EmbedBook
-// mirroring non-primary books).
+// mirroring non-primary books). The marker also refuses more than it must:
+// any verdict write in a run, an embedding upsert included, means no marker,
+// so it saves the reconcile only after a quiet run.
 
 // hnswCleanStopFile is the marker's name inside the snapshot directory.
 const hnswCleanStopFile = "hnsw.clean-stop"
+
+// HNSWSnapshotDir is the HNSW snapshot directory of the Pebble database at
+// dbPath: "hnsw" beside it. The server persists the graph there, and every
+// process that opens that database on disk takes the clean-stop marker from
+// it (takeCleanStopClaim).
+func HNSWSnapshotDir(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "hnsw")
+}
+
+// hnswCleanStopClaimOff stops store opens from taking the marker
+// (DisableHNSWCleanStopClaim).
+var hnswCleanStopClaimOff atomic.Bool
+
+// DisableHNSWCleanStopClaim stops every later store open in this process, and
+// ClaimHNSWCleanStop, from taking the HNSW clean-stop marker. An
+// operation-runner child calls it before it opens the store: the marker
+// belongs to its parent.
+func DisableHNSWCleanStopClaim() { hnswCleanStopClaimOff.Store(true) }
+
+// cleanStopClaim is the marker an open took from dir (an absolute, clean
+// path; cleanStopDir): rec is nil when there was none, one that did not
+// vouch, or one a books migration voided (adoptCleanStop).
+type cleanStopClaim struct {
+	dir string
+	rec *cleanStopRecord
+}
+
+// cleanStopDir is dir as a claim records and compares it: absolute and
+// clean, so the open (which resolves the database path) and the server's
+// import (which derives the directory from the configured path, relative or
+// not) name one directory one way.
+func cleanStopDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	return abs
+}
+
+// takeCleanStopClaim takes the clean-stop marker from dir before anything
+// writes the database beside it (R1-15 follow-up review, MINOR-1). Any
+// process that opens the database can change the rows the snapshot
+// projects, and only the server counts those writes against the marker
+// (BindTruthSource), so the marker must not outlive an open by a CLI command
+// or a tool: a run between a clean stop and the next boot costs that boot a
+// reconcile. Two openers call it, each before the store's first write:
+//
+//   - OpenStandalone, for a database on disk, after core's Open (which
+//     writes nothing, and fails on a database another process holds) and
+//     before Prepare;
+//   - the served app, before app.New opens, prepares and migrates the store
+//     (ClaimHNSWCleanStop, from books' Options).
+//
+// The store keeps what the open took (adoptCleanStop) for the server's
+// import (popCleanStop).
+func takeCleanStopClaim(dir string) *cleanStopClaim {
+	dir = cleanStopDir(dir)
+	rec, err := takeCleanStop(dir)
+	if err != nil {
+		hnswLog.Error("hnsw: opening the database: %v; the next snapshot import reconciles", err)
+	}
+	return &cleanStopClaim{dir: dir, rec: rec}
+}
+
+// adoptCleanStop keeps the claim the database's open took on d, until the
+// snapshot import pops it. migrated says a books migration step ran after
+// the take: the step wrote the store through a step store of its own, whose
+// verdict writes no watch of d counted, so the claim's marker no longer
+// vouches and the import reconciles. A nil claim (the open took none) leaves
+// d without one.
+func (d *GatedDB) adoptCleanStop(c *cleanStopClaim, migrated bool) {
+	if c == nil {
+		return
+	}
+	adopted := *c
+	if migrated && adopted.rec != nil {
+		hnswLog.Info("hnsw: a books migration ran after the clean-stop marker in %s was taken, so it no longer vouches; the snapshot import reconciles", adopted.dir)
+		adopted.rec = nil
+	}
+	d.cleanStop.Store(&adopted)
+}
+
+// HNSWCleanStopClaim is the clean-stop marker the served app takes before
+// app.New opens the store (ClaimHNSWCleanStop), held until books' Register
+// hands it to the store it builds (PebbleStore.AdoptHNSWCleanStopClaim).
+type HNSWCleanStopClaim struct{ c *cleanStopClaim }
+
+// ClaimHNSWCleanStop takes the clean-stop marker beside the database at
+// dbPath, for the served app to call before app.New: the kernel prepares and
+// migrates the store inside New, and the marker must be gone before the
+// first write, so a crash in a migration cannot leave it vouching
+// (takeCleanStopClaim). It returns nil when an operation-runner child turned
+// claims off (DisableHNSWCleanStopClaim).
+func ClaimHNSWCleanStop(dbPath string) *HNSWCleanStopClaim {
+	if hnswCleanStopClaimOff.Load() {
+		return nil
+	}
+	return &HNSWCleanStopClaim{c: takeCleanStopClaim(HNSWSnapshotDir(dbPath))}
+}
+
+// AdoptHNSWCleanStopClaim hands the store the marker ClaimHNSWCleanStop took,
+// for the server's snapshot import. migrated says one of books' migration
+// steps ran in this boot (BooksSpecObserved), which voids it
+// (adoptCleanStop). Books' Register calls it right after NewBooksStore,
+// before the settings boot writes anything through the store. A nil claim
+// does nothing.
+func (p *PebbleStore) AdoptHNSWCleanStopClaim(c *HNSWCleanStopClaim, migrated bool) {
+	if c == nil {
+		return
+	}
+	p.db.adoptCleanStop(c.c, migrated)
+}
+
+// popCleanStop returns the marker the open took from dir, once: ok is false
+// when this database's open took none (an in-memory database, a raw engine
+// wrapped by NewGatedDB, a child, or a second pop), or took it from another
+// directory, whose claim it then discards.
+func (d *GatedDB) popCleanStop(dir string) (rec *cleanStopRecord, ok bool) {
+	c := d.cleanStop.Swap(nil)
+	if c == nil || c.dir != cleanStopDir(dir) {
+		return nil, false
+	}
+	return c.rec, true
+}
 
 func cleanStopPath(dir string) string { return filepath.Join(dir, hnswCleanStopFile) }
 
@@ -294,10 +424,10 @@ func pebbleVerdictWritesReason(n int64) string {
 // TakeHNSWCleanStop reports whether dir holds a clean-stop marker that
 // vouches (it parses, with this build's version), and removes whatever marker
 // is there durably, so a crash later in this run cannot leave it vouching for
-// a snapshot the run lets fall behind. ImportWithStalenessCheck takes it first
-// thing, and the server calls this directly when the HNSW store is not in use.
-// An operation-runner child takes neither path: the marker belongs to the
-// parent. A marker that cannot be removed is emptied instead, so it vouches
+// a snapshot the run lets fall behind. Every open of a database on disk takes
+// the marker beside it already (takeCleanStopClaim); this covers a directory the
+// open did not, and the server calls it when the HNSW store is not in use.
+// An operation-runner child calls neither: the marker belongs to the parent. A marker that cannot be removed is emptied instead, so it vouches
 // for nothing (discardCleanStop); one that can be neither is reported absent
 // (the snapshot is then reconciled, the safe direction) with an error saying
 // it is still there.
@@ -321,6 +451,21 @@ func takeCleanStop(dir string) (*cleanStopRecord, error) {
 		return nil, errors.Join(readErr, fmt.Errorf("clean-stop marker %s could not be discarded durably, so a later boot may trust a snapshot this run lets fall behind; delete it by hand: %w", p, err))
 	}
 	return rec, readErr
+}
+
+// takeCleanStopForImport returns the marker the snapshot import in dir holds:
+// the one the bound database's open took (popCleanStop), or, when that open
+// took none for dir, the one on disk now (takeCleanStop).
+func (s *HNSWEmbeddingStore) takeCleanStopForImport(dir string) (*cleanStopRecord, error) {
+	s.mu.RLock()
+	db := s.truthDB
+	s.mu.RUnlock()
+	if db != nil {
+		if rec, ok := db.popCleanStop(dir); ok {
+			return rec, nil
+		}
+	}
+	return takeCleanStop(dir)
 }
 
 // cleanStopStaleReason returns why a boot holding marker rec (nil: none, or

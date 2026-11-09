@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -128,6 +128,11 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	if warn != "" {
 		fmt.Fprintln(os.Stderr, "Warning: "+warn)
 	}
+	// Last, once nothing above can refuse: the HNSW clean-stop marker beside
+	// the store, before app.New opens, prepares and migrates it, so a crash
+	// in a migration cannot leave the marker vouching (R1-15 follow-up
+	// review, MINOR-1). Register hands it to the store it builds.
+	m.cleanStop = database.ClaimHNSWCleanStop(dbPath)
 	return app.Options{
 		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,

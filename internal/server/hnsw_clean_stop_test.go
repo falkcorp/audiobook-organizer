@@ -1,5 +1,5 @@
 // file: internal/server/hnsw_clean_stop_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: aeaaf5c1-04d2-4e80-9cdd-1edb60bf8015
 // last-edited: 2026-11-08
 
@@ -288,7 +288,7 @@ func newPebbleCleanStopFixture(t *testing.T) *pebbleCleanStopFixture {
 	root := t.TempDir()
 	f := &pebbleCleanStopFixture{
 		dbPath:  filepath.Join(root, "audiobooks.pebble"),
-		hnswDir: filepath.Join(root, "hnsw"),
+		hnswDir: database.HNSWSnapshotDir(filepath.Join(root, "audiobooks.pebble")),
 		vecs:    map[string][]float32{},
 	}
 	ps, err := database.NewPebbleStore(f.dbPath)
@@ -480,6 +480,57 @@ func TestHNSWCleanStop_AnotherEmbeddingModelAfterTheRestart(t *testing.T) {
 				t.Errorf("the boot's NeedsReconcile = %v, want %v", got, tc.stale)
 			}
 		})
+	}
+}
+
+// TestHNSWCleanStop_AToolRunBetweenTheStopAndTheBoot (R1-15 follow-up review,
+// MINOR-1): a process that opens the database between a clean stop and the
+// next boot (a CLI command, a tool) can change the rows the snapshot
+// projects, and only the server counts those writes against the marker. Its
+// open takes the marker, so the next boot reconciles, and the merge it made
+// in Pebble does not survive as a primary match.
+func TestHNSWCleanStop_AToolRunBetweenTheStopAndTheBoot(t *testing.T) {
+	f := newPebbleCleanStopFixture(t)
+	prev := f.open(t, "bge-m3")
+	s := &Server{hnswPersistDir: f.hnswDir, container: prev.c}
+	importHNSWSnapshot(prev.c, f.hnswDir)
+	prev.buildGraph(t, f)
+	s.stopHNSWSnapshot(context.Background())
+	s.markHNSWCleanStop(nil)
+	prev.close(t)
+	if !cleanStopMarkerExists(t, f.hnswDir) {
+		t.Fatal("the clean stop left no marker; the case needs one")
+	}
+
+	tool, err := database.NewPebbleStore(f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanStopMarkerExists(t, f.hnswDir) {
+		t.Error("the tool's open left the marker on disk")
+	}
+	venom, err := tool.GetBookByID("venom")
+	if err != nil || venom == nil {
+		t.Fatalf("GetBookByID(venom) = %v, %v", venom, err)
+	}
+	notPrimary := false
+	venom.IsPrimaryVersion = &notPrimary
+	if _, err := tool.UpdateBook("venom", venom); err != nil {
+		t.Fatal(err)
+	}
+	if err := tool.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	next := f.open(t, "bge-m3")
+	t.Cleanup(func() { next.close(t) })
+	importHNSWSnapshot(next.c, f.hnswDir)
+	if !next.hnsw.NeedsReconcile() {
+		t.Error("the boot after a tool's run must reconcile the snapshot")
+	}
+	next.postInit(t)
+	if got := primaryNearest(t, next.hnsw, f.vecs["venom"]); slices.Contains(got, "venom") {
+		t.Errorf("primary matches for venom's vector after the boot = %v; the tool made it non-primary", got)
 	}
 }
 
