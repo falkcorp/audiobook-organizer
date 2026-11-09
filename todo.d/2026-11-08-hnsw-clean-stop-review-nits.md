@@ -1,6 +1,6 @@
 - [ ] **HNSW clean-stop marker: three gaps from the R1-15 round-2 review (N1, N2, N4)**, none
-      a regression against main, none built yet (PR #4476 and its successor #4496 recorded
-      them; the reviewer rated them as nits).
+      a regression against main, none built yet (the R1-15 clean-stop PRs recorded them;
+      the reviewer rated them as nits).
       - **N1, crash window in the re-check.** `MarkCleanStop` stores `cleanStopLive` and then
         re-reads the verdict count; a writer adds to the count and then reads `cleanStopLive`
         (`hnsw_clean_stop.go`, `hnsw_verdict_watch.go`). The atomics are sequentially
@@ -12,7 +12,7 @@
         unnecessary. Cost: `MarkCleanStop` holds `s.mu` across two fsyncs, stalling any
         verdict write for that long, which is acceptable at stop.
       - **N2, a marker that survives a double I/O failure at open.** The open-time take
-        (`claimCleanStop`) removes the marker and fsyncs the directory, and the claim lives
+        (`takeCleanStopClaim`) removes the marker and fsyncs the directory, and the claim lives
         only in memory, so a crash after it reconciles. If the removal fails twice and the
         fallback empty write fails too, a vouching marker stays on disk (logged at ERROR),
         and a later boot can honor it once the I/O recovers. **Fix:** record a Pebble-side
