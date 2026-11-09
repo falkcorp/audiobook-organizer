@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -492,4 +492,31 @@ func TestPrepareRestoreIn_RefusesAnEmptyArchive(t *testing.T) {
 			t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
 		}
 	})
+}
+
+// TestPrepareRestoreIn_RecordsTheArchiveRoot (R1-15 round-4 verification
+// review, NIT): the restore handler derives the restored database's snapshot
+// directory from the archive's own root, not from today's database name.
+func TestPrepareRestoreIn_RecordsTheArchiveRoot(t *testing.T) {
+	cases := map[string][][2]string{
+		"audiobooks-2025.pebble": {
+			{"audiobooks-2025.pebble/MANIFEST-000001", "batcave"},
+			{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+		},
+		"audiobooks.pebble": {{"./audiobooks.pebble/OPTIONS-000002", "alfred"}},
+		"database":          {{"/database/MANIFEST-000001", "batcave"}},
+	}
+	for want, entries := range cases {
+		t.Run(want, func(t *testing.T) {
+			dir := t.TempDir()
+			writePlainTar(t, filepath.Join(dir, "a-lonely-place-of-dying.tar"), entries)
+			r, err := PrepareRestoreIn(dir, "a-lonely-place-of-dying.tar", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Root(); got != want {
+				t.Errorf("Root() = %q, want %q", got, want)
+			}
+		})
+	}
 }

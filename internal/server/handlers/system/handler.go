@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.6
+// version: 1.29.7
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -1082,8 +1082,9 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// and a target that overlaps the live one was refused above. The removal
 	// takes a marker that was there before the restore, beside a custom
 	// target's database.
-	defer h.removeANNCleanStopMarkers(targetPath)
-	if err := prepared.Extract(targetPath, annSnapshotDirs(targetPath)); err != nil {
+	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
+	defer h.removeANNCleanStopMarkers(snapshotDirs)
+	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
 		httputil.InternalError(c, "failed to restore backup", err)
 		return
 	}
@@ -1121,25 +1122,27 @@ func (h *Handler) markANNSnapshotDiverged() {
 }
 
 // annSnapshotDirs returns the HNSW snapshot directories of a restore into
-// targetPath: the live database's, and the restored database's. Extract keeps
-// every entry out of them and removeANNCleanStopMarkers empties them of
-// markers. Without a configured database path there are none.
-func annSnapshotDirs(targetPath string) []string {
+// targetPath of an archive whose root is root: the live database's, and the
+// restored database's. Extract keeps every entry out of them and
+// removeANNCleanStopMarkers empties them of markers. Without a configured
+// database path there are none.
+func annSnapshotDirs(targetPath, root string) []string {
 	dbPath := config.AppConfig.DatabasePath
 	if dbPath == "" {
 		return nil
 	}
 	live := database.HNSWSnapshotDir(dbPath)
-	// The archive holds the database directory under its own name, so the
-	// restore wrote it at targetPath/<name> (see backup.addToArchive).
-	restored := database.HNSWSnapshotDir(filepath.Join(targetPath, filepath.Base(dbPath)))
+	// The restore writes the archive's database at targetPath/<root>, under
+	// the name it had when the backup was taken, which need not be today's
+	// filepath.Base(dbPath) (R1-15 round-4 verification review, NIT).
+	restored := database.HNSWSnapshotDir(filepath.Join(targetPath, root))
 	return slices.Compact([]string{live, restored})
 }
 
 // removeANNCleanStopMarkers removes a clean-stop marker in each of the
 // restore's snapshot directories (annSnapshotDirs).
-func (h *Handler) removeANNCleanStopMarkers(targetPath string) {
-	for _, dir := range annSnapshotDirs(targetPath) {
+func (h *Handler) removeANNCleanStopMarkers(snapshotDirs []string) {
+	for _, dir := range snapshotDirs {
 		if _, err := database.TakeHNSWCleanStop(dir); err != nil {
 			systemLog.Error("backup restore: %v", err)
 		}
