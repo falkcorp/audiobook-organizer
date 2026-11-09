@@ -1,5 +1,5 @@
 // file: core/kernel/restore.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
 // last-edited: 2026-11-09
 
@@ -70,7 +70,7 @@ type RestoreOfflineResult struct {
 //     swap's staging directory, refused when the extracted store does not
 //     open read-only;
 //   - every form, in place or --into, refuses before anything else unless
-//     this process is the state directory's owner (ErrNotStateDirOwner,
+//     this process is the state directory's owner (storage.ErrNotStateDirOwner,
 //     R1-25 review B-1): the journal directories, the state files it puts
 //     back and the extracted store, and --into's copy, the scratch area
 //     and the sweep lock in the checkpoint directory, must be the
@@ -113,7 +113,7 @@ func RestoreOffline(ctx context.Context, c Config, req RestoreOfflineRequest) (r
 	if req.Archive != "" && !filepath.IsAbs(req.Archive) {
 		return res, fmt.Errorf("kernel: --archive %q is not an absolute path", req.Archive)
 	}
-	if err := refuseNotOwner(ctx, c.StateDir, "storage restore-offline"); err != nil {
+	if err := storage.RefuseNotStateDirOwner(ctx, c.StateDir, "storage restore-offline"); err != nil {
 		return res, err
 	}
 	k, err := offlineKernel(c)

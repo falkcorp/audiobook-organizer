@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
 // last-edited: 2026-11-09
 
@@ -47,7 +47,7 @@ type Seams struct {
 	// Labels names each durable operation; nil = no labels (production).
 	Labels Labeler
 	// Euid replaces os.Geteuid for the offline commands' owner check
-	// (kernel.ErrNotStateDirOwner), so a test runs a non-owner's refusal
+	// (storage.ErrNotStateDirOwner), so a test runs a non-owner's refusal
 	// unprivileged; nil = os.Geteuid.
 	Euid func() int
 	// SwapLock wraps the hold a serve boot's P0a takes on the swap lock, so

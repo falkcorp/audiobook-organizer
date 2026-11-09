@@ -1,5 +1,5 @@
 // file: core/storage/swaplock.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cf4363ba-fe79-48e3-9f10-fe0f3f01ffd7
 // last-edited: 2026-11-09
 
@@ -63,7 +63,7 @@ var ErrSwapLockHeld = errors.New("storage: the swap lock is held")
 // changes it. Any other taker (root running a read-only command, say) locks
 // the owner's file as it is, or refuses; the offline commands that write
 // the store or the state directory refuse any other user before they take
-// the lock (kernel.ErrNotStateDirOwner, R1-25 review B-1). A take refuses,
+// the lock (ErrNotStateDirOwner, R1-25 review B-1). A take refuses,
 // without locking, a state directory group or others can write, and a lock
 // file that is not a regular file, has more than one link, or is not the
 // directory owner's; it changes the file only through its descriptor and
