@@ -1,12 +1,13 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package backup
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,9 +19,10 @@ import (
 // directory (addToArchive), and the HNSW snapshot directory sits beside the
 // database, not in it. An archive entry in that directory is therefore never
 // from a real backup, and extracting one could plant a clean-stop marker that
-// vouches for a graph the restored database does not match. PrepareRestoreIn
+// vouches for a graph the restored database does not match. ExtractStore
 // refuses such an archive in the same read that verifies it, before anything
-// is written; extractArchive refuses the entry too, without writing it.
+// is written (scanArchive); extractArchive refuses the entry too, without
+// writing it.
 
 // writeArchive writes a tar archive of regular files through codec.
 func writeArchive(t *testing.T, path string, codec Codec, entries [][2]string) {
@@ -121,36 +123,58 @@ func TestEntryRefusal(t *testing.T) {
 	}
 }
 
-// TestPrepareRestoreIn_RefusesAClimbingEntry: an entry that climbs out of the
-// target is refused before anything is written, including the round-4
-// review's probe, which joins back into the snapshot directory of a target
-// named arkham.
-func TestPrepareRestoreIn_RefusesAClimbingEntry(t *testing.T) {
+// extractStoreRefused runs ExtractStore on archive into a fresh, empty store
+// directory and returns its error, failing the test when anything was
+// written: the scan refuses before the first write, so the extraction never
+// runs (afterEntryHook), the store directory stays empty and no extraction
+// directory is made beside it.
+func extractStoreRefused(t *testing.T, archive string) error {
+	t.Helper()
+	extracted := 0
+	afterEntryHook = func(string) { extracted++ }
+	t.Cleanup(func() { afterEntryHook = nil })
+	dst := emptyStoreDir(t)
+	_, err := ExtractStore(context.Background(), archive, dst)
+	if extracted != 0 {
+		t.Errorf("the extraction wrote %d entries before the refusal; the scan must refuse first", extracted)
+	}
+	if entries, _ := os.ReadDir(dst); len(entries) != 0 {
+		t.Errorf("a refused archive left %d entries in the store directory", len(entries))
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(dst), ".extract-*")); len(left) != 0 {
+		t.Errorf("a refused archive left extraction directories: %v", left)
+	}
+	return err
+}
+
+// TestExtractStore_RefusesAClimbingEntryUnwritten: an entry that climbs out
+// of the target is refused before anything is written, including the
+// round-4 review's probe, which joins back into the snapshot directory of a
+// target named arkham.
+func TestExtractStore_RefusesAClimbingEntryUnwritten(t *testing.T) {
 	for _, name := range []string{"../bane", "x/../../arkham/hnsw/hnsw.clean-stop"} {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			archive := filepath.Join(dir, "no-mans-land.tar")
+			archive := filepath.Join(t.TempDir(), "no-mans-land.tar")
 			writePlainTar(t, archive, [][2]string{
 				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
 				{name, "venom"},
 			})
-			r, err := PrepareRestoreIn(dir, "no-mans-land.tar", false)
-			if !errors.Is(err, ErrArchiveEntryEscapes) || r != nil {
-				t.Fatalf("PrepareRestoreIn = %v, %v; want ErrArchiveEntryEscapes and no prepared restore", r, err)
+			if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveEntryEscapes) {
+				t.Fatalf("ExtractStore = %v; want ErrArchiveEntryEscapes", err)
 			}
 		})
 	}
 }
 
-func TestPrepareRestoreIn_RefusesAnHNSWSnapshotEntry(t *testing.T) {
+func TestExtractStore_RefusesAnHNSWSnapshotEntryUnwritten(t *testing.T) {
 	marker := [2]string{"hnsw/hnsw.clean-stop", `{"version":1,"model":"bge-m3"}`}
 	layouts := []struct {
 		name    string
 		entries [][2]string
 	}{
 		// The refusal comes mid-read, after a large entry: a verified
-		// prepare must still hash every byte, or the checksum would mismatch
-		// and hide the refusal.
+		// extraction must still hash every byte, or the checksum would
+		// mismatch and hide the refusal.
 		{"after a large entry", [][2]string{
 			{"audiobooks.pebble/000001.sst", incompressible(1 << 20)},
 			marker,
@@ -168,21 +192,19 @@ func TestPrepareRestoreIn_RefusesAnHNSWSnapshotEntry(t *testing.T) {
 	}
 	for _, layout := range layouts {
 		for _, codec := range []Codec{gzipCodec{}, zstdCodec{}, noneCodec{}} {
-			for _, verify := range []bool{false, true} {
+			for _, sealed := range []bool{false, true} {
 				name := layout.name + "/" + codec.Name()
-				if verify {
-					name += "/verified"
+				if sealed {
+					name += "/with its sidecar"
 				}
 				t.Run(name, func(t *testing.T) {
-					dir := t.TempDir()
-					archive := filepath.Join(dir, "the-court-of-owls"+codec.Extension())
+					archive := filepath.Join(t.TempDir(), "the-court-of-owls"+codec.Extension())
 					writeArchive(t, archive, codec, layout.entries)
-					if verify {
+					if sealed {
 						sealArchive(t, archive)
 					}
-					r, err := PrepareRestoreIn(dir, filepath.Base(archive), verify)
-					if !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) || r != nil {
-						t.Fatalf("PrepareRestoreIn = %v, %v; want ErrArchiveCarriesHNSWSnapshot and no prepared restore", r, err)
+					if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
+						t.Fatalf("ExtractStore = %v; want ErrArchiveCarriesHNSWSnapshot", err)
 					}
 				})
 			}
@@ -190,11 +212,11 @@ func TestPrepareRestoreIn_RefusesAnHNSWSnapshotEntry(t *testing.T) {
 	}
 }
 
-// TestPrepareRestoreIn_VerifiesInTheScanRead: verification shares the read
-// that scans the entries, so the checksum still covers every byte, a mismatch
-// still wins over what the scan found, and an archive the scan cannot read to
-// the end is refused before anything is written.
-func TestPrepareRestoreIn_VerifiesInTheScanRead(t *testing.T) {
+// TestExtractStore_VerifiesInTheScanRead: verification shares the read that
+// scans the entries, so the checksum still covers every byte, a mismatch
+// still wins over what the scan found, and an archive the scan cannot read
+// to the end is refused before anything is written.
+func TestExtractStore_VerifiesInTheScanRead(t *testing.T) {
 	entries := [][2]string{
 		{"audiobooks.pebble/000001.sst", incompressible(1 << 20)},
 		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
@@ -205,8 +227,8 @@ func TestPrepareRestoreIn_VerifiesInTheScanRead(t *testing.T) {
 			whole := filepath.Join(dir, "zero-year"+codec.Extension())
 			writeArchive(t, whole, codec, entries)
 			sealArchive(t, whole)
-			if _, err := PrepareRestoreIn(dir, filepath.Base(whole), true); err != nil {
-				t.Fatalf("a whole archive with its own checksum: %v", err)
+			if _, verified, err := extractStore(context.Background(), whole, emptyStoreDir(t)); err != nil || !verified {
+				t.Fatalf("a whole archive with its own checksum: verified %v, %v", verified, err)
 			}
 
 			raw, err := os.ReadFile(whole)
@@ -218,14 +240,14 @@ func TestPrepareRestoreIn_VerifiesInTheScanRead(t *testing.T) {
 			if err := os.WriteFile(cut, raw[:len(raw)/2], 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := PrepareRestoreIn(dir, filepath.Base(cut), false); err == nil {
-				t.Error("unverified prepare of a cut archive succeeded; want it refused before any write")
+			if err := extractStoreRefused(t, cut); err == nil {
+				t.Error("an unverified cut archive was extracted; want it refused before any write")
 			}
 			// The cut archive's own checksum matches, so the scan's failure
 			// is what the caller hears.
 			sealArchive(t, cut)
-			if _, err := PrepareRestoreIn(dir, filepath.Base(cut), true); err == nil || errors.Is(err, ErrChecksumMismatch) {
-				t.Errorf("verified prepare of a cut archive with its own checksum = %v; want the scan's error, not a mismatch", err)
+			if err := extractStoreRefused(t, cut); err == nil || errors.Is(err, ErrChecksumMismatch) {
+				t.Errorf("a cut archive with its own checksum = %v; want the scan's error, not a mismatch", err)
 			}
 			// The whole archive's checksum does not, and the mismatch wins.
 			sidecar, err := os.ReadFile(checksumSidecarPath(whole))
@@ -235,15 +257,15 @@ func TestPrepareRestoreIn_VerifiesInTheScanRead(t *testing.T) {
 			if err := os.WriteFile(checksumSidecarPath(cut), sidecar, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := PrepareRestoreIn(dir, filepath.Base(cut), true); !errors.Is(err, ErrChecksumMismatch) {
-				t.Errorf("verified prepare of a cut archive with the whole one's checksum = %v; want ErrChecksumMismatch", err)
+			if err := extractStoreRefused(t, cut); !errors.Is(err, ErrChecksumMismatch) {
+				t.Errorf("a cut archive with the whole one's checksum = %v; want ErrChecksumMismatch", err)
 			}
 		})
 	}
 }
 
 // TestExtractArchive_RefusesAClimbingEntryUnwritten: the round-4 review's
-// probe, extracted without the prepare (an archive that changed after it):
+// probe, extracted without the scan (an archive that changed after it):
 // the target is named arkham, so the entry would land in arkham/hnsw.
 func TestExtractArchive_RefusesAClimbingEntryUnwritten(t *testing.T) {
 	dir := t.TempDir()
@@ -264,9 +286,9 @@ func TestExtractArchive_RefusesAClimbingEntryUnwritten(t *testing.T) {
 	}
 }
 
-// TestExtractArchive_RefusesAnHNSWSnapshotEntryUnwritten: PrepareRestoreIn
-// refuses such an archive first, so this guards one that changed between the
-// two reads. The entry is never written, whatever came before it.
+// TestExtractArchive_RefusesAnHNSWSnapshotEntryUnwritten: ExtractStore's
+// scan refuses such an archive first, so this guards one that changed
+// between the two reads. The entry is never written, whatever came before it.
 func TestExtractArchive_RefusesAnHNSWSnapshotEntryUnwritten(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "under-the-hood.tar")
@@ -622,7 +644,7 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 
 // TestExtractArchive_SkipsTheTargetItself: an entry that names the target
 // itself is skipped, as "/" always was, so the extraction counts the entries
-// the scan counts (PreparedRestore.Root, ErrArchiveEmpty).
+// the scan counts (ErrArchiveEmpty).
 func TestExtractArchive_SkipsTheTargetItself(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "death-in-the-family.tar")
@@ -640,86 +662,36 @@ func TestExtractArchive_SkipsTheTargetItself(t *testing.T) {
 	}
 }
 
-// TestCheckPathsApart: the restore handler refuses a target_path that is
-// the live snapshot directory, lies above it or lies inside it
-// (ErrPathsOverlap), compared by identity, and one it cannot compare with it
-// because a symlink on either path does not resolve (ErrUnresolvableSymlink,
-// R1-15 round-6 verification review, B1-r6).
-func TestCheckPathsApart(t *testing.T) {
-	base := t.TempDir()
-	snap := filepath.Join(base, "gotham", "hnsw")
-	mustMkdir(t, snap)
-	mustSymlink(t, filepath.Join(base, "gotham"), filepath.Join(base, "wayne-manor"))
-	mustSymlink(t, "joker", filepath.Join(base, "harley"))
-	mustSymlink(t, "riddler", filepath.Join(base, "riddler"))
-	cases := map[string]error{
-		snap:                                    ErrPathsOverlap, // the directory itself
-		filepath.Join(base, "gotham"):           ErrPathsOverlap, // above it
-		base:                                    ErrPathsOverlap, // further above
-		filepath.Join(snap, "batcave"):          ErrPathsOverlap, // inside it, not created yet
-		filepath.Join(base, "wayne-manor"):      ErrPathsOverlap, // above it, through a symlink
-		filepath.Join(base, "wayne-manor/hnsw"): ErrPathsOverlap, // the directory, through a symlink
-		filepath.Join(base, "gotham", "hnsw2"):  nil,             // a sibling sharing the prefix
-		filepath.Join(base, "arkham"):           nil,             // a sibling of its parent
-		// B1-r6: a target that is, or lies under, a symlink that does not
-		// resolve, dangling or looping, cannot be compared.
-		filepath.Join(base, "harley"):            ErrUnresolvableSymlink,
-		filepath.Join(base, "harley", "batcave"): ErrUnresolvableSymlink,
-		filepath.Join(base, "riddler"):           ErrUnresolvableSymlink,
-	}
-	// S1-r5: on a case-insensitive filesystem these name the directory.
-	for _, alias := range []string{"HNSW", "hn\u017fw"} {
-		if caseAlias(t, t.TempDir(), "hnsw", alias) {
-			cases[filepath.Join(base, "gotham", alias)] = ErrPathsOverlap
-			cases[filepath.Join(base, "gotham", alias, "batcave")] = ErrPathsOverlap
-		} else {
-			t.Logf("the filesystem does not fold %q to hnsw; that row is skipped", alias)
-		}
-	}
-	for p, want := range cases {
-		if got := CheckPathsApart(p, snap); !errors.Is(got, want) || (want == nil) != (got == nil) {
-			t.Errorf("CheckPathsApart(%q, snapshot) = %v, want %v", p, got, want)
-		}
-	}
-
-	// A snapshot directory not made yet has no identity: its parent's
-	// identity and its name, compared without case, stand in for it.
-	absent := filepath.Join(base, "batcave", "hnsw")
-	mustMkdir(t, filepath.Dir(absent))
-	for p, want := range map[string]error{
-		absent:                                 ErrPathsOverlap,
-		filepath.Join(base, "batcave", "HNSW"): ErrPathsOverlap,
-		filepath.Join(base, "batcave", "HNSW", "x"):  ErrPathsOverlap,
-		filepath.Join(base, "batcave"):               ErrPathsOverlap, // above it
-		filepath.Join(base, "batcave", "hnsw-old"):   nil,
-		filepath.Join(base, "batcave-annex", "hnsw"): nil,
+// TestScanArchive_CountsWhatTheExtractionCounts: the scan skips an entry
+// that names the target itself, as the extraction does, so an archive of
+// only such entries is ErrArchiveEmpty at the scan, before ExtractStore
+// makes anything, and one entry the extraction writes is enough.
+func TestScanArchive_CountsWhatTheExtractionCounts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entries [][2]string
+		want    error
+	}{
+		"only the target itself": {[][2]string{{"/", ""}, {"./", ""}, {"robin/../", ""}}, ErrArchiveEmpty},
+		"and one entry":          {[][2]string{{"./", ""}, {"./audiobooks.pebble/MANIFEST-000001", "batcave"}}, nil},
 	} {
-		if got := CheckPathsApart(p, absent); !errors.Is(got, want) || (want == nil) != (got == nil) {
-			t.Errorf("CheckPathsApart(%q, a snapshot directory not made yet) = %v, want %v", p, got, want)
-		}
-	}
-
-	// B1-r6, the reviewer's shape: the snapshot directory's path is a
-	// dangling symlink, and the target is where it points. Any target is
-	// refused: where the directory is cannot be told.
-	dangling := filepath.Join(base, "arkham-asylum", "hnsw")
-	mustMkdir(t, filepath.Dir(dangling))
-	mustSymlink(t, "real-hnsw", dangling)
-	for _, p := range []string{
-		filepath.Join(base, "arkham-asylum", "real-hnsw"),
-		filepath.Join(base, "blackgate"),
-	} {
-		if got := CheckPathsApart(p, dangling); !errors.Is(got, ErrUnresolvableSymlink) {
-			t.Errorf("CheckPathsApart(%q, a dangling snapshot directory) = %v, want ErrUnresolvableSymlink", p, got)
-		}
+		t.Run(name, func(t *testing.T) {
+			archive := filepath.Join(t.TempDir(), "a-death-in-the-family.tar")
+			writePlainTar(t, archive, tc.entries)
+			sum, err := scanArchive(archive)
+			if sum == "" {
+				t.Fatalf("no digest for a readable archive (%v)", err)
+			}
+			if !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+				t.Fatalf("scanArchive = %v; want %v", err, tc.want)
+			}
+		})
 	}
 }
 
-// TestCheckSnapshotDirs (B1-r6): the restore handler checks the snapshot
-// directories before it marks the store or writes anything, and refuses one
-// whose path, or one of whose ancestors, is a symlink that does not resolve.
-// A directory not made yet is fine.
-func TestCheckSnapshotDirs(t *testing.T) {
+// TestStatKeepOuts (B1-r6): the extraction looks the snapshot directories up
+// at each entry and refuses one whose path, or one of whose ancestors, is a
+// symlink that does not resolve. A directory not made yet is fine.
+func TestStatKeepOuts(t *testing.T) {
 	base := t.TempDir()
 	live := filepath.Join(base, "gotham", "hnsw")
 	mustMkdir(t, live)
@@ -751,9 +723,9 @@ func TestCheckSnapshotDirs(t *testing.T) {
 			if name == "under a directory it may not search" && os.Geteuid() == 0 {
 				t.Skip("root searches any directory")
 			}
-			got := CheckSnapshotDirs(tc.dirs)
+			_, got := statKeepOuts(tc.dirs)
 			if !errors.Is(got, tc.want) || (tc.want == nil) != (got == nil) {
-				t.Fatalf("CheckSnapshotDirs = %v; want %v", got, tc.want)
+				t.Fatalf("statKeepOuts = %v; want %v", got, tc.want)
 			}
 		})
 	}
@@ -775,26 +747,24 @@ func mustSymlink(t *testing.T, oldname, newname string) {
 	}
 }
 
-// TestPrepareRestoreIn_RefusesAnEmptyArchive (R1-15 round-4 verification
-// review, SHOULD-FIX 2): an archive with nothing to restore is refused in the
-// prepare step, so the handler never marks the snapshot diverged for it.
-func TestPrepareRestoreIn_RefusesAnEmptyArchive(t *testing.T) {
+// TestExtractStore_RefusesAnEmptyArchiveUnwritten (R1-15 round-4
+// verification review, SHOULD-FIX 2): an archive with nothing to restore is
+// refused by the scan, before anything is written.
+func TestExtractStore_RefusesAnEmptyArchiveUnwritten(t *testing.T) {
 	for _, codec := range []Codec{gzipCodec{}, zstdCodec{}, noneCodec{}} {
-		for _, verify := range []bool{false, true} {
+		for _, sealed := range []bool{false, true} {
 			name := codec.Name()
-			if verify {
-				name += "/verified"
+			if sealed {
+				name += "/with its sidecar"
 			}
 			t.Run(name, func(t *testing.T) {
-				dir := t.TempDir()
-				archive := filepath.Join(dir, "the-long-halloween"+codec.Extension())
+				archive := filepath.Join(t.TempDir(), "the-long-halloween"+codec.Extension())
 				writeArchive(t, archive, codec, nil)
-				if verify {
+				if sealed {
 					sealArchive(t, archive)
 				}
-				r, err := PrepareRestoreIn(dir, filepath.Base(archive), verify)
-				if !errors.Is(err, ErrArchiveEmpty) || r != nil {
-					t.Fatalf("PrepareRestoreIn = %v, %v; want ErrArchiveEmpty and no prepared restore", r, err)
+				if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveEmpty) {
+					t.Fatalf("ExtractStore = %v; want ErrArchiveEmpty", err)
 				}
 			})
 		}
@@ -807,61 +777,23 @@ func TestPrepareRestoreIn_RefusesAnEmptyArchive(t *testing.T) {
 		"dot slash": {{"./", ""}, {"/", ""}, {"robin/../", ""}},
 	} {
 		t.Run("only names the extraction skips/"+name, func(t *testing.T) {
-			dir := t.TempDir()
-			writePlainTar(t, filepath.Join(dir, "the-long-halloween.tar"), entries)
-			if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
-				t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
+			archive := filepath.Join(t.TempDir(), "the-long-halloween.tar")
+			writePlainTar(t, archive, entries)
+			if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveEmpty) {
+				t.Fatalf("ExtractStore = %v; want ErrArchiveEmpty", err)
 			}
 		})
 	}
 	// A 0-byte file sniffs as an uncompressed tar with no entries.
 	t.Run("zero bytes", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "the-long-halloween.tar"), nil, 0o600); err != nil {
+		archive := filepath.Join(t.TempDir(), "the-long-halloween.tar")
+		if err := os.WriteFile(archive, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
-			t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
+		if err := extractStoreRefused(t, archive); !errors.Is(err, ErrArchiveEmpty) {
+			t.Fatalf("ExtractStore = %v; want ErrArchiveEmpty", err)
 		}
 	})
-}
-
-// TestPrepareRestoreIn_RecordsTheArchiveRoot (R1-15 round-4 verification
-// review, NIT): the restore handler derives the restored database's snapshot
-// directory from the archive's own root, not from today's database name.
-func TestPrepareRestoreIn_RecordsTheArchiveRoot(t *testing.T) {
-	cases := map[string][][2]string{
-		"audiobooks-2025.pebble": {
-			{"audiobooks-2025.pebble/MANIFEST-000001", "batcave"},
-			{"audiobooks.pebble/MANIFEST-000001", "batcave"},
-		},
-		"audiobooks.pebble": {{"./audiobooks.pebble/OPTIONS-000002", "alfred"}},
-		"database":          {{"/database/MANIFEST-000001", "batcave"}},
-		// tar -C <dir> -cf <archive> . writes the target itself first, as
-		// "./"; that entry is not the root.
-		"oracle.pebble": {
-			{"./", ""},
-			{"./oracle.pebble/", ""},
-			{"./oracle.pebble/MANIFEST-000001", "batcave"},
-		},
-		"robin.pebble": {
-			{"nightwing.pebble/../", ""},
-			{"robin.pebble/MANIFEST-000001", "batcave"},
-		},
-	}
-	for want, entries := range cases {
-		t.Run(want, func(t *testing.T) {
-			dir := t.TempDir()
-			writePlainTar(t, filepath.Join(dir, "a-lonely-place-of-dying.tar"), entries)
-			r, err := PrepareRestoreIn(dir, "a-lonely-place-of-dying.tar", false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := r.Root(); got != want {
-				t.Errorf("Root() = %q, want %q", got, want)
-			}
-		})
-	}
 }
 
 // TestExtractArchive_ReplacesAFileRatherThanWritingIntoIt (R1-15 round-6

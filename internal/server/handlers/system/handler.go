@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.14
+// version: 1.30.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -21,18 +21,18 @@ package system
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -41,7 +41,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
@@ -49,6 +48,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/gin-gonic/gin"
 )
 
@@ -117,6 +117,37 @@ type Handler struct {
 	// (database.SnapshotDivergence) so this run's stop writes no clean-stop
 	// marker. RestoreBackup calls it: see WithANNSnapshotDivergence.
 	annDiverged func(reason string)
+	// restoreStager yields, at request time, the stager POST /backup/restore
+	// stages through. Nil, or a provider yielding nil, answers 503. See
+	// WithRestoreStager.
+	restoreStager func() RestoreStager
+}
+
+// RestoreStager stages a backup restore in the journaled swap and asks for
+// the restart that applies it (05-backup §5B.3.4, release R1's form):
+// internal/books implements it over backup.StageRestore and the kernel's
+// Deps.RequestRestart.
+type RestoreStager interface {
+	// StageRestore stages a restore of the archive filename in backupDir
+	// (matched against the directory's listing) and returns what it
+	// staged; verify requires the archive's checksum sidecar. diverged runs
+	// once every check passed, before the HNSW clean-stop marker beside the
+	// live store is discarded and before the intent is written: the
+	// handler's mark that keeps this run's stop, the restart that applies
+	// the restore, from writing a new marker for the rows the swap replaces
+	// (markANNSnapshotDiverged). A refused restore never runs it.
+	StageRestore(ctx context.Context, backupDir, filename string, verify bool, requestedBy string, diverged func()) (backup.StagedRestore, error)
+	// RequestRestart asks the service to stop and exit 75, so the service
+	// manager starts it again and the boot applies the staged restore.
+	RequestRestart(reason string)
+}
+
+// WithRestoreStager installs the provider of POST /backup/restore's stager.
+// Lazy, as WithPostureTokens is: books installs it once the App exists,
+// after the handlers are wired.
+func (h *Handler) WithRestoreStager(f func() RestoreStager) *Handler {
+	h.restoreStager = f
+	return h
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs operation out of
@@ -594,13 +625,6 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
 }
 
-var systemLog = logger.New("handlers.system")
-
-// beforeRestoreExtractHook, unset outside tests, runs in RestoreBackup just
-// before the extraction's first write: after the divergence mark and the
-// first marker removal.
-var beforeRestoreExtractHook atomic.Pointer[func()]
-
 // GetConfig implements GET /config.
 func (h *Handler) GetConfig(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"config": withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))})
@@ -825,7 +849,25 @@ func (h *Handler) ListBackups(c *gin.Context) {
 	})
 }
 
-// RestoreBackup restores from a backup file. Implements POST /backup/restore.
+// RestoreBackup stages a restore of a backup. Implements POST
+// /backup/restore.
+//
+// A restore never extracts over the running store any more (09 §9.1; R1-25):
+// the archive is extracted into the journaled swap's staging directory and
+// staged as a KindArchive intent (backup.StageRestore through the books
+// stager), the request is answered 202 with restart_required, and then the
+// service is asked to restart (exit 75). The swap runs at the next boot,
+// before the store opens. target_path is refused: a restore into another
+// directory runs offline (storage restore-offline --into).
+//
+// Errors: 400 for a target_path or for verify=true on an archive without a
+// checksum sidecar (backup.ErrVerificationUnsupported); 404 for an archive
+// not in the backup directory; 409 for an archive whose sidecar disagrees
+// (backup.ErrChecksumMismatch) or a restore or reset already staged or in
+// flight (restorejournal.ErrSwapPending); 422 for a swap whose renames the
+// filesystem would refuse (restorejournal.ErrRenameRefused,
+// ErrTargetsRefused); 503 when this process has no stager; 500 otherwise.
+// Nothing is staged on any error.
 func (h *Handler) RestoreBackup(c *gin.Context) {
 	var req struct {
 		BackupFilename string `json:"backup_filename" binding:"required"`
@@ -837,256 +879,83 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-
-	backupConfig := backup.DefaultBackupConfig()
-	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
-	safeFilename := library.SanitizeFilename(req.BackupFilename)
-
-	// Use current database path as target if not specified
-	var targetPath string
 	if req.TargetPath != "" {
-		cleanTarget, err := library.CleanAbsolutePath(req.TargetPath)
-		if err != nil {
-			httputil.RespondWithBadRequest(c, "invalid target_path: "+err.Error())
-			return
-		}
-		// CleanAbsolutePath's checks are comparisons CodeQL's
-		// go/path-injection does not read, so every path built from the
-		// target was reported (R1-15 round-6 verification review, SF2).
-		// This restates its absoluteness as a prefix check on the cleaned
-		// path, which it does read. A target_path is an absolute directory
-		// the operator chooses, so the only base it has is its volume's
-		// root, and this check adds no containment: what keeps a restore
-		// where it belongs is the route's permission (settings manage),
-		// IsDangerousRoot and CheckPathsApart below.
-		if !strings.HasPrefix(cleanTarget, filepath.VolumeName(cleanTarget)+string(filepath.Separator)) {
-			httputil.RespondWithBadRequest(c, "invalid target_path: not an absolute path")
-			return
-		}
-		if library.IsDangerousRoot(cleanTarget) {
-			httputil.RespondWithBadRequest(c, "restore target is a protected system directory")
-			return
-		}
-		// A target that is the live HNSW snapshot directory, lies above it
-		// or lies inside it lets an ordinary entry name land in it (R1-15
-		// round-4 verification review, SHOULD-FIX 1). Refused here, before
-		// anything is prepared or marked. CheckPathsApart compares
-		// directories by identity, so a symlink to it or a case-insensitive
-		// spelling (HNSW, hnſw) counts (round-5 verification review,
-		// S1-r5), and refuses a target it cannot compare because a symlink
-		// on either path does not resolve (round 6, B1-r6). The default
-		// target lies above it too, and is how a restore goes over the live
-		// database: there, PrepareRestoreIn and Extract keep entries out of
-		// the directory.
-		if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
-			if err := backup.CheckPathsApart(cleanTarget, database.HNSWSnapshotDir(dbPath)); err != nil {
-				if errors.Is(err, backup.ErrUnresolvableSymlink) {
-					httputil.RespondWithConflict(c, "restore target cannot be compared with the HNSW snapshot directory: "+err.Error())
-					return
-				}
-				httputil.RespondWithBadRequest(c, "restore target overlaps the HNSW snapshot directory; omit target_path to restore over the live database")
-				return
-			}
-		}
-		targetPath = cleanTarget
-	} else {
-		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
+		httputil.RespondWithBadRequest(c, "target_path is not supported: a restore replaces the served database at the next restart; "+
+			"to restore into another directory, stop the service and run `audiobook-organizer storage restore-offline --archive <file> --into <dir>`")
+		return
+	}
+	var stager RestoreStager
+	if h.restoreStager != nil {
+		stager = h.restoreStager()
+	}
+	if stager == nil {
+		httputil.RespondWithServiceUnavailable(c, "restore is not available in this process")
+		return
 	}
 
-	// PrepareRestoreIn (not a path-taking variant) so req.BackupFilename is
-	// only ever used as a directory-listing lookup key, never joined directly
-	// into a filesystem path -- see backup.PrepareRestoreIn's doc comment
-	// (CodeQL go/path-injection: sanitizing the filename is not a credited
-	// barrier in this repo, only resolving it against os.ReadDir's own
-	// results is).
-	prepared, err := backup.PrepareRestoreIn(backupConfig.BackupDir, safeFilename, req.Verify)
+	backupDir := backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
+	requestedBy := "api"
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		requestedBy = "user:" + u.Username
+	}
+	// The filename is only ever a lookup key in the backup directory's
+	// listing (backup.StageRestore's lookupArchive; CodeQL go/path-injection).
+	staged, err := stager.StageRestore(c.Request.Context(), backupDir, library.SanitizeFilename(req.BackupFilename), req.Verify, requestedBy,
+		h.markANNSnapshotDiverged)
 	if err != nil {
-		// PrepareRestoreIn writes nothing, so a refused restore leaves the HNSW
-		// snapshot's trust alone. It distinguishes two verify=true failure
-		// shapes, both fail-closed (no extraction performed) rather than
-		// silently restoring unverified, and one archive it refuses whatever
-		// verify says:
-		//
-		//   - ErrChecksumMismatch: the archive's current bytes disagree with
-		//     the checksum recorded when it was created -- i.e. the request
-		//     conflicts with the actual state of the stored resource. 409 is
-		//     the closer fit than 422: nothing about the JSON body is
-		//     malformed, the archive on disk no longer matches what it's
-		//     supposed to be.
-		//   - ErrVerificationUnsupported: no checksum sidecar exists at all
-		//     (a legacy backup from before this feature), so there is nothing
-		//     to compare against. 400: the caller's request cannot be
-		//     satisfied as specified.
-		//   - ErrArchiveCarriesHNSWSnapshot, ErrArchiveEntryEscapes: the
-		//     archive has an entry in the HNSW snapshot directory, or one
-		//     that climbs out of the target, which no real backup has (R1-15
-		//     round 4). 400, like the case above: the archive named cannot be
-		//     restored, and that is a refusal, not a server fault.
-		//
-		// Any other error (missing file, unreadable backup directory or
-		// archive, an archive with no entries: ErrArchiveEmpty) is a 500 via
-		// httputil.InternalError, the same as a truncated archive.
 		switch {
-		case errors.Is(err, backup.ErrChecksumMismatch):
-			httputil.RespondWithConflict(c, err.Error())
+		// An archive a backup this program wrote never is (an entry that
+		// climbs out of the target, one in an HNSW snapshot directory):
+		// refused before anything is extracted, a 400 as HEAD's in-place
+		// restore answered (R1-15). An empty or truncated archive stays a
+		// 500, as it was there: the backup itself is broken.
 		case errors.Is(err, backup.ErrVerificationUnsupported),
-			errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot),
-			errors.Is(err, backup.ErrArchiveEntryEscapes):
+			errors.Is(err, backup.ErrArchiveEntryEscapes),
+			errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot):
 			httputil.RespondWithBadRequest(c, err.Error())
+		case errors.Is(err, os.ErrNotExist):
+			httputil.RespondWithNotFound(c, "backup", req.BackupFilename)
+		case errors.Is(err, backup.ErrChecksumMismatch), errors.Is(err, restorejournal.ErrSwapPending):
+			httputil.RespondWithConflict(c, err.Error())
+		case errors.Is(err, restorejournal.ErrRenameRefused), errors.Is(err, restorejournal.ErrTargetsRefused):
+			httputil.RespondWithError(c, http.StatusUnprocessableEntity, err.Error(), "restore_refused")
 		default:
-			httputil.InternalError(c, "failed to restore backup", err)
+			httputil.InternalError(c, "failed to stage the restore", err)
 		}
 		return
 	}
 
-	// The snapshot directories the extraction keeps entries out of must
-	// resolve: one whose path, or an ancestor's, is a symlink that does not
-	// has no identity to compare an entry's destination with, and an entry
-	// could create the symlink's target, the snapshot directory from then on
-	// (R1-15 round-6 verification review, B1-r6). Checked before the mark
-	// and before anything is written, so such a restore costs nothing. A
-	// 409: the server's directory, not the request, stands in the way.
-	// Extract checks again for each entry.
-	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
-	if err := backup.CheckSnapshotDirs(snapshotDirs); err != nil {
-		httputil.RespondWithConflict(c, "backup not restored: "+err.Error())
-		return
-	}
-
-	// The extraction below writes database files behind the write gate. The
-	// live HNSW store is marked diverged before its first write, not after
-	// it: the kernel's drain does not wait for handler goroutines, so a stop
-	// can run MarkCleanStop while this extraction is mid-write and the
-	// process can exit before this handler returns (R1-15 round-3 review,
-	// B1-r3). After the mark, such a stop refuses the marker, and a marker an
-	// earlier stop wrote is removed by the mark itself.
-	h.markANNSnapshotDiverged()
-	// The on-disk markers are removed before the extraction's first write,
-	// like the mark: a marker already beside a custom target's database
-	// (the mark covers only the live store) would otherwise outlive a crash
-	// or exit during the extraction and vouch for a snapshot the
-	// half-restored database does not match (R1-15 round-5 verification
-	// review, the B1r-5 order). The checks keep archive entries out of both
-	// snapshot directories: PrepareRestoreIn refuses an entry named into the
-	// snapshot directory or climbing out of the target; Extract compares
-	// every directory on the way to each destination with them by identity,
-	// so symlinks and case-insensitive spellings count, and does not write a
-	// file through a symlink (B1-r5); and a target that overlaps the live
-	// one, compared the same way, was refused above. The removal runs again
-	// after the extraction, deferred so that it runs whether the extraction
-	// finished, failed partway or panicked, as the backstop should an entry
-	// still reach one.
-	// A marker the first removal can neither remove nor empty would go on
-	// vouching, so the restore fails there, before its first write (R1-15
-	// round-6 verification review, NIT). Any other error is about a marker
-	// that vouched for nothing (it did not parse) and is gone. The
-	// backstop's error can only be logged, as the restore has written by
-	// then.
-	if err := h.removeANNCleanStopMarkers(snapshotDirs); err != nil {
-		if errors.Is(err, database.ErrCleanStopNotDiscarded) {
-			httputil.InternalError(c, "backup not restored: a clean-stop marker beside a snapshot directory could be neither removed nor emptied, and nothing was written", err)
-			return
-		}
-		systemLog.Warn("backup restore: %v", err)
-	}
-	defer func() {
-		if err := h.removeANNCleanStopMarkers(snapshotDirs); err != nil {
-			systemLog.Error("backup restore: %v", err)
-		}
-	}()
-	if hook := beforeRestoreExtractHook.Load(); hook != nil {
-		(*hook)()
-	}
-	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
-		// The extraction can stop after it has written entries, so every
-		// response from here says so (restorePartialNote). A refusal is
-		// the status the same refusal has before the mark: a snapshot
-		// directory, or a symlink on an entry's path, that does not
-		// resolve (B1-r6, B1-r8) is the 409 above; an entry that would
-		// land in a snapshot directory, which only the extraction can see
-		// when a symlink routes it there, or that climbs out of the target,
-		// is the prepare step's 400 with its reason (R1-15 round-8
-		// verification review, N1). It was a bare 500.
-		switch {
-		case errors.Is(err, backup.ErrUnresolvableSymlink):
-			httputil.RespondWithConflict(c, "backup restore stopped: "+err.Error()+restorePartialNote)
-		case errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot),
-			errors.Is(err, backup.ErrArchiveEntryEscapes):
-			httputil.RespondWithBadRequest(c, "backup restore stopped: "+err.Error()+restorePartialNote)
-		default:
-			httputil.InternalError(c, "failed to restore backup"+restorePartialNote, err)
-		}
-		return
-	}
-
-	// Reaching here means either verify=false (verification not requested) or
-	// verify=true and the checksum matched -- backup.PrepareRestoreIn returns
-	// an error in every other case, so "verified" always equals what was asked
-	// for. The fields are included explicitly (rather than omitted) so a
-	// caller parsing the response, not just the server log, can tell whether
-	// verification actually happened.
-	httputil.RespondWithOK(c, gin.H{
-		"message":          "backup restored successfully",
-		"target":           targetPath,
-		"verified":         req.Verify,
+	// "verified" is whether the archive was checked against its checksum
+	// sidecar: always with verify=true (StageRestore refuses otherwise), and
+	// without it whenever the archive has a sidecar.
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"message":          "restore staged; the service restarts now to apply it",
+		"restart_required": true,
+		"restore_id":       staged.ID,
+		"verified":         staged.Verified,
 		"verify_requested": req.Verify,
 	})
+	// After the answer is written: the restart's stop drains the listener
+	// within the shutdown budget, so the 202 reaches the client.
+	stager.RequestRestart("restore " + staged.ID + " staged")
 }
 
 // annRestoreReason is the divergence reason a restore gives the HNSW store.
-const annRestoreReason = "a backup restore wrote database files the write gate did not see"
-
-// restorePartialNote ends every response to a restore whose extraction
-// failed: what the failure leaves on disk, which the caller cannot see from
-// the reason alone.
-const restorePartialNote = "; entries extracted before it may have been written, and the HNSW snapshot is marked diverged, so it is reconciled against the database rather than trusted"
+const annRestoreReason = "a backup restore is staged, and the next boot swaps in database files the write gate does not see"
 
 // markANNSnapshotDiverged stops this run's stop from vouching for the HNSW
-// snapshot once a restore is about to write (R1-15 round-2 review B1, and
-// round-3 B1-r3 for when). Extraction writes Pebble files with plain file
-// writes, so the GatedDB verdict watch never counts them, and the restored
-// rows can differ from the graph in every way. It marks the live store for
-// every target: a custom target can still be the live database directory
-// under another spelling (a symlink, a bind mount), and the cost of a
-// needless mark is one boot that reconciles the snapshot instead of trusting
-// it.
+// snapshot once a restore is staged (R1-15 round-2 review B1, round-3 B1-r3
+// for when; R1-25 for the staged restore). The stager runs it once every
+// check passed, before it discards the marker on disk and writes the
+// intent: the restart that applies the restore stops this run, and a quiet
+// stop would otherwise write a new marker, which the boot after the swap
+// would take as vouching for the restored rows. A restore whose intent
+// write then fails leaves the mark; its cost is one boot that reconciles
+// the snapshot instead of trusting it.
 func (h *Handler) markANNSnapshotDiverged() {
 	if h.annDiverged != nil {
 		h.annDiverged(annRestoreReason)
 	}
-}
-
-// annSnapshotDirs returns the HNSW snapshot directories of a restore into
-// targetPath of an archive whose root is root: the live database's, and the
-// restored database's. Extract keeps every entry out of them and
-// removeANNCleanStopMarkers empties them of markers. Without a configured
-// database path there are none.
-func annSnapshotDirs(targetPath, root string) []string {
-	dbPath := config.AppConfig.DatabasePath
-	if dbPath == "" {
-		return nil
-	}
-	live := database.HNSWSnapshotDir(dbPath)
-	// The restore writes the archive's database at targetPath/<root>, under
-	// the name it had when the backup was taken, which need not be today's
-	// filepath.Base(dbPath) (R1-15 round-4 verification review, NIT).
-	restored := database.HNSWSnapshotDir(filepath.Join(targetPath, root))
-	return slices.Compact([]string{live, restored})
-}
-
-// removeANNCleanStopMarkers removes a clean-stop marker in each of the
-// restore's snapshot directories (annSnapshotDirs). It tries every
-// directory and joins their errors (database.TakeHNSWCleanStop):
-// database.ErrCleanStopNotDiscarded is in it when a marker may still
-// vouch.
-func (h *Handler) removeANNCleanStopMarkers(snapshotDirs []string) error {
-	var errs []error
-	for _, dir := range snapshotDirs {
-		if _, err := database.TakeHNSWCleanStop(dir); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // DeleteBackup deletes a backup file. Implements DELETE /backup/:filename.
@@ -1101,8 +970,9 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	backupConfig.BackupDir = backup.ResolveDir(config.AppConfig.BackupDir, config.AppConfig.DatabasePath)
 	filename = library.SanitizeFilename(filename)
 
-	// DeleteBackupIn (not DeleteBackup): same reasoning as PrepareRestoreIn
-	// above -- filename is only ever used as a directory-listing lookup key.
+	// DeleteBackupIn (not DeleteBackup): filename is only ever used as a
+	// directory-listing lookup key (CodeQL go/path-injection), as in the
+	// restore stager's backup.StageRestore above.
 	if err := backup.DeleteBackupIn(backupConfig.BackupDir, filename); err != nil {
 		httputil.InternalError(c, "failed to delete backup", err)
 		return

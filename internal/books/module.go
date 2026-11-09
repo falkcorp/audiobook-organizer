@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-09
 
@@ -94,6 +94,12 @@ type booksModule struct {
 	// Register hands both to the store it builds.
 	cleanStop *database.HNSWCleanStopClaim
 	migrated  atomic.Bool
+	// dbPath is core.storage.path and version serve's Options.Version,
+	// both set by Options: Attach builds the restore stager from them.
+	dbPath, version string
+	// requestRestart is the kernel's Lifecycle.RequestRestart, set by
+	// Register: the restore stager asks for the restart (exit 75) with it.
+	requestRestart func(reason string)
 	// beforeSettings, when set (tests), runs on the store Register built,
 	// before the settings boot: a stored settings blob, the seeded roles.
 	beforeSettings func(*database.PebbleStore)
@@ -192,6 +198,7 @@ func versionSegment(s string) bool {
 // declares nothing beyond its manifest.
 func (m *booksModule) Register(r *module.Registrar) error {
 	m.registered.Add(1)
+	m.requestRestart = r.Deps().RequestRestart
 	legacy := r.Deps().Storage.Legacy
 	if legacy == (storage.LegacyRange{}) {
 		return nil

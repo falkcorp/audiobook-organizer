@@ -1,7 +1,7 @@
 // file: core/storage/admin.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e760c156-0276-4ad3-9f53-76551e9860b5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -143,6 +143,12 @@ func (a *Admin) ClaimViolations() map[ClaimViolation]uint64 { return a.db.ClaimV
 
 // ClaimViolationKeys is DB.ClaimViolationKeys through the admin surface.
 func (a *Admin) ClaimViolationKeys() map[ClaimViolation][]string { return a.db.ClaimViolationKeys() }
+
+// InstallID is the open store's install marker, the value Opened.InstallID
+// reported when it was opened. An app's restore stager records it in the
+// intent (Intent.InstallID, 05-backup §5B.3.4 step 8; R1-21 decision D8):
+// P2 gives it to a restored store that carries no marker.
+func (a *Admin) InstallID() string { return a.db.boot.installID }
 
 // CompactionStats samples the engine's compaction counters; a closed store
 // reports Absent.
