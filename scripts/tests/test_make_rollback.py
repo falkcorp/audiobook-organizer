@@ -1,5 +1,5 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
 # last-edited: 2026-11-09
 
@@ -33,6 +33,7 @@ Run with:
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import re
@@ -184,6 +185,10 @@ class FakeHost:
                 [guard.HELPER_DIR, str(self.libexec)],
                 [guard.HOST_CONFIG, str(self.config)],
                 ["/usr/bin/cat ", "cat "],
+                [
+                    f"systemctl show -p ActiveState --value {guard.TRANSIENT_UNIT}",
+                    f"{self.host_tools}/systemctl show -p ActiveState --value {guard.TRANSIENT_UNIT}",
+                ],
             ],
         )
 
@@ -196,8 +201,18 @@ class FakeHost:
         self.config = etc / "rollback.conf"
         tools = self.root / "host-tools"
         tools.mkdir()
+        self.host_tools = tools
         fakes = {}
-        for name, body in (("systemd-run", _SYSTEMD_RUN), ("systemctl", "sys.exit(0)")):
+        # The fake systemctl answers the restore helper's `show -p
+        # ActiveState` for its transient unit from a file (absent: inactive).
+        self.transient_state = self.root / "transient-state"
+        systemctl = (
+            'if "ActiveState" in sys.argv:\n'
+            f"    p = {str(self.transient_state)!r}\n"
+            '    print(open(p).read().strip() if os.path.exists(p) else "inactive")\n'
+            "sys.exit(0)\n"
+        )
+        for name, body in (("systemd-run", _SYSTEMD_RUN), ("systemctl", systemctl)):
             p = tools / name
             p.write_text(
                 _TOOL.format(python=sys.executable, log=str(self.log), name=name, body=body)
@@ -694,6 +709,36 @@ class RollbackRestoreTest(unittest.TestCase):
         self.assertIn(guard.TRANSIENT_UNIT, out(p))
         self.assertIn("do NOT start", out(p))
         self.assertEqual(host.installed(), "current")
+        # The checks run as the deploy user: the log is group-readable and
+        # carries the exit status, so they need no sudo grant.
+        check = [ln for ln in out(p).splitlines() if "tail -n 5" in ln]
+        self.assertEqual(len(check), 1, out(p))
+        self.assertIn(f"systemctl is-active {guard.TRANSIENT_UNIT}", check[0])
+        self.assertIn("tail -n 5 /run/audiobook-organizer-rollback/restore.log", check[0])
+        self.assertNotIn("sudo", check[0])
+        self.assertIn(f"{guard.RESTORE_DONE}exit 0", out(p))
+
+    def test_a_restore_still_running_from_an_earlier_run_is_left_alone(self) -> None:
+        host = FakeHost(self)
+        host.transient_state.write_text("active\n")
+        log = host.root / "run" / "restore.log"
+        log.parent.mkdir()
+        log.write_text("=== catwoman's restore, lost to ssh ===\n")
+        p = host.make("rollback-restore")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("an earlier restore is still running", out(p))
+        self.assertIn("do NOT start", out(p))
+        self.assertEqual(log.read_text(), "=== catwoman's restore, lost to ssh ===\n")
+        self.assertEqual(host.restores(), [])
+        self.assertEqual(host.installed(), "current")
+        self.assertFalse(any("systemctl start" in c for c in host.ssh()))
+
+    def test_the_guard_and_the_helper_agree_on_the_restore_markers(self) -> None:
+        src = (HELPERS / "rollback_helper.py").read_text()
+        for name in ("RESTORE_DONE", "TRANSIENT_UNIT"):
+            m = re.search(rf"^{name} = (\"[^\"]*\")$", src, re.M)
+            assert m is not None, name
+            self.assertEqual(ast.literal_eval(m.group(1)), getattr(guard, name), name)
 
     def test_release_refuses_naming_f8(self) -> None:
         host = FakeHost(self)
