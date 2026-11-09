@@ -1,7 +1,7 @@
 # file: scripts/tests/test_ci_classifier.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: bdb67332-0e68-4d5a-ba7f-f83eb036cb28
-# last-edited: 2026-11-06
+# last-edited: 2026-11-09
 """Gate tests for the ``changes`` classifier and the required-check workflows (09 §9.2.1).
 
 The classifier is the ``Classify changed paths`` step of ci.yml's ``changes`` job.
@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 CI_YML = WORKFLOWS / "ci.yml"
 EXTRACTION_YML = WORKFLOWS / "extraction-gates.yml"
+UNIT_LIFECYCLE_YML = WORKFLOWS / "unit-lifecycle.yml"
 STEP_NAME = "Classify changed paths"
 
 # The job names 09 §9.2.1's required-checks table lists. A workflow that defines
@@ -159,7 +160,12 @@ def job_names_in(workflow: Path) -> set[str]:
 # -- running the classifier ----------------------------------------------------
 
 
-def classify(script: str, files: list[str], event: str = "pull_request") -> dict[str, str]:
+def classify(
+    script: str,
+    files: list[str],
+    event: str = "pull_request",
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Run a classifier script with ``git diff --name-only`` stubbed to print ``files``."""
     bash = shutil.which("bash")
     if not bash:
@@ -180,6 +186,7 @@ def classify(script: str, files: list[str], event: str = "pull_request") -> dict
             "BASE_REF": "main",
             "BEFORE": "0" * 40,
             "AFTER": "f" * 40,
+            **(extra_env or {}),
         }
         res = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True)
         if res.returncode != 0:
@@ -430,3 +437,77 @@ class WorkflowShapeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnitLifecycleTriggerTests(unittest.TestCase):
+    """unit-lifecycle.yml's own classifier (09 §9.2.1's unit-lifecycle row)."""
+
+    @classmethod
+    def setUpClass(cls):
+        _, cls.script = extract_step(UNIT_LIFECYCLE_YML, STEP_NAME)
+
+    def run_for(self, files, event="pull_request"):
+        env = {"MERGE_BASE": "a" * 40, "MERGE_HEAD": "b" * 40}
+        return classify(self.script, files, event, env)["run"]
+
+    def test_every_trigger_path_of_the_spec_runs_the_job(self):
+        for f in (
+            "deploy/audiobook-organizer.service",
+            "deploy/grafana/x.json",
+            "cmd/serve.go",
+            "main.go",
+            "internal/backup/stage_restore.go",
+            "internal/updater/updater.go",
+            "internal/server/server_lifecycle.go",
+            "internal/server/server_lifecycle_test.go",
+            "internal/books/cutover/m1.go",
+            "core/kernel/boot.go",
+            "core/internal/restoreswap/swap.go",
+        ):
+            self.assertEqual(self.run_for([f]), "true", f)
+            self.assertEqual(self.run_for(["docs/x.md", f]), "true", f"{f} with a docs file")
+
+    def test_the_jobs_own_files_run_the_job(self):
+        for f in (
+            ".github/workflows/unit-lifecycle.yml",
+            "scripts/tests/test_unit_lifecycle.py",
+            "scripts/tests/unit_lifecycle/dropin.conf",
+            "scripts/deploy-wait-ready.sh",
+        ):
+            self.assertEqual(self.run_for([f]), "true", f)
+
+    def test_other_changes_skip_the_job(self):
+        for files in (
+            ["docs/plans/x.md", "README.md", "changelog.d/x.md"],
+            ["web/src/App.tsx"],
+            ["internal/server/server.go", "internal/books/scan.go"],
+            ["internal/server/server_lifecycle_notes.md"],
+            ["scripts/ci/run_gates.py"],
+        ):
+            self.assertEqual(self.run_for(files), "false", files)
+
+    def test_merge_queue_uses_its_own_range(self):
+        self.assertEqual(self.run_for(["cmd/x.go"], "merge_group"), "true")
+        self.assertEqual(self.run_for(["docs/x.md"], "merge_group"), "false")
+
+    def test_nightly_and_manual_runs_always_run(self):
+        for event in ("schedule", "workflow_dispatch"):
+            self.assertEqual(self.run_for(["docs/x.md"], event), "true", event)
+
+    def test_job_shape(self):
+        found = jobs(UNIT_LIFECYCLE_YML)
+        self.assertEqual(
+            found["unit-lifecycle"]["name"], "unit-lifecycle", "the ruleset keys on it"
+        )
+        text = found["unit-lifecycle"]["text"]
+        self.assertRegex(text, r"(?m)^    needs: changes\s*$")
+        self.assertRegex(text, r"(?m)^    if: .*needs\.changes\.outputs\.run == 'true'")
+        # outside the 35 minute budget of 09 §9.2.10, bounded at 40 minutes
+        self.assertRegex(text, r"(?m)^    timeout-minutes: 40\s*$")
+        # the cells may not pass by skipping, and the binary carries the hook
+        self.assertIn("UNIT_LIFECYCLE_REQUIRED: '1'", text)
+        self.assertIn("go build -tags unitlifecycle -o /tmp/abo .", text)
+        on = on_block(UNIT_LIFECYCLE_YML)
+        for trigger in ("pull_request", "merge_group", "schedule"):
+            self.assertIn(trigger, on)
+        self.assertNotIn("paths:", on, "a paths filter leaves the required check expected")
