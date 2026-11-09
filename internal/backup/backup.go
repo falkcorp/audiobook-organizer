@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.11
+// version: 1.22.12
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -680,6 +680,22 @@ var ErrArchiveEmpty = errors.New("backup archive has no entries")
 // drift apart unnoticed).
 const hnswSnapshotDirName = "hnsw"
 
+// entryPath returns the archive entry named name relative to the restore
+// target, cleaned the way the extraction resolves it, and false for a name
+// that is the target itself: empty once its leading slashes go ("/"), or one
+// that cleans to "." ("./", as tar -C <dir> -cf <archive> . writes first, or
+// "x/../"). The extraction skips such an entry, and the scan neither counts
+// it nor takes the archive's root from it, so the two agree on what an
+// archive restores.
+func entryPath(name string) (string, bool) {
+	trimmed := strings.TrimLeft(filepath.ToSlash(name), "/")
+	if trimmed == "" {
+		return "", false
+	}
+	clean := path.Clean(trimmed)
+	return clean, clean != "."
+}
+
 // entryRefusal says why the archive entry named name may not be extracted,
 // wherever the restore goes, or nil. It cleans the name the way the
 // extraction does (a leading "/" dropped, then path.Clean), and refuses a
@@ -850,11 +866,11 @@ func scanEntries(codec Codec, r io.Reader, name string) (string, error) {
 		if err := entryRefusal(header.Name); err != nil {
 			return "", err
 		}
-		// The extraction skips a name that is empty once its leading
-		// slashes go, and counts every other entry.
-		if trimmed := strings.TrimLeft(filepath.ToSlash(header.Name), "/"); trimmed != "" {
+		// The extraction skips an entry that names the target itself, and
+		// counts every other one; the first of those gives the root.
+		if clean, ok := entryPath(header.Name); ok {
 			if entries == 0 {
-				root, _, _ = strings.Cut(path.Clean(trimmed), "/")
+				root, _, _ = strings.Cut(clean, "/")
 			}
 			entries++
 		}
@@ -874,8 +890,9 @@ type PreparedRestore struct {
 	root        string
 }
 
-// Root is the archive's root: the first path component of its first entry,
-// which for a backup this program wrote is the database directory's name
+// Root is the archive's root: the first path component of its first entry
+// that is not the target itself (entryPath skips "/" and "./"), never "." or
+// "..". For a backup this program wrote it is the database directory's name
 // when the backup was taken (addToArchive). A restore into a target writes
 // that database at target/Root().
 func (r *PreparedRestore) Root() string {
@@ -1070,9 +1087,11 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		// Normalise the archive entry name: strip any leading slashes so that
 		// absolute-path entries (e.g. "/etc/passwd") are treated as relative
 		// paths inside the target directory — the same behaviour as
-		// filepath.Join(root, "/etc/passwd") on Unix, but explicit.
-		entryName := strings.TrimLeft(filepath.ToSlash(header.Name), "/")
-		if entryName == "" {
+		// filepath.Join(root, "/etc/passwd") on Unix, but explicit — and
+		// skip an entry that names the target itself (entryPath), as the
+		// scan does.
+		entryName, ok := entryPath(header.Name)
+		if !ok {
 			continue
 		}
 		// PrepareRestoreIn refused an archive with such an entry before
