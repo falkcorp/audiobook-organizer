@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 81e6acdc-f52e-41ad-80ef-a56203095de9
 // last-edited: 2026-11-08
 
@@ -682,6 +682,20 @@ func TestTakeHNSWCleanStop_SaysWhetherAMarkerStays(t *testing.T) {
 			t.Error("a marker that stays is reported as vouching for this run")
 		}
 		if !errors.Is(err, ErrCleanStopNotDiscarded) {
+			t.Fatalf("TakeHNSWCleanStop error = %v; want ErrCleanStopNotDiscarded", err)
+		}
+	})
+	t.Run("a directory it may not search", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root searches any directory")
+		}
+		dir := t.TempDir()
+		writeMarker(t, dir)
+		if err := os.Chmod(dir, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		if _, err := TakeHNSWCleanStop(dir); !errors.Is(err, ErrCleanStopNotDiscarded) {
 			t.Fatalf("TakeHNSWCleanStop error = %v; want ErrCleanStopNotDiscarded", err)
 		}
 	})
