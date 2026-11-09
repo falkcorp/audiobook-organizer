@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.14
+// version: 1.22.15
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -1017,9 +1017,11 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 // (ErrArchiveCarriesHNSWSnapshot), and refuses every entry while one of them,
 // or a directory on the entry's own path, cannot be compared because a
 // symlink there does not resolve (ErrUnresolvableSymlink, R1-15 round-6
-// verification review, B1-r6; round 8, B1-r8). It also does not write a file
-// through a symlink (ErrRestoreThroughSymlink): the file is opened with
-// O_NOFOLLOW, so a symlink planted where an entry lands is never followed.
+// verification review, B1-r6; round 8, B1-r8). It
+// does not write a file through a symlink (ErrRestoreThroughSymlink), nor
+// into a file already at an entry's destination: each entry is written to a
+// new file and renamed into place (writeEntry), so a hard link there to a
+// snapshot's file leaves that file as it was (SF1).
 // nil checks names and symlinks only.
 func (r *PreparedRestore) Extract(targetPath string, snapshotDirs []string) error {
 	return extractArchive(r.archivePath, targetPath, snapshotDirs)
@@ -1343,34 +1345,16 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			if err := os.MkdirAll(filepath.Dir(target), 0775); err != nil {
 				return fmt.Errorf("failed to create parent directory for %s: %w", target, err)
 			}
-
-			// Create the file without following a symlink at its name
-			// (openNoFollow): landsIn stops at a dangling link, and a write
-			// through one creates whatever it points at.
-			outFile, err := openNoFollow(target)
-			if err != nil {
+			if err := writeEntry(target, tarReader, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("archive entry %q: %w", header.Name, err)
-			}
-
-			// Copy data
-			if _, err := io.Copy(outFile, tarReader); err != nil {
-				_ = outFile.Close()
-				return fmt.Errorf("failed to write file %s: %w", target, err)
-			}
-
-			// Set file permissions on the open file, not by name, which
-			// would follow a symlink put there since the open.
-			if err := outFile.Chmod(os.FileMode(header.Mode)); err != nil {
-				_ = outFile.Close()
-				return fmt.Errorf("failed to set permissions on %s: %w", target, err)
-			}
-			if err := outFile.Close(); err != nil {
-				return fmt.Errorf("failed to write file %s: %w", target, err)
 			}
 		default:
 			slog.Warn("backup unsupported file type", "type", header.Typeflag, "name", header.Name)
 		}
 		extracted++
+		if afterEntryHook != nil {
+			afterEntryHook(header.Name)
+		}
 	}
 
 	// Extracting nothing is a FAILED restore, not a successful empty one.
@@ -1391,6 +1375,57 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		return emptyArchiveError(filepath.Base(archivePath))
 	}
 
+	return nil
+}
+
+// afterEntryHook, nil outside tests, runs in extractArchive after each
+// entry, with its name.
+var afterEntryHook func(name string)
+
+// writeEntry writes the regular file read from r, with mode, at dst: into a
+// new file in dst's directory, fsynced, then renamed over dst. A rename
+// replaces dst's name, never what it names: a file already at dst that is a
+// hard link to a file elsewhere (a snapshot's, or a Pebble checkpoint's,
+// which no directory comparison can see) keeps its content under every
+// other name it has, where truncating and writing it in place wrote that
+// inode (R1-15 round-6 verification review, SF1). It also leaves dst its old
+// file, whole, when the entry cannot be written in full.
+//
+// The new file is made with O_CREATE|O_EXCL (os.CreateTemp), which fails on
+// any existing name, a symlink included, so it never follows one. A symlink
+// at dst is refused (ErrRestoreThroughSymlink) before anything is written,
+// so the restore says so rather than replacing it; the check does not have
+// to win a race with whoever planted the link, as the rename replaces a
+// symlink put there since, not what it points at.
+func writeEntry(dst string, r io.Reader, mode os.FileMode) (err error) {
+	if fi, lerr := os.Lstat(dst); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrRestoreThroughSymlink, dst)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".restoring-*")
+	if err != nil {
+		return fmt.Errorf("failed to create a file to write %s: %w", dst, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if _, err = io.Copy(tmp, r); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+	if err = tmp.Chmod(mode); err != nil {
+		return fmt.Errorf("failed to set permissions on %s: %w", dst, err)
+	}
+	if err = tmp.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file %s: %w", dst, err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+	if err = os.Rename(tmp.Name(), dst); err != nil {
+		return fmt.Errorf("failed to move file %s into place: %w", dst, err)
+	}
 	return nil
 }
 
