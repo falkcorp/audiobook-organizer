@@ -1,5 +1,5 @@
 // file: cmd/cli_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bd8ce310-ae03-4f86-893a-7b69f8b973bb
 // last-edited: 2026-11-09
 
@@ -128,15 +128,18 @@ func commandContext(cmd *cobra.Command) context.Context {
 // too. The state directory is resolved first (config.EnsureSecureStateDir),
 // as books.OfflineOptions resolves it for restore-offline: where the default
 // cannot be created it falls back to the database directory, and the slot a
-// staged swap is in is there, not under the unresolved default.
-func refuseBusySwapSlot() error {
+// staged swap is in is there, not under the unresolved default. It returns
+// that directory, so a caller that writes (reserved-prefs --set or
+// --delete) applies the owner rule to the same one
+// (storage.RefuseNotStateDirOwner).
+func refuseBusySwapSlot() (stateDir string, err error) {
 	dir, err := config.EnsureSecureStateDir()
 	if err != nil {
-		return fmt.Errorf("resolve the state directory %s, where the swap slot is: %w", dir, err)
+		return "", fmt.Errorf("resolve the state directory %s, where the swap slot is: %w", dir, err)
 	}
 	st, err := restorejournal.ReadSlot(vfs.Default, dir)
 	if err != nil {
-		return fmt.Errorf("read the swap slot under %s: %w", dir, err)
+		return "", fmt.Errorf("read the swap slot under %s: %w", dir, err)
 	}
-	return st.Err()
+	return dir, st.Err()
 }
