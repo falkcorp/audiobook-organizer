@@ -1,7 +1,7 @@
 // file: core/app/offline_prune.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7435e2a1-aaaa-450e-96a6-35082ffd5d60
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package app
 
@@ -31,7 +31,12 @@ failed, which the previous build is serving from) is kept unless
 from that upgrade.
 
 It opens no store, so it runs with the service stopped or while it serves.
-It refuses while a restore is staged or in flight.`
+It refuses while a restore is staged or in flight.
+
+It runs only as the state directory's owner, the user the service runs as
+(sudo -u <that user>): run as anyone else, root included, the sweep lock it
+creates is one the service cannot open, so the service's checkpoint sweeps
+and every later storage restore-offline would stop on it.`
 
 // pruneCheckpointsCommand is storage prune-checkpoints (05-storage §5S.3.12
 // "Retention"; 06 §6.4.5): storage.PruneCheckpoints over the app's store
@@ -82,6 +87,12 @@ func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, i
 	}
 	if dbPath == "" {
 		return errors.New("storage prune-checkpoints: no module of this app declares storage, so it has no checkpoints")
+	}
+	// The owner rule (seams.d/R1-25.md D29): it takes the checkpoint
+	// directory's sweep lock, and the lock file its first take creates
+	// belongs to whoever runs it.
+	if err := storage.RefuseNotStateDirOwner(ctx, stateDir, "storage prune-checkpoints"); err != nil {
+		return err
 	}
 	res, err := storage.PruneCheckpoints(ctx, storage.PruneOptions{
 		Path: dbPath, StateDir: stateDir, IncludeOpen: includeOpen, Logger: opts.Logger,
