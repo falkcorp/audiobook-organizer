@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.29.9
+// version: 1.29.10
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-09
 
@@ -1008,15 +1008,23 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		// A target that is the live HNSW snapshot directory, lies above it
 		// or lies inside it lets an ordinary entry name land in it (R1-15
 		// round-4 verification review, SHOULD-FIX 1). Refused here, before
-		// anything is prepared or marked. PathsOverlap compares directories
-		// by identity, so a symlink to it or a case-insensitive spelling
-		// (HNSW, hnſw) counts (round-5 verification review, S1-r5). The
-		// default target lies above it too, and is how a restore goes over
-		// the live database: there, PrepareRestoreIn and Extract keep
-		// entries out of the directory.
-		if dbPath := config.AppConfig.DatabasePath; dbPath != "" && backup.PathsOverlap(cleanTarget, database.HNSWSnapshotDir(dbPath)) {
-			httputil.RespondWithBadRequest(c, "restore target overlaps the HNSW snapshot directory; omit target_path to restore over the live database")
-			return
+		// anything is prepared or marked. CheckPathsApart compares
+		// directories by identity, so a symlink to it or a case-insensitive
+		// spelling (HNSW, hnſw) counts (round-5 verification review,
+		// S1-r5), and refuses a target it cannot compare because a symlink
+		// on either path does not resolve (round 6, B1-r6). The default
+		// target lies above it too, and is how a restore goes over the live
+		// database: there, PrepareRestoreIn and Extract keep entries out of
+		// the directory.
+		if dbPath := config.AppConfig.DatabasePath; dbPath != "" {
+			if err := backup.CheckPathsApart(cleanTarget, database.HNSWSnapshotDir(dbPath)); err != nil {
+				if errors.Is(err, backup.ErrUnresolvableSymlink) {
+					httputil.RespondWithConflict(c, "restore target cannot be compared with the HNSW snapshot directory: "+err.Error())
+					return
+				}
+				httputil.RespondWithBadRequest(c, "restore target overlaps the HNSW snapshot directory; omit target_path to restore over the live database")
+				return
+			}
 		}
 		targetPath = cleanTarget
 	} else {
@@ -1069,6 +1077,20 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 		return
 	}
 
+	// The snapshot directories the extraction keeps entries out of must
+	// resolve: one whose path, or an ancestor's, is a symlink that does not
+	// has no identity to compare an entry's destination with, and an entry
+	// could create the symlink's target, the snapshot directory from then on
+	// (R1-15 round-6 verification review, B1-r6). Checked before the mark
+	// and before anything is written, so such a restore costs nothing. A
+	// 409: the server's directory, not the request, stands in the way.
+	// Extract checks again for each entry.
+	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
+	if err := backup.CheckSnapshotDirs(snapshotDirs); err != nil {
+		httputil.RespondWithConflict(c, "backup not restored: "+err.Error())
+		return
+	}
+
 	// The extraction below writes database files behind the write gate. The
 	// live HNSW store is marked diverged before its first write, not after
 	// it: the kernel's drain does not wait for handler goroutines, so a stop
@@ -1092,11 +1114,27 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// after the extraction, deferred so that it runs whether the extraction
 	// finished, failed partway or panicked, as the backstop should an entry
 	// still reach one.
-	snapshotDirs := annSnapshotDirs(targetPath, prepared.Root())
 	h.removeANNCleanStopMarkers(snapshotDirs)
 	defer h.removeANNCleanStopMarkers(snapshotDirs)
 	if err := prepared.Extract(targetPath, snapshotDirs); err != nil {
-		httputil.InternalError(c, "failed to restore backup", err)
+		// The extraction can stop after it has written entries, so every
+		// response from here says so (restorePartialNote). A refusal is
+		// the status the same refusal has before the mark: a snapshot
+		// directory, or a symlink on an entry's path, that does not
+		// resolve (B1-r6, B1-r8) is the 409 above; an entry that would
+		// land in a snapshot directory, which only the extraction can see
+		// when a symlink routes it there, or that climbs out of the target,
+		// is the prepare step's 400 with its reason (R1-15 round-8
+		// verification review, N1). It was a bare 500.
+		switch {
+		case errors.Is(err, backup.ErrUnresolvableSymlink):
+			httputil.RespondWithConflict(c, "backup restore stopped: "+err.Error()+restorePartialNote)
+		case errors.Is(err, backup.ErrArchiveCarriesHNSWSnapshot),
+			errors.Is(err, backup.ErrArchiveEntryEscapes):
+			httputil.RespondWithBadRequest(c, "backup restore stopped: "+err.Error()+restorePartialNote)
+		default:
+			httputil.InternalError(c, "failed to restore backup"+restorePartialNote, err)
+		}
 		return
 	}
 
@@ -1116,6 +1154,11 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 
 // annRestoreReason is the divergence reason a restore gives the HNSW store.
 const annRestoreReason = "a backup restore wrote database files the write gate did not see"
+
+// restorePartialNote ends every response to a restore whose extraction
+// failed: what the failure leaves on disk, which the caller cannot see from
+// the reason alone.
+const restorePartialNote = "; entries extracted before it may have been written, and the HNSW snapshot is marked diverged, so it is reconciled against the database rather than trusted"
 
 // markANNSnapshotDiverged stops this run's stop from vouching for the HNSW
 // snapshot once a restore is about to write (R1-15 round-2 review B1, and
