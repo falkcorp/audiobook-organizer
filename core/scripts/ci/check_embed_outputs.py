@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: core/scripts/ci/check_embed_outputs.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: dbf08da6-5642-4354-bcf0-47a4326a82e9
-# last-edited: 2026-11-07
+# last-edited: 2026-11-09
 """Check core's own //go:embed inputs (12 §12.3.11, 03 §3.2 item 4; make -C core embed-check).
 
 core builds no image, so it has no .dockerignore and no Dockerfile to compare
@@ -63,7 +63,8 @@ class TagSet:
 
 # 03 §3.5.1 item 4's one list. core/archtest/tags.go holds the same list for
 # the Go tools; scripts/tests/test_check_embed_context.py fails when the names
-# differ, so change both together (R1-28 adds `unitlifecycle` to both).
+# differ, so change both together (`unitlifecycle` is R1-28's: the test-only
+# fake-migration hook of core/kernel).
 TAG_SETS: tuple[TagSet, ...] = (
     TagSet("default"),
     TagSet("bench", tags=("bench",)),
@@ -71,6 +72,7 @@ TAG_SETS: tuple[TagSet, ...] = (
     TagSet("pprof", tags=("pprof",)),
     TagSet("race", tags=("race",)),
     TagSet("native_taglib", tags=("native_taglib",)),
+    TagSet("unitlifecycle", tags=("unitlifecycle",)),
     TagSet("image", tags=("embed_frontend", "fts5", "native_taglib")),
     TagSet("darwin", goos="darwin", cgo="0", tags=("embed_frontend",)),
     TagSet("windows-mtls-bridge", goos="windows", patterns=("./cmd/mtls-bridge",)),
