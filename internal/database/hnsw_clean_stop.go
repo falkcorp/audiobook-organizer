@@ -1,5 +1,5 @@
 // file: internal/database/hnsw_clean_stop.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: dd04968f-f35c-456d-830f-87bd3ce9b0dd
 // last-edited: 2026-11-08
 
@@ -365,6 +365,14 @@ func pebbleVerdictWritesReason(n int64) string {
 	return fmt.Sprintf("%d Pebble write(s) since the store opened touched what the reconcile reads (embedding rows, or a book's existence, primary flag or series fields), and the graph may not reflect them", n)
 }
 
+// ErrCleanStopNotDiscarded is in TakeHNSWCleanStop's error when a marker
+// may still vouch: one could be neither removed nor emptied durably
+// (discardCleanStop), or the directory could not be read to tell. An error
+// without it is about a marker that vouched for nothing (it did not parse)
+// and is gone. The restore handler fails before its first write on this one
+// (R1-15 round-6 verification review, NIT).
+var ErrCleanStopNotDiscarded = errors.New("clean-stop marker may still vouch")
+
 // TakeHNSWCleanStop reports whether dir holds a clean-stop marker that
 // vouches (it parses, with this build's version), and removes whatever marker
 // is there durably, so a crash later in this run cannot leave it vouching for
@@ -388,11 +396,11 @@ func takeCleanStop(dir string) (*cleanStopRecord, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("clean-stop marker %s: %w", p, err)
+		return nil, fmt.Errorf("%w: clean-stop marker %s: %w", ErrCleanStopNotDiscarded, p, err)
 	}
 	rec, readErr := readCleanStop(p)
 	if err := discardCleanStop(p); err != nil {
-		return nil, errors.Join(readErr, fmt.Errorf("clean-stop marker %s could not be discarded durably, so a later boot may trust a snapshot this run lets fall behind; delete it by hand: %w", p, err))
+		return nil, errors.Join(readErr, fmt.Errorf("%w: clean-stop marker %s could not be discarded durably, so a later boot may trust a snapshot this run lets fall behind; delete it by hand: %w", ErrCleanStopNotDiscarded, p, err))
 	}
 	return rec, readErr
 }
