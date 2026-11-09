@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -897,7 +897,9 @@ class InstallStaged(unittest.TestCase):
         h.write_config(values)
         self.host_conf_path = h.systemd / f"{values['unit']}.d" / "host.conf"
         self.host_conf_path.parent.mkdir(parents=True)
-        self.host_conf_path.write_text(HOST_CONF)
+        self.host_conf_path.write_text(
+            HOST_CONF.replace("User=alfred", f"User={values['service_user']}")
+        )
         self.host_conf_path.chmod(0o644)
         return h
 
@@ -1220,6 +1222,48 @@ class InstallStaged(unittest.TestCase):
             h.mod, "_owner_ok", lambda st: st.st_ino != ino and owner_ok(st)
         ):
             self.assert_local_conf_refused(h)
+
+    def test_the_unit_install_needs_a_good_host_conf_too(self):
+        """The unit and local.conf share one host.conf check, run before
+        anything is copied: a host with no host.conf (or a bad one) never
+        gets the base unit installed, so it can never restart on the base
+        ExecStart, whether or not the deploy has a local.conf."""
+        breakers = {
+            "missing": lambda p: p.unlink(),
+            "symlink": lambda p: (
+                p.unlink(),
+                p.symlink_to(p.parent.parent / "audiobook-organizer.service"),
+            ),
+            "directory": lambda p: (p.unlink(), p.mkdir()),
+            "group-writable": lambda p: p.chmod(0o664),
+            "ExecStartPre": lambda p: p.write_text(HOST_CONF + "ExecStartPre=/usr/bin/true\n"),
+            "+ExecStart": lambda p: p.write_text(
+                HOST_CONF + "ExecStart=+/usr/local/bin/audiobook-organizer\n"
+            ),
+        }
+        for name, breaker in breakers.items():
+            with self.subTest(name=name):
+                h = self.host()
+                self.template()
+                breaker(self.host_conf_path)
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, err)
+                self.assertIn("host.conf", err)
+                self.assertFalse(self.unit_path(h).exists(), "nothing copied")
+                self.assertEqual(h.tools(), [], "no daemon-reload")
+
+    def test_the_unit_and_local_conf_share_one_host_conf_check(self):
+        h = self.host()
+        self.template()
+        calls = []
+        check = h.mod._check_host_conf
+        with unittest.mock.patch.object(
+            h.mod, "_check_host_conf", lambda cfg: (calls.append(cfg["unit"]), check(cfg))
+        ):
+            self.assertEqual(h.run("install", "unit")[0], 0)
+            self.stage_conf("[Service]\nEnvironment=A=1\n")
+            self.assertEqual(h.run("install", "local-conf")[0], 0)
+        self.assertEqual(calls, ["audiobook-organizer.service"] * 2)
 
     def test_a_good_host_conf_lets_local_conf_install(self):
         h = self.host()
