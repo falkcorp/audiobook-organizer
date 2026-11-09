@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -190,7 +190,7 @@ type booksStorage struct{}
 func (booksStorage) Manifest() module.Manifest {
 	m := (&booksModule{}).Manifest()
 	return module.Manifest{ID: m.ID, Version: m.Version, DisplayName: m.DisplayName, MinCoreVersion: m.MinCoreVersion,
-		DefaultEnabled: true, Storage: database.BooksSpec()}
+		DefaultEnabled: true, Storage: database.BooksSpec(nil)}
 }
 
 func (booksStorage) Register(*module.Registrar) error { return nil }

@@ -1,5 +1,5 @@
 // file: internal/database/booksspec.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d814793-7285-4757-ae8a-aabc89f7a006
 // last-edited: 2026-11-09
 
@@ -32,17 +32,14 @@ import (
 // per-batch state (see booksBookkeeping), and one store's boot must never
 // share it with another's.
 
-// BooksSpec is books' storage.Spec at release R1.
-func BooksSpec() storage.Spec { return BooksSpecObserved(nil) }
-
-// BooksSpecObserved is BooksSpec whose every migration step, legacy or
-// versioned, calls ran before it runs (nil: none). An opener passes it to
-// learn that a step wrote the store in this boot: the steps write through
-// their own step stores and batches, so nothing the opener's store counts
-// sees them, and the HNSW clean-stop marker the opener took before them no
-// longer vouches (adoptCleanStop). Books' manifest and OpenStandalone use
-// it.
-func BooksSpecObserved(ran func()) storage.Spec {
+// BooksSpec is books' storage.Spec at release R1. Every migration step,
+// legacy or versioned, calls ran before it runs (nil: none). An opener
+// passes ran to learn that a step wrote the store in this boot: the steps
+// write through their own step stores and batches, so nothing the
+// opener's store counts sees them, and the HNSW clean-stop marker the
+// opener took before them no longer vouches (adoptCleanStop). Books'
+// manifest and OpenStandalone pass one.
+func BooksSpec(ran func()) storage.Spec {
 	bk := &booksBookkeeping{}
 	return storage.Spec{
 		Claims:        BooksClaims(),
