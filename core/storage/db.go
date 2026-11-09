@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -292,7 +292,7 @@ func (s handleOf) absolute(key []byte, op opKind) (abs []byte, serialized bool, 
 		return slices.Clone(key), false, nil
 	}
 	if !iv.mode.allows(op) {
-		return nil, false, fmt.Errorf("storage: %s %s in a %s claim of %s: %w", op, keyRef(key), iv.mode, s.owner, ErrClaimMode)
+		return nil, false, fmt.Errorf("storage: %s %s in a %s claim of %s: %w", op, s.db.keyRef(key), iv.mode, s.owner, ErrClaimMode)
 	}
 	return slices.Clone(key), iv.serialized, nil
 }
@@ -311,7 +311,7 @@ func (s handleOf) absolute(key []byte, op opKind) (abs []byte, serialized bool, 
 // 4th, 8th, ... access (a power of two) and carries the series count, so a
 // hot unclaimed family cannot flood the log. The counter and
 // ClaimViolationKeys see every access. Neither the Warn nor the error carries
-// the key's bytes, only keyRef's family, length and hash.
+// any of the key's bytes, only keyRef's claim name, length and hash.
 func (db *DB) violation(owner Owner, op opKind, key []byte) error {
 	reserved := bytes.HasPrefix(key, []byte("c/")) || bytes.HasPrefix(key, []byte("m/"))
 	v := ClaimViolation{Owner: owner, Op: "write", Mode: "refused"}
@@ -320,34 +320,40 @@ func (db *DB) violation(owner Owner, op opKind, key []byte) error {
 	}
 	if !db.set.shadow || reserved {
 		db.countViolation(v, key)
-		return fmt.Errorf("storage: %s %s by %s: %w", op, keyRef(key), owner, ErrOutsideKeyspace)
+		return fmt.Errorf("storage: %s %s by %s: %w", op, db.keyRef(key), owner, ErrOutsideKeyspace)
 	}
 	v.Mode = "shadow"
 	if n := db.countViolation(v, key); n&(n-1) == 0 {
 		db.log.Warn("storage: out-of-claim access allowed by core.storage.claims.mode=shadow",
-			"owner", string(owner), "op", op.String(), "key", keyRef(key), "count", n)
+			"owner", string(owner), "op", op.String(), "key", db.keyRef(key), "count", n)
 	}
 	return nil
 }
 
-// maxKeyRefFamily bounds the family keyRef shows: a first separator past it
-// is not taken as a family boundary, so a long opaque key shows none.
-const maxKeyRefFamily = 32
-
-// keyRef names a key in an error or a log line without its bytes: its family
-// (the key up to and including its first ':' or '/', when that falls within
-// maxKeyRefFamily bytes), its length and the first four bytes of its SHA-256.
-// A key can carry a secret (books' session rows are sess:<bearer token>) and
+// keyRef names key in an error or a log line without any of its bytes. A key
+// can carry a secret (books' session rows are sess:<bearer token>) and
 // storage's errors and Warns reach logs, so no message in this package carries
-// a data key (R1-23 review SF1). The family says which claim set to look at;
-// the hash matches two reports of one key.
-func keyRef(key []byte) string {
-	fam := ""
-	if i := bytes.IndexAny(key, ":/"); i >= 0 && i < maxKeyRefFamily {
-		fam = string(key[:i+1])
+// a data key or any part of one (R1-23 review SF1, CodeQL
+// go/clear-text-logging). It names the declared claim that holds the key, by
+// longest match (`key under claim "joker:"`, `claimed key "joker_counter"`):
+// strings from an owner's spec, chosen by comparing the key and never cut from
+// it. A key under the reserved roots is named by its root, and a key in no
+// claim only as "unclaimed key". Then come the key's length and the first four
+// bytes of its SHA-256, so two reports of one key can be matched.
+func (db *DB) keyRef(key []byte) string {
+	where := "unclaimed key"
+	switch {
+	case bytes.HasPrefix(key, []byte("c/")):
+		where = `key under reserved "c/"`
+	case bytes.HasPrefix(key, []byte("m/")):
+		where = `key under reserved "m/"`
+	default:
+		if c := db.claims.claimOf(key); c != "" {
+			where = c
+		}
 	}
 	sum := sha256.Sum256(key)
-	return fmt.Sprintf("%q... (%d bytes, sha256:%x)", fam, len(key), sum[:4])
+	return fmt.Sprintf("%s (%d bytes, sha256:%x)", where, len(key), sum[:4])
 }
 
 // ClaimViolation is one series of <namespace>_storage_claim_violations_total
@@ -375,7 +381,7 @@ func (db *DB) countViolation(v ClaimViolation, key []byte) uint64 {
 	}
 	db.violations[v]++
 	if ks := db.violationKeys[v]; len(ks) < maxViolationKeys {
-		q := keyRef(key)
+		q := db.keyRef(key)
 		if !slices.Contains(ks, q) {
 			db.violationKeys[v] = append(ks, q)
 		}

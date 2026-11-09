@@ -1,7 +1,7 @@
 // file: core/storage/boot.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package storage
 
@@ -762,7 +762,7 @@ func (db *DB) foreignKeys() error {
 			return fmt.Errorf("storage: iterator: %w", err)
 		}
 		for ok := it.First(); ok && len(sample) < 5; ok = it.Next() {
-			sample = append(sample, keyRef(it.Key()))
+			sample = append(sample, db.keyRef(it.Key()))
 		}
 		if err := errors.Join(it.Error(), it.Close()); err != nil {
 			return fmt.Errorf("storage: iterator: %w", err)
@@ -796,7 +796,8 @@ func (db *DB) logUnclaimedKeys() error {
 
 // unclaimedKeys counts the keys in the gaps between the claim index's
 // intervals, outside c/ and m/, and returns at most limit of them as keyRef
-// names them (family, length and hash, never the bytes: R1-23 review SF1).
+// names them (length and hash only: an unclaimed key has no claim to name,
+// and none of its bytes is shown; R1-23 review SF1).
 func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
 	release, err := db.lease()
 	if err != nil {
@@ -833,7 +834,7 @@ func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
 			}
 			n++
 			if len(sample) < limit {
-				sample = append(sample, keyRef(k))
+				sample = append(sample, db.keyRef(k))
 			}
 		}
 		if err := errors.Join(it.Error(), it.Close()); err != nil {
