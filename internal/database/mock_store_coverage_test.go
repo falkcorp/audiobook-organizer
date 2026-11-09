@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package database
 
@@ -18,7 +18,6 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	// Set all custom functions to simple implementations
 	// Lifecycle
 	mock.CloseFunc = func() error { return nil }
-	mock.ResetFunc = func() error { return nil }
 
 	// Metadata
 	mock.GetMetadataFieldStatesFunc = func(string) ([]MetadataFieldState, error) { return nil, nil }
@@ -147,7 +146,6 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 
 	// Now call all methods to execute the custom function paths
 	_ = mock.Close()
-	_ = mock.Reset()
 	_, _ = mock.GetMetadataFieldStates("book-1")
 	_ = mock.UpsertMetadataFieldState(&MetadataFieldState{})
 	_ = mock.DeleteMetadataFieldState("book-1", "title")

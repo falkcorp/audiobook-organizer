@@ -1,7 +1,7 @@
 // file: internal/config/config_unit_test.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: c50805f7-8e88-4a02-a03a-2e48863e2619
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package config
 
@@ -562,7 +562,7 @@ func TestInitConfigOpenLibraryDumpDir(t *testing.T) {
 }
 
 func TestResetToDefaultsPreservesPaths(t *testing.T) {
-	// ResetToDefaults rebuilds the whole process-wide Config. Leaving factory
+	// ResetToDefaultsForTest rebuilds the whole process-wide Config. Leaving factory
 	// defaults (or this test's fixture) behind couples every later test to
 	// whether this one ran first, which is exactly the order dependence that
 	// made internal/config fail 20 of 24 -shuffle seeds.
@@ -577,7 +577,7 @@ func TestResetToDefaultsPreservesPaths(t *testing.T) {
 		LogLevel:     "debug",
 	}
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	// Paths should be preserved
 	assert.Equal(t, "/media/audiobooks", AppConfig.RootDir)

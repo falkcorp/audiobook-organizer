@@ -1,16 +1,16 @@
 // file: internal/config/chapter_consolidation.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 352b4f24-83a2-44dd-83d3-0d58454324bf
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package config
 
 import "github.com/falkcorp/audiobook-organizer/internal/logger"
 
 // DefaultChapterConsolidationThresholdMin is the shipped value of
-// chapter_consolidation_threshold_min. viper's default, ResetToDefaults, the
-// load/save normalization below and every consumer's fallback read it from
-// here, so the number exists once.
+// chapter_consolidation_threshold_min. viper's default (and so the factory
+// defaults tests reset to), the load/save normalization below and every
+// consumer's fallback read it from here, so the number exists once.
 const DefaultChapterConsolidationThresholdMin = 10
 
 // DefaultRepairChapterMaxMin is the shipped value of repair_chapter_max_min

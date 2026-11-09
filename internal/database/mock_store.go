@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.157.1
+// version: 1.157.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-08
 
 package database
 
@@ -677,7 +677,6 @@ type MockStore struct {
 
 	// Lifecycle
 	CloseFunc            func() error
-	ResetFunc            func() error
 	SetLastWrittenAtFunc func(id string, t time.Time) error
 
 	// MetadataCacheStore (METADATA-CACHED-MATCHER)
@@ -2719,13 +2718,6 @@ func (m *MockStore) GetLibraryFingerprint(path string) (*LibraryFingerprintRecor
 		return m.GetLibraryFingerprintFunc(path)
 	}
 	return nil, nil
-}
-
-func (m *MockStore) Reset() error {
-	if m.ResetFunc != nil {
-		return m.ResetFunc()
-	}
-	return nil
 }
 
 func (m *MockStore) SetLastWrittenAt(id string, t time.Time) error {

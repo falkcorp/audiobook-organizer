@@ -1,7 +1,7 @@
 // file: internal/scheduler/asin_backfill_task_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6e1c9a47-3b0d-4f82-a5e9-2d7c8b41f036
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -29,7 +29,7 @@ func asinBackfillTaskFixture(t *testing.T, registerDef bool, prevStatus string, 
 	t.Helper()
 	restoreCfg := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restoreCfg })
-	config.ResetToDefaults()
+	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row

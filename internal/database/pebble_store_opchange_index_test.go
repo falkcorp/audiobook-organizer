@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-28
+// last-edited: 2026-11-08
 
 package database
 
@@ -1175,25 +1175,6 @@ func TestOpchangeIndex_RebuildProgressPerChunk(t *testing.T) {
 	}
 	if want := []int{3, 6, 9, 10}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("progress calls = %v, want %v (res %+v)", calls, want, res)
-	}
-}
-
-// TestOpchangeIndex_ResetClearsTrust: Reset wipes the journal and the index;
-// it drops trust after its commit, so readers scan until the next ensure.
-func TestOpchangeIndex_ResetClearsTrust(t *testing.T) {
-	p := newOpChangeTestStore(t)
-	mustTrustOpChange(t, p)
-	if err := p.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	if p.opChangeByBookIndexTrusted() {
-		t.Fatal("trust survived Reset")
-	}
-	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := p.GetBookChanges("b1"); err != nil || len(got) != 1 {
-		t.Fatalf("GetBookChanges after Reset = %v, %v", changeIDs(got), err)
 	}
 }
 

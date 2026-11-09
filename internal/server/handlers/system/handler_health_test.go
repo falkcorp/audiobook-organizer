@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_health_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6f1b9d30-2c85-4e7a-9a43-b0d8e5c71f26
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package system_test
 
@@ -44,7 +44,7 @@ func healthBodyWith(t *testing.T, store system.SystemStore, getDegraded func() s
 	gin.SetMode(gin.TestMode)
 	h := system.New(
 		func() system.SystemStore { return store },
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil,
 		getDegraded,
 	)
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
@@ -151,7 +151,7 @@ func TestHealthCheck_NilDegradedSource(t *testing.T) {
 func TestHealthCheck_TimestampFollowsInstalledClock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := system.New(func() system.SystemStore { return nil },
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	).WithClock(func() time.Time { return time.Unix(1794193930, 0) })
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
 		r.GET("/health", h.HealthCheck)

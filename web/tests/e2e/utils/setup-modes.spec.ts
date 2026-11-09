@@ -1,6 +1,6 @@
 // file: web/tests/e2e/utils/setup-modes.spec.ts
-// version: 1.1.0
-// last-edited: 2026-03-02
+// version: 1.2.0
+// last-edited: 2026-11-08
 // guid: e2d3c4b5-a6f7-8901-2345-6789abcdef01
 
 import { test, expect } from '@playwright/test';
@@ -8,21 +8,9 @@ import {
   mockEventSource,
   setupPhase1ApiDriven,
   setupPhase2Interactive,
-  resetToFactoryDefaults,
 } from './test-helpers';
 
 test.describe('Setup Modes', () => {
-  test('resetToFactoryDefaults handles missing endpoint gracefully', async ({
-    page,
-    baseURL,
-  }) => {
-    // Arrange - mock an endpoint that doesn't exist
-    const result = await resetToFactoryDefaults(page, baseURL || 'http://localhost:5173');
-
-    // Assert - should return false for endpoint that doesn't exist, but not throw
-    expect(typeof result).toBe('boolean');
-  });
-
   test('setupPhase1ApiDriven skips welcome wizard', async ({
     page,
     baseURL,
@@ -31,7 +19,7 @@ test.describe('Setup Modes', () => {
     await mockEventSource(page);
 
     // Act
-    await setupPhase1ApiDriven(page, baseURL || 'http://localhost:5173');
+    await setupPhase1ApiDriven(page);
     await page.goto(baseURL || 'http://localhost:5173');
 
     // Assert - verify welcome_wizard_completed is set in localStorage
