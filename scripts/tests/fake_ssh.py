@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/tests/fake_ssh.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: e299f5fd-6b61-4552-a861-35f0c11b511d
 # last-edited: 2026-11-09
 
@@ -17,6 +17,7 @@ The scenario is a JSON file named by FAKE_SSH_SCENARIO:
       "root":  "<sandbox directory>",
       "log":   "<invocation log, one JSON object per line>",
       "state": "<cursor file>",
+      "map":   [["<host path>", "<sandbox path>"], ...],
       "rules": [
         {"match": "<regex searched in the command>",
          "responses": [{"stdout": "", "stderr": "", "exit": 0}, ...],
@@ -32,7 +33,10 @@ across processes). A command no rule matches runs for real under /bin/sh,
 with every `sudo` prefix (`sudo`, `-n`, `-u USER`, `-H`) stripped, but only
 when each absolute path in it lies inside the sandbox or is one of a few
 system tools; anything else exits 255 naming the command, so a recipe can
-never reach outside the sandbox. Every invocation is logged first.
+never reach outside the sandbox. Before that check, each `map` pair rewrites
+a host path to its sandbox stand-in (the rollback helpers installed under
+/usr/local/libexec on a real host, their config in /etc); rules still match
+the command as sent. Every invocation is logged first.
 
 `write_fake_app` writes a fake application binary: a small Python script
 that answers the fast-exit flags from an identity baked into its own text,
@@ -141,7 +145,10 @@ def main(argv: list[str]) -> int:
             sys.stdout.write(r.get("stdout", ""))
             sys.stderr.write(r.get("stderr", ""))
             return int(r.get("exit", 0))
-    run = _sandboxed(sc["root"], command)
+    mapped = command
+    for host_path, sandbox_path in sc.get("map", []):
+        mapped = mapped.replace(host_path, sandbox_path)
+    run = _sandboxed(sc["root"], mapped)
     if run is None:
         print(
             f"fake_ssh: no rule for, and refusing to run outside the sandbox: {command}",
@@ -244,7 +251,9 @@ class HealthServer:
         self._srv.server_close()
 
 
-def install(sandbox: str | Path, rules: list[dict]) -> dict:
+def install(
+    sandbox: str | Path, rules: list[dict], path_map: list[list[str]] | None = None
+) -> dict:
     """Prepare sandbox for a test: a bin directory whose `ssh` is this file,
     and a scenario with rules. Returns the environment to run commands with
     (PATH prefixed, FAKE_SSH_SCENARIO set) under the key "env", and the log
@@ -259,7 +268,13 @@ def install(sandbox: str | Path, rules: list[dict]) -> dict:
     log = sb / "invocations.log"
     scenario.write_text(
         json.dumps(
-            {"root": str(sb), "log": str(log), "state": str(sb / "cursors.json"), "rules": rules}
+            {
+                "root": str(sb),
+                "log": str(log),
+                "state": str(sb / "cursors.json"),
+                "rules": rules,
+                "map": path_map or [],
+            }
         ),
         encoding="utf-8",
     )
@@ -269,11 +284,20 @@ def install(sandbox: str | Path, rules: list[dict]) -> dict:
     return {"env": env, "log": log}
 
 
-def show(active: str, sub: str = "running", restarts: int = 0, status: int = 0) -> dict:
-    """One `systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus`
-    answer."""
+def show(
+    active: str,
+    sub: str = "running",
+    restarts: int = 0,
+    status: int = 0,
+    invocation: str = "1nv0c4710n",
+) -> dict:
+    """One `systemctl show -p
+    ActiveState,SubState,NRestarts,ExecMainStatus,InvocationID` answer."""
     return {
-        "stdout": f"ActiveState={active}\nSubState={sub}\nNRestarts={restarts}\nExecMainStatus={status}\n",
+        "stdout": (
+            f"ActiveState={active}\nSubState={sub}\nNRestarts={restarts}\n"
+            f"ExecMainStatus={status}\nInvocationID={invocation}\n"
+        ),
         "exit": 0,
     }
 

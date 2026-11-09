@@ -1,0 +1,12 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/swap-prev
+# version: 1.0.0
+# guid: 973d5f10-28d3-40c6-ba52-808b14293b22
+# last-edited: 2026-11-09
+#
+# Install <bin>.prev as <bin> atomically (no arguments), as root.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py swap-prev "$@"
