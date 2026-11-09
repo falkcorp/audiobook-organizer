@@ -1,5 +1,5 @@
 // file: internal/backup/path_wrappers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 747b560c-7210-40b1-bfb9-50efcbb78f38
 // last-edited: 2026-11-08
 
@@ -22,7 +22,7 @@ func RestoreBackupIn(backupDir, filename, targetPath string, verify bool) error 
 	if err != nil {
 		return err
 	}
-	return r.Extract(targetPath)
+	return r.Extract(targetPath, nil)
 }
 
 // DeleteBackup deletes the archive at backupPath and its checksum sidecar. It

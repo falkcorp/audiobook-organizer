@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.28.9
+// version: 1.28.10
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-08
 
@@ -918,6 +918,16 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "restore target is a protected system directory")
 			return
 		}
+		// A target that is the live HNSW snapshot directory, lies above it
+		// or lies inside it lets an ordinary entry name land in it (R1-15
+		// round-4 verification review, SHOULD-FIX 1). Refused here, before
+		// anything is prepared or marked. The default target lies above it
+		// too, and is how a restore goes over the live database: there,
+		// PrepareRestoreIn and Extract keep entries out of the directory.
+		if dbPath := config.AppConfig.DatabasePath; dbPath != "" && backup.PathsOverlap(cleanTarget, database.HNSWSnapshotDir(dbPath)) {
+			httputil.RespondWithBadRequest(c, "restore target overlaps the HNSW snapshot directory; omit target_path to restore over the live database")
+			return
+		}
 		targetPath = cleanTarget
 	} else {
 		targetPath = filepath.Dir(config.AppConfig.DatabasePath)
@@ -977,14 +987,15 @@ func (h *Handler) RestoreBackup(c *gin.Context) {
 	// earlier stop wrote is removed by the mark itself.
 	h.markANNSnapshotDiverged()
 	// The on-disk markers are removed after the extraction, deferred so that
-	// runs whether it finished, failed partway or panicked. An archive entry
-	// named into the snapshot directory never gets there (PrepareRestoreIn
-	// refused it, and Extract refuses it unwritten if the archive changed
-	// since), but both read entry names, so a symlink already in the target
-	// can still route one there, and only a removal after the extraction
-	// catches that marker.
+	// runs whether it finished, failed partway or panicked. No archive entry
+	// can put one there: PrepareRestoreIn refuses an entry named into the
+	// snapshot directory or climbing out of the target, Extract refuses one
+	// that would land in either snapshot directory with symlinks resolved,
+	// and a target that overlaps the live one was refused above. The removal
+	// takes a marker that was there before the restore, beside a custom
+	// target's database.
 	defer h.removeANNCleanStopMarkers(targetPath)
-	if err := prepared.Extract(targetPath); err != nil {
+	if err := prepared.Extract(targetPath, annSnapshotDirs(targetPath)); err != nil {
 		httputil.InternalError(c, "failed to restore backup", err)
 		return
 	}
@@ -1021,20 +1032,26 @@ func (h *Handler) markANNSnapshotDiverged() {
 	}
 }
 
-// removeANNCleanStopMarkers removes a clean-stop marker in the snapshot
-// directory of the live database and in that of the database a restore into
-// targetPath wrote. RestoreBackup defers it past the extraction, so it also
-// removes a marker the archive carried.
-func (h *Handler) removeANNCleanStopMarkers(targetPath string) {
+// annSnapshotDirs returns the HNSW snapshot directories of a restore into
+// targetPath: the live database's, and the restored database's. Extract keeps
+// every entry out of them and removeANNCleanStopMarkers empties them of
+// markers. Without a configured database path there are none.
+func annSnapshotDirs(targetPath string) []string {
 	dbPath := config.AppConfig.DatabasePath
 	if dbPath == "" {
-		return
+		return nil
 	}
 	live := database.HNSWSnapshotDir(dbPath)
 	// The archive holds the database directory under its own name, so the
 	// restore wrote it at targetPath/<name> (see backup.addToArchive).
 	restored := database.HNSWSnapshotDir(filepath.Join(targetPath, filepath.Base(dbPath)))
-	for _, dir := range slices.Compact([]string{live, restored}) {
+	return slices.Compact([]string{live, restored})
+}
+
+// removeANNCleanStopMarkers removes a clean-stop marker in each of the
+// restore's snapshot directories (annSnapshotDirs).
+func (h *Handler) removeANNCleanStopMarkers(targetPath string) {
+	for _, dir := range annSnapshotDirs(targetPath) {
 		if _, err := database.TakeHNSWCleanStop(dir); err != nil {
 			systemLog.Error("backup restore: %v", err)
 		}
