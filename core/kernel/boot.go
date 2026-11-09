@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-08
 
@@ -397,15 +397,22 @@ func (k *Kernel) extendStart(id module.ID) func(string) {
 		if !k.startWin.extend(id, sdnotify.StartupStepBudget) && k.ran.Load() {
 			return
 		}
-		send := k.cfg.ExtendStart
-		if send == nil {
-			send = func(string) {
-				if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
-					k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
-				}
-			}
-		}
+		k.sendExtend(id, step)
+	}
+}
+
+// sendExtend asks the service manager for sdnotify.StartupStepBudget more
+// start time (Config.ExtendStart in tests); a failure is logged, never
+// returned. extendStart decides when a module's request is a start-up one;
+// the reset hook, which runs at Run step (2) before READY=1, calls it
+// directly (reset.go).
+func (k *Kernel) sendExtend(id module.ID, step string) {
+	if send := k.cfg.ExtendStart; send != nil {
 		send(step)
+		return
+	}
+	if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
+		k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
 	}
 }
 

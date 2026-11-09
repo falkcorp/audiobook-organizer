@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-08
 
@@ -96,6 +96,19 @@ type Options struct {
 	// resolves them at R1 (ABO: HEAD's .encryption_key and the gap-fill
 	// config.yaml); from F3 core config builds the table.
 	StorageStateFiles []storage.StateFile
+	// R1BeforeSwap runs in storage restore-offline (in place) and storage
+	// reset after every check passed and before the first write that stages
+	// or moves anything, with core.storage.path (kernel.Config.BeforeSwap).
+	// ABO removes its HNSW clean-stop marker there, so the boot after the
+	// swap rebuilds the vector graph rather than trust one of the replaced
+	// store. An error stops the command with nothing staged or moved. nil =
+	// none. Release R1 only.
+	R1BeforeSwap func(dbPath string) error
+	// R1ArchiveExtract extracts an archive's store into storeDir, an empty
+	// directory, for storage restore-offline --archive, and returns the
+	// archive's ID (ABO: HEAD's backup format). nil = --archive is refused.
+	// Release R1 only: F8's backup extractor replaces it.
+	R1ArchiveExtract func(ctx context.Context, archive, storeDir string) (string, error)
 	// StorageFS is the filesystem core storage opens the store on; the zero
 	// value is the OS's. Tests only: coretest's harness passes
 	// storage.MemFS(), so a harness boot leaves no store on disk (06 §6.4.8).
