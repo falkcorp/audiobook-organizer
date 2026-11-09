@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_round8_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 46c7f994-13e9-42cc-afa7-78f58699cb26
 // last-edited: 2026-11-09
 
@@ -14,14 +14,16 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // The R1-15 round-8 verification review's restore findings, through the
-// handler: B1-r8 (a symlink into a subdirectory of the snapshot directory)
-// and N1 (the status and body of a refusal inside the extraction).
+// handler: B1-r8 (a symlink into a subdirectory of the snapshot directory),
+// N1 (the status and body of a refusal inside the extraction) and N4 (the
+// backstop removal after the extraction).
 
 // liveRestore points the configuration at a database directory under a new
 // temporary root, with its backup directory, and returns the root and the
@@ -94,9 +96,11 @@ func TestRestoreBackup_RefusesASymlinkIntoTheSnapshotSubdirectory(t *testing.T) 
 // is a 400 with its reason. It is now the 400 with the reason, and the body
 // says what the prepare step's refusal never has to: entries before the
 // refused one may have been written, and the live store was marked
-// diverged, so its snapshot is reconciled rather than trusted. The case: an
-// entry that reaches the snapshot directory through a symlink (the
-// reviewer's).
+// diverged, so its snapshot is reconciled rather than trusted. The cases:
+// an entry that reaches the snapshot directory through a symlink (the
+// reviewer's), and an archive that changed after the prepare step read it
+// (rewritten from the extraction hook) to carry a snapshot entry or one
+// that climbs out of the target.
 func TestRestoreBackup_AnExtractionRefusalIsABadRequest(t *testing.T) {
 	for name, tc := range map[string]struct {
 		setup     func(t *testing.T, dbPath, archive string)
@@ -111,6 +115,30 @@ func TestRestoreBackup_AnExtractionRefusalIsABadRequest(t *testing.T) {
 				})
 			},
 			wantError: "HNSW snapshot directory",
+		},
+		"an archive changed to carry a snapshot entry": {
+			setup: func(t *testing.T, _ string, archive string) {
+				writeTar(t, archive, []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+				t.Cleanup(system.SetBeforeRestoreExtractHook(func() {
+					writeTar(t, archive, []tarEntry{
+						{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+						{"hnsw/hnsw.clean-stop", testCleanStopMarker},
+					})
+				}))
+			},
+			wantError: "HNSW snapshot directory",
+		},
+		"an archive changed to climb out of the target": {
+			setup: func(t *testing.T, _ string, archive string) {
+				writeTar(t, archive, []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+				t.Cleanup(system.SetBeforeRestoreExtractHook(func() {
+					writeTar(t, archive, []tarEntry{
+						{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+						{"../joker/hnsw.clean-stop", testCleanStopMarker},
+					})
+				}))
+			},
+			wantError: "climbs out",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -134,6 +162,68 @@ func TestRestoreBackup_AnExtractionRefusalIsABadRequest(t *testing.T) {
 			assert.True(t, os.IsNotExist(err), "an entry climbed out of the target (lstat: %v)", err)
 		})
 	}
+}
+
+// TestRestoreBackup_EveryExtractionFailureSaysWhatItLeft (N1): the 409 for
+// a snapshot directory that stops resolving during the extraction, and the
+// 500 for an entry that cannot be written, say what the 400 says: the
+// extraction can stop after it has written entries, and the store was
+// marked diverged before it began.
+func TestRestoreBackup_EveryExtractionFailureSaysWhatItLeft(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entries    []tarEntry
+		hook       func(t *testing.T, live string)
+		wantStatus int
+	}{
+		"a snapshot directory that stops resolving": {
+			entries: []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}},
+			hook: func(t *testing.T, live string) {
+				require.NoError(t, os.Remove(live))
+				require.NoError(t, os.Symlink("joker", live))
+			},
+			wantStatus: http.StatusConflict,
+		},
+		"an entry that cannot be written": {
+			entries: []tarEntry{
+				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				{"audiobooks.pebble/MANIFEST-000001/joker", "hahaha"},
+			},
+			wantStatus: http.StatusInternalServerError,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, dbPath := liveRestore(t)
+			live := database.HNSWSnapshotDir(dbPath)
+			require.NoError(t, os.MkdirAll(live, 0o755))
+			writeTar(t, filepath.Join(config.AppConfig.BackupDir, "hush.tar"), tc.entries)
+			if tc.hook != nil {
+				t.Cleanup(system.SetBeforeRestoreExtractHook(func() { tc.hook(t, live) }))
+			}
+			status, body, marks := postRestore(t, "hush.tar", "")
+			require.Equal(t, tc.wantStatus, status, body)
+			for _, want := range extractRefusalNote {
+				assert.Contains(t, body, want)
+			}
+			assert.Equal(t, 1, marks)
+		})
+	}
+}
+
+// TestRestoreBackup_TheBackstopRemovesAMarkerWrittenDuringTheExtraction
+// (N4): the removal after the extraction is the backstop for a marker that
+// reaches a snapshot directory past every check. The extraction hook forces
+// one into the live directory after the first removal; the restore
+// succeeds, and the marker is gone when it returns.
+func TestRestoreBackup_TheBackstopRemovesAMarkerWrittenDuringTheExtraction(t *testing.T) {
+	_, dbPath := liveRestore(t)
+	live := database.HNSWSnapshotDir(dbPath)
+	require.NoError(t, os.MkdirAll(live, 0o755))
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "hush.tar"), []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+	t.Cleanup(system.SetBeforeRestoreExtractHook(func() { plantMarker(t, live) }))
+
+	status, body, _ := postRestore(t, "hush.tar", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.False(t, markerPresent(t, live), "the marker written during the extraction outlived the restore")
 }
 
 // TestRestoreBackup_ThroughSymlinkedDataAndSnapshotDirectories: what B1-r8's

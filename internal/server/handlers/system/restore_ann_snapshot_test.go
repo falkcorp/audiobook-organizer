@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -805,4 +805,44 @@ func TestRestoreBackup_RemovesTheRestoredMarkerBeforeTheFirstWrite(t *testing.T)
 	require.False(t, got.written, "the hook ran after the extraction's first write")
 	assert.False(t, got.present, "the marker beside the custom target's database was still there when the extraction began")
 	assert.False(t, markerPresent(t, restoredDir), "no marker may vouch for the restored database's snapshot")
+}
+
+// TestRestoreBackup_RefusesASnapshotDirectoryThatStopsResolving (B1-r6):
+// the check before the mark is not the only one. A snapshot directory that
+// stops resolving after it (here, between the first marker removal and the
+// extraction) is refused by the extraction, before the first entry is
+// written, with the same 409.
+func TestRestoreBackup_RefusesASnapshotDirectoryThatStopsResolving(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "audiobooks.pebble")
+	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
+	config.AppConfig.DatabasePath = dbPath
+	config.AppConfig.BackupDir = filepath.Join(root, "backups")
+	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	require.NoError(t, os.MkdirAll(config.AppConfig.BackupDir, 0o755))
+	live := database.HNSWSnapshotDir(dbPath)
+	require.NoError(t, os.MkdirAll(live, 0o755))
+	writeTar(t, filepath.Join(config.AppConfig.BackupDir, "hush.tar"), []tarEntry{
+		{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+		{"joker/hnsw.clean-stop", testCleanStopMarker},
+	})
+	t.Cleanup(system.SetBeforeRestoreExtractHook(func() {
+		require.NoError(t, os.Remove(live))
+		require.NoError(t, os.Symlink("joker", live))
+	}))
+
+	h, _ := newTestHandler(t)
+	marks := 0
+	h.WithANNSnapshotDivergence(func(string) { marks++ })
+	body, err := json.Marshal(map[string]any{"backup_filename": "hush.tar"})
+	require.NoError(t, err)
+	w := run(http.MethodPost, "/backup/restore", "/backup/restore", body, func(r *gin.Engine) {
+		r.POST("/backup/restore", h.RestoreBackup)
+	})
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Equal(t, 1, marks, "the restore was marked before the extraction")
+	for _, p := range []string{"audiobooks.pebble", "joker"} {
+		_, err := os.Lstat(filepath.Join(root, p))
+		assert.True(t, os.IsNotExist(err), "%s was written (lstat: %v)", p, err)
+	}
 }
