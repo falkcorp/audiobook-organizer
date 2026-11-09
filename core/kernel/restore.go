@@ -1,5 +1,5 @@
 // file: core/kernel/restore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
 // last-edited: 2026-11-09
 
@@ -395,9 +395,13 @@ func (k *Kernel) restoreInto(ctx context.Context, fs vfs.FS, cps *storage.Checkp
 			break
 		}
 	}
+	sidecars := k.intoSidecars(into)
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, removeIfExists(fs, into), removeIfExists(fs, state))
+			for _, p := range sidecars {
+				err = errors.Join(err, removeIfExists(fs, p))
+			}
 		}
 	}()
 	if cp.Name != "" {
@@ -430,9 +434,30 @@ func (k *Kernel) restoreInto(ctx context.Context, fs vfs.FS, cps *storage.Checkp
 	if err := chmodTree(fs, into); err != nil {
 		return res, err
 	}
+	// The copy's own sidecars, from its own stamps: <into>.storage-levels
+	// and each legacy projection sidecar beside it, never the live store's.
+	// make rollback-restore reads an archive's levels from them before it
+	// touches anything (05-storage §5S.3.12 row make rollback-restore: the
+	// levels read from the archived store itself), and the rehearsal boot of
+	// the copy finds sidecars that already describe it.
+	if err := storage.RewriteSidecars(ctx, fs, into, k.storageOwners()); err != nil {
+		return res, fmt.Errorf("kernel: --into: sidecars of the copy: %w", err)
+	}
 	res.Into, res.IntoState = into, state
 	res.Warnings = append(res.Warnings, fmt.Sprintf("the copy at %s holds the store's secrets and sign-in tokens: delete it after the rehearsal (the checkpoint sweeper deletes it 7 days after its last change)", into))
 	return res, nil
+}
+
+// intoSidecars is every sidecar path RewriteSidecars writes beside an
+// --into copy: the level sidecar and each owner's legacy projection.
+func (k *Kernel) intoSidecars(into string) []string {
+	out := []string{into + restorejournal.LevelsSuffix}
+	for _, o := range k.storageOwners() {
+		if g := o.Spec.LegacyGuard; g != nil && g.SidecarSuffix != "" {
+			out = append(out, into+g.SidecarSuffix)
+		}
+	}
+	return out
 }
 
 // mkdirPrivate creates dir (and any missing parent) and makes dir mode 0700.

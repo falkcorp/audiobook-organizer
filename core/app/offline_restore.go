@@ -1,5 +1,5 @@
 // file: core/app/offline_restore.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 10f91970-5117-4c65-b504-d2c27759490c
 // last-edited: 2026-11-09
 
@@ -29,7 +29,8 @@ touches the live store, so it takes no lock and runs while the service runs.
   --checkpoint <name>  the checkpoint of the store's latest upgrade attempt
   --archive <file>     an archive (this app's backup format)
   --into <dir>         copy the source into a new directory inside the
-                       checkpoint scratch area instead of replacing the store
+                       checkpoint scratch area instead of replacing the store,
+                       with the copy's own <dir>.storage-levels beside it
   --accept-loss        restoring a served or completed checkpoint, or an
                        archive, discards every write made since it was taken
 
