@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.9.2 -->
+<!-- version: 1.10.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -462,10 +462,7 @@ placeholder values:
 
 <!-- sudoers:begin -->
 ```
-deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
-    /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
-    /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
-    /usr/bin/systemctl stop audiobook-organizer.service, \
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service, \
     /usr/bin/systemctl start audiobook-organizer.service, \
     /usr/bin/systemctl restart audiobook-organizer.service, \
     /usr/local/libexec/audiobook-organizer/rollback/inflight-probe "", \
@@ -474,13 +471,20 @@ deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-leve
     /usr/local/libexec/audiobook-organizer/rollback/unit-type, \
     /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
     /usr/local/libexec/audiobook-organizer/rollback/pprof
-deploy ALL=(audiobook) NOPASSWD: /usr/local/libexec/audiobook-organizer/rollback/checkpoint-record
+deploy ALL=(audiobook) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
+    /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
+    /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
+    /usr/local/libexec/audiobook-organizer/rollback/checkpoint-record
 ```
 <!-- sudoers:end -->
 
 A helper listed bare admits any arguments, which it validates; one listed
 with `""` admits none. The plain lines have fixed arguments, which sudo
-matches exactly. `visudo -c` checks the syntax.
+matches exactly. The three `cat` lines run as the service user, not root:
+the sidecars sit in the store's directory, which the service user can write,
+so one could be a symlink to any file root can read. No refusal prints what
+a read returned, only its length and a hash, and names (owners, a release, a
+time) only when they match a fixed grammar. `visudo -c` checks the syntax.
 
 Check it with `ssh HOST 'sudo -n /usr/local/libexec/audiobook-organizer/rollback/inflight-probe'`:
 it should print nothing (no swap in flight) and not ask for a password.
