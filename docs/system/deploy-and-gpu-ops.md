@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.15.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -356,7 +356,13 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    `inactive` or `failed`: the recipe checks before it stops anything, and the
    helper again before it opens the log. The command takes the
    store's swap lock itself (an flock on `<state dir>/swap.lock` that never
-   waits) and refuses while a service is running or starting. The recipe does not retry. Afterwards it checks again that the
+   waits) and refuses while a service is running or starting. It also
+   refuses the lock when the state directory is writable by group or others,
+   or when `swap.lock` belongs to anyone but the taker or the state
+   directory's owner. The restore runs as the service user, which owns the
+   state directory (`offline_env`'s `ABK_STATE_DIR`), so it passes on a host
+   whose state directory is the service's own and not group- or
+   other-writable; nothing here takes the lock as root. The recipe does not retry. Afterwards it checks again that the
    unit stayed stopped.
 6. The `swap-prev` helper keeps the current binary as
    `$(DEPLOY_BIN).rolled-back` and installs `.prev` atomically; it starts
