@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -255,7 +255,7 @@ func TestExtractArchive_RefusesAClimbingEntryUnwritten(t *testing.T) {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := extractArchive(archive, target); !errors.Is(err, ErrArchiveEntryEscapes) {
+	if err := extractArchive(archive, target, nil); !errors.Is(err, ErrArchiveEntryEscapes) {
 		t.Fatalf("extractArchive = %v; want ErrArchiveEntryEscapes", err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "hnsw")); !os.IsNotExist(err) {
@@ -274,10 +274,164 @@ func TestExtractArchive_RefusesAnHNSWSnapshotEntryUnwritten(t *testing.T) {
 		{"hnsw/hnsw.clean-stop", `{"version":1,"model":"bge-m3"}`},
 	})
 	target := t.TempDir()
-	if err := extractArchive(archive, target); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
+	if err := extractArchive(archive, target, nil); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
 		t.Fatalf("extractArchive = %v; want ErrArchiveCarriesHNSWSnapshot", err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "hnsw")); !os.IsNotExist(err) {
 		t.Errorf("the HNSW snapshot directory exists after the refusal (%v); the entry must not be written", err)
+	}
+}
+
+// TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs (R1-15 round-4
+// verification review, SHOULD-FIX 1): entry names cannot keep an entry out
+// of a snapshot directory the filesystem routes it into, so Extract checks
+// where each entry lands, symlinks resolved, before it creates anything.
+func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
+	type entry struct {
+		name string
+		dir  bool
+	}
+	cases := []struct {
+		name string
+		// setup prepares the filesystem and returns the target and the
+		// snapshot directory; base is an empty directory.
+		setup   func(t *testing.T, base string) (target, snap string)
+		entries []entry
+		// landed is where the refused entry would have been written,
+		// relative to the snapshot directory.
+		landed string
+	}{
+		{
+			name: "a target above the snapshot directory",
+			setup: func(t *testing.T, base string) (string, string) {
+				return base, filepath.Join(base, "arkham", "hnsw")
+			},
+			entries: []entry{{name: "arkham/hnsw/hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+		},
+		{
+			name: "the snapshot directory as the target",
+			setup: func(t *testing.T, base string) (string, string) {
+				snap := filepath.Join(base, "hnsw")
+				return snap, snap
+			},
+			entries: []entry{{name: "hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+		},
+		{
+			name: "a symlinked parent",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, snap := filepath.Join(base, "gotham"), filepath.Join(base, "hnsw")
+				mustMkdir(t, target, snap)
+				mustSymlink(t, snap, filepath.Join(target, "wayne-manor"))
+				return target, snap
+			},
+			entries: []entry{{name: "wayne-manor/graph.bin"}},
+			landed:  "graph.bin",
+		},
+		{
+			// A write through a dangling symlink creates its target.
+			name: "a dangling symlink as the entry itself",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, snap := filepath.Join(base, "gotham"), filepath.Join(base, "hnsw")
+				mustMkdir(t, target, snap)
+				mustSymlink(t, filepath.Join(snap, "hnsw.clean-stop"), filepath.Join(target, "alfred"))
+				return target, snap
+			},
+			entries: []entry{{name: "alfred"}},
+			landed:  "hnsw.clean-stop",
+		},
+		{
+			// Checked before MkdirAll, which would create it.
+			name: "a directory entry through a symlink",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, snap := filepath.Join(base, "gotham"), filepath.Join(base, "hnsw")
+				mustMkdir(t, target, snap)
+				mustSymlink(t, snap, filepath.Join(target, "wayne-manor"))
+				return target, snap
+			},
+			entries: []entry{{name: "wayne-manor/batcave/", dir: true}},
+			landed:  "batcave",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target, snap := tc.setup(t, t.TempDir())
+			archive := filepath.Join(t.TempDir(), "the-dark-knight.tar")
+			f, err := os.Create(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tw := tar.NewWriter(f)
+			for _, e := range tc.entries {
+				h := &tar.Header{Name: e.name, Mode: 0o644, Typeflag: tar.TypeReg}
+				if e.dir {
+					h.Typeflag, h.Mode = tar.TypeDir, 0o755
+				}
+				if err := tw.WriteHeader(h); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := extractArchive(archive, target, []string{snap}); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
+				t.Fatalf("extractArchive = %v; want ErrArchiveCarriesHNSWSnapshot", err)
+			}
+			if _, err := os.Lstat(filepath.Join(snap, tc.landed)); !os.IsNotExist(err) {
+				t.Errorf("%s exists in the snapshot directory after the refusal (%v)", tc.landed, err)
+			}
+		})
+	}
+
+	t.Run("an entry outside the snapshot directories", func(t *testing.T) {
+		base := t.TempDir()
+		archive := filepath.Join(base, "the-dark-knight.tar")
+		writePlainTar(t, archive, [][2]string{{"audiobooks.pebble/MANIFEST-000001", "batcave"}})
+		target := filepath.Join(base, "gotham")
+		if err := extractArchive(archive, target, []string{filepath.Join(target, "hnsw"), filepath.Join(base, "hnsw")}); err != nil {
+			t.Fatalf("extractArchive = %v; want the entry written", err)
+		}
+	})
+}
+
+func TestPathsOverlap(t *testing.T) {
+	base := t.TempDir()
+	snap := filepath.Join(base, "gotham", "hnsw")
+	mustMkdir(t, snap)
+	mustSymlink(t, filepath.Join(base, "gotham"), filepath.Join(base, "wayne-manor"))
+	cases := map[string]bool{
+		snap:                                    true,  // the directory itself
+		filepath.Join(base, "gotham"):           true,  // above it
+		base:                                    true,  // further above
+		filepath.Join(snap, "batcave"):          true,  // inside it, not created yet
+		filepath.Join(base, "wayne-manor"):      true,  // above it, through a symlink
+		filepath.Join(base, "wayne-manor/hnsw"): true,  // the directory, through a symlink
+		filepath.Join(base, "gotham", "hnsw2"):  false, // a sibling sharing the prefix
+		filepath.Join(base, "arkham"):           false, // a sibling of its parent
+	}
+	for p, want := range cases {
+		if got := PathsOverlap(p, snap); got != want {
+			t.Errorf("PathsOverlap(%q, snapshot) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func mustMkdir(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func mustSymlink(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Symlink(oldname, newname); err != nil {
+		t.Fatal(err)
 	}
 }

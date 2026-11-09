@@ -1,5 +1,5 @@
 // file: internal/backup/prepare_restore_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 29ed21ba-737f-4de2-844d-5681aec413d7
 // last-edited: 2026-11-08
 
@@ -108,7 +108,7 @@ func TestPreparedRestore_ExtractCanFailAfterWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := t.TempDir()
-	if err := r.Extract(target); err == nil {
+	if err := r.Extract(target, nil); err == nil {
 		t.Fatal("Extract succeeded; want the entry under a file to fail")
 	}
 	if _, err := os.Stat(filepath.Join(target, "audiobooks.pebble", "MANIFEST-000001")); err != nil {
@@ -133,7 +133,7 @@ func TestPreparedRestore_ExtractErrorCanMatchNotExist(t *testing.T) {
 	if err := os.Remove(archive); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Extract(t.TempDir()); !errors.Is(err, os.ErrNotExist) {
+	if err := r.Extract(t.TempDir(), nil); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Extract after the archive went away = %v; want an error matching os.ErrNotExist", err)
 	}
 }

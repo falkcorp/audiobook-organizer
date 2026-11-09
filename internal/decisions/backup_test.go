@@ -1,5 +1,5 @@
 // file: internal/decisions/backup_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d6a41f93-58e2-4b07-9c1d-3e8f720b5a64
 // last-edited: 2026-11-08
 
@@ -45,7 +45,7 @@ func TestBackupRoundTrip_DecisionsSurvive(t *testing.T) {
 	restoreRoot := t.TempDir()
 	prepared, err := backup.PrepareRestoreIn(backupDir, info.Filename, true)
 	require.NoError(t, err)
-	require.NoError(t, prepared.Extract(restoreRoot))
+	require.NoError(t, prepared.Extract(restoreRoot, nil))
 
 	restored, err := database.NewPebbleStore(filepath.Join(restoreRoot, "audiobooks.pebble"))
 	require.NoError(t, err)
