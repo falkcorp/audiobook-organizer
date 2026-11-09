@@ -1,5 +1,5 @@
 // file: cmd/commands_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
 // last-edited: 2026-11-08
 
@@ -26,8 +26,7 @@ import (
 func stubCommandDeps(t *testing.T) {
 	t.Helper()
 
-	origInit := initializeStore
-	origClose := closeStore
+	origOpen := openCLIStore
 	origScan := scanDirectory
 	origProcess := processBooks
 	origPlaylists := generatePlaylists
@@ -37,7 +36,7 @@ func stubCommandDeps(t *testing.T) {
 	origDefaultCfg := getDefaultServerConfig
 	origRunApp := runApp
 
-	initializeStore = func(dbType, path string) (database.Store, error) {
+	openCLIStore = func(context.Context, bool) (database.Store, func(), error) {
 		// Command tests only need GlobalStore to be non-nil for the
 		// startup sequence to proceed. The only store method the
 		// startup path actually touches is GetAllImportPaths (in
@@ -48,11 +47,7 @@ func stubCommandDeps(t *testing.T) {
 		ms := mocks.NewMockStore(t)
 		ms.EXPECT().GetAllImportPaths().Return(nil, nil).Maybe()
 		database.SetGlobalStore(ms)
-		return ms, nil
-	}
-	closeStore = func() error {
-		database.SetGlobalStore(nil)
-		return nil
+		return ms, func() { database.SetGlobalStore(nil) }, nil
 	}
 	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return []scanner.Book{}, nil
@@ -76,8 +71,7 @@ func stubCommandDeps(t *testing.T) {
 	runApp = func(context.Context, books.ServeInputs) error { return nil }
 
 	t.Cleanup(func() {
-		initializeStore = origInit
-		closeStore = origClose
+		openCLIStore = origOpen
 		scanDirectory = origScan
 		processBooks = origProcess
 		generatePlaylists = origPlaylists
@@ -259,8 +253,8 @@ func TestStoreInitializationError(t *testing.T) {
 	config.AppConfig.DatabaseType = "sqlite"
 	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
 
-	initializeStore = func(dbType, path string) (database.Store, error) {
-		return nil, fmt.Errorf("store init failed")
+	openCLIStore = func(context.Context, bool) (database.Store, func(), error) {
+		return nil, nil, fmt.Errorf("store init failed")
 	}
 
 	if err := scanCmd.RunE(scanCmd, nil); err == nil {
@@ -295,9 +289,9 @@ func serveWithStubs(t *testing.T) (started bool, in books.ServeInputs, err error
 // app.New, after this snapshot), as it did for HEAD (R1-15).
 func TestServe_RunsNoStartupStepOfItsOwn(t *testing.T) {
 	stubCommandDeps(t)
-	initializeStore = func(string, string) (database.Store, error) {
+	openCLIStore = func(context.Context, bool) (database.Store, func(), error) {
 		t.Error("serve opened the store itself; the kernel opens it at P2")
-		return nil, fmt.Errorf("serve must not open the store")
+		return nil, nil, fmt.Errorf("serve must not open the store")
 	}
 	loadConfigFromDB = func(database.SettingsStore) error {
 		t.Error("serve loaded the stored settings itself; books' Register does")

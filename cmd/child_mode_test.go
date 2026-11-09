@@ -1,5 +1,5 @@
 // file: cmd/child_mode_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2b9c71-3f4a-4d86-a0e7-8c1f6b2d9a34
 // last-edited: 2026-11-08
 
@@ -40,10 +40,10 @@ func TestChildModeHelperProcess(t *testing.T) {
 
 	switch mode {
 	case "fail":
-		initializeStore = func(string, string) (database.Store, error) {
+		initializeChildStore = func(string, string) (database.Store, error) {
 			return mocks.NewMockStore(t), nil
 		}
-		closeStore = func() error { return nil }
+		closeChildStore = func() error { return nil }
 		loadConfigFromDB = func(database.SettingsStore) error {
 			return errors.New("read settings: boom")
 		}
@@ -71,7 +71,10 @@ func runChildModeHelper(t *testing.T, mode string) (int, string) {
 		childModeHelperEnv+"="+mode,
 		registry.EnvChildDBType+"=pebble",
 		registry.EnvChildDBPath+"="+filepath.Join(t.TempDir(), "audiobooks.pebble"),
-		registry.EnvChildRootDir+"="+t.TempDir())
+		registry.EnvChildRootDir+"="+t.TempDir(),
+		// The child reads the swap slot under the state directory before it
+		// opens the store: keep it off the host's.
+		config.SecureStateDirEnv+"="+t.TempDir())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stderr

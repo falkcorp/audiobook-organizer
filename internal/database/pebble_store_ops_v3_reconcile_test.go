@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_reconcile_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: ea4b7eaf-18c6-45d2-9344-3838c68c905f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package database
 
@@ -207,7 +207,7 @@ func TestReconcileOpsV3NoWritesAfterEveryWriter(t *testing.T) {
 
 // TestReconcileOpsV3RepairsOldBinaryWritesOnReboot simulates a rollback: a
 // binary without the opv3 projection writes, creates and deletes opv2 rows
-// directly (no opv3 change); the next boot of this binary (InitializeStore:
+// directly (no opv3 change); the next boot of this binary (InitializeStoreWith:
 // version already 65, so migration 065 does not run) must rebuild every
 // stale record, create the missing one, remove the orphan, and leave the
 // untouched runs alone. A further reconcile then writes nothing.
@@ -215,9 +215,9 @@ func TestReconcileOpsV3RepairsOldBinaryWritesOnReboot(t *testing.T) {
 	dir := t.TempDir() + "/pebble"
 	open := func() *PebbleStore {
 		t.Helper()
-		s, err := InitializeStore("pebble", dir)
+		s, err := InitializeStoreWith("pebble", dir, StandaloneOptions{})
 		if err != nil {
-			t.Fatalf("InitializeStore: %v", err)
+			t.Fatalf("InitializeStoreWith: %v", err)
 		}
 		return s.(*PebbleStore)
 	}

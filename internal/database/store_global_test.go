@@ -1,7 +1,7 @@
 // file: internal/database/store_global_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c1e3a2b-4d5f-4a6b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package database
 
@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// TestGlobalStoreConcurrentAccess drives InitializeStore-style writes
-// (SetGlobalStore, the same setter InitializeStore now calls), the real
+// TestGlobalStoreConcurrentAccess drives InitializeStoreWith-style writes
+// (SetGlobalStore, the same setter InitializeStoreWith now calls), the real
 // CloseStore, and GetGlobalStore concurrently. Run under `go test -race`:
-// before the InitializeStore/CloseStore fix, CloseStore's bare
+// before the InitializeStoreWith/CloseStore fix, CloseStore's bare
 // `store := globalStore; globalStore = nil` raced with GetGlobalStore's
 // RLock because neither held globalStoreMu; the race detector flagged it.
 // With the fix, CloseStore takes globalStoreMu.Lock() around that sequence,
@@ -36,7 +36,7 @@ func TestGlobalStoreConcurrentAccess(t *testing.T) {
 	wg.Add(goroutines * 3)
 
 	for range goroutines {
-		// Writer: mimics InitializeStore setting a new store.
+		// Writer: mimics InitializeStoreWith setting a new store.
 		go func() {
 			defer wg.Done()
 			SetGlobalStore(&MockStore{})
