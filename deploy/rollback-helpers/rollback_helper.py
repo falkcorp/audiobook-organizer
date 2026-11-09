@@ -1,10 +1,10 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
-"""Root-owned helpers for `make rollback` and `make rollback-restore` (R1-27).
+"""Root-owned helpers for `make deploy`, `make rollback` and `make rollback-restore` (R1-27).
 
 The deploy user runs each operation through `sudo -n` and one stub per
 operation in LIBDIR (see STUBS). sudoers grants each stub with no argument
@@ -22,6 +22,10 @@ it touches comes from CONFIG, a root-owned file the owner writes once:
     archive_dir = /path/to/archives
     checkpoint_dir =                       (optional; core.storage.checkpoint_dir)
     offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
+    service_group = audiobook             (optional; defaults to service_user)
+    stage_bin = /home/USER/audiobook-organizer                    (optional)
+    stage_unit = /home/USER/audiobook-organizer.service           (optional)
+    stage_local_conf = /home/USER/audiobook-organizer-local.conf  (optional)
 
 CONFIG and its directory must be owned by root (or by the user running the
 helper) and not writable by group or others, or every operation refuses.
@@ -59,6 +63,23 @@ Operations (the stub name, then the subcommand):
                      writes the fixed drop-in `[Service]\\nType=simple\\n` to
                      /etc/systemd/system/<unit>.d/zz-rollback-type-simple.conf;
                      notify removes it. Then `systemctl daemon-reload`.
+  install-staged     `install binary`, `install unit` or `install local-conf`,
+                     as root: the deploy. binary installs stage_bin as <bin>
+                     atomically (copy to <bin>.new, fsync, rename), keeping
+                     the replaced one as <bin>.prev. unit installs stage_unit
+                     as /etc/systemd/system/<unit>, local-conf installs
+                     stage_local_conf as /etc/systemd/system/<unit>.d/local.conf;
+                     both then `systemctl daemon-reload`. systemd reads those
+                     two files as root, so a free copy would let the deploy
+                     user write User=root, ExecStartPre= or
+                     StandardOutput=file:/etc/...: each is read once (no
+                     symlink, at most 256 KiB), checked against ALLOWED (an
+                     allowlist of directives, see check_unit_text), and those
+                     same bytes are installed.
+  pprof              `pprof on` or `pprof off`, as root. on writes the fixed
+                     drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
+                     to /etc/systemd/system/<unit>.d/pprof.conf; off removes
+                     it. Then `systemctl daemon-reload`.
   swap-prev          `swap-prev`, no arguments, as root. Keeps <bin> as
                      <bin>.rolled-back and installs <bin>.prev as <bin>
                      atomically (copy to <bin>.new, then rename), which also
@@ -96,6 +117,9 @@ TRANSIENT_UNIT = "audiobook-organizer-rollback-restore"
 INTO_NAME = "rollback-restore-levels"
 DROPIN = "zz-rollback-type-simple.conf"
 DROPIN_TEXT = "[Service]\nType=simple\n"
+PPROF_DROPIN = "pprof.conf"
+PPROF_TEXT = "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n"
+UNIT_LIMIT = 256 << 10
 RECORD_LIMIT = 1 << 20
 # stub file name -> subcommand. Each stub is `exec /usr/bin/python3 -I
 # LIBDIR/rollback_helper.py <subcommand> "$@"`.
@@ -105,6 +129,8 @@ STUBS = {
     "restore-offline": "restore",
     "unit-type": "unit-type",
     "swap-prev": "swap-prev",
+    "install-staged": "install",
+    "pprof": "pprof",
 }
 
 _NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
@@ -122,6 +148,10 @@ _KEYS = {
     "archive_dir": True,
     "checkpoint_dir": False,
     "offline_env": False,
+    "service_group": False,
+    "stage_bin": False,
+    "stage_unit": False,
+    "stage_local_conf": False,
 }
 
 
@@ -173,7 +203,16 @@ def load_config() -> dict[str, str]:
     for key, required in _KEYS.items():
         if required and not cfg.get(key):
             raise RefusedError(f"{CONFIG}: {key} is not set")
-    for key in ("bin", "db", "state_dir", "archive_dir", "checkpoint_dir"):
+    for key in (
+        "bin",
+        "db",
+        "state_dir",
+        "archive_dir",
+        "checkpoint_dir",
+        "stage_bin",
+        "stage_unit",
+        "stage_local_conf",
+    ):
         v = cfg.get(key, "")
         if not v:
             continue
@@ -185,6 +224,12 @@ def load_config() -> dict[str, str]:
         raise RefusedError(
             f"{CONFIG}: service_user {cfg['service_user']!r} must be the service's own user, not root"
         )
+    group = cfg.setdefault("service_group", "") or cfg["service_user"]
+    if not _USER.fullmatch(group) or group == "root":
+        raise RefusedError(
+            f"{CONFIG}: service_group {group!r} must be the service's own group, not root"
+        )
+    cfg["service_group"] = group
     if not _UNIT.fullmatch(cfg["unit"]):
         raise RefusedError(f"{CONFIG}: unit {cfg['unit']!r} is not a .service unit name")
     for tok in cfg.get("offline_env", "").split():
@@ -382,31 +427,325 @@ def op_into_worker(args: list[str]) -> int:
         _clean_scratch(into)
 
 
+def _fixed_dropin(name: str, text: str | None, what: str) -> None:
+    """Write the fixed drop-in `name` (text) or remove it (None), then
+    daemon-reload."""
+    cfg = load_config()
+    d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
+    path = f"{d}/{name}"
+    if text is not None:
+        os.makedirs(d, mode=0o755, exist_ok=True)
+        _write_replace(path, text.encode(), 0o644)
+        print(f"installed {path} ({what})")
+    else:
+        try:
+            os.unlink(path)
+            print(f"removed {path} ({what})")
+        except FileNotFoundError:
+            print(f"{path} is absent ({what})")
+    _daemon_reload()
+
+
+def _daemon_reload() -> None:
+    rc = subprocess.run([TOOLS["systemctl"], "daemon-reload"], check=False).returncode
+    if rc != 0:
+        raise RefusedError(f"systemctl daemon-reload exited {rc}")
+
+
+def _write_replace(path: str, data: bytes, mode: int) -> None:
+    """Write data to path atomically: a temporary file beside it, fsync, rename."""
+    tmp = f"{path}.tmp"
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def op_unit_type(args: list[str]) -> int:
     _arity(args, 1, "unit-type simple|notify")
     kind = args[0]
     if kind not in ("simple", "notify"):
         raise RefusedError("usage: unit-type simple|notify", 2)
+    _fixed_dropin(DROPIN, DROPIN_TEXT if kind == "simple" else None, f"Type={kind}")
+    return 0
+
+
+def op_pprof(args: list[str]) -> int:
+    _arity(args, 1, "pprof on|off")
+    if args[0] not in ("on", "off"):
+        raise RefusedError("usage: pprof on|off", 2)
+    on = args[0] == "on"
+    _fixed_dropin(PPROF_DROPIN, PPROF_TEXT if on else None, f"pprof {args[0]}")
+    return 0
+
+
+# The directives a staged unit or local.conf may hold, by section, and what
+# each value may be (None: anything). An allowlist, not a denylist: the ways
+# a unit can run something as root, write a file as root or widen a
+# privilege are too many to list (ExecStartPre=, a `+` or `!` command prefix,
+# User=, Group=, SupplementaryGroups=, AmbientCapabilities=, DynamicUser=,
+# RootDirectory=, EnvironmentFile=, StandardOutput=file:, OnFailure=,
+# StartLimitAction=, Alias=, ...). Anything not here is refused by name, so
+# the owner can see what to add after checking it cannot do any of that.
+# User= and Group= must name service_user and service_group (checked apart:
+# the unit must set both, since a unit without User= runs as root, and an
+# empty User= in a drop-in resets it to root). Environment= may hold any
+# variable: it reaches only the service's processes, which run as
+# service_user.
+_ANY = None
+_TARGETS = {
+    "network.target",
+    "network-online.target",
+    "local-fs.target",
+    "remote-fs.target",
+    "time-sync.target",
+}
+ALLOWED: dict[str, dict[str, object]] = {
+    "Unit": {
+        "Description": _ANY,
+        "Documentation": _ANY,
+        "After": _ANY,
+        "Wants": "targets",
+        "StartLimitBurst": "number",
+        "StartLimitIntervalSec": "time",
+    },
+    "Service": {
+        "Type": {"simple", "exec", "notify"},
+        "NotifyAccess": {"main", "exec", "all", "none"},
+        "TimeoutStartSec": "time",
+        "TimeoutStopSec": "time",
+        "User": "user",
+        "Group": "group",
+        "ExecStart": "exec",
+        "WorkingDirectory": "dir",
+        "Environment": _ANY,
+        "Restart": {
+            "no",
+            "on-success",
+            "on-failure",
+            "on-abnormal",
+            "on-watchdog",
+            "on-abort",
+            "always",
+        },
+        "RestartSec": "time",
+        "RestartPreventExitStatus": "statuses",
+        "KillMode": {"control-group", "mixed", "process"},
+        "MemoryMax": "size",
+        "MemoryHigh": "size",
+        "LimitNOFILE": "size",
+        "NoNewPrivileges": {"yes", "no", "true", "false"},
+        "ProtectKernelTunables": {"yes", "no", "true", "false"},
+        "ProtectKernelModules": {"yes", "no", "true", "false"},
+        "ProtectControlGroups": {"yes", "no", "true", "false"},
+        "ProtectSystem": {"yes", "no", "true", "false", "full", "strict"},
+        "ProtectHome": {"yes", "no", "true", "false", "read-only", "tmpfs"},
+        "PrivateTmp": {"yes", "no", "true", "false"},
+        "PrivateDevices": {"yes", "no", "true", "false"},
+        "StandardOutput": {"journal", "journal+console", "null", "inherit"},
+        "StandardError": {"journal", "journal+console", "null", "inherit"},
+        "SyslogIdentifier": "word",
+    },
+    "Install": {"WantedBy": {"multi-user.target", "default.target"}},
+}
+_VALUES = {
+    "number": re.compile(r"[0-9]+"),
+    "time": re.compile(r"[0-9a-z. ]+|infinity"),
+    "size": re.compile(r"[0-9]+[KMGT]?|infinity|[0-9]+%"),
+    "statuses": re.compile(r"[0-9A-Z ]+"),
+    "word": re.compile(r"[A-Za-z0-9._-]+"),
+    "dir": re.compile(r"-?/[^\s]*"),
+    # empty (a reset), or an absolute command with no `+`/`!` prefix, which
+    # would run it as root or with full privileges.
+    "exec": re.compile(r"|[-@:]*/.*"),
+}
+
+
+def _logical_lines(text: str) -> list[tuple[int, str]]:
+    """(line number, logical line) pairs, continuations joined the way
+    systemd joins them, refusing every form systemd versions disagree on."""
+    if "\r" in text or "\0" in text:
+        raise RefusedError("carriage returns and NUL bytes are refused")
+    out: list[tuple[int, str]] = []
+    cont: list[str] = []
+    start = 0
+    for n, line in enumerate(text.split("\n"), 1):
+        stripped = line.strip()
+        if cont:
+            if not stripped or stripped[0] in "#;":
+                raise RefusedError(
+                    f"line {n}: a blank or comment line inside a continued value is refused"
+                )
+        elif not stripped or stripped[0] in "#;":
+            continue
+        if line.rstrip() != line and line.rstrip().endswith("\\"):
+            raise RefusedError(f"line {n}: a backslash followed by spaces is refused")
+        if line.endswith("\\"):
+            if not cont:
+                start = n
+            cont.append(line[:-1])
+            continue
+        if cont:
+            out.append((start, " ".join([*cont, line])))
+            cont = []
+        else:
+            out.append((n, line))
+    if cont:
+        raise RefusedError(f"line {start}: the file ends inside a continued value")
+    return out
+
+
+def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
+    """Raise RefusedError unless text holds only ALLOWED directives with
+    allowed values. whole_unit: the unit file itself, which must set User=
+    and Group= in [Service] (a drop-in may leave them out)."""
+    section = ""
+    seen: set[str] = set()
+    for n, line in _logical_lines(text):
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            section = s[1:-1]
+            if section not in ALLOWED:
+                raise RefusedError(f"line {n}: section [{section}] is not allowed")
+            continue
+        key, sep, value = s.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key):
+            raise RefusedError(f"line {n}: {s[:60]!r} is not a `Key=value` directive")
+        if not section:
+            raise RefusedError(f"line {n}: {key}= comes before any [section]")
+        if key not in ALLOWED[section]:
+            raise RefusedError(
+                f"line {n}: {key}= is not on the allowed list for [{section}] "
+                "(rollback_helper.py ALLOWED; add it there only after checking it "
+                "cannot run, write or grant anything as root)"
+            )
+        rule = ALLOWED[section][key]
+        ok = True
+        if rule == "user":
+            ok = value == cfg["service_user"]
+        elif rule == "group":
+            ok = value == cfg["service_group"]
+        elif rule == "targets":
+            ok = bool(value) and all(t in _TARGETS for t in value.split())
+        elif isinstance(rule, set):
+            ok = value in rule
+        elif isinstance(rule, str):
+            ok = bool(_VALUES[rule].fullmatch(value))
+            if rule == "exec" and value:
+                ok = ok and not set(value[: len(value) - len(value.lstrip("-@:+!"))]) & {"+", "!"}
+        if not ok:
+            want = {
+                "user": f"must be {cfg['service_user']}",
+                "group": f"must be {cfg['service_group']}",
+            }
+            raise RefusedError(
+                f"line {n}: {key}={value[:60]!r} is refused"
+                + (f" ({want[rule]})" if isinstance(rule, str) and rule in want else "")
+            )
+        if section == "Service":
+            seen.add(key)
+    if whole_unit:
+        for key, who in (("User", cfg["service_user"]), ("Group", cfg["service_group"])):
+            if key not in seen:
+                raise RefusedError(
+                    f"the unit sets no {key}= (it would run as root); it must set {key}={who}"
+                )
+
+
+def _read_staged(path: str, limit: int | None) -> tuple[int, os.stat_result]:
+    """Open a staged file without following a symlink; it must be a regular
+    file (of at most limit bytes). Returns the open fd and its stat."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        raise RefusedError(f"cannot open {path}: {e.strerror} (a symlink is refused)") from e
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or (limit is not None and st.st_size > limit):
+        os.close(fd)
+        raise RefusedError(
+            f"{path} is not a regular file" + (f" of at most {limit} bytes" if limit else "")
+        )
+    return fd, st
+
+
+def op_install(args: list[str]) -> int:
+    _arity(args, 1, "install binary|unit|local-conf")
+    what = args[0]
+    keys = {"binary": "stage_bin", "unit": "stage_unit", "local-conf": "stage_local_conf"}
+    if what not in keys:
+        raise RefusedError("usage: install binary|unit|local-conf", 2)
     cfg = load_config()
-    d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
-    path = f"{d}/{DROPIN}"
-    if kind == "simple":
-        os.makedirs(d, mode=0o755, exist_ok=True)
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(DROPIN_TEXT)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
-        print(f"installed {path} (Type=simple)")
+    src = cfg.get(keys[what], "")
+    if not src:
+        raise RefusedError(f"{keys[what]} is not set in {CONFIG}: nothing to install from")
+    if what == "binary":
+        return _install_binary(cfg["bin"], src)
+    fd, _ = _read_staged(src, UNIT_LIMIT)
+    try:
+        data = os.read(fd, UNIT_LIMIT + 1)
+    finally:
+        os.close(fd)
+    if len(data) > UNIT_LIMIT:
+        raise RefusedError(f"{src} is larger than {UNIT_LIMIT} bytes")
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        raise RefusedError(f"{src} is not UTF-8") from e
+    try:
+        check_unit_text(text, cfg, whole_unit=what == "unit")
+    except RefusedError as e:
+        raise RefusedError(f"{src} refused, nothing installed: {e}") from e
+    if what == "unit":
+        dest = f"{SYSTEMD_DIR}/{cfg['unit']}"
+        os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
     else:
+        d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
+        os.makedirs(d, mode=0o755, exist_ok=True)
+        dest = f"{d}/local.conf"
+    _write_replace(dest, data, 0o644)
+    print(f"installed {src} as {dest}")
+    _daemon_reload()
+    return 0
+
+
+def _install_binary(b: str, src: str) -> int:
+    prev, new = f"{b}.prev", f"{b}.new"
+    fd, _ = _read_staged(src, None)
+    try:
+        if os.path.lexists(b):
+            try:
+                shutil.copy2(b, f"{prev}.tmp")
+                os.replace(f"{prev}.tmp", prev)
+            except OSError as e:
+                raise RefusedError(f"keeping {b} as {prev} failed ({e}); {b} is unchanged") from e
         try:
-            os.unlink(path)
-            print(f"removed {path} (Type=notify)")
-        except FileNotFoundError:
-            print(f"{path} is absent (Type=notify)")
-    rc = subprocess.run([TOOLS["systemctl"], "daemon-reload"], check=False).returncode
-    if rc != 0:
-        raise RefusedError(f"systemctl daemon-reload exited {rc}")
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(new)
+            out = os.open(new, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755)
+            with os.fdopen(out, "wb") as f, os.fdopen(os.dup(fd), "rb") as s:
+                shutil.copyfileobj(s, f, 1 << 20)
+                f.flush()
+                os.fchmod(f.fileno(), 0o755)
+                os.fsync(f.fileno())
+            os.replace(new, b)
+        except OSError as e:
+            with contextlib.suppress(OSError):
+                os.unlink(new)
+            raise RefusedError(f"installing {src} as {b} failed ({e}); {b} is unchanged") from e
+    finally:
+        os.close(fd)
+    print(f"installed {src} as {b}; the replaced binary is {prev}")
     return 0
 
 
@@ -446,6 +785,8 @@ OPS = {
     "restore": op_restore,
     "unit-type": op_unit_type,
     "swap-prev": op_swap_prev,
+    "install": op_install,
+    "pprof": op_pprof,
     "_into-worker": op_into_worker,
 }
 
