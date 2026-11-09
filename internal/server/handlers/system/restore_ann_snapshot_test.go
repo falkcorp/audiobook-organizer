@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -36,14 +37,19 @@ const testCleanStopMarker = `{"version":1,"model":"bge-m3","at":"2026-11-08T00:0
 type tarEntry struct{ name, body string }
 
 // writeTar writes an uncompressed tar archive: the restore sniffs the codec
-// from the bytes and falls back to plain tar.
+// from the bytes and falls back to plain tar. A name that ends in a slash is
+// written as a directory.
 func writeTar(t *testing.T, path string, entries []tarEntry) {
 	t.Helper()
 	f, err := os.Create(path)
 	require.NoError(t, err)
 	tw := tar.NewWriter(f)
 	for _, e := range entries {
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}))
+		hdr := &tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}
+		if strings.HasSuffix(e.name, "/") {
+			hdr = &tar.Header{Name: e.name, Mode: 0o755, Typeflag: tar.TypeDir}
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
 		_, err := tw.Write([]byte(e.body))
 		require.NoError(t, err)
 	}
@@ -100,6 +106,19 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 		{
 			name:       "custom target",
 			entries:    []tarEntry{{"audiobooks.pebble/MANIFEST-000001", "batcave"}},
+			custom:     true,
+			plantLive:  true,
+			wantStatus: http.StatusOK,
+		},
+		{
+			// tar -C <dir> -cf <archive> . writes the target itself first, as
+			// "./": the restored database is still under the custom target,
+			// and so is the snapshot directory whose marker must go.
+			name: "custom target, an archive whose first entry is the target itself",
+			entries: []tarEntry{
+				{"./", ""},
+				{"./audiobooks.pebble/MANIFEST-000001", "batcave"},
+			},
 			custom:     true,
 			plantLive:  true,
 			wantStatus: http.StatusOK,
