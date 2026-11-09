@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -102,6 +102,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import unicodedata
 
 CONFIG = "/etc/audiobook-organizer/rollback.conf"
 LIBDIR = "/usr/local/libexec/audiobook-organizer/rollback"
@@ -571,24 +572,48 @@ _VALUES = {
 }
 
 
+# systemd's own whitespace inside a line. Python's str.strip(), split() and
+# splitlines() also take \v, \f, \x1c-\x1f, \x85, U+2028 and more as
+# whitespace or line breaks, which systemd does not: `User=alfred<VT>` would
+# pass a check built on them and be an invalid User= to systemd, which then
+# ignores it and runs the unit as root. So directive lines may hold only
+# printable ASCII and tab (_DIRECTIVE_CHARS), lines split on \n alone, and
+# only " \t" is ever stripped.
+_WS = " \t"
+_DIRECTIVE_CHARS = re.compile(r"[\t\x20-\x7e]*")
+
+
+def _is_comment(line: str) -> bool:
+    s = line.lstrip(_WS)
+    return not s or s[0] in "#;"
+
+
 def _logical_lines(text: str) -> list[tuple[int, str]]:
     """(line number, logical line) pairs, continuations joined the way
-    systemd joins them, refusing every form systemd versions disagree on."""
+    systemd joins them, refusing every form systemd versions disagree on.
+    Messages name line numbers only, never the text: root read it."""
     if "\r" in text or "\0" in text:
         raise RefusedError("carriage returns and NUL bytes are refused")
     out: list[tuple[int, str]] = []
     cont: list[str] = []
     start = 0
     for n, line in enumerate(text.split("\n"), 1):
-        stripped = line.strip()
-        if cont:
-            if not stripped or stripped[0] in "#;":
-                raise RefusedError(
-                    f"line {n}: a blank or comment line inside a continued value is refused"
-                )
-        elif not stripped or stripped[0] in "#;":
+        if _is_comment(line) and not cont:
+            # systemd skips a comment line whole, up to the \n; any
+            # character but a control (and the line breaks refused above) is
+            # fine there, so a comment may hold an em dash.
+            if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") and c != "\t" for c in line):
+                raise RefusedError(f"line {n}: a control character in a comment is refused")
             continue
-        if line.rstrip() != line and line.rstrip().endswith("\\"):
+        if not _DIRECTIVE_CHARS.fullmatch(line):
+            raise RefusedError(
+                f"line {n}: only printable ASCII and tabs are allowed outside comments"
+            )
+        if cont and _is_comment(line):
+            raise RefusedError(
+                f"line {n}: a blank or comment line inside a continued value is refused"
+            )
+        if line.rstrip(_WS) != line and line.rstrip(_WS).endswith("\\"):
             raise RefusedError(f"line {n}: a backslash followed by spaces is refused")
         if line.endswith("\\"):
             if not cont:
@@ -608,26 +633,30 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
 def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
     """Raise RefusedError unless text holds only ALLOWED directives with
     allowed values. whole_unit: the unit file itself, which must set User=
-    and Group= in [Service] (a drop-in may leave them out)."""
+    and Group= in [Service] (a drop-in may leave them out). Refusals name
+    the line, and a section or key only once it is one of ALLOWED's own
+    names; never a value."""
     section = ""
     seen: set[str] = set()
     for n, line in _logical_lines(text):
-        s = line.strip()
+        s = line.strip(_WS)
         if s.startswith("[") and s.endswith("]"):
             section = s[1:-1]
             if section not in ALLOWED:
-                raise RefusedError(f"line {n}: section [{section}] is not allowed")
+                raise RefusedError(
+                    f"line {n}: a section other than [{'], ['.join(ALLOWED)}] is not allowed"
+                )
             continue
         key, sep, value = s.partition("=")
-        key, value = key.strip(), value.strip()
+        key, value = key.strip(_WS), value.strip(_WS)
         if not sep or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key):
-            raise RefusedError(f"line {n}: {s[:60]!r} is not a `Key=value` directive")
+            raise RefusedError(f"line {n} is not a `Key=value` directive")
         if not section:
-            raise RefusedError(f"line {n}: {key}= comes before any [section]")
+            raise RefusedError(f"line {n}: a directive before any [section]")
         if key not in ALLOWED[section]:
             raise RefusedError(
-                f"line {n}: {key}= is not on the allowed list for [{section}] "
-                "(rollback_helper.py ALLOWED; add it there only after checking it "
+                f"line {n}: a directive not on the allowed list for [{section}] "
+                "(rollback_helper.py ALLOWED; add one there only after checking it "
                 "cannot run, write or grant anything as root)"
             )
         rule = ALLOWED[section][key]
@@ -637,20 +666,24 @@ def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
         elif rule == "group":
             ok = value == cfg["service_group"]
         elif rule == "targets":
-            ok = bool(value) and all(t in _TARGETS for t in value.split())
+            ok = bool(value) and all(t in _TARGETS for t in value.split(" "))
         elif isinstance(rule, set):
             ok = value in rule
         elif isinstance(rule, str):
             ok = bool(_VALUES[rule].fullmatch(value))
             if rule == "exec" and value:
-                ok = ok and not set(value[: len(value) - len(value.lstrip("-@:+!"))]) & {"+", "!"}
+                # No `+` or `!` prefix (root, full privileges), and no `;`,
+                # which systemd reads as the start of a second command line
+                # with its own prefix.
+                prefix = value[: len(value) - len(value.lstrip("-@:+!"))]
+                ok = ok and not set(prefix) & {"+", "!"} and ";" not in value
         if not ok:
             want = {
                 "user": f"must be {cfg['service_user']}",
                 "group": f"must be {cfg['service_group']}",
             }
             raise RefusedError(
-                f"line {n}: {key}={value[:60]!r} is refused"
+                f"line {n}: the {key}= value is refused"
                 + (f" ({want[rule]})" if isinstance(rule, str) and rule in want else "")
             )
         if section == "Service":
@@ -663,19 +696,35 @@ def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
                 )
 
 
+def _deploy_uid() -> int:
+    """The user who ran sudo (SUDO_UID, which sudo sets and the caller cannot
+    override), or this process's user when run without sudo."""
+    v = os.environ.get("SUDO_UID", "")
+    return int(v) if v.isdigit() else os.getuid()
+
+
 def _read_staged(path: str, limit: int | None) -> tuple[int, os.stat_result]:
-    """Open a staged file without following a symlink; it must be a regular
-    file (of at most limit bytes). Returns the open fd and its stat."""
+    """Open a staged file as root without following a symlink. It must be a
+    regular file (of at most limit bytes) owned by the deploy user with no
+    other hard link: a hard link to a root-only file such as /etc/shadow
+    opens through O_NOFOLLOW, but it has the root file's owner and a second
+    link. Returns the open fd and its stat."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as e:
         raise RefusedError(f"cannot open {path}: {e.strerror} (a symlink is refused)") from e
     st = os.fstat(fd)
+    problem = ""
+    uid = _deploy_uid()
     if not stat.S_ISREG(st.st_mode) or (limit is not None and st.st_size > limit):
+        problem = "is not a regular file" + (f" of at most {limit} bytes" if limit else "")
+    elif st.st_nlink != 1:
+        problem = f"has {st.st_nlink} hard links; a staged file must have exactly one"
+    elif st.st_uid != uid:
+        problem = f"is owned by uid {st.st_uid}, not by the deploy user (uid {uid}) who must own it"
+    if problem:
         os.close(fd)
-        raise RefusedError(
-            f"{path} is not a regular file" + (f" of at most {limit} bytes" if limit else "")
-        )
+        raise RefusedError(f"{path} {problem}; nothing installed")
     return fd, st
 
 
