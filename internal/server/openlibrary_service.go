@@ -1,7 +1,7 @@
 // file: internal/server/openlibrary_service.go
-// version: 2.12.2
+// version: 2.12.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-11-07
+// last-edited: 2026-11-08
 
 package server
 
@@ -192,6 +192,26 @@ func (s *Server) uploadOLDump(c *gin.Context) {
 		"filename": header.Filename,
 		"size":     written,
 	})
+}
+
+// WithOpenLibraryClosed runs fn with the Open Library store closed and the
+// service's Mu held from the close through fn, so no import's EnsureStore
+// opens a new engine in a directory fn is removing (books' reset hook, as
+// deleteOLData and HEAD's factory reset did). A store that does not close
+// (an access outlived the drain) is returned as an error and fn does not
+// run: removing its directory would pull files out from under a live
+// engine. With no Open Library service fn runs alone.
+func (s *Server) WithOpenLibraryClosed(fn func() error) error {
+	svc := s.olService
+	if svc == nil {
+		return fn()
+	}
+	svc.Mu.Lock()
+	defer svc.Mu.Unlock()
+	if err := svc.CloseStoreLocked(); err != nil {
+		return fmt.Errorf("the Open Library store did not close; its data was kept: %w", err)
+	}
+	return fn()
 }
 
 func (s *Server) deleteOLData(c *gin.Context) {
