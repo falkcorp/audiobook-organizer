@@ -1,5 +1,5 @@
 # file: Makefile.local.example
-# version: 1.11.0
+# version: 1.12.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
 # last-edited: 2026-11-09
 #
@@ -70,9 +70,12 @@ DEPLOY_DB := /path/to/audiobooks.pebble
 # binary, the unit and local.conf through `install-staged`, and deploy-debug /
 # pprof-off switch the pprof drop-in through `pprof`: the sudoers drop-in
 # grants those helpers, never a free `cp`/`tee` into /etc/systemd/system (a
-# file systemd reads as root, so writing it freely is being root). The
-# staging paths below must equal stage_bin, stage_unit and stage_local_conf in
-# the helpers' config. Do not change DEPLOY_HELPERS: the stubs exec a fixed path.
+# file systemd reads as root, so writing it freely is being root). Nothing
+# uploaded becomes a unit file as written: the unit is the root-owned copy in
+# the helper bundle (reinstall the bundle to change it), and local.conf is
+# re-rendered from its [Service] and Environment= lines only. The staging
+# paths below must equal stage_bin and stage_local_conf in the helpers'
+# config. Do not change DEPLOY_HELPERS: the stubs exec a fixed path.
 DEPLOY_HELPERS := /usr/local/libexec/audiobook-organizer/rollback
 
 # Base URL of the deployed server, used by the post-deploy readiness wait
@@ -92,10 +95,10 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 # time). Uncomment to override:
 # DEPLOY_READY_TIMEOUT := 900
 
-## deploy: Build via the committed `build-linux` target, ship the binary, the
-## unit and deploy/local.conf (if present), install them through the helpers
-## (the binary atomically, keeping a .prev copy), restart, and verify the
-## deployed version.
+## deploy: Build via the committed `build-linux` target, ship the binary and
+## deploy/local.conf (if present), install them and the helper bundle's unit
+## through the helpers (the binary atomically, keeping a .prev copy), restart,
+## and verify the deployed version.
 #
 # The build itself lives in the committed Makefile (`make build-linux`): it owns
 # the tags (including `pprof`, listener off unless ABK_PPROF_ADDR is set), the
@@ -110,13 +113,12 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 deploy:
 	@bash scripts/deploy-preflight.sh origin/main
 	@$(MAKE) build-linux VERSION=$(VERSION)
-	@echo "→ Copying the binary, the unit and local.conf to $(DEPLOY_HOST)'s staging paths..."
+	@echo "→ Copying the binary to $(DEPLOY_HOST)'s staging path..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
-	scp deploy/audiobook-organizer.service $(DEPLOY_HOST):/home/USER/audiobook-organizer.service
-	@echo "→ Installing the unit (checked against the helper's allowlist of directives)..."
+	@echo "→ Installing the unit from the root-owned helper bundle (nothing uploaded)..."
 	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged unit'
 	@if [ -f deploy/local.conf ]; then \
-	  echo "→ Installing deploy/local.conf as the unit's local.conf drop-in..."; \
+	  echo "→ Rendering deploy/local.conf's Environment= lines as the local.conf drop-in..."; \
 	  scp deploy/local.conf $(DEPLOY_HOST):/home/USER/audiobook-organizer-local.conf && \
 	  ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged local-conf'; \
 	fi

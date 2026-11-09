@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.2.1
+# version: 1.3.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -24,7 +24,6 @@ it touches comes from CONFIG, a root-owned file the owner writes once:
     offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
     service_group = audiobook             (optional; defaults to service_user)
     stage_bin = /home/USER/audiobook-organizer                    (optional)
-    stage_unit = /home/USER/audiobook-organizer.service           (optional)
     stage_local_conf = /home/USER/audiobook-organizer-local.conf  (optional)
 
 CONFIG and its directory must be owned by root (or by the user running the
@@ -66,16 +65,22 @@ Operations (the stub name, then the subcommand):
   install-staged     `install binary`, `install unit` or `install local-conf`,
                      as root: the deploy. binary installs stage_bin as <bin>
                      atomically (copy to <bin>.new, fsync, rename), keeping
-                     the replaced one as <bin>.prev. unit installs stage_unit
-                     as /etc/systemd/system/<unit>, local-conf installs
-                     stage_local_conf as /etc/systemd/system/<unit>.d/local.conf;
-                     both then `systemctl daemon-reload`. systemd reads those
-                     two files as root, so a free copy would let the deploy
-                     user write User=root, ExecStartPre= or
-                     StandardOutput=file:/etc/...: each is read once (no
-                     symlink, at most 256 KiB), checked against ALLOWED (an
-                     allowlist of directives, see check_unit_text), and those
-                     same bytes are installed.
+                     the replaced one as <bin>.prev. systemd reads the unit
+                     and its drop-ins as root, so neither takes free-form
+                     content from the deploy user: unit installs
+                     LIBDIR/UNIT_TEMPLATE, the copy of
+                     deploy/audiobook-organizer.service the owner installed
+                     root-owned with the helpers, as /etc/systemd/system/<unit>
+                     (after checking it names bin, service_user and
+                     service_group); local-conf renders
+                     /etc/systemd/system/<unit>.d/local.conf itself from the
+                     Environment= lines of stage_local_conf, each one
+                     assignment in a strict grammar (render_local_conf), so
+                     systemd reads only lines this helper wrote. Both then
+                     `systemctl daemon-reload`. A staged file is reached with
+                     no symlink in any path component, must be a regular file
+                     owned by the deploy user (SUDO_UID) with one link, and
+                     is read once.
   pprof              `pprof on` or `pprof off`, as root. on writes the fixed
                      drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
                      to /etc/systemd/system/<unit>.d/pprof.conf; off removes
@@ -102,7 +107,6 @@ import subprocess
 import sys
 import tarfile
 import time
-import unicodedata
 
 CONFIG = "/etc/audiobook-organizer/rollback.conf"
 LIBDIR = "/usr/local/libexec/audiobook-organizer/rollback"
@@ -121,6 +125,7 @@ DROPIN_TEXT = "[Service]\nType=simple\n"
 PPROF_DROPIN = "pprof.conf"
 PPROF_TEXT = "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n"
 UNIT_LIMIT = 256 << 10
+UNIT_TEMPLATE = "audiobook-organizer.service"
 RECORD_LIMIT = 1 << 20
 # stub file name -> subcommand. Each stub is `exec /usr/bin/python3 -I
 # LIBDIR/rollback_helper.py <subcommand> "$@"`.
@@ -151,7 +156,6 @@ _KEYS = {
     "offline_env": False,
     "service_group": False,
     "stage_bin": False,
-    "stage_unit": False,
     "stage_local_conf": False,
 }
 
@@ -211,7 +215,6 @@ def load_config() -> dict[str, str]:
         "archive_dir",
         "checkpoint_dir",
         "stage_bin",
-        "stage_unit",
         "stage_local_conf",
     ):
         v = cfg.get(key, "")
@@ -490,210 +493,93 @@ def op_pprof(args: list[str]) -> int:
     return 0
 
 
-# The directives a staged unit or local.conf may hold, by section, and what
-# each value may be (None: anything). An allowlist, not a denylist: the ways
-# a unit can run something as root, write a file as root or widen a
-# privilege are too many to list (ExecStartPre=, a `+` or `!` command prefix,
-# User=, Group=, SupplementaryGroups=, AmbientCapabilities=, DynamicUser=,
-# RootDirectory=, EnvironmentFile=, StandardOutput=file:, OnFailure=,
-# StartLimitAction=, Alias=, ...). Anything not here is refused by name, so
-# the owner can see what to add after checking it cannot do any of that.
-# User= and Group= must name service_user and service_group (checked apart:
-# the unit must set both, since a unit without User= runs as root, and an
-# empty User= in a drop-in resets it to root). Environment= may hold any
-# variable: it reaches only the service's processes, which run as
-# service_user.
-_ANY = None
-_TARGETS = {
-    "network.target",
-    "network-online.target",
-    "local-fs.target",
-    "remote-fs.target",
-    "time-sync.target",
-}
-ALLOWED: dict[str, dict[str, object]] = {
-    "Unit": {
-        "Description": _ANY,
-        "Documentation": _ANY,
-        "After": _ANY,
-        "Wants": "targets",
-        "StartLimitBurst": "number",
-        "StartLimitIntervalSec": "time",
-    },
-    "Service": {
-        "Type": {"simple", "exec", "notify"},
-        "NotifyAccess": {"main", "exec", "all", "none"},
-        "TimeoutStartSec": "time",
-        "TimeoutStopSec": "time",
-        "User": "user",
-        "Group": "group",
-        "ExecStart": "exec",
-        "WorkingDirectory": "dir",
-        "Environment": _ANY,
-        "Restart": {
-            "no",
-            "on-success",
-            "on-failure",
-            "on-abnormal",
-            "on-watchdog",
-            "on-abort",
-            "always",
-        },
-        "RestartSec": "time",
-        "RestartPreventExitStatus": "statuses",
-        "KillMode": {"control-group", "mixed", "process"},
-        "MemoryMax": "size",
-        "MemoryHigh": "size",
-        "LimitNOFILE": "size",
-        "NoNewPrivileges": {"yes", "no", "true", "false"},
-        "ProtectKernelTunables": {"yes", "no", "true", "false"},
-        "ProtectKernelModules": {"yes", "no", "true", "false"},
-        "ProtectControlGroups": {"yes", "no", "true", "false"},
-        "ProtectSystem": {"yes", "no", "true", "false", "full", "strict"},
-        "ProtectHome": {"yes", "no", "true", "false", "read-only", "tmpfs"},
-        "PrivateTmp": {"yes", "no", "true", "false"},
-        "PrivateDevices": {"yes", "no", "true", "false"},
-        "StandardOutput": {"journal", "journal+console", "null", "inherit"},
-        "StandardError": {"journal", "journal+console", "null", "inherit"},
-        "SyslogIdentifier": "word",
-    },
-    "Install": {"WantedBy": {"multi-user.target", "default.target"}},
-}
-_VALUES = {
-    "number": re.compile(r"[0-9]+"),
-    "time": re.compile(r"[0-9a-z. ]+|infinity"),
-    "size": re.compile(r"[0-9]+[KMGT]?|infinity|[0-9]+%"),
-    "statuses": re.compile(r"[0-9A-Z ]+"),
-    "word": re.compile(r"[A-Za-z0-9._-]+"),
-    "dir": re.compile(r"-?/[^\s]*"),
-    # empty (a reset), or an absolute command with no `+`/`!` prefix, which
-    # would run it as root or with full privileges.
-    "exec": re.compile(r"|[-@:]*/.*"),
-}
-
-
-# systemd's own whitespace inside a line. Python's str.strip(), split() and
-# splitlines() also take \v, \f, \x1c-\x1f, \x85, U+2028 and more as
-# whitespace or line breaks, which systemd does not: `User=alfred<VT>` would
-# pass a check built on them and be an invalid User= to systemd, which then
-# ignores it and runs the unit as root. So directive lines may hold only
-# printable ASCII and tab (_DIRECTIVE_CHARS), lines split on \n alone, and
-# only " \t" is ever stripped.
+# systemd's own whitespace inside a line is " \t". Python's str.strip(),
+# split() and splitlines() also take \v, \f, \x1c-\x1f, \x85, U+2028 and
+# more for whitespace or line breaks, which systemd does not. The rendered
+# local.conf holds only lines this helper writes, so a differential in how
+# the staged file is read cannot reach systemd; still, a deployed line must
+# be printable ASCII or tab, lines split on \n alone, and only " \t" is
+# stripped, so what is checked is exactly what is written.
 _WS = " \t"
 _DIRECTIVE_CHARS = re.compile(r"[\t\x20-\x7e]*")
+# One assignment per Environment= line: KEY=value with no space, quote or
+# backslash in the value, or the whole assignment in double or single
+# quotes with no matching quote or backslash inside. No backslash anywhere:
+# no escapes, no continuation.
+_ENV_KEY = r"[A-Za-z_][A-Za-z0-9_]*"
+_ENV_ASSIGNMENT = re.compile(
+    rf"{_ENV_KEY}=[^\s\"'\\]*|\"{_ENV_KEY}=[^\"\\]*\"|'{_ENV_KEY}=[^'\\]*'"
+)
 
 
-def _is_comment(line: str) -> bool:
-    s = line.lstrip(_WS)
-    return not s or s[0] in "#;"
-
-
-def _logical_lines(text: str) -> list[tuple[int, str]]:
-    """(line number, logical line) pairs, continuations joined the way
-    systemd joins them, refusing every form systemd versions disagree on.
-    Messages name line numbers only, never the text: root read it."""
+def render_local_conf(text: str, source: str) -> str:
+    """The local.conf drop-in to install, rendered from the staged file:
+    `[Service]` and its `Environment=` lines, each re-written as is after it
+    matches _ENV_ASSIGNMENT. Comment and blank lines are dropped; anything
+    else refuses (by line number: a refusal never prints the file). Settings
+    other than Environment= (ExecStart=, WorkingDirectory=, MemoryMax=, ...)
+    decide what runs and as whom, so they live in host.conf, which the owner
+    installs as root and deploy never touches."""
     if "\r" in text or "\0" in text:
         raise RefusedError("carriage returns and NUL bytes are refused")
-    out: list[tuple[int, str]] = []
-    cont: list[str] = []
-    start = 0
-    for n, line in enumerate(text.split("\n"), 1):
-        if _is_comment(line) and not cont:
-            # systemd skips a comment line whole, up to the \n; any
-            # character but a control (and the line breaks refused above) is
-            # fine there, so a comment may hold an em dash.
-            if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") and c != "\t" for c in line):
-                raise RefusedError(f"line {n}: a control character in a comment is refused")
-            continue
-        if not _DIRECTIVE_CHARS.fullmatch(line):
+    lines: list[str] = []
+    section = False
+    for n, raw in enumerate(text.split("\n"), 1):
+        s = raw.strip(_WS)
+        if not s or s[0] in "#;":
+            continue  # dropped: nothing in it reaches systemd
+        if not _DIRECTIVE_CHARS.fullmatch(raw):
             raise RefusedError(
                 f"line {n}: only printable ASCII and tabs are allowed outside comments"
             )
-        if cont and _is_comment(line):
-            raise RefusedError(
-                f"line {n}: a blank or comment line inside a continued value is refused"
-            )
-        if line.rstrip(_WS) != line and line.rstrip(_WS).endswith("\\"):
-            raise RefusedError(f"line {n}: a backslash followed by spaces is refused")
-        if line.endswith("\\"):
-            if not cont:
-                start = n
-            cont.append(line[:-1])
+        if s == "[Service]":
+            section = True
             continue
-        if cont:
-            out.append((start, " ".join([*cont, line])))
-            cont = []
-        else:
-            out.append((n, line))
-    if cont:
-        raise RefusedError(f"line {start}: the file ends inside a continued value")
-    return out
+        if s.startswith("Environment=") and section:
+            value = s[len("Environment=") :]
+            if _ENV_ASSIGNMENT.fullmatch(value):
+                lines.append(f"Environment={value}\n")
+                continue
+            raise RefusedError(
+                f"line {n}: an Environment= line must hold one KEY=value assignment, unquoted "
+                "with no spaces, or wholly in double or single quotes, with no backslash"
+            )
+        raise RefusedError(
+            f"line {n}: only [Service] and its Environment= lines are deployed in local.conf; "
+            "put any other setting in host.conf, which the owner installs as root "
+            "(docs/system/deploy-and-gpu-ops.md)"
+        )
+    return (
+        f"# Rendered by rollback_helper.py (install-staged local-conf) from {source}:\n"
+        "# only its Environment= lines. Edit that file and deploy again.\n"
+        "[Service]\n" + "".join(lines)
+    )
 
 
-def check_unit_text(text: str, cfg: dict[str, str], whole_unit: bool) -> None:
-    """Raise RefusedError unless text holds only ALLOWED directives with
-    allowed values. whole_unit: the unit file itself, which must set User=
-    and Group= in [Service] (a drop-in may leave them out). Refusals name
-    the line, and a section or key only once it is one of ALLOWED's own
-    names; never a value."""
-    section = ""
-    seen: set[str] = set()
-    for n, line in _logical_lines(text):
+def _check_template(text: str, cfg: dict[str, str]) -> None:
+    """The owner's unit template must name this config's binary, user and
+    group: a template from another install would start the wrong thing."""
+    service = False
+    found = {"User": None, "Group": None, "ExecStart": None}
+    for line in text.split("\n"):
         s = line.strip(_WS)
-        if s.startswith("[") and s.endswith("]"):
-            section = s[1:-1]
-            if section not in ALLOWED:
-                raise RefusedError(
-                    f"line {n}: a section other than [{'], ['.join(ALLOWED)}] is not allowed"
-                )
+        if s.startswith("["):
+            service = s == "[Service]"
             continue
         key, sep, value = s.partition("=")
-        key, value = key.strip(_WS), value.strip(_WS)
-        if not sep or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key):
-            raise RefusedError(f"line {n} is not a `Key=value` directive")
-        if not section:
-            raise RefusedError(f"line {n}: a directive before any [section]")
-        if key not in ALLOWED[section]:
+        if service and sep and key in found and value:
+            found[key] = value
+    want = {"User": cfg["service_user"], "Group": cfg["service_group"]}
+    for key, who in want.items():
+        if found[key] != who:
             raise RefusedError(
-                f"line {n}: a directive not on the allowed list for [{section}] "
-                "(rollback_helper.py ALLOWED; add one there only after checking it "
-                "cannot run, write or grant anything as root)"
+                f"the unit template's {key}= is not {who} (service_{key.lower()} in {CONFIG})"
             )
-        rule = ALLOWED[section][key]
-        ok = True
-        if rule == "user":
-            ok = value == cfg["service_user"]
-        elif rule == "group":
-            ok = value == cfg["service_group"]
-        elif rule == "targets":
-            ok = bool(value) and all(t in _TARGETS for t in value.split(" "))
-        elif isinstance(rule, set):
-            ok = value in rule
-        elif isinstance(rule, str):
-            ok = bool(_VALUES[rule].fullmatch(value))
-            if rule == "exec" and value:
-                # No `+` or `!` prefix (root, full privileges), and no `;`,
-                # which systemd reads as the start of a second command line
-                # with its own prefix.
-                prefix = value[: len(value) - len(value.lstrip("-@:+!"))]
-                ok = ok and not set(prefix) & {"+", "!"} and ";" not in value
-        if not ok:
-            want = {
-                "user": f"must be {cfg['service_user']}",
-                "group": f"must be {cfg['service_group']}",
-            }
-            raise RefusedError(
-                f"line {n}: the {key}= value is refused"
-                + (f" ({want[rule]})" if isinstance(rule, str) and rule in want else "")
-            )
-        if section == "Service":
-            seen.add(key)
-    if whole_unit:
-        for key, who in (("User", cfg["service_user"]), ("Group", cfg["service_group"])):
-            if key not in seen:
-                raise RefusedError(
-                    f"the unit sets no {key}= (it would run as root); it must set {key}={who}"
-                )
+    exe = found["ExecStart"] or ""
+    if exe != cfg["bin"] and not exe.startswith(cfg["bin"] + " "):
+        raise RefusedError(
+            f"the unit template's ExecStart= does not run {cfg['bin']} (bin in {CONFIG})"
+        )
 
 
 def _read_all(fd: int, limit: int) -> bytes:
@@ -718,16 +604,36 @@ def _deploy_uid() -> int:
     return int(v) if v.isdigit() else os.getuid()
 
 
-def _read_staged(path: str, limit: int | None) -> tuple[int, os.stat_result]:
-    """Open a staged file as root without following a symlink. It must be a
-    regular file (of at most limit bytes) owned by the deploy user with no
-    other hard link: a hard link to a root-only file such as /etc/shadow
-    opens through O_NOFOLLOW, but it has the root file's owner and a second
-    link. Returns the open fd and its stat."""
+def _open_no_symlinks(path: str) -> int:
+    """Open path for reading with no symlink in ANY component: O_NOFOLLOW
+    alone guards only the last one, so each directory is opened in turn,
+    relative to the one before, with O_NOFOLLOW."""
+    parts = [p for p in path.split("/") if p not in ("", ".")]
+    if not path.startswith("/") or not parts or ".." in parts:
+        raise RefusedError(f"{path} is not an absolute path")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        for part in parts[:-1]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def _read_staged(path: str, limit: int | None) -> tuple[int, os.stat_result]:
+    """Open a staged file as root. It is reached with no symlink in any
+    component, and must be a regular file (of at most limit bytes) owned by
+    the deploy user with no other hard link: a hard link to a root-only file
+    such as /etc/shadow opens through O_NOFOLLOW, but has the root file's
+    owner and a second link. Returns the open fd and its stat."""
+    try:
+        fd = _open_no_symlinks(path)
     except OSError as e:
-        raise RefusedError(f"cannot open {path}: {e.strerror} (a symlink is refused)") from e
+        raise RefusedError(
+            f"cannot open {path}: {e.strerror} (a symlink in any component of the path is refused)"
+        ) from e
     st = os.fstat(fd)
     problem = ""
     uid = _deploy_uid()
@@ -743,16 +649,52 @@ def _read_staged(path: str, limit: int | None) -> tuple[int, os.stat_result]:
     return fd, st
 
 
+def _read_template(cfg: dict[str, str]) -> bytes:
+    """LIBDIR/UNIT_TEMPLATE, which the owner installed with the helpers:
+    no symlink, a regular file owned by root and not writable by group or
+    others, like CONFIG."""
+    path = f"{LIBDIR}/{UNIT_TEMPLATE}"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        raise RefusedError(
+            f"cannot read the unit template {path}: {e.strerror}. Install it with the helpers "
+            "(docs/system/deploy-and-gpu-ops.md)."
+        ) from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > UNIT_LIMIT or not _owner_ok(st):
+            raise RefusedError(
+                f"{path} must be a regular file owned by root, not writable by group or others"
+            )
+        data = _read_all(fd, UNIT_LIMIT + 1)
+    finally:
+        os.close(fd)
+    try:
+        _check_template(data.decode("utf-8", "strict"), cfg)
+    except UnicodeDecodeError as e:
+        raise RefusedError(f"{path} is not UTF-8") from e
+    return data
+
+
 def op_install(args: list[str]) -> int:
     _arity(args, 1, "install binary|unit|local-conf")
     what = args[0]
-    keys = {"binary": "stage_bin", "unit": "stage_unit", "local-conf": "stage_local_conf"}
-    if what not in keys:
+    if what not in ("binary", "unit", "local-conf"):
         raise RefusedError("usage: install binary|unit|local-conf", 2)
     cfg = load_config()
-    src = cfg.get(keys[what], "")
+    if what == "unit":
+        data = _read_template(cfg)
+        os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
+        dest = f"{SYSTEMD_DIR}/{cfg['unit']}"
+        _write_replace(dest, data, 0o644)
+        print(f"installed the unit template {LIBDIR}/{UNIT_TEMPLATE} as {dest}")
+        _daemon_reload()
+        return 0
+    key = "stage_bin" if what == "binary" else "stage_local_conf"
+    src = cfg.get(key, "")
     if not src:
-        raise RefusedError(f"{keys[what]} is not set in {CONFIG}: nothing to install from")
+        raise RefusedError(f"{key} is not set in {CONFIG}: nothing to install from")
     if what == "binary":
         return _install_binary(cfg["bin"], src)
     fd, _ = _read_staged(src, UNIT_LIMIT)
@@ -767,18 +709,14 @@ def op_install(args: list[str]) -> int:
     except UnicodeDecodeError as e:
         raise RefusedError(f"{src} is not UTF-8") from e
     try:
-        check_unit_text(text, cfg, whole_unit=what == "unit")
+        rendered = render_local_conf(text, src)
     except RefusedError as e:
         raise RefusedError(f"{src} refused, nothing installed: {e}") from e
-    if what == "unit":
-        dest = f"{SYSTEMD_DIR}/{cfg['unit']}"
-        os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
-    else:
-        d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
-        os.makedirs(d, mode=0o755, exist_ok=True)
-        dest = f"{d}/local.conf"
-    _write_replace(dest, data, 0o644)
-    print(f"installed {src} as {dest}")
+    d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    dest = f"{d}/local.conf"
+    _write_replace(dest, rendered.encode("ascii"), 0o644)
+    print(f"rendered {dest} from the Environment= lines of {src}")
     _daemon_reload()
     return 0
 
