@@ -787,6 +787,13 @@ class ReviewProbes(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, out(p))
         self.assertNotIn("Rolled back", out(p))
         self.assertIn("not restarted", out(p))
+        # The fast path: a sudo refusal fails at once, naming sudo, with no
+        # wait on the unit or on /health (the old process would pass both).
+        self.assertIn("sudo refused", out(p))
+        restart = host.index("systemctl restart ")
+        self.assertGreaterEqual(restart, 0)
+        self.assertFalse(any(re.search(UNIT_SHOW, c) for c in host.ssh()[restart:]), host.ssh())
+        self.assertEqual(host.server.requests, 0)
 
     def test_p1_rollback_restart_lost_to_ssh_is_not_ready(self) -> None:
         host = FakeHost(

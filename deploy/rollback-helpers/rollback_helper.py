@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -146,7 +146,7 @@ _NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
 _BASENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,199}")
 _PATH = re.compile(r"/[A-Za-z0-9._/@+-]+")
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
-_UNIT = re.compile(r"[A-Za-z0-9@._:-]+\.service")
+_UNIT = re.compile(r"[A-Za-z0-9@._-]+\.service")
 _ENV = re.compile(r"(HOME|ABK_STATE_DIR|ABK_[A-Z0-9_]+)=[A-Za-z0-9._/@+:-]*")
 _KEYS = {
     "bin": True,
