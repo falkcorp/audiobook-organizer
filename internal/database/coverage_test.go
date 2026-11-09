@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.5
+// version: 2.4.6
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -26,12 +26,12 @@ func TestInitializeStoreAndClose(t *testing.T) {
 	}()
 
 	// The SQLite backend was removed; the sqlite type must always be rejected.
-	if _, err := InitializeStore("sqlite", tempDir+"/db.sqlite"); err == nil {
+	if _, err := InitializeStoreWith("sqlite", tempDir+"/db.sqlite", StandaloneOptions{}); err == nil {
 		t.Fatal("expected error for sqlite type")
 	}
 
 	pebbleDir := tempDir + "/pebble"
-	if _, err := InitializeStore("pebble", pebbleDir); err != nil {
+	if _, err := InitializeStoreWith("pebble", pebbleDir, StandaloneOptions{}); err != nil {
 		t.Fatalf("unexpected pebble init error: %v", err)
 	}
 	if err := CloseStore(); err != nil {
@@ -39,7 +39,7 @@ func TestInitializeStoreAndClose(t *testing.T) {
 	}
 	globalStore = nil
 
-	if _, err := InitializeStore("unknown", tempDir+"/bad"); err == nil {
+	if _, err := InitializeStoreWith("unknown", tempDir+"/bad", StandaloneOptions{}); err == nil {
 		t.Fatal("expected error for unsupported database type")
 	}
 }

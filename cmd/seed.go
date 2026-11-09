@@ -1,7 +1,7 @@
 // file: cmd/seed.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
-// last-edited: 2026-09-11
+// last-edited: 2026-11-08
 //
 // `seed` populates a fresh database with synthetic books for local
 // development. Use it after `make build` so a dev can hit `make run`
@@ -10,6 +10,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/oklog/ulid/v2"
 	"github.com/spf13/cobra"
 )
@@ -78,6 +80,18 @@ var seedTitleNouns = []string{
 
 var seedFormats = []string{"m4b", "mp3", "flac"}
 
+// seedOpenHint names the fix when the offline open refused a store the
+// service has never started (no store at the path, an empty store, or one
+// with migration steps pending): seed no longer creates or migrates the
+// store itself, so a fresh install needs one start of the service first.
+// Any other refusal (a staged swap, a held store) already says what to do.
+func seedOpenHint(err error) error {
+	if errors.Is(err, storage.ErrNoStore) || errors.Is(err, storage.ErrOfflinePendingSteps) {
+		return fmt.Errorf("seed fills a store the service has started at least once: start the service once (audiobook-organizer serve), stop it, then run seed again: %w", err)
+	}
+	return err
+}
+
 func runSeed(cmd *cobra.Command, _ []string) error {
 	if config.AppConfig.RootDir == "" {
 		return fmt.Errorf("root directory not specified — pass --dir or set ROOT_DIR")
@@ -92,11 +106,11 @@ func runSeed(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--series must be > 0")
 	}
 
-	store, err := initializeStore(config.AppConfig.DatabaseType, config.AppConfig.DatabasePath)
+	store, closeCLIStore, err := openCLIStore(commandContext(cmd), false)
 	if err != nil {
-		return fmt.Errorf("failed to initialize database: %w", err)
+		return fmt.Errorf("failed to initialize database: %w", seedOpenHint(err))
 	}
-	defer closeStore()
+	defer closeCLIStore()
 
 	if store == nil {
 		return fmt.Errorf("database not initialized")

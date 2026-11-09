@@ -1,7 +1,7 @@
 // file: cmd/child_mode_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2b9c71-3f4a-4d86-a0e7-8c1f6b2d9a34
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // childModeHelperEnv selects the scenario TestChildModeHelperProcess runs when
@@ -40,10 +41,10 @@ func TestChildModeHelperProcess(t *testing.T) {
 
 	switch mode {
 	case "fail":
-		initializeStore = func(string, string) (database.Store, error) {
+		initializeChildStore = func(string, string, database.StandaloneOptions) (database.Store, error) {
 			return mocks.NewMockStore(t), nil
 		}
-		closeStore = func() error { return nil }
+		closeChildStore = func() error { return nil }
 		loadConfigFromDB = func(database.SettingsStore) error {
 			return errors.New("read settings: boom")
 		}
@@ -66,12 +67,22 @@ func TestChildModeHelperProcess(t *testing.T) {
 
 func runChildModeHelper(t *testing.T, mode string) (int, string) {
 	t.Helper()
+	// The child reads the swap slot under the state directory before it
+	// opens the store: keep it off the host's.
+	return runChildModeHelperIn(t, mode, t.TempDir(), filepath.Join(t.TempDir(), "audiobooks.pebble"))
+}
+
+// runChildModeHelperIn runs the helper child over the store at dbPath, with
+// stateDir as its secure state directory (where the swap slot is).
+func runChildModeHelperIn(t *testing.T, mode, stateDir, dbPath string) (int, string) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestChildModeHelperProcess$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
 		childModeHelperEnv+"="+mode,
 		registry.EnvChildDBType+"=pebble",
-		registry.EnvChildDBPath+"="+filepath.Join(t.TempDir(), "audiobooks.pebble"),
-		registry.EnvChildRootDir+"="+t.TempDir())
+		registry.EnvChildDBPath+"="+dbPath,
+		registry.EnvChildRootDir+"="+t.TempDir(),
+		config.SecureStateDirEnv+"="+stateDir)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stderr
@@ -108,5 +119,29 @@ func TestRunOperationRunner_EmptySettingsProceeds(t *testing.T) {
 	if code != reachedServerExitCode {
 		t.Fatalf("child mode exit code = %d, want %d (reached server construction); output:\n%s",
 			code, reachedServerExitCode, out)
+	}
+}
+
+// The child opens the live store with the standalone opener, so the state
+// directory it passes is what makes that opener read the swap slot: with a
+// restore staged for the next start, the child refuses before it opens the
+// store, and never reaches the server. Without StateDir the opener reads no
+// slot and the child would run its op on the store the swap is about to
+// replace.
+func TestRunOperationRunner_StagedSwapRefusesTheOpen(t *testing.T) {
+	stateDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	seedStarted(t, dbPath)
+	stageSwap(t, stateDir, dbPath)
+
+	code, out := runChildModeHelperIn(t, "empty", stateDir, dbPath)
+	if code == reachedServerExitCode {
+		t.Fatalf("child mode built the server over a store with a staged swap; output:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("child mode exit code = %d, want 2 (the store open refused); output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "initializeChildStore") || !strings.Contains(out, restorejournal.ErrSwapPending.Error()) {
+		t.Errorf("child mode output does not name the refused open and the staged swap:\n%s", out)
 	}
 }
