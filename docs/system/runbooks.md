@@ -1,7 +1,7 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
-<!-- last-edited: 2026-10-12 -->
+<!-- last-edited: 2026-11-09 -->
 
 # Operator Runbooks
 
@@ -168,59 +168,44 @@ directory, so removing the directory (`rm -rf <db>`, `os.RemoveAll`) leaves
 created at the same path is refused as too new. Remove the sidecar together
 with the directory.
 
-**What `make rollback` does.** It swaps in `<bin>.prev` only when the store's
-format (read from `<db>.storage-format`, so `DEPLOY_DB` must be set) is not
-above the format `<bin>.prev --print-storage-format` reports (a build older
-than the flag counts as `1`). Otherwise it refuses, swaps nothing, and prints
-the steps below. An unreadable or missing sidecar also refuses;
-`ROLLBACK_IGNORE_FORMAT=1` overrides only that case, after you have checked the
-store is at format 1. Nothing overrides a store that is newer than `.prev`.
+**What `make rollback` does.** It swaps in `<bin>.prev` only when no owner's
+level in `<db>.storage-levels` is above what `<bin>.prev --print-storage-levels`
+serves (an R0 `.prev` without that flag is asked `--print-storage-format`, and
+format 1 means every owner at level 0), and no restore or reset swap is in
+flight. A store no core build has opened has no `.storage-levels`; only then
+does it compare `<db>.storage-format` as above, and only there does
+`ROLLBACK_IGNORE_FORMAT=1` override an unreadable sidecar. Otherwise it
+refuses, swaps nothing, and names `make rollback-restore`. Details and the
+sudoers rules it needs:
+[Rollback flow](deploy-and-gpu-ops.md#2-rollback-flow).
 
-**Nothing short of the checkpoint restores a converted store.** A release that
-converts the store (release B, release C) writes a checkpoint first, and the
-converted rows cannot be read by the previous binary. A binary swap cannot go
-back past a format change.
+**Nothing short of a restore goes back past a level change.** A release that
+raises a store level writes a pre-upgrade checkpoint first, and the previous
+binary cannot read the upgraded rows. A binary swap cannot go back past it.
 
-**A restore discards every write made since the cut-over**, including anything
-the app did after it started serving on the new format. Get the owner's
-approval before running it.
+**A restore discards every write made since the checkpoint or archive was
+taken**, including credential changes: a key revoked or a password changed
+since then is live again. Get the owner's approval before running it.
 
 ### Restore steps
 
-`<db>` is the store path (`DEPLOY_DB`), `<bin>` the binary path (`DEPLOY_BIN`),
-`<N>` the store's current format.
+Run `make rollback-restore` from your workstation (the latest pre-upgrade
+checkpoint), or `make rollback-restore ROLLBACK_ARCHIVE=<file on the host>`
+once the checkpoint is gone. It checks that `<bin>.prev` serves exactly the
+source's levels, stops the service, restores with the current binary's
+`storage restore-offline` as the service user, installs `<bin>.prev`, and waits
+for readiness. The order of operations, what each refusal means and the
+sudoers rules are in
+[`make rollback-restore`](deploy-and-gpu-ops.md#make-rollback-restore-when-a-binary-swap-is-refused).
 
-1. Stop the service: `sudo systemctl stop audiobook-organizer.service`
-2. Move the converted store aside and put the checkpoint in its place. The
-   checkpoint is the one named in `<db>.migration-checkpoint` (written by the
-   release B and C cut-overs), never "the newest `.migration-backups/` entry":
-   ```bash
-   CKPT=$(cat <db>.migration-checkpoint)
-   sudo mv <db> <db>.format-<N>-aside
-   sudo cp -a "$CKPT/$(basename <db>)" <db>
-   ```
-   If `<db>.migration-checkpoint` is empty or missing, do not guess; read the
-   `storage_migration` report for the checkpoint path.
-3. Write the restored store's format into `<db>.storage-format`: the value
-   `<bin>.pre-format-<N> --print-storage-format` prints.
-4. Install `<bin>.pre-format-<N>` as `<bin>`, never `<bin>.prev`.
-   The deploy step meant to save that binary when a format-changing release
-   is deployed, `scripts/deploy-cutover.sh`, is planned
-   ([TASK-A9](../plans/storage-efficiency/TASK-A9.md)) and not in the repo
-   yet. Until it lands, nothing saves it automatically. Before deploying a
-   format-changing release, copy the running binary by hand with
-   `sudo cp <bin> <bin>.pre-format-<N>`. If the file is absent, build the
-   release that matches the restored format and install that instead.
-5. Match the service type to that binary before starting it. From your
-   workstation, run `bash scripts/deploy-match-unit-type.sh <host> <bin>`.
-   A binary from before readiness notification never sends `READY=1`, so
-   under the `Type=notify` unit systemd would kill it at the start timeout
-   and restart it in a loop. The script installs a `Type=simple` drop-in for
-   such a binary, and removes the drop-in for a binary that notifies (see
-   [Rollback-safe unit type](deploy-and-gpu-ops.md#rollback-safe-unit-type)).
-6. Start the service (`sudo systemctl start audiobook-organizer.service`) and
-   check that the `storage format: stamp=… supported=…` log line shows the
-   restored stamp.
+Do not move store directories or copy checkpoints by hand: `<db>.migration-checkpoint`
+is a JSON pointer to a checkpoint record, not a path, and a restore must go
+through the journaled swap so a crash halfway is finished at the next start.
+If a checkpoint restore boot fails its migration and leaves
+`<state dir>/restore/<id>/inflight.json`, both make targets refuse; with the
+service stopped, run the **previous** binary's `storage restore-offline
+--checkpoint <name>` (the one command admitted while that file exists), then
+start the service.
 
 ## memdb Warmup Recovery
 
