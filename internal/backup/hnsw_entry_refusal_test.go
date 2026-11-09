@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -282,10 +282,28 @@ func TestExtractArchive_RefusesAnHNSWSnapshotEntryUnwritten(t *testing.T) {
 	}
 }
 
+// caseAlias reports whether, in dir, the name alias opens the directory
+// name, which it creates: whether the filesystem folds alias to name. A test
+// that needs a case-insensitive filesystem skips without one; this asks the
+// filesystem rather than guessing from GOOS, and asks per alias, because
+// plain case folding and the long s are separate questions.
+func caseAlias(t *testing.T, dir, name, alias string) bool {
+	t.Helper()
+	mustMkdir(t, filepath.Join(dir, name))
+	want, err := os.Stat(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Stat(filepath.Join(dir, alias))
+	return err == nil && os.SameFile(got, want)
+}
+
 // TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs (R1-15 round-4
-// verification review, SHOULD-FIX 1): entry names cannot keep an entry out
-// of a snapshot directory the filesystem routes it into, so Extract checks
-// where each entry lands, symlinks resolved, before it creates anything.
+// verification review, SHOULD-FIX 1; round 5, B1-r5 and S1-r5): entry names
+// cannot keep an entry out of a snapshot directory the filesystem routes it
+// into, so Extract compares each directory on the way to the destination
+// with the snapshot directories by identity, and does not write a file
+// through a symlink.
 func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 	type entry struct {
 		name string
@@ -300,6 +318,8 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 		// landed is where the refused entry would have been written,
 		// relative to the snapshot directory.
 		landed string
+		// wantErr is the refusal; ErrArchiveCarriesHNSWSnapshot when nil.
+		wantErr error
 	}{
 		{
 			name: "a target above the snapshot directory",
@@ -340,6 +360,93 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 			},
 			entries: []entry{{name: "alfred"}},
 			landed:  "hnsw.clean-stop",
+			wantErr: ErrRestoreThroughSymlink,
+		},
+		{
+			// B1-r5, the reviewer's first shape: the kernel resolves m's
+			// relative target from m's physical parent, x/y, so lnk/m lands
+			// in the live snapshot directory. Joined lexically to lnk, as
+			// the round-5 resolver did, it seemed to land above the target.
+			name: "a relative symlink resolved from its physical parent",
+			setup: func(t *testing.T, base string) (string, string) {
+				snap := filepath.Join(base, "hnsw")
+				mustMkdir(t, filepath.Join(base, "x", "y"), snap)
+				mustSymlink(t, filepath.Join("x", "y"), filepath.Join(base, "lnk"))
+				mustSymlink(t, filepath.Join("..", "..", "hnsw", "hnsw.clean-stop"), filepath.Join(base, "x", "y", "m"))
+				return base, snap
+			},
+			entries: []entry{{name: "lnk/m"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrRestoreThroughSymlink,
+		},
+		{
+			// B1-r5, the second shape: the same under a custom target, one
+			// level further down, into the live snapshot directory.
+			name: "a relative symlink under a custom target",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, snap := filepath.Join(base, "gotham"), filepath.Join(base, "hnsw")
+				mustMkdir(t, filepath.Join(target, "x", "y"), snap)
+				mustSymlink(t, filepath.Join("x", "y"), filepath.Join(target, "lnk"))
+				mustSymlink(t, filepath.Join("..", "..", "..", "hnsw", "hnsw.clean-stop"), filepath.Join(target, "x", "y", "m"))
+				return target, snap
+			},
+			entries: []entry{{name: "lnk/m"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrRestoreThroughSymlink,
+		},
+		{
+			// B1-r5, the third shape: the target itself is a symlink to x/y.
+			name: "a target that is a symlink",
+			setup: func(t *testing.T, base string) (string, string) {
+				snap := filepath.Join(base, "hnsw")
+				mustMkdir(t, filepath.Join(base, "x", "y"), snap)
+				mustSymlink(t, filepath.Join("x", "y"), filepath.Join(base, "arkham"))
+				mustSymlink(t, filepath.Join("..", "..", "hnsw", "hnsw.clean-stop"), filepath.Join(base, "x", "y", "m"))
+				return filepath.Join(base, "arkham"), snap
+			},
+			entries: []entry{{name: "m"}},
+			landed:  "hnsw.clean-stop",
+			wantErr: ErrRestoreThroughSymlink,
+		},
+		{
+			// S1-r5: on a case-insensitive filesystem HNSW is the snapshot
+			// directory, whatever its spelling in the path.
+			name: "the snapshot directory as the target, in another case",
+			setup: func(t *testing.T, base string) (string, string) {
+				if !caseAlias(t, base, "hnsw", "HNSW") {
+					t.Skip("the filesystem does not fold HNSW to hnsw")
+				}
+				return filepath.Join(base, "HNSW"), filepath.Join(base, "hnsw")
+			},
+			entries: []entry{{name: "hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+		},
+		{
+			// S1-r5: and with a long s (U+017F), which folds to s.
+			name: "the snapshot directory as the target, with a long s",
+			setup: func(t *testing.T, base string) (string, string) {
+				if !caseAlias(t, base, "hnsw", "hn\u017fw") {
+					t.Skip("the filesystem does not fold a long s to s")
+				}
+				return filepath.Join(base, "hn\u017fw"), filepath.Join(base, "hnsw")
+			},
+			entries: []entry{{name: "hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
+		},
+		{
+			// The snapshot directory does not exist yet, so it has no
+			// identity: its parent's identity and its name, compared without
+			// case, stand in for it. Through a symlink to the parent, the
+			// entry would create the directory.
+			name: "a symlink to the parent of a snapshot directory not made yet",
+			setup: func(t *testing.T, base string) (string, string) {
+				target, live := filepath.Join(base, "gotham"), filepath.Join(base, "wayne-manor")
+				mustMkdir(t, target, live)
+				mustSymlink(t, live, filepath.Join(target, "lnk"))
+				return target, filepath.Join(live, "hnsw")
+			},
+			entries: []entry{{name: "lnk/HNSW/hnsw.clean-stop"}},
+			landed:  "hnsw.clean-stop",
 		},
 		{
 			// Checked before MkdirAll, which would create it.
@@ -378,11 +485,16 @@ func TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs(t *testing.T) {
 			if err := f.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if err := extractArchive(archive, target, []string{snap}); !errors.Is(err, ErrArchiveCarriesHNSWSnapshot) {
-				t.Fatalf("extractArchive = %v; want ErrArchiveCarriesHNSWSnapshot", err)
+			want := tc.wantErr
+			if want == nil {
+				want = ErrArchiveCarriesHNSWSnapshot
 			}
+			err = extractArchive(archive, target, []string{snap})
 			if _, err := os.Lstat(filepath.Join(snap, tc.landed)); !os.IsNotExist(err) {
-				t.Errorf("%s exists in the snapshot directory after the refusal (%v)", tc.landed, err)
+				t.Errorf("%s exists in the snapshot directory after the extraction (%v)", tc.landed, err)
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("extractArchive = %v; want %v", err, want)
 			}
 		})
 	}
@@ -433,9 +545,35 @@ func TestPathsOverlap(t *testing.T) {
 		filepath.Join(base, "gotham", "hnsw2"):  false, // a sibling sharing the prefix
 		filepath.Join(base, "arkham"):           false, // a sibling of its parent
 	}
+	// S1-r5: on a case-insensitive filesystem these name the directory.
+	for _, alias := range []string{"HNSW", "hn\u017fw"} {
+		if caseAlias(t, t.TempDir(), "hnsw", alias) {
+			cases[filepath.Join(base, "gotham", alias)] = true
+			cases[filepath.Join(base, "gotham", alias, "batcave")] = true
+		} else {
+			t.Logf("the filesystem does not fold %q to hnsw; that row is skipped", alias)
+		}
+	}
 	for p, want := range cases {
 		if got := PathsOverlap(p, snap); got != want {
 			t.Errorf("PathsOverlap(%q, snapshot) = %v, want %v", p, got, want)
+		}
+	}
+
+	// A snapshot directory not made yet has no identity: its parent's
+	// identity and its name, compared without case, stand in for it.
+	absent := filepath.Join(base, "batcave", "hnsw")
+	mustMkdir(t, filepath.Dir(absent))
+	for p, want := range map[string]bool{
+		absent:                                 true,
+		filepath.Join(base, "batcave", "HNSW"): true,
+		filepath.Join(base, "batcave", "HNSW", "x"):  true,
+		filepath.Join(base, "batcave"):               true, // above it
+		filepath.Join(base, "batcave", "hnsw-old"):   false,
+		filepath.Join(base, "batcave-annex", "hnsw"): false,
+	} {
+		if got := PathsOverlap(p, absent); got != want {
+			t.Errorf("PathsOverlap(%q, a snapshot directory not made yet) = %v, want %v", p, got, want)
 		}
 	}
 }

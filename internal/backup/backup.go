@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.12
+// version: 1.22.13
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -673,6 +673,13 @@ var ErrArchiveEntryEscapes = errors.New("backup archive has an entry that climbs
 // verification review, SHOULD-FIX 2).
 var ErrArchiveEmpty = errors.New("backup archive has no entries")
 
+// ErrRestoreThroughSymlink is returned by Extract for an entry whose
+// destination is a symlink: the extraction does not write a file through
+// one. A symlink's target is resolved by the kernel from the link's physical
+// parent, which a path string cannot settle (R1-15 round-5 verification
+// review, B1-r5), and a dangling one would be created by the write.
+var ErrRestoreThroughSymlink = errors.New("backup restore does not write a file through a symlink")
+
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
 // TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
@@ -985,57 +992,132 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 // snapshotDirs are the HNSW snapshot directories no entry may be written
 // into: the restore handler passes the live database's and the restored
 // one's. Entry names alone cannot keep an entry out of them (a symlink
-// already in the target, or a target above one), so Extract resolves where
-// each entry would land, symlinks included, and refuses one inside any of
-// them (ErrArchiveCarriesHNSWSnapshot) before writing it. nil checks names
-// only.
+// already in the target, or a target above one), so before it creates
+// anything for an entry Extract compares every directory on the way to its
+// destination with them by identity (landsIn) and refuses one inside any of
+// them (ErrArchiveCarriesHNSWSnapshot). It also does not write a file
+// through a symlink (ErrRestoreThroughSymlink): the file is opened with
+// O_NOFOLLOW, so a symlink planted where an entry lands is never followed.
+// nil checks names and symlinks only.
 func (r *PreparedRestore) Extract(targetPath string, snapshotDirs []string) error {
 	return extractArchive(r.archivePath, targetPath, snapshotDirs)
 }
 
-// resolvePath returns where a write to p lands as the filesystem stands now:
-// every symlink in p resolved, a dangling one included (a write through it
-// creates its target), and the part of p that does not exist yet appended
-// as it is. p need not exist.
-func resolvePath(p string) string {
-	return resolvePathDepth(filepath.Clean(p), 0)
+// keepOutDir is a directory a restore must not write into, held by identity
+// rather than by path: a path string cannot say where the kernel resolves it
+// (a relative symlink resolves from its physical parent, not from the path
+// that reached it: R1-15 round-5 verification review, B1-r5), and on a
+// case-insensitive filesystem one directory has many spellings (HNSW, or
+// hnſw with a long s: S1-r5).
+type keepOutDir struct {
+	dir string
+	// anchor is os.Stat of dir's deepest existing ancestor, dir itself when
+	// it exists, and rest the components from the anchor down to dir: empty
+	// when dir exists.
+	anchor os.FileInfo
+	rest   []string
 }
 
-func resolvePathDepth(p string, links int) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+// statKeepOut looks dir up as the filesystem stands now. A caller that runs
+// over time (the extraction) looks again for each entry: a directory that
+// did not exist has no identity until it is made (an earlier entry can make
+// its parents, and the server's periodic HNSW export can make the snapshot
+// directory during a restore).
+func statKeepOut(dir string) keepOutDir {
+	k := keepOutDir{dir: dir}
+	cur := absPath(dir)
+	for {
+		if fi, err := os.Stat(cur); err == nil {
+			k.anchor = fi
+			return k
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return k
+		}
+		k.rest = append([]string{filepath.Base(cur)}, k.rest...)
+		cur = parent
 	}
-	// More links than any real chain means a loop; a write to it fails.
-	if links < 40 {
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			if dest, err := os.Readlink(p); err == nil {
-				if !filepath.IsAbs(dest) {
-					dest = filepath.Join(filepath.Dir(p), dest)
-				}
-				return resolvePathDepth(filepath.Clean(dest), links+1)
-			}
+}
+
+// holds reports whether the existing directory fi, reached on a walk whose
+// components still to come are remaining, is k's directory, lies under it,
+// or would create it.
+//
+// While k's directory exists, identity alone decides (os.SameFile); a
+// case-variant spelling of it is caught when the walk stats that spelling.
+// While it does not exist it has no identity, so its deepest existing
+// ancestor's identity and the names below it stand in: a walk that reaches
+// that ancestor and goes on through those names, compared without case,
+// would create the directory (MkdirAll). strings.EqualFold folds the long s
+// too. On a case-sensitive filesystem this refuses a distinct HNSW beside a
+// snapshot directory not made yet; refusing a name that close is the safe
+// side, and applying the rule only while the directory is absent keeps a
+// real HNSW directory usable once the snapshot directory exists.
+func (k keepOutDir) holds(fi os.FileInfo, remaining []string) bool {
+	if k.anchor == nil || !os.SameFile(fi, k.anchor) || len(remaining) < len(k.rest) {
+		return false
+	}
+	for i, name := range k.rest {
+		if !strings.EqualFold(remaining[i], name) {
+			return false
 		}
 	}
-	parent := filepath.Dir(p)
-	if parent == p {
-		return p
+	return true
+}
+
+// absPath is filepath.Abs, or the cleaned path when the working directory
+// cannot be read.
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
 	}
-	return filepath.Join(resolvePathDepth(parent, links), filepath.Base(p))
+	return filepath.Clean(p)
 }
 
-// pathWithin reports whether p is dir or lies under it. Both must already be
-// resolved (resolvePath).
-func pathWithin(p, dir string) bool {
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// landsIn walks p from the filesystem root down to p itself, stats each
+// directory on the way (following symlinks, as the kernel does), and returns
+// the keep-out directory one of them is, lies under, or would create. The
+// walk stops at the first component that does not exist: nothing below it
+// exists either, and what MkdirAll makes there is caught by holds' rule for
+// a directory not made yet. A symlinked directory on the way is followed,
+// not refused: the database directory itself may be a symlink to another
+// disk.
+func landsIn(p string, keep []keepOutDir) (string, bool) {
+	abs := absPath(p)
+	vol := filepath.VolumeName(abs)
+	cur := vol + string(filepath.Separator)
+	var parts []string
+	if rest := strings.Trim(abs[len(vol):], string(filepath.Separator)); rest != "" {
+		parts = strings.Split(rest, string(filepath.Separator))
+	}
+	for i := 0; ; i++ {
+		fi, err := os.Stat(cur)
+		if err != nil {
+			return "", false
+		}
+		for _, k := range keep {
+			if k.holds(fi, parts[i:]) {
+				return k.dir, true
+			}
+		}
+		if i == len(parts) {
+			return "", false
+		}
+		cur = filepath.Join(cur, parts[i])
+	}
 }
 
-// PathsOverlap reports whether a and b, symlinks resolved, are the same
-// directory or one lies under the other. The restore handler refuses a
+// PathsOverlap reports whether a and b are the same directory or one lies
+// under the other, compared by identity (landsIn, both ways), so symlinks
+// and case-insensitive spellings count. The restore handler refuses a
 // target_path that overlaps the live HNSW snapshot directory this way.
 func PathsOverlap(a, b string) bool {
-	ra, rb := resolvePath(a), resolvePath(b)
-	return pathWithin(ra, rb) || pathWithin(rb, ra)
+	if _, ok := landsIn(a, []keepOutDir{statKeepOut(b)}); ok {
+		return true
+	}
+	_, ok := landsIn(b, []keepOutDir{statKeepOut(a)})
+	return ok
 }
 
 // extractArchive opens archivePath and extracts it into targetPath. It is
@@ -1044,11 +1126,6 @@ func PathsOverlap(a, b string) bool {
 // return before any file is opened) stays separate from the extraction
 // mechanics below.
 func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
-	keepOut := make([]string, 0, len(snapshotDirs))
-	for _, d := range snapshotDirs {
-		keepOut = append(keepOut, resolvePath(d))
-	}
-
 	// Open backup file
 	backupFile, err := os.Open(archivePath)
 	if err != nil {
@@ -1107,13 +1184,16 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
 		target := targetSP.String()
-		// Where the entry lands, symlinks resolved, decides; checked before
-		// anything is created for it, its parent directories included.
-		dest := resolvePath(target)
-		for _, dir := range keepOut {
-			if pathWithin(dest, dir) {
-				return fmt.Errorf("%w: %q would be written at %s", ErrArchiveCarriesHNSWSnapshot, header.Name, dest)
-			}
+		// Where the entry lands decides, by directory identity, checked
+		// before anything is created for it, its parent directories
+		// included. The snapshot directories are looked up again for each
+		// entry (statKeepOut).
+		keepOut := make([]keepOutDir, 0, len(snapshotDirs))
+		for _, d := range snapshotDirs {
+			keepOut = append(keepOut, statKeepOut(d))
+		}
+		if dir, ok := landsIn(target, keepOut); ok {
+			return fmt.Errorf("%w: %q would be written in %s", ErrArchiveCarriesHNSWSnapshot, header.Name, dir)
 		}
 
 		// Handle directories and files
@@ -1128,23 +1208,28 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 				return fmt.Errorf("failed to create parent directory for %s: %w", target, err)
 			}
 
-			// Create file
-			outFile, err := os.Create(target)
+			// Create the file without following a symlink at its name
+			// (openNoFollow): landsIn stops at a dangling link, and a write
+			// through one creates whatever it points at.
+			outFile, err := openNoFollow(target)
 			if err != nil {
-				return fmt.Errorf("failed to create file %s: %w", target, err)
+				return fmt.Errorf("archive entry %q: %w", header.Name, err)
 			}
 
 			// Copy data
 			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
+				_ = outFile.Close()
 				return fmt.Errorf("failed to write file %s: %w", target, err)
 			}
 
-			outFile.Close()
-
-			// Set file permissions
-			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+			// Set file permissions on the open file, not by name, which
+			// would follow a symlink put there since the open.
+			if err := outFile.Chmod(os.FileMode(header.Mode)); err != nil {
+				_ = outFile.Close()
 				return fmt.Errorf("failed to set permissions on %s: %w", target, err)
+			}
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("failed to write file %s: %w", target, err)
 			}
 		default:
 			slog.Warn("backup unsupported file type", "type", header.Typeflag, "name", header.Name)

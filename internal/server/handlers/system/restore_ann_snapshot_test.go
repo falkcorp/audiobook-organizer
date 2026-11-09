@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -363,16 +363,22 @@ func TestRestoreBackup_MarksTheStoreBeforeTheFirstWrite(t *testing.T) {
 // into, or marks, the live database's HNSW snapshot directory.
 type restoreProbe struct {
 	name string
+	// setup, when set, prepares root (the live database's directory, whose
+	// snapshot directory exists) before the restore; it may skip the test.
+	setup func(t *testing.T, root string)
 	// entries builds the archive; root is the live database's directory.
 	entries func(root string) []tarEntry
 	// target returns the request's target_path; nil means the default.
-	target     func(root string) string
+	target func(root string) string
+	// marked: the restore is refused inside the extraction, after the
+	// divergence mark, so it is marked once; otherwise it is not marked.
+	marked     bool
 	wantStatus int
 }
 
 // runRestoreProbe runs p, verified and not, and checks the refusal: the
-// status, no divergence mark, no marker in the live snapshot directory, and
-// no entry written where it would have landed.
+// status, the divergence mark (none unless p.marked), no marker in the live
+// snapshot directory, and no entry written where it would have landed.
 func runRestoreProbe(t *testing.T, p restoreProbe) {
 	for _, verify := range []bool{false, true} {
 		name := p.name + "/unverified"
@@ -390,6 +396,9 @@ func runRestoreProbe(t *testing.T, p restoreProbe) {
 			// The live server persists its graph here, so it exists.
 			snapshotDir := database.HNSWSnapshotDir(dbPath)
 			require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+			if p.setup != nil {
+				p.setup(t, root)
+			}
 
 			entries := p.entries(root)
 			archive := filepath.Join(config.AppConfig.BackupDir, "hush.tar")
@@ -417,7 +426,11 @@ func runRestoreProbe(t *testing.T, p restoreProbe) {
 			})
 
 			require.Equal(t, p.wantStatus, w.Code, w.Body.String())
-			assert.Empty(t, reasons, "a refused restore must not mark the store diverged")
+			if p.marked {
+				assert.Len(t, reasons, 1, "a restore refused inside the extraction is marked once")
+			} else {
+				assert.Empty(t, reasons, "a refused restore must not mark the store diverged")
+			}
 			assert.False(t, markerPresent(t, snapshotDir), "a refused restore wrote a marker into the live snapshot directory")
 			for _, e := range entries {
 				_, err := os.Stat(filepath.Join(target, e.name))
@@ -506,6 +519,102 @@ func TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot(t *testing.T) {
 			name:       "an empty archive",
 			entries:    func(string) []tarEntry { return nil },
 			wantStatus: http.StatusInternalServerError,
+		},
+	}
+	for _, p := range probes {
+		runRestoreProbe(t, p)
+	}
+}
+
+// symlinks makes each link (relative to root) a symlink to its target.
+func symlinks(t *testing.T, root string, links map[string]string) {
+	t.Helper()
+	for link, target := range links {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, link)), 0o755))
+		require.NoError(t, os.Symlink(target, filepath.Join(root, link)))
+	}
+}
+
+// skipUnlessFolded skips the test unless the filesystem opens root/hnsw
+// (the live snapshot directory, which exists) under alias. It asks the
+// filesystem, per alias, rather than guessing from GOOS.
+func skipUnlessFolded(t *testing.T, root, alias string) {
+	t.Helper()
+	want, err := os.Stat(filepath.Join(root, "hnsw"))
+	require.NoError(t, err)
+	if got, err := os.Stat(filepath.Join(root, alias)); err != nil || !os.SameFile(got, want) {
+		t.Skipf("the filesystem does not fold %q to hnsw", alias)
+	}
+}
+
+// TestRestoreBackup_ComparesDirectoriesByIdentity (R1-15 round-5
+// verification review): the round-5 checks compared path strings, which
+// the filesystem does not. B1-r5: a relative symlink resolves from its
+// physical parent, not from the path that reached it, so each of the
+// reviewer's three shapes wrote the live marker; they are now refused inside
+// the extraction (a 500 after the mark), because it does not write a file
+// through a symlink. S1-r5: a case-insensitive filesystem opens the snapshot
+// directory under HNSW or hnſw; the target check now compares directories by
+// identity and refuses those with a 400.
+func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
+	marker := func(name string) func(string) []tarEntry {
+		return func(string) []tarEntry { return []tarEntry{{name, testCleanStopMarker}} }
+	}
+	probes := []restoreProbe{
+		{
+			name: "a relative symlink resolved from its physical parent",
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "x", "y"), 0o755))
+				symlinks(t, root, map[string]string{
+					"lnk":   filepath.Join("x", "y"),
+					"x/y/m": filepath.Join("..", "..", "hnsw", "hnsw.clean-stop"),
+				})
+			},
+			entries:    marker("lnk/m"),
+			marked:     true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name: "a relative symlink under a custom target",
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "gotham", "x", "y"), 0o755))
+				symlinks(t, root, map[string]string{
+					"gotham/lnk":   filepath.Join("x", "y"),
+					"gotham/x/y/m": filepath.Join("..", "..", "..", "hnsw", "hnsw.clean-stop"),
+				})
+			},
+			entries:    marker("lnk/m"),
+			target:     func(root string) string { return filepath.Join(root, "gotham") },
+			marked:     true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name: "a target that is a symlink",
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "x", "y"), 0o755))
+				symlinks(t, root, map[string]string{
+					"arkham": filepath.Join("x", "y"),
+					"x/y/m":  filepath.Join("..", "..", "hnsw", "hnsw.clean-stop"),
+				})
+			},
+			entries:    marker("m"),
+			target:     func(root string) string { return filepath.Join(root, "arkham") },
+			marked:     true,
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "the snapshot directory as the target, in another case",
+			setup:      func(t *testing.T, root string) { skipUnlessFolded(t, root, "HNSW") },
+			entries:    marker("hnsw.clean-stop"),
+			target:     func(root string) string { return filepath.Join(root, "HNSW") },
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "the snapshot directory as the target, with a long s",
+			setup:      func(t *testing.T, root string) { skipUnlessFolded(t, root, "hn\u017fw") },
+			entries:    marker("hnsw.clean-stop"),
+			target:     func(root string) string { return filepath.Join(root, "hn\u017fw") },
+			wantStatus: http.StatusBadRequest,
 		},
 	}
 	for _, p := range probes {
