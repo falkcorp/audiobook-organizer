@@ -1,5 +1,5 @@
 // file: internal/decisions/rowcache_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 40be71d2-95a3-4c08-b6e1-7f2d83a9c514
 // last-edited: 2026-11-09
 
@@ -202,8 +202,8 @@ func TestDecisionKeysHaveOneWriter(t *testing.T) {
 	// Outside the package, no production code names a decision: key but the
 	// key-family registry.
 	allowed := map[string]bool{
-		filepath.Join("internal", "decisions", "keys.go"):       true,
-		filepath.Join("internal", "database", "keyfamilies.go"): true,
+		filepath.Join("internal", "decisions", "keys.go"):             true,
+		filepath.Join("internal", "books", "store", "keyfamilies.go"): true,
 	}
 	require.NoError(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

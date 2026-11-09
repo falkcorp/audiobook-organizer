@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_ops_v2_timeline_test.go
-// version: 1.10.4
+// version: 1.10.5
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
 // last-edited: 2026-11-09
 
@@ -1128,7 +1128,7 @@ func opv2FuncKey(rel string, fd *ast.FuncDecl) string {
 //     through channels, closures' captured writes, struct fields read back
 //     in another function, or interface method calls resolved at run time.
 func TestOpsV2RowWritesGoThroughStageOpRow(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}

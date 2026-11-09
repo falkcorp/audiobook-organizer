@@ -1,5 +1,5 @@
 // file: internal/books/store/change_type_class_undo_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 3f9c2d71-6a4e-4b8f-9e15-0d7a2c6b4e83
 // last-edited: 2026-11-09
 
@@ -84,7 +84,7 @@ func TestClassifyChangeType(t *testing.T) {
 // reach the journal routes without someone deciding whether its rows are user
 // data.
 func TestUserDataChangeTypes_EveryConstantIsClassified(t *testing.T) {
-	declared := declaredChangeTypeConsts(t, "../undo")
+	declared := declaredChangeTypeConsts(t, "../../undo")
 	require.NotEmpty(t, declared)
 	table := database.ExportUndoClassified()
 
