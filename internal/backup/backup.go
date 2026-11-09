@@ -1,5 +1,5 @@
 // file: internal/backup/backup.go
-// version: 1.22.13
+// version: 1.22.14
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
 // last-edited: 2026-11-08
 
@@ -13,12 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -680,6 +683,21 @@ var ErrArchiveEmpty = errors.New("backup archive has no entries")
 // review, B1-r5), and a dangling one would be created by the write.
 var ErrRestoreThroughSymlink = errors.New("backup restore does not write a file through a symlink")
 
+// ErrUnresolvableSymlink is returned by Extract, CheckSnapshotDirs and
+// CheckPathsApart for a directory the restore must compare with another
+// when its path, or one of its ancestors, is a symlink that does not
+// resolve: dangling, looping, or one the process may not follow. Such a
+// directory has no identity to compare, and a dangling symlink at a snapshot
+// directory's path is the more dangerous for it: an entry can create the
+// symlink's target, which is the snapshot directory from then on (R1-15
+// round-6 verification review, B1-r6). The restore fails closed: nothing is
+// compared, so nothing is written.
+var ErrUnresolvableSymlink = errors.New("a symlink on the restore's path does not resolve, so where it leads cannot be compared")
+
+// ErrPathsOverlap is returned by CheckPathsApart for two directories one of
+// which is, or lies under, the other.
+var ErrPathsOverlap = errors.New("the directories overlap")
+
 // hnswSnapshotDirName is the HNSW snapshot directory's name, beside the
 // database (database.HNSWSnapshotDir, which this package does not import;
 // TestRestoreBackup_RefusesAnArchiveCarryingTheHNSWSnapshot in the restore
@@ -993,9 +1011,13 @@ func PrepareRestoreIn(backupDir, filename string, verify bool) (*PreparedRestore
 // into: the restore handler passes the live database's and the restored
 // one's. Entry names alone cannot keep an entry out of them (a symlink
 // already in the target, or a target above one), so before it creates
-// anything for an entry Extract compares every directory on the way to its
-// destination with them by identity (landsIn) and refuses one inside any of
-// them (ErrArchiveCarriesHNSWSnapshot). It also does not write a file
+// anything for an entry Extract compares every directory on the physical
+// path to its destination, symlinks resolved, with them by identity
+// (landsIn) and refuses one inside any of them
+// (ErrArchiveCarriesHNSWSnapshot), and refuses every entry while one of them,
+// or a directory on the entry's own path, cannot be compared because a
+// symlink there does not resolve (ErrUnresolvableSymlink, R1-15 round-6
+// verification review, B1-r6; round 8, B1-r8). It also does not write a file
 // through a symlink (ErrRestoreThroughSymlink): the file is opened with
 // O_NOFOLLOW, so a symlink planted where an entry lands is never followed.
 // nil checks names and symlinks only.
@@ -1023,21 +1045,62 @@ type keepOutDir struct {
 // did not exist has no identity until it is made (an earlier entry can make
 // its parents, and the server's periodic HNSW export can make the snapshot
 // directory during a restore).
-func statKeepOut(dir string) keepOutDir {
+//
+// A component missing from dir is not the same as one that does not
+// resolve: os.Stat fails for both, and os.Lstat tells them apart. A missing
+// one is a directory not made yet, which holds' rule for that covers. One
+// that exists but does not resolve (a dangling or looping symlink, or any
+// error but "does not exist") is refused with ErrUnresolvableSymlink, and so
+// is a dangling symlink higher up, which the walk reaches as an ancestor:
+// standing its parent's identity and its name in for it, as for a directory
+// not made yet, would let an entry create the symlink's target, the
+// directory itself from then on (R1-15 round-6 verification review, B1-r6).
+func statKeepOut(dir string) (keepOutDir, error) {
 	k := keepOutDir{dir: dir}
 	cur := absPath(dir)
 	for {
-		if fi, err := os.Stat(cur); err == nil {
+		fi, err := os.Stat(cur)
+		if err == nil {
 			k.anchor = fi
-			return k
+			return k, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return k, fmt.Errorf("%w: %s: %w", ErrUnresolvableSymlink, cur, err)
+		}
+		if _, lerr := os.Lstat(cur); lerr == nil {
+			return k, fmt.Errorf("%w: %s is a symlink to something that does not exist", ErrUnresolvableSymlink, cur)
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return k
+			return k, nil
 		}
 		k.rest = append([]string{filepath.Base(cur)}, k.rest...)
 		cur = parent
 	}
+}
+
+// statKeepOuts is statKeepOut for each of dirs.
+func statKeepOuts(dirs []string) ([]keepOutDir, error) {
+	keep := make([]keepOutDir, 0, len(dirs))
+	for _, d := range dirs {
+		k, err := statKeepOut(d)
+		if err != nil {
+			return nil, err
+		}
+		keep = append(keep, k)
+	}
+	return keep, nil
+}
+
+// CheckSnapshotDirs returns ErrUnresolvableSymlink for the first of dirs, the
+// HNSW snapshot directories a restore keeps entries out of, that cannot be
+// compared with an entry's destination (statKeepOut), and nil when each can.
+// A directory not made yet can. The restore handler calls it before it marks
+// the HNSW store diverged or writes anything, so such a restore is refused
+// whole; Extract makes the same check for each entry.
+func CheckSnapshotDirs(dirs []string) error {
+	_, err := statKeepOuts(dirs)
+	return err
 }
 
 // holds reports whether the existing directory fi, reached on a walk whose
@@ -1075,49 +1138,116 @@ func absPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// landsIn walks p from the filesystem root down to p itself, stats each
-// directory on the way (following symlinks, as the kernel does), and returns
-// the keep-out directory one of them is, lies under, or would create. The
-// walk stops at the first component that does not exist: nothing below it
-// exists either, and what MkdirAll makes there is caught by holds' rule for
-// a directory not made yet. A symlinked directory on the way is followed,
-// not refused: the database directory itself may be a symlink to another
-// disk.
-func landsIn(p string, keep []keepOutDir) (string, bool) {
-	abs := absPath(p)
-	vol := filepath.VolumeName(abs)
+// physicalPath returns abs, an absolute and clean path, as the kernel
+// resolves it: the deepest prefix of it that exists, resolved with
+// filepath.EvalSymlinks, and the components below that prefix, which do not
+// exist yet, appended. The prefix is found with os.Lstat, which a symlink
+// passes whether or not it resolves, so a dangling or looping symlink is the
+// prefix and fails EvalSymlinks: ErrUnresolvableSymlink, as is any error
+// but a missing component (ENOENT, or ENOTDIR under a file).
+func physicalPath(abs string) (string, error) {
+	existing := abs
+	var missing []string
+	for {
+		_, err := os.Lstat(existing)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return "", fmt.Errorf("%w: %s: %w", ErrUnresolvableSymlink, existing, err)
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break
+		}
+		missing = append(missing, filepath.Base(existing))
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrUnresolvableSymlink, existing, err)
+	}
+	slices.Reverse(missing)
+	return filepath.Join(append([]string{resolved}, missing...)...), nil
+}
+
+// landsIn walks p's physical path (physicalPath) from the filesystem root
+// down to p itself, stats each directory on the way, and returns the
+// keep-out directory one of them is, lies under, or would create. The walk
+// stops at the first component that does not exist: nothing below it exists
+// either, and what MkdirAll makes there is caught by holds' rule for a
+// directory not made yet. A symlinked directory on the way is followed, not
+// refused: the database directory itself may be a symlink to another disk.
+//
+// The walk is over the physical path, not the path as p spells it: a
+// symlink on the way to a directory strictly under a keep-out directory has
+// that subdirectory's identity, so a walk of the spelled path compared the
+// symlink, then names that did not exist yet, and never reached the
+// keep-out directory the kernel writes into (R1-15 round-8 verification
+// review, B1-r8). The physical path runs through it. An error is
+// ErrUnresolvableSymlink: a symlink on p's path that does not resolve, or a
+// directory on it that cannot be looked at, so where p lands cannot be told.
+func landsIn(p string, keep []keepOutDir) (string, bool, error) {
+	phys, err := physicalPath(absPath(p))
+	if err != nil {
+		return "", false, err
+	}
+	vol := filepath.VolumeName(phys)
 	cur := vol + string(filepath.Separator)
 	var parts []string
-	if rest := strings.Trim(abs[len(vol):], string(filepath.Separator)); rest != "" {
+	if rest := strings.Trim(phys[len(vol):], string(filepath.Separator)); rest != "" {
 		parts = strings.Split(rest, string(filepath.Separator))
 	}
 	for i := 0; ; i++ {
 		fi, err := os.Stat(cur)
 		if err != nil {
-			return "", false
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				return "", false, nil
+			}
+			return "", false, fmt.Errorf("%w: %s: %w", ErrUnresolvableSymlink, cur, err)
 		}
 		for _, k := range keep {
 			if k.holds(fi, parts[i:]) {
-				return k.dir, true
+				return k.dir, true, nil
 			}
 		}
 		if i == len(parts) {
-			return "", false
+			return "", false, nil
 		}
 		cur = filepath.Join(cur, parts[i])
 	}
 }
 
-// PathsOverlap reports whether a and b are the same directory or one lies
-// under the other, compared by identity (landsIn, both ways), so symlinks
-// and case-insensitive spellings count. The restore handler refuses a
-// target_path that overlaps the live HNSW snapshot directory this way.
-func PathsOverlap(a, b string) bool {
-	if _, ok := landsIn(a, []keepOutDir{statKeepOut(b)}); ok {
-		return true
+// CheckPathsApart returns ErrPathsOverlap when a and b are the same
+// directory or one lies under the other, compared by identity along each
+// one's physical path (landsIn, both ways), so symlinks, a symlink to a
+// directory under the other included (R1-15 round-8 verification review,
+// B1-r8), and case-insensitive spellings count, and ErrUnresolvableSymlink
+// when either cannot be compared (statKeepOut, landsIn). The restore handler
+// refuses a target_path that is not apart from the live HNSW snapshot
+// directory this way.
+func CheckPathsApart(a, b string) error {
+	ka, err := statKeepOut(a)
+	if err != nil {
+		return err
 	}
-	_, ok := landsIn(b, []keepOutDir{statKeepOut(a)})
-	return ok
+	kb, err := statKeepOut(b)
+	if err != nil {
+		return err
+	}
+	for _, pair := range []struct {
+		p string
+		k keepOutDir
+	}{{a, kb}, {b, ka}} {
+		_, ok, err := landsIn(pair.p, []keepOutDir{pair.k})
+		if err != nil {
+			return err
+		}
+		if ok {
+			return fmt.Errorf("%w: %s and %s", ErrPathsOverlap, a, b)
+		}
+	}
+	return nil
 }
 
 // extractArchive opens archivePath and extracts it into targetPath. It is
@@ -1184,15 +1314,21 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
 		target := targetSP.String()
-		// Where the entry lands decides, by directory identity, checked
-		// before anything is created for it, its parent directories
-		// included. The snapshot directories are looked up again for each
-		// entry (statKeepOut).
-		keepOut := make([]keepOutDir, 0, len(snapshotDirs))
-		for _, d := range snapshotDirs {
-			keepOut = append(keepOut, statKeepOut(d))
+		// Where the entry lands decides, by directory identity along its
+		// physical path, checked before anything is created for it, its
+		// parent directories included. The snapshot directories are looked
+		// up again for each entry (statKeepOut), and one that cannot be
+		// compared refuses the entry, whatever its destination; so does a
+		// symlink on the entry's own path that does not resolve (landsIn).
+		keepOut, err := statKeepOuts(snapshotDirs)
+		if err != nil {
+			return fmt.Errorf("archive entry %q: %w", header.Name, err)
 		}
-		if dir, ok := landsIn(target, keepOut); ok {
+		dir, ok, err := landsIn(target, keepOut)
+		if err != nil {
+			return fmt.Errorf("archive entry %q: %w", header.Name, err)
+		}
+		if ok {
 			return fmt.Errorf("%w: %q would be written in %s", ErrArchiveCarriesHNSWSnapshot, header.Name, dir)
 		}
 

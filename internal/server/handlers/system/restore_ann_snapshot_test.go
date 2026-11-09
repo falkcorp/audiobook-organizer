@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/restore_ann_snapshot_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: b3587e2b-0397-4f38-8a01-ae6bdd068607
 // last-edited: 2026-11-08
 
@@ -152,7 +152,8 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			// extraction also checks where each entry lands and refuses one
 			// inside a snapshot directory, unwritten. The entry is not the
 			// marker, so the deferred marker removal cannot be what keeps
-			// the directory clean.
+			// the directory clean. The prepare step's 400 for the same
+			// refusal (round 8, N1).
 			name: "a symlink in the target routes an entry into the snapshot directory",
 			entries: []tarEntry{
 				{"audiobooks.pebble/MANIFEST-000001", "batcave"},
@@ -160,7 +161,7 @@ func TestRestoreBackup_DistrustsTheHNSWSnapshot(t *testing.T) {
 			},
 			link:       "wayne-manor",
 			wantAbsent: []string{"hnsw/hnsw.graph"},
-			wantStatus: http.StatusInternalServerError,
+			wantStatus: http.StatusBadRequest,
 		},
 		{
 			// Round 4: a real backup never holds the snapshot directory, so
@@ -552,8 +553,10 @@ func skipUnlessFolded(t *testing.T, root, alias string) {
 // the filesystem does not. B1-r5: a relative symlink resolves from its
 // physical parent, not from the path that reached it, so each of the
 // reviewer's three shapes wrote the live marker; they are now refused inside
-// the extraction (a 500 after the mark), because it does not write a file
-// through a symlink. S1-r5: a case-insensitive filesystem opens the snapshot
+// the extraction, after the mark: each destination is a symlink that does
+// not resolve, a 409 since round 8 resolves the whole path (B1-r8), where
+// writeEntry's refusal to write through a symlink gave a 500. S1-r5: a
+// case-insensitive filesystem opens the snapshot
 // directory under HNSW or hnſw; the target check now compares directories by
 // identity and refuses those with a 400.
 func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
@@ -572,7 +575,7 @@ func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
 			},
 			entries:    marker("lnk/m"),
 			marked:     true,
-			wantStatus: http.StatusInternalServerError,
+			wantStatus: http.StatusConflict,
 		},
 		{
 			name: "a relative symlink under a custom target",
@@ -586,7 +589,7 @@ func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
 			entries:    marker("lnk/m"),
 			target:     func(root string) string { return filepath.Join(root, "gotham") },
 			marked:     true,
-			wantStatus: http.StatusInternalServerError,
+			wantStatus: http.StatusConflict,
 		},
 		{
 			name: "a target that is a symlink",
@@ -600,7 +603,7 @@ func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
 			entries:    marker("m"),
 			target:     func(root string) string { return filepath.Join(root, "arkham") },
 			marked:     true,
-			wantStatus: http.StatusInternalServerError,
+			wantStatus: http.StatusConflict,
 		},
 		{
 			name:       "the snapshot directory as the target, in another case",
@@ -615,6 +618,77 @@ func TestRestoreBackup_ComparesDirectoriesByIdentity(t *testing.T) {
 			entries:    marker("hnsw.clean-stop"),
 			target:     func(root string) string { return filepath.Join(root, "hn\u017fw") },
 			wantStatus: http.StatusBadRequest,
+		},
+	}
+	for _, p := range probes {
+		runRestoreProbe(t, p)
+	}
+}
+
+// danglingLiveSnapshot replaces the live snapshot directory, which
+// runRestoreProbe makes, with a relative symlink to root/joker, which does
+// not exist.
+func danglingLiveSnapshot(t *testing.T, root string) {
+	t.Helper()
+	require.NoError(t, os.Remove(filepath.Join(root, "hnsw")))
+	symlinks(t, root, map[string]string{"hnsw": "joker"})
+}
+
+// TestRestoreBackup_RefusesAnUnresolvableSnapshotDirectory (R1-15 round-6
+// verification review, B1-r6): a snapshot directory whose path is a
+// symlink that does not resolve has no identity to compare with, and an
+// entry could create the symlink's target, which is the snapshot directory
+// from then on: the reviewer's probe wrote a vouching marker there that a
+// crash during the extraction would have left. The restore checks both
+// snapshot directories before it marks the store or writes anything, and
+// refuses with a 409: the server's directory, not the request, is what
+// stands in the way. A custom target that cannot be compared with the live
+// snapshot directory for the same reason is refused before the archive is
+// read.
+func TestRestoreBackup_RefusesAnUnresolvableSnapshotDirectory(t *testing.T) {
+	probes := []restoreProbe{
+		{
+			// The reviewer's handler probe, without its named pipe: the
+			// pipe held the extraction so the probe could see the marker,
+			// and the extraction no longer starts.
+			name:  "a dangling live snapshot directory",
+			setup: danglingLiveSnapshot,
+			entries: func(string) []tarEntry {
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000000", "batcave"},
+					{"joker/hnsw.clean-stop", testCleanStopMarker},
+					{"audiobooks.pebble/OPTIONS-000002", "bane"},
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+				}
+			},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:  "a custom target where the dangling live snapshot directory points",
+			setup: danglingLiveSnapshot,
+			entries: func(string) []tarEntry {
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+					{"hnsw.clean-stop", testCleanStopMarker},
+				}
+			},
+			target:     func(root string) string { return filepath.Join(root, "joker") },
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "a dangling restored snapshot directory",
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "gotham"), 0o755))
+				symlinks(t, root, map[string]string{"gotham/hnsw": "joker"})
+			},
+			entries: func(string) []tarEntry {
+				return []tarEntry{
+					{"audiobooks.pebble/MANIFEST-000001", "batcave"},
+					{"joker/hnsw.clean-stop", testCleanStopMarker},
+				}
+			},
+			target:     func(root string) string { return filepath.Join(root, "gotham") },
+			wantStatus: http.StatusConflict,
 		},
 	}
 	for _, p := range probes {
