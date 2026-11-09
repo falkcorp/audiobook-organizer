@@ -1,5 +1,5 @@
 // file: core/kernel/restore.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
 // last-edited: 2026-11-09
 
@@ -100,8 +100,12 @@ type RestoreOfflineResult struct {
 //     swap, no journal, no intent; it runs beside a serving service, as
 //     the service's user (R1-27's rollback check runs it that way).
 //     Run as root, it would leave root-owned entries in the checkpoint
-//     directory that the sweeper cannot open or remove: a .sweep.lock
-//     every later sweep skips on, a scratch area and a copy.
+//     directory that the service cannot open or remove: a .sweep.lock
+//     its sweeps stop on (storage.ErrCheckpointSweepLockForeign), a
+//     scratch area and a copy; and where the checkpoint directory did not
+//     exist yet, which the copy creates, the directory itself, which the
+//     next upgrade boot's checkpoint (storage's takeCheckpoint) cannot
+//     list or write, so that upgrade fails.
 //
 // Every form holds the checkpoint directory's sweep lock throughout
 // (storage.Checkpoints.Lock), so a sweep or storage prune-checkpoints never

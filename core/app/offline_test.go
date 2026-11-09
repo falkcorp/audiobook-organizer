@@ -1,7 +1,7 @@
 // file: core/app/offline_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: cc4eb0c6-a5b7-4c42-ade1-8413517a38ae
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package app
 
@@ -12,10 +12,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -34,10 +36,16 @@ func seeded(n int) manifestOnly {
 // runPrune runs storage prune-checkpoints from OfflineCommands with args.
 func runPrune(t *testing.T, opts Options, mods []module.Module, args ...string) (string, error) {
 	t.Helper()
+	return runPruneAs(t, t.Context(), opts, mods, args...)
+}
+
+// runPruneAs is runPrune under ctx, which carries the seams it runs with.
+func runPruneAs(t *testing.T, ctx context.Context, opts Options, mods []module.Module, args ...string) (string, error) {
+	t.Helper()
 	for _, c := range OfflineCommands(opts, mods...) {
 		if c.Name == "storage prune-checkpoints" {
 			var out bytes.Buffer
-			err := c.Run(t.Context(), args, &out)
+			err := c.Run(ctx, args, &out)
 			return out.String(), err
 		}
 	}
@@ -113,6 +121,41 @@ func TestPruneCheckpointsCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath + ".migration-checkpoint"); err != nil {
 		t.Fatalf("a refused prune deleted something: %v", err)
+	}
+
+	// The owner rule (R1-25 follow-up SF-1): run as root, or as any other
+	// user, it is refused before it takes the sweep lock, so it neither
+	// deletes the checkpoint nor leaves a lock file the service cannot
+	// open. The lock file is absent here because no sweep has run.
+	_, stateDir, err := storagePath(opts, mods)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ok, err := storage.StateDirOwner(bootseam.FS(t.Context()), stateDir)
+	if err != nil || (!ok && runtime.GOOS != "windows") {
+		t.Fatalf("StateDirOwner(%s) = %d, %v, %v", stateDir, owner, ok, err)
+	}
+	var strangers []int // none where files carry no owner this reads
+	if ok {
+		strangers = append(strangers, int(owner)+1)
+	}
+	if ok && owner != 0 {
+		strangers = append(strangers, 0)
+	}
+	lockFile := filepath.Join(filepath.Dir(dbPath), ".mediacore-checkpoints", ".sweep.lock")
+	_ = os.Remove(lockFile)
+	for _, uid := range strangers {
+		ctx := bootseam.With(t.Context(), &bootseam.Seams{Euid: func() int { return uid }})
+		_, err := runPruneAs(t, ctx, opts, mods)
+		if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "storage prune-checkpoints") || !strings.Contains(err.Error(), "sudo -u ") {
+			t.Fatalf("prune as uid %d = %v, want storage.ErrNotStateDirOwner naming the command and sudo -u", uid, err)
+		}
+		if _, err := os.Stat(dbPath + ".migration-checkpoint"); err != nil {
+			t.Fatalf("a prune as uid %d deleted the pointer: %v", uid, err)
+		}
+		if _, err := os.Lstat(lockFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a prune as uid %d left a sweep lock file (%v)", uid, err)
+		}
 	}
 
 	out, err := runPrune(t, opts, mods)
