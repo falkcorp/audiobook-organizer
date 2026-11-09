@@ -1,7 +1,7 @@
 # file: scripts/tests/test_run_gates.py
-# version: 1.4.1
+# version: 1.4.2
 # guid: 5b9d2e74-c1a6-4380-9f2e-d4a7b6c30e18
-# last-edited: 2026-11-07
+# last-edited: 2026-11-09
 """Tests for scripts/ci/run_gates.py and the one-way ratchet rule (07-G4)."""
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ class ManifestTests(unittest.TestCase):
                 "vet-integration",
                 "commits-build",
                 "embed-context",
+                "unit-lifecycle",
                 "core-errcheck",
                 "core-interface-width",
                 "core-pprof",
@@ -264,17 +265,22 @@ class CiCoverageTests(unittest.TestCase):
         self.assertNotIn("ci/gates.txt", ci)
 
     def test_own_job_gates_run_in_a_ci_job(self):
-        # An own-job gate runs in a ci.yml job or an extraction-gates.yml job
-        # (09 §9.2.1: extraction-gates, vet-darwin and vet-integration).
-        text = (
-            self._ci_lines() + "\n" + _live_lines(ROOT / ".github/workflows/extraction-gates.yml")
+        # An own-job gate runs in a ci.yml job, an extraction-gates.yml job
+        # (09 §9.2.1: extraction-gates, vet-darwin and vet-integration) or the
+        # unit-lifecycle.yml job (R1-28: it needs systemd as PID 1).
+        text = "\n".join(
+            [
+                self._ci_lines(),
+                _live_lines(ROOT / ".github/workflows/extraction-gates.yml"),
+                _live_lines(ROOT / ".github/workflows/unit-lifecycle.yml"),
+            ]
         )
         gates = [g for g in self._gates() if g.job == "own-job"]
         self.assertTrue(gates)
         for g in gates:
             self.assertTrue(
                 gate_runs_in(g, text),
-                f"{g.name}: no ci.yml or extraction-gates.yml step runs {g.command!r}",
+                f"{g.name}: no ci.yml, extraction-gates.yml or unit-lifecycle.yml step runs {g.command!r}",
             )
 
     def test_own_job_gates_of_the_required_checks_are_registered(self):
@@ -290,6 +296,16 @@ class CiCoverageTests(unittest.TestCase):
                 _live_lines(ROOT / ".github/workflows/extraction-gates.yml"),
             )
         )
+
+    def test_unit_lifecycle_gate_is_registered_and_runs_in_its_own_workflow(self):
+        by_name = {g.name: g for g in self._gates()}
+        gate = by_name["unit-lifecycle"]
+        self.assertEqual((gate.kind, gate.job), ("check", "own-job"))
+        self.assertTrue(
+            gate_runs_in(gate, _live_lines(ROOT / ".github/workflows/unit-lifecycle.yml"))
+        )
+        # no other workflow runs it: it needs systemd as PID 1
+        self.assertFalse(gate_runs_in(gate, self._ci_lines()))
 
     def test_core_job_gates_run_in_core_ci(self):
         # A core-job gate's command runs inside `make -C core ci` or a step of
