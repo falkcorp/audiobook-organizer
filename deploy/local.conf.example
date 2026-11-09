@@ -1,14 +1,20 @@
 # file: deploy/local.conf.example
-# version: 1.4.1
+# version: 1.5.0
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
-# TEMPLATE — this is a systemd drop-in for audiobook-organizer.service.
-# Copy to deploy/local.conf (gitignored) and fill in your own TLS cert
-# paths, DB path, and Windows GPU transcription/embedding endpoint. Deploy it
-# to the server at:
-#   /etc/systemd/system/audiobook-organizer.service.d/local.conf
-# then `sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer`.
+# TEMPLATE — the environment drop-in for audiobook-organizer.service.
+# Copy to deploy/local.conf (gitignored) and fill in your own endpoints.
+# `make deploy` uploads it and the root-owned install-staged helper renders
+# /etc/systemd/system/audiobook-organizer.service.d/local.conf from its
+# [Service] and Environment= lines, one KEY=value assignment per line
+# (unquoted with no spaces, or wholly in double or single quotes, no
+# backslash). Any other setting refuses the deploy: systemd reads this file
+# as root, so whoever writes it could otherwise write User=root or
+# ExecStartPre=. The host's other settings (the ExecStart= command line with
+# its TLS and DB paths, TimeoutStopSec=, WorkingDirectory=, MemoryMax=) go in
+# host.conf beside it, which the owner installs as root and deploy never
+# touches; the commented block below shows them.
 #
 # See deploy/audiobook-organizer.service for the base unit this overrides,
 # and docs/system/deploy-and-gpu-ops.md for the full deploy/rollback flow.
@@ -19,22 +25,28 @@
 # 192.168.0.20 are placeholder addresses — substitute your own hosts in
 # docs/system/runbooks.md and docs/status/2026-07-02-local-cutover-and-matching.md.
 
-[Service]
-# Clear the base unit's ExecStart, then set the full production command line.
-ExecStart=
-ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
-      --db /path/to/audiobooks.pebble \
-      --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
-      --http3-port 8484
+# --- host.conf, NOT this file -------------------------------------------
+# /etc/systemd/system/audiobook-organizer.service.d/host.conf, written once
+# by the owner as root (sudo tee / sudoedit), then
+# `sudo systemctl daemon-reload`:
+#
+# [Service]
+# # Clear the base unit's ExecStart, then set the full production command line.
+# ExecStart=
+# ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
+#       --db /path/to/audiobooks.pebble \
+#       --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
+#       --http3-port 8484
+# # How long systemd waits for a graceful shutdown before SIGKILL. The base
+# # unit sets 60 s, which covers the kernel's shutdown budget (25 s by default)
+# # plus the store's close after it (up to 10 s for a Pebble access still in
+# # flight). Production runs with 90 s. Raise it if large in-flight operations
+# # (fingerprint rescans, dedup purges) need longer to finish cleanly on
+# # stop/restart.
+# TimeoutStopSec=90
+# --------------------------------------------------------------------------
 
-# How long systemd waits for a graceful shutdown before SIGKILL. The base unit
-# sets none, so this value (or systemd's DefaultTimeoutStopSec) is the one the
-# server stops under. It must cover the kernel's shutdown budget (25s by
-# default) plus the store's close after it, which can wait up to 10s for a
-# Pebble access still in flight. Production runs with 90s. Raise it if large
-# in-flight operations (fingerprint rescans, dedup purges) need longer to
-# finish cleanly on stop/restart.
-TimeoutStopSec=90
+[Service]
 
 # Point at your own Windows GPU box (or other Ollama-compatible endpoint)
 # running bge-m3 (1024-dim embeddings) and qwen2.5:7b-instruct. See

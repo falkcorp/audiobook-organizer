@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.2.1
+# version: 1.3.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -25,6 +25,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -585,52 +586,60 @@ class SwapPrev(unittest.TestCase):
             self.assertEqual(h.bin.read_text(), "current")
 
 
-# A drop-in shaped like a real host's local.conf: an ExecStart reset and an
-# override continued over several lines, a JSON value in single quotes, a
-# memory cap and a working directory. Values are made up.
-REAL_SHAPED_LOCAL_CONF = """[Service]
-MemoryMax=30G
-TimeoutStopSec=90
+# A local.conf shaped like a real host's, Environment= lines only: a JSON
+# value in single quotes, a double-quoted value with spaces, comments with
+# an em dash. Values are made up.
+REAL_SHAPED_LOCAL_CONF = """# Wayne Manor — the Batcave's environment
+[Service]
 Environment='WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]'
 Environment=OWNER_EMAIL=alfred@wayne-manor.invalid
-WorkingDirectory=/srv/batcave/.appdata
+Environment="SMTP_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"
+  # an indented comment
 Environment=HOME=/srv/batcave/.appdata
-ExecStart=
-ExecStart=/usr/local/bin/audiobook-organizer serve \\
-      --host 0.0.0.0 \\
-      --port 8484 \\
-      --db /srv/batcave/.appdata/audiobooks.pebble
 """
 
-# Each of these, alone in an otherwise good file, must be refused: every one
-# lets whoever writes the file run something as root, write a file as root,
-# gain a privilege, or reboot the host.
-ROOT_FORMS = [
+RENDERED_REAL_SHAPED = (
+    "[Service]\n"
+    'Environment=\'WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]\'\n'
+    "Environment=OWNER_EMAIL=alfred@wayne-manor.invalid\n"
+    'Environment="SMTP_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"\n'
+    "Environment=HOME=/srv/batcave/.appdata\n"
+)
+
+# Each of these lines in a deployed local.conf is refused: only [Service]
+# and one-assignment Environment= lines are deployed. The non-Environment
+# ones run, write or grant something as root, or change how the service
+# runs, and belong in host.conf, which the owner installs as root.
+REFUSED_LINES = [
     "User=root",
     "User=",
-    "User=0",
     "Group=root",
-    "Group=",
+    "ExecStart=",
+    "ExecStart=/usr/local/bin/audiobook-organizer serve",
     "ExecStartPre=/bin/sh -c 'id'",
-    "ExecStartPost=/bin/true",
-    "ExecStopPost=/bin/true",
-    "ExecStart=+/bin/sh -c 'id'",
-    "ExecStart=!/bin/sh",
-    "ExecStart=!!/bin/sh",
-    "ExecStart=-+/bin/sh",
-    "ExecStart=sh -c id",
     "StandardOutput=file:/etc/sudoers.d/batman",
-    "StandardError=append:/etc/passwd",
     "AmbientCapabilities=CAP_SYS_ADMIN",
-    "CapabilityBoundingSet=~",
     "SupplementaryGroups=root",
-    "DynamicUser=yes",
-    "RootDirectory=/",
     "EnvironmentFile=/etc/shadow",
-    "PermissionsStartOnly=yes",
-    "Wants=reboot.target",
-    "OnFailure=reboot.target",
-    "WorkingDirectory=relative",
+    "WorkingDirectory=/srv/batcave",
+    "MemoryMax=30G",
+    "TimeoutStopSec=90",
+    "[Unit]",
+    "[Install]",
+    "[Service ]",
+    "Environment",
+    "Environment =A=1",
+    "environment=A=1",
+    "Environment=A=1 B=2",
+    "Environment=1A=1",
+    "Environment=A-B=1",
+    "Environment=A",
+    'Environment="A=1',
+    "Environment='A=1\"",
+    'Environment="A=1" "B=2"',
+    "Environment=A=1\\",
+    "Environment=A=\\x",
+    'Environment="A=a\\"b"',
     ".include /etc/evil.conf",
     "not a directive",
 ]
@@ -644,30 +653,41 @@ def committed_unit(user: str = "alfred") -> str:
 
 
 class InstallStaged(unittest.TestCase):
-    """install-staged installs the deploy user's staged binary, unit and
-    local.conf. The unit and the drop-in are files systemd reads as root,
-    so a free copy (`sudo cp`) would let the deploy user write User=root or
-    ExecStartPre=: each is checked against an allowlist of directives first,
-    from the bytes read once, and those same bytes are installed."""
+    """install-staged installs the deploy's binary, the unit and local.conf.
+
+    systemd reads the unit and its drop-ins as root, so the helper accepts
+    no free-form content for them: the unit is the copy of
+    deploy/audiobook-organizer.service the owner installed root-owned in
+    LIBDIR with the helpers, and local.conf is rendered by the helper from
+    the staged file's Environment= lines, each checked against one strict
+    grammar, so systemd only ever reads lines the helper wrote."""
 
     def host(self, **extra) -> Host:
         h = Host(self)
         self.stage = h.root / "home"
         self.stage.mkdir()
+        self.libdir = h.root / "libexec"
+        self.libdir.mkdir()
+        h.mod.LIBDIR = str(self.libdir)
         values = {
-            "bin": str(h.bin),
+            "bin": "/usr/local/bin/audiobook-organizer",
             "db": str(h.db),
             "state_dir": str(h.state),
             "unit": "audiobook-organizer.service",
             "service_user": "alfred",
             "archive_dir": str(h.archives),
             "stage_bin": str(self.stage / "audiobook-organizer"),
-            "stage_unit": str(self.stage / "audiobook-organizer.service"),
             "stage_local_conf": str(self.stage / "audiobook-organizer-local.conf"),
         }
         values.update(extra)
         h.write_config(values)
         return h
+
+    def template(self, text: str | None = None, mode: int = 0o644) -> Path:
+        p = self.libdir / "audiobook-organizer.service"
+        p.write_text(committed_unit() if text is None else text)
+        p.chmod(mode)
+        return p
 
     def unit_path(self, h: Host) -> Path:
         return h.systemd / "audiobook-organizer.service"
@@ -675,141 +695,113 @@ class InstallStaged(unittest.TestCase):
     def conf_path(self, h: Host) -> Path:
         return h.systemd / "audiobook-organizer.service.d" / "local.conf"
 
-    def test_the_committed_unit_installs_and_reloads(self):
+    def stage_conf(self, text: str) -> None:
+        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+
+    # -- the unit: the owner's root-owned copy, nothing staged --------------
+
+    def test_the_unit_is_the_owners_template_and_reloads(self):
         h = self.host()
-        text = committed_unit()
-        (self.stage / "audiobook-organizer.service").write_text(text)
-        code, out, err = h.run("install", "unit")
+        self.template()
+        code, _, err = h.run("install", "unit")
         self.assertEqual(code, 0, err)
-        self.assertEqual(self.unit_path(h).read_text(), text)
+        self.assertEqual(self.unit_path(h).read_text(), committed_unit())
         self.assertEqual(stat.S_IMODE(os.stat(self.unit_path(h)).st_mode), 0o644)
         self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
 
-    def test_the_committed_local_conf_example_installs(self):
+    def test_the_committed_unit_installs_verbatim_for_its_own_user(self):
+        h = self.host(service_user="audiobook")
+        text = (REPO_ROOT / "deploy" / "audiobook-organizer.service").read_text()
+        self.template(text)
+        self.assertEqual(h.run("install", "unit")[0], 0)
+        self.assertEqual(self.unit_path(h).read_text(), text)
+
+    def test_a_staged_unit_is_never_read(self):
         h = self.host()
-        text = (REPO_ROOT / "deploy" / "local.conf.example").read_text()
-        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        self.template()
+        (self.stage / "audiobook-organizer.service").write_text("[Service]\nUser=root\n")
+        self.assertEqual(h.run("install", "unit")[0], 0)
+        self.assertNotIn("User=root", self.unit_path(h).read_text())
+
+    def test_stage_unit_is_no_longer_a_setting(self):
+        h = self.host(stage_unit="/srv/batcave/x.service")
+        self.template()
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 1)
+        self.assertIn("stage_unit", err)
+
+    def test_the_template_must_be_owner_installed(self):
+        for mode in (0o664, 0o646):
+            with self.subTest(mode=oct(mode)):
+                h = self.host()
+                self.template(mode=mode)
+                self.assertEqual(h.run("install", "unit")[0], 1)
+                self.assertFalse(self.unit_path(h).exists())
+        h = self.host()
+        real = h.root / "real.service"
+        real.write_text(committed_unit())
+        os.symlink(real, self.libdir / "audiobook-organizer.service")
+        self.assertEqual(h.run("install", "unit")[0], 1)
+        h = self.host()
+        self.assertEqual(h.run("install", "unit")[0], 1, "no template installed")
+
+    def test_the_template_must_match_the_config(self):
+        for text in (
+            committed_unit("batman"),
+            committed_unit().replace("Group=alfred", "Group=batman"),
+            committed_unit().replace(
+                "ExecStart=/usr/local/bin/audiobook-organizer ", "ExecStart=/opt/x "
+            ),
+            committed_unit().replace("User=alfred\n", ""),
+        ):
+            with self.subTest(text=text[-80:]):
+                h = self.host()
+                self.template(text)
+                code, _, err = h.run("install", "unit")
+                self.assertEqual(code, 1, err)
+                self.assertFalse(self.unit_path(h).exists())
+
+    # -- local.conf: rendered from Environment= lines ------------------------
+
+    def test_local_conf_is_rendered_from_its_environment_lines(self):
+        h = self.host()
+        self.stage_conf(REAL_SHAPED_LOCAL_CONF)
         code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 0, err)
-        self.assertEqual(self.conf_path(h).read_text(), text)
+        out = self.conf_path(h).read_text()
+        self.assertTrue(out.endswith(RENDERED_REAL_SHAPED), out)
+        body = [ln for ln in out.splitlines() if ln and not ln.startswith("#")]
+        self.assertEqual(body, RENDERED_REAL_SHAPED.splitlines())
+        self.assertTrue(out.isascii())
+        self.assertEqual([t["argv"] for t in h.tools()], [["daemon-reload"]])
 
-    def test_a_short_read_still_installs_the_whole_file(self):
-        """read(2) may return less than asked (a network-mounted home):
-        the helper reads to the end, never installing a truncated drop-in."""
+    def test_the_committed_local_conf_example_renders(self):
         h = self.host()
-        (self.stage / "audiobook-organizer-local.conf").write_text(REAL_SHAPED_LOCAL_CONF)
-        real = os.read
-        with unittest.mock.patch.object(h.mod.os, "read", lambda fd, n: real(fd, min(n, 7))):
-            code, _, err = h.run("install", "local-conf")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.conf_path(h).read_text(), REAL_SHAPED_LOCAL_CONF)
-
-    def test_a_real_shaped_local_conf_installs(self):
-        h = self.host()
-        (self.stage / "audiobook-organizer-local.conf").write_text(REAL_SHAPED_LOCAL_CONF)
+        self.stage_conf((REPO_ROOT / "deploy" / "local.conf.example").read_text())
         code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 0, err)
-        self.assertEqual(self.conf_path(h).read_text(), REAL_SHAPED_LOCAL_CONF)
+        self.assertIn("Environment=", self.conf_path(h).read_text())
 
-    def test_root_forms_are_refused_in_the_unit(self):
-        for line in ROOT_FORMS:
+    def test_every_other_line_is_refused(self):
+        for line in REFUSED_LINES:
             with self.subTest(line=line):
                 h = self.host()
-                section = "[Unit]" if line.startswith(("Wants", "OnFailure")) else "[Service]"
-                text = committed_unit().replace(section + "\n", f"{section}\n{line}\n", 1)
-                self.assertIn(line, text)
-                (self.stage / "audiobook-organizer.service").write_text(text)
-                code, _, err = h.run("install", "unit")
+                self.stage_conf(f"[Service]\nEnvironment=A=1\n{line}\n")
+                code, _, err = h.run("install", "local-conf")
                 self.assertEqual(code, 1, (line, err))
-                self.assertFalse(self.unit_path(h).exists(), line)
+                self.assertIn("line 3", err)
+                self.assertFalse(self.conf_path(h).exists(), line)
                 self.assertEqual(h.tools(), [], line)
 
-    def test_root_forms_are_refused_in_the_dropin(self):
-        for line in ROOT_FORMS:
-            with self.subTest(line=line):
-                h = self.host()
-                section = "[Unit]" if line.startswith(("Wants", "OnFailure")) else "[Service]"
-                text = f"{section}\n{line}\n"
-                (self.stage / "audiobook-organizer-local.conf").write_text(text)
-                code, _, err = h.run("install", "local-conf")
-                self.assertEqual(code, 1, (line, err))
-                self.assertFalse(self.conf_path(h).exists(), line)
-
-    def test_a_root_form_hidden_in_a_continuation_is_refused(self):
+    def test_environment_before_service_is_refused(self):
         h = self.host()
-        text = "[Service]\nEnvironment=A=1 \\\nUser=root\n"
-        (self.stage / "audiobook-organizer-local.conf").write_text(text)
-        # The continuation makes `User=root` part of the Environment value,
-        # which is harmless; a lone `User=root` after a comment is not.
-        self.assertEqual(h.run("install", "local-conf")[0], 0)
-        # A comment never continues (systemd skips it whole), so this
-        # User=root is a directive.
-        text = "[Service]\n# a comment \\\nUser=root\n"
-        (self.stage / "audiobook-organizer-local.conf").write_text(text)
+        self.stage_conf("Environment=A=1\n[Service]\n")
         self.assertEqual(h.run("install", "local-conf")[0], 1)
-        # systemd versions differ on a comment or blank line inside a
-        # continuation (one ends the value there, so User=root would be a
-        # directive), and on a backslash followed by spaces: all refused.
-        for text in (
-            "[Service]\nEnvironment=A=1 \\\n# x\nUser=root\n",
-            "[Service]\nEnvironment=A=1 \\\n\nUser=root\n",
-            "[Service]\nEnvironment=A=1 \\ \nUser=root\n",
-            "[Service]\nEnvironment=A=1 \\",
-            "[Service]\r\nUser=root\r\n",
-        ):
-            with self.subTest(text=text):
-                (self.stage / "audiobook-organizer-local.conf").write_text(text)
-                self.assertEqual(h.run("install", "local-conf")[0], 1, text)
 
-    def test_the_unit_must_name_the_service_user(self):
-        for drop in ("User=alfred\n", "Group=alfred\n"):
-            with self.subTest(drop=drop):
-                h = self.host()
-                (self.stage / "audiobook-organizer.service").write_text(
-                    committed_unit().replace(drop, "")
-                )
-                code, _, err = h.run("install", "unit")
-                self.assertEqual(code, 1, err)
-                self.assertIn("alfred", err)
-
-    def test_a_service_group_other_than_the_user(self):
-        h = self.host(service_group="batfamily")
-        text = committed_unit().replace("Group=alfred", "Group=batfamily")
-        (self.stage / "audiobook-organizer.service").write_text(text)
-        self.assertEqual(h.run("install", "unit")[0], 0)
-
-    def test_an_unknown_directive_is_refused_by_line_without_echoing_it(self):
-        """A refusal names the line, never the file's text: root read it."""
-        h = self.host()
-        (self.stage / "audiobook-organizer-local.conf").write_text(
-            "[Service]\nEnvironment=A=1\nBatSignal=hunter2\n"
-        )
-        code, _, err = h.run("install", "local-conf")
-        self.assertEqual(code, 1)
-        self.assertIn("line 3", err)
-        self.assertNotIn("BatSignal", err)
-        self.assertNotIn("hunter2", err)
-
-    def test_no_refusal_echoes_a_value(self):
-        for text in (
-            "[Service]\nUser=hunter2\n",
-            "[Service]\nExecStart=+/hunter2\n",
-            "[Service]\nStandardOutput=file:/hunter2\n",
-            "hunter2\n",
-            "[hunter2]\n",
-        ):
-            with self.subTest(text=text):
-                h = self.host()
-                (self.stage / "audiobook-organizer-local.conf").write_text(text)
-                code, _, err = h.run("install", "local-conf")
-                self.assertEqual(code, 1, err)
-                self.assertNotIn("hunter2", err)
-
-    def test_characters_systemd_does_not_strip_are_refused(self):
-        """Python's str.strip() and splitlines() treat these as whitespace or
-        line breaks and systemd does not, so `User=alfred<VT>` would pass a
-        Python check and be an invalid User= to systemd, which then runs the
-        unit as root. Outside comments only printable ASCII and tab pass."""
+    def test_character_classes_outside_comments_are_refused(self):
+        """Python's str.strip() and splitlines() take these for whitespace
+        or line breaks and systemd does not; outside a comment only printable
+        ASCII and tab pass, and the rendered file is all ASCII."""
         for ch in (
             "\v",
             "\f",
@@ -818,80 +810,68 @@ class InstallStaged(unittest.TestCase):
             "\x1e",
             "\x1f",
             "\x85",
-            "\u2028",
-            "\u2029",
+            " ",
+            " ",
             "\xa0",
             "\x7f",
-            "\x00",
             "\x1b",
+            "\x01",
             "é",
+            "​",
         ):
-            with self.subTest(ch=repr(ch)):
+            for text in (
+                f"[Service]\nEnvironment=A=1{ch}\n",
+                f"[Service]\nEnvironment=A=1\n{ch}User=root\n",
+                f"[Service]{ch}\nEnvironment=A=1\n",
+            ):
+                with self.subTest(ch=repr(ch), text=repr(text)):
+                    h = self.host()
+                    self.stage_conf(text)
+                    code, _, err = h.run("install", "local-conf")
+                    self.assertEqual(code, 1, (repr(ch), err))
+                    self.assertFalse(self.conf_path(h).exists())
+
+    def test_cr_and_nul_are_refused_anywhere(self):
+        for text in (
+            "[Service]\r\nEnvironment=A=1\r\n",
+            "# x\rUser=root\n[Service]\n",
+            "# \x00\n[Service]\n",
+        ):
+            with self.subTest(text=repr(text)):
                 h = self.host()
-                text = committed_unit().replace("User=alfred\n", f"User=alfred{ch}\n")
-                (self.stage / "audiobook-organizer.service").write_text(text)
-                code, _, err = h.run("install", "unit")
-                self.assertEqual(code, 1, (repr(ch), err))
-                self.assertFalse(self.unit_path(h).exists())
-                h2 = self.host()
-                text = f"[Service]\nEnvironment=A=1{ch}ExecStartPre=/bin/sh\n"
-                (self.stage / "audiobook-organizer-local.conf").write_text(text)
-                self.assertEqual(h2.run("install", "local-conf")[0], 1, repr(ch))
+                self.stage_conf(text)
+                self.assertEqual(h.run("install", "local-conf")[0], 1)
 
-    def test_non_ascii_in_a_comment_is_accepted(self):
+    def test_a_comment_with_a_trailing_backslash_is_dropped_not_joined(self):
+        """Comments are dropped, and only lines the helper writes reach
+        systemd, so a comment can hide nothing."""
         h = self.host()
-        text = "# Wayne Manor \u2014 the Batcave\u2019s drop-in\n[Service]\nTimeoutStopSec=90\n"
-        (self.stage / "audiobook-organizer-local.conf").write_text(text)
-        code, _, err = h.run("install", "local-conf")
-        self.assertEqual(code, 0, err)
-
-    def test_a_semicolon_in_execstart_is_refused(self):
-        """systemd reads a lone `;` in ExecStart= as a second command line,
-        whose own `+` prefix would run it as root."""
-        for v in ("/bin/true ; +/bin/sh -c id", "/bin/true;/bin/sh"):
-            with self.subTest(v=v):
-                h = self.host()
-                (self.stage / "audiobook-organizer-local.conf").write_text(
-                    f"[Service]\nExecStart=\nExecStart={v}\n"
-                )
-                self.assertEqual(h.run("install", "local-conf")[0], 1, v)
-
-    def test_a_staged_file_with_another_link_or_owner_is_refused(self):
-        """Root opens the staged file: a hard link (to /etc/shadow, say) is
-        refused, and so is a file the deploy user (SUDO_UID) does not own."""
-        h = self.host()
-        conf = self.stage / "audiobook-organizer-local.conf"
-        other = h.root / "elsewhere.conf"
-        other.write_text("[Service]\nTimeoutStopSec=90\n")
-        os.link(other, conf)
-        code, _, err = h.run("install", "local-conf")
-        self.assertEqual(code, 1, err)
-        self.assertIn("link", err)
-        conf.unlink()
-        conf.write_text("[Service]\nTimeoutStopSec=90\n")
+        self.stage_conf("[Service]\n# x \\\nEnvironment=A=1\n")
         self.assertEqual(h.run("install", "local-conf")[0], 0)
-        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
-            code, _, err = h.run("install", "local-conf")
-        self.assertEqual(code, 1, err)
-        self.assertIn("own", err)
+        self.assertIn("Environment=A=1\n", self.conf_path(h).read_text())
 
-    def test_a_staged_binary_with_another_link_or_owner_is_refused(self):
+    def test_no_refusal_echoes_the_file(self):
         h = self.host()
-        h.bin.write_text("current")
-        staged = self.stage / "audiobook-organizer"
-        other = h.root / "elsewhere"
-        other.write_text("new")
-        os.link(other, staged)
-        self.assertEqual(h.run("install", "binary")[0], 1)
-        self.assertEqual(h.bin.read_text(), "current")
-        staged.unlink()
-        staged.write_text("new")
-        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
-            self.assertEqual(h.run("install", "binary")[0], 1)
-        self.assertEqual(h.bin.read_text(), "current")
-        self.assertFalse(Path(f"{h.bin}.prev").exists())
+        self.stage_conf("[Service]\nEnvironment=A=1\nhunter2=x\nBatSignal=hunter2\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1)
+        self.assertNotIn("hunter2", err)
+        self.assertNotIn("BatSignal", err)
 
-    def test_a_symlinked_or_oversize_or_missing_source_is_refused(self):
+    def test_a_short_read_still_installs_the_whole_file(self):
+        """read(2) may return less than asked (a network-mounted home):
+        the helper reads to the end, never installing a truncated drop-in."""
+        h = self.host()
+        self.stage_conf(REAL_SHAPED_LOCAL_CONF)
+        real = os.read
+        with unittest.mock.patch.object(h.mod.os, "read", lambda fd, n: real(fd, min(n, 7))):
+            code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.conf_path(h).read_text().endswith(RENDERED_REAL_SHAPED))
+
+    # -- the staged files: who owns them and how they are reached ------------
+
+    def test_a_symlinked_oversize_or_missing_source_is_refused(self):
         h = self.host()
         conf = self.stage / "audiobook-organizer-local.conf"
         os.symlink("/etc/hosts", conf)
@@ -903,38 +883,136 @@ class InstallStaged(unittest.TestCase):
         self.assertEqual(h.run("install", "local-conf")[0], 1)
         self.assertFalse(self.conf_path(h).exists())
 
+    def test_a_symlink_anywhere_in_the_stage_path_is_refused(self):
+        """O_NOFOLLOW guards only the last component: each directory on the
+        way is opened with O_NOFOLLOW too, so a staging directory swapped
+        for a link to another directory is refused."""
+        for what, name, body in (
+            ("local-conf", "audiobook-organizer-local.conf", "[Service]\nEnvironment=A=1\n"),
+            ("binary", "audiobook-organizer", "new"),
+        ):
+            with self.subTest(what=what):
+                h = self.host()
+                real = h.root / "real-home"
+                real.mkdir()
+                (real / name).write_text(body)
+                os.rmdir(self.stage)
+                os.symlink(real, self.stage)
+                code, _, err = h.run("install", what)
+                self.assertEqual(code, 1, err)
+                self.assertIn("symlink", err)
+
     def test_an_unset_stage_key_refuses(self):
-        h = self.host(stage_unit=None)
-        code, _, err = h.run("install", "unit")
+        h = self.host(stage_local_conf=None)
+        code, _, err = h.run("install", "local-conf")
         self.assertEqual(code, 1)
-        self.assertIn("stage_unit", err)
+        self.assertIn("stage_local_conf", err)
+
+    def test_a_staged_file_with_another_link_or_owner_is_refused(self):
+        """Root opens the staged file: a hard link (to /etc/shadow, say) is
+        refused, and so is a file the deploy user (SUDO_UID) does not own."""
+        h = self.host()
+        conf = self.stage / "audiobook-organizer-local.conf"
+        other = h.root / "elsewhere.conf"
+        other.write_text("[Service]\nEnvironment=A=1\n")
+        os.link(other, conf)
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn("link", err)
+        conf.unlink()
+        conf.write_text("[Service]\nEnvironment=A=1\n")
+        self.assertEqual(h.run("install", "local-conf")[0], 0)
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertIn("own", err)
+
+    def test_stage_paths_are_validated_like_the_others(self):
+        for bad in ("relative/path", "/a/../etc/shadow", "/a b", "/x/"):
+            with self.subTest(bad=bad):
+                h = self.host(stage_local_conf=bad)
+                self.assertEqual(h.run("install", "local-conf")[0], 1, bad)
+
+    def test_service_group_root_is_refused(self):
+        h = self.host(service_group="root")
+        self.template()
+        self.assertEqual(h.run("install", "unit")[0], 1)
+
+    def test_a_service_group_other_than_the_user(self):
+        h = self.host(service_group="batfamily")
+        self.template(committed_unit().replace("Group=alfred", "Group=batfamily"))
+        self.assertEqual(h.run("install", "unit")[0], 0)
+
+    def test_the_committed_config_example_loads(self):
+        h = Host(self)
+        Path(h.mod.CONFIG).write_text(
+            (REPO_ROOT / "deploy" / "rollback-helpers" / "rollback.conf.example").read_text()
+        )
+        cfg = h.mod.load_config()
+        self.assertEqual(cfg["service_group"], cfg["service_user"])
+        for key in ("stage_bin", "stage_local_conf"):
+            self.assertTrue(cfg[key].startswith("/"), key)
+        self.assertNotIn("stage_unit", cfg)
+
+    # -- the binary -----------------------------------------------------------
+
+    def bin_host(self) -> tuple[Host, Path]:
+        bindir = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, bindir, True)
+        b = bindir / "audiobook-organizer"
+        return self.host(bin=str(b)), b
 
     def test_binary_is_installed_atomically_and_the_old_one_kept_as_prev(self):
-        h = self.host()
-        h.bin.write_text("current")
-        h.bin.chmod(0o755)
+        h, b = self.bin_host()
+        b.write_text("current")
+        b.chmod(0o755)
         (self.stage / "audiobook-organizer").write_text("new")
-        code, out, err = h.run("install", "binary")
+        old = os.open(b, os.O_RDONLY)
+        self.addCleanup(os.close, old)
+        old_ino = os.fstat(old).st_ino
+        code, _, err = h.run("install", "binary")
         self.assertEqual(code, 0, err)
-        self.assertEqual(h.bin.read_text(), "new")
-        self.assertEqual(Path(f"{h.bin}.prev").read_text(), "current")
-        self.assertEqual(stat.S_IMODE(os.stat(h.bin).st_mode), 0o755)
-        self.assertFalse(Path(f"{h.bin}.new").exists())
+        self.assertEqual(b.read_text(), "new")
+        self.assertEqual(Path(f"{b}.prev").read_text(), "current")
+        self.assertEqual(stat.S_IMODE(os.stat(b).st_mode), 0o755)
+        self.assertFalse(Path(f"{b}.new").exists())
+        # A rename, not an overwrite: the running executable's inode keeps
+        # its old content (no ETXTBSY, no torn binary).
+        self.assertNotEqual(os.stat(b).st_ino, old_ino)
+        self.assertEqual(os.pread(old, 64, 0), b"current")
         self.assertEqual(h.tools(), [], "installing the binary reloads nothing")
 
     def test_first_binary_install_has_no_prev(self):
-        h = self.host()
+        h, b = self.bin_host()
         (self.stage / "audiobook-organizer").write_text("new")
         self.assertEqual(h.run("install", "binary")[0], 0)
-        self.assertEqual(h.bin.read_text(), "new")
-        self.assertFalse(Path(f"{h.bin}.prev").exists())
+        self.assertEqual(b.read_text(), "new")
+        self.assertFalse(Path(f"{b}.prev").exists())
 
     def test_symlinked_staged_binary_is_refused(self):
-        h = self.host()
-        h.bin.write_text("current")
-        os.symlink("/bin/sh", self.stage / "audiobook-organizer")
+        h, b = self.bin_host()
+        b.write_text("current")
+        target = h.root / "elsewhere-bin"
+        target.write_text("evil")
+        os.symlink(target, self.stage / "audiobook-organizer")
         self.assertEqual(h.run("install", "binary")[0], 1)
-        self.assertEqual(h.bin.read_text(), "current")
+        self.assertEqual(b.read_text(), "current")
+
+    def test_a_staged_binary_with_another_link_or_owner_is_refused(self):
+        h, b = self.bin_host()
+        b.write_text("current")
+        staged = self.stage / "audiobook-organizer"
+        other = h.root / "elsewhere"
+        other.write_text("new")
+        os.link(other, staged)
+        self.assertEqual(h.run("install", "binary")[0], 1)
+        self.assertEqual(b.read_text(), "current")
+        staged.unlink()
+        staged.write_text("new")
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            self.assertEqual(h.run("install", "binary")[0], 1)
+        self.assertEqual(b.read_text(), "current")
+        self.assertFalse(Path(f"{b}.prev").exists())
 
     def test_bad_arguments(self):
         for argv in (
@@ -951,27 +1029,6 @@ class InstallStaged(unittest.TestCase):
                 self.assertEqual(h.run("install", *argv)[0], 2, argv)
                 self.assertEqual(h.tools(), [], argv)
                 self.assertFalse(h.systemd.exists(), argv)
-
-    def test_stage_paths_are_validated_like_the_others(self):
-        for bad in ("relative/path", "/a/../etc/shadow", "/a b", "/x/"):
-            with self.subTest(bad=bad):
-                h = self.host(stage_unit=bad)
-                self.assertEqual(h.run("install", "unit")[0], 1, bad)
-
-    def test_the_committed_config_example_loads(self):
-        h = Host(self)
-        Path(h.mod.CONFIG).write_text(
-            (REPO_ROOT / "deploy" / "rollback-helpers" / "rollback.conf.example").read_text()
-        )
-        cfg = h.mod.load_config()
-        self.assertEqual(cfg["service_group"], cfg["service_user"])
-        for key in ("stage_bin", "stage_unit", "stage_local_conf"):
-            self.assertTrue(cfg[key].startswith("/"), key)
-
-    def test_service_group_root_is_refused(self):
-        h = self.host(service_group="root")
-        (self.stage / "audiobook-organizer.service").write_text(committed_unit())
-        self.assertEqual(h.run("install", "unit")[0], 1)
 
 
 class Pprof(unittest.TestCase):
