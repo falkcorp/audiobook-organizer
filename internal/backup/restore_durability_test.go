@@ -1,7 +1,7 @@
 // file: internal/backup/restore_durability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d1096f1c-7cfc-4fb7-8cfd-6a0f7085706c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package backup
 
@@ -152,5 +152,89 @@ func TestSyncDir_ReportsADirectoryItCannotOpen(t *testing.T) {
 	}
 	if err := syncDir(filepath.Join(t.TempDir(), "arkham")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("syncDir on a missing directory = %v; want os.ErrNotExist", err)
+	}
+}
+
+// recordFsyncs replaces fsyncFile for the test, recording each file's name
+// and calling see, if given, at the moment of the sync.
+func recordFsyncs(t *testing.T, see func(name string)) *[]string {
+	t.Helper()
+	var names []string
+	prev := fsyncFile
+	fsyncFile = func(f *os.File) error {
+		names = append(names, f.Name())
+		if see != nil {
+			see(f.Name())
+		}
+		return prev(f)
+	}
+	t.Cleanup(func() { fsyncFile = prev })
+	return &names
+}
+
+// TestWriteEntry_SyncsTheNewFileBeforeTheRename (N14): the entry's new file
+// is synced whole, while the destination still holds its old file, so the
+// rename never puts a name on content a crash could lose.
+func TestWriteEntry_SyncsTheNewFileBeforeTheRename(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "MANIFEST-000001")
+	if err := os.WriteFile(dst, []byte("the old manifest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var tmpHeld, dstHeld string
+	synced := recordFsyncs(t, func(name string) {
+		b, _ := os.ReadFile(name)
+		tmpHeld = string(b)
+		b, _ = os.ReadFile(dst)
+		dstHeld = string(b)
+	})
+	if err := writeEntry(dst, strings.NewReader("batcave"), 0o644); err != nil {
+		t.Fatalf("writeEntry = %v", err)
+	}
+	if len(*synced) != 1 || filepath.Dir((*synced)[0]) != dir || (*synced)[0] == dst {
+		t.Fatalf("synced %q; want the new file beside the destination, once", *synced)
+	}
+	if tmpHeld != "batcave" || dstHeld != "the old manifest" {
+		t.Errorf("at the sync the new file held %q and the destination %q; want the whole entry, and the old file", tmpHeld, dstHeld)
+	}
+}
+
+// TestSyncDir_SyncsTheDirectoryItOpens: off Windows, syncDir syncs the
+// directory itself, which is what makes the renames into it durable.
+func TestSyncDir_SyncsTheDirectoryItOpens(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("syncDir does nothing on Windows")
+	}
+	dir := t.TempDir()
+	synced := recordFsyncs(t, nil)
+	if err := syncDir(dir); err != nil {
+		t.Fatalf("syncDir = %v", err)
+	}
+	if len(*synced) != 1 || (*synced)[0] != dir {
+		t.Errorf("synced %q; want %s", *synced, dir)
+	}
+}
+
+// TestCheckWithin (N6): the prefix check that CodeQL credits. No archive
+// reaches it, since library.Join refuses an escaping name first, so it is
+// tested here with destinations that escape.
+func TestCheckWithin(t *testing.T) {
+	within := filepath.Join(string(filepath.Separator), "gotham") + string(filepath.Separator)
+	for _, tc := range []struct {
+		target string
+		ok     bool
+	}{
+		{filepath.Join(string(filepath.Separator), "gotham", "audiobooks.pebble", "CURRENT"), true},
+		{filepath.Join(string(filepath.Separator), "gotham"), false},
+		{filepath.Join(string(filepath.Separator), "gotham-city", "CURRENT"), false},
+		{filepath.Join(string(filepath.Separator), "blackgate", "hnsw", "hnsw.clean-stop"), false},
+	} {
+		got, err := checkWithin(tc.target, within)
+		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrArchiveEntryEscapes)) {
+			t.Errorf("checkWithin(%q, %q) = %q, %v; want ok=%v", tc.target, within, got, err, tc.ok)
+		}
+		if tc.ok && got != tc.target {
+			t.Errorf("checkWithin(%q, %q) = %q; want the destination itself", tc.target, within, got)
+		}
 	}
 }
