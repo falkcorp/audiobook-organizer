@@ -1,7 +1,7 @@
 // file: internal/backup/backup.go
-// version: 1.22.17
+// version: 1.22.18
 // guid: 8f9e0a1b-2c3d-4e5f-6a7b-8c9d0e1f2a3b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package backup
 
@@ -1269,15 +1269,17 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			return fmt.Errorf("archive entry %q escapes target directory: %w", header.Name, err)
 		}
 		target := targetSP.String()
-		// The same containment, as a prefix check on target itself, which
-		// is the form CodeQL's go/zipslip and go/path-injection credit.
+		// The same containment, as checkWithin's prefix check on the path
+		// it returns, the form CodeQL's go/zipslip and go/path-injection
+		// credit.
 		// library.Join's own check does not cut their flow: it lets the
 		// root itself through before its prefix check, so that check does
 		// not guard the path it returns (R1-15 round-6 verification review,
 		// SF2). entryPath never yields the target itself, so a destination
 		// always lies strictly under it.
-		if !strings.HasPrefix(target, within) {
-			return fmt.Errorf("%w: %q", ErrArchiveEntryEscapes, header.Name)
+		target, err = checkWithin(target, within)
+		if err != nil {
+			return fmt.Errorf("%w: %q", err, header.Name)
 		}
 		// Where the entry lands decides, by directory identity, checked
 		// before anything is created for it, its parent directories
@@ -1341,6 +1343,21 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 	// synced. A restore that answered 200 could then come back after a crash
 	// as a mix of old and new files.
 	return changed.sync()
+}
+
+// checkWithin returns target, an entry's destination, when it lies under
+// within, the cleaned target with a trailing separator, and
+// ErrArchiveEntryEscapes when it does not. A function of its own so a test
+// can give it a path that escapes: library.Join refuses every such name
+// first, so no archive reaches it (R1-15 round-7 verification review, N6).
+// The caller uses the path it returns, which only the prefix check's true
+// branch returns; CodeQL credits that, and does not credit a function that
+// only returns an error.
+func checkWithin(target, within string) (string, error) {
+	if !strings.HasPrefix(target, within) {
+		return "", ErrArchiveEntryEscapes
+	}
+	return target, nil
 }
 
 // changedDirs is the set of directories whose entries an extraction
@@ -1410,6 +1427,11 @@ func (c *changedDirs) sync() error {
 // entry, with its name.
 var afterEntryHook func(name string)
 
+// fsyncFile is (*os.File).Sync. A test replaces it to see which files and
+// directories are synced, and when (R1-15 round-7 verification review,
+// N14).
+var fsyncFile = (*os.File).Sync
+
 // syncDir makes dir's entries durable: the names renamed into it and the
 // directories made in it. A variable so a test can see which directories
 // a restore syncs.
@@ -1426,7 +1448,7 @@ var syncDir = func(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := d.Sync(); err != nil {
+	if err := fsyncFile(d); err != nil {
 		return errors.Join(err, d.Close())
 	}
 	return d.Close()
@@ -1467,7 +1489,7 @@ func writeEntry(dst string, r io.Reader, mode os.FileMode) (err error) {
 	if err = tmp.Chmod(mode); err != nil {
 		return fmt.Errorf("failed to set permissions on %s: %w", dst, err)
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = fsyncFile(tmp); err != nil {
 		return fmt.Errorf("failed to sync file %s: %w", dst, err)
 	}
 	if err = tmp.Close(); err != nil {
