@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-09
 
@@ -691,6 +691,16 @@ UNIT_DIRS = (
     "/lib/systemd/system",
     "/run/systemd/generator.late",
 )
+# Where the unit's main file (its fragment) may live besides SYSTEMD_DIR:
+# the unit directories the owner or a package writes. A copy in a generator,
+# transient, .control or .attached directory was made by something else and
+# refuses.
+FRAGMENT_DIRS = (
+    "/run/systemd/system",
+    "/usr/local/lib/systemd/system",
+    "/usr/lib/systemd/system",
+    "/lib/systemd/system",
+)
 # Settings no drop-in may carry. Every Environment= line local.conf deploys
 # reaches the processes the unit runs; that is safe only while those are the
 # service user's own ExecStart (whose code the deploy user already controls
@@ -857,6 +867,84 @@ def _unit_dropins(cfg: dict[str, str]) -> list[str]:
     return sorted(found)
 
 
+def _check_unit_fragment(cfg: dict[str, str], installing_unit: bool) -> None:
+    """The unit's main file must pass the same rules as its drop-ins and set
+    the config's User=/Group= (a unit without User= runs as root).
+
+    The candidates are what `systemctl show -p FragmentPath -p SourcePath`
+    reports (parsed strictly) and every copy of the unit file in the unit
+    directories (an /etc copy shadows /usr/lib, but each is checked). A
+    generated unit (SourcePath set), a FragmentPath outside SYSTEMD_DIR and
+    FRAGMENT_DIRS, or a copy in any other directory refuses. With none at
+    all it refuses, except for install-staged unit, which is about to write
+    the checked template to SYSTEMD_DIR."""
+    unit = cfg["unit"]
+    allowed = {SYSTEMD_DIR, *FRAGMENT_DIRS}
+    p = subprocess.run(  # noqa: S603 (fixed argv)
+        [TOOLS["systemctl"], "show", "-p", "FragmentPath", "-p", "SourcePath", unit],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    found: set[str] = set()
+    if p.returncode == 0:
+        props: dict[str, str] = {}
+        for line in p.stdout.split("\n"):
+            if not line:
+                continue
+            key, sep, value = line.partition("=")
+            if not sep or key not in ("FragmentPath", "SourcePath") or key in props:
+                raise RefusedError(
+                    f"systemctl show -p FragmentPath -p SourcePath for {unit} gave an answer the helper "
+                    "cannot parse; nothing installed"
+                )
+            if value and not _PATH.fullmatch(value):
+                raise RefusedError(
+                    f"systemctl show gave a {key} for {unit} the helper cannot parse; nothing installed"
+                )
+            props[key] = value
+        if props.get("SourcePath"):
+            raise RefusedError(
+                f"{unit} is generated from another file (SourcePath is set): only a unit file the owner "
+                "installed is accepted; nothing installed"
+            )
+        frag = props.get("FragmentPath", "")
+        if frag:
+            if os.path.dirname(frag) not in allowed or os.path.basename(frag) != unit:
+                raise RefusedError(
+                    f"systemctl reports {unit}'s FragmentPath outside the unit directories "
+                    f"({', '.join(sorted(allowed))}); nothing installed"
+                )
+            found.add(frag)
+    for root in (SYSTEMD_DIR, *UNIT_DIRS):
+        path = f"{root}/{unit}"
+        if os.path.lexists(path):
+            if root not in allowed:
+                raise RefusedError(
+                    f"{path} is a copy of the unit in a directory systemd fills itself (a generator, "
+                    "transient or attached unit); nothing installed"
+                )
+            found.add(path)
+    etc = f"{SYSTEMD_DIR}/{unit}"
+    if not found and not installing_unit:
+        raise RefusedError(
+            f"no unit file for {unit} was found ({etc} or the other unit directories): install the "
+            "unit first (install-staged unit); nothing installed"
+        )
+    for path in sorted(found):
+        try:
+            text = _read_root_conf(path)
+        except FileNotFoundError as e:
+            if installing_unit and path == etc:
+                continue
+            raise RefusedError(f"{path}, {unit}'s unit file, is missing; nothing installed") from e
+        try:
+            _check_template(text, cfg)
+        except RefusedError as e:
+            raise RefusedError(f"{path}: {e}; nothing installed") from e
+        _check_rules(text, cfg, path)
+
+
 def _check_unit_dropins(cfg: dict[str, str]) -> None:
     """Apply _check_rules to every drop-in systemd applies to the unit,
     host.conf and the helper's own fixed files included (they pass)."""
@@ -1003,6 +1091,7 @@ def op_install(args: list[str]) -> int:
         # neither the unit nor local.conf is installed.
         _check_host_conf(cfg)
         _check_unit_dropins(cfg)
+        _check_unit_fragment(cfg, installing_unit=what == "unit")
     if what == "unit":
         data = _read_template(cfg)
         os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)

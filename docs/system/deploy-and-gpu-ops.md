@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -516,6 +516,19 @@ anything:
   one) pass by construction. A masked drop-in (a symlink to `/dev/null`)
   refuses like any other symlink.
 - The unit template in the helper bundle is checked by the same rules.
+- So is the unit's main file wherever systemd finds it: what
+  `systemctl show -p FragmentPath -p SourcePath <unit>` reports (parsed
+  strictly) and every copy of `<unit>` in the unit directories (an `/etc`
+  copy shadows `/usr/lib`, but each copy is checked). Each must also set
+  `User=` and `Group=` to `service_user` and `service_group`, since a unit
+  without `User=` runs as root, and run the configured binary. A generated
+  unit (`SourcePath` set), a `FragmentPath` outside `/etc/systemd/system`,
+  `/run/systemd/system`, `/usr/local/lib/systemd/system` and
+  `/usr/lib/systemd/system`, or a copy in a generator, transient,
+  `.control` or `.attached` directory refuses. With no unit file at all,
+  `install-staged local-conf` refuses; `install-staged unit` accepts a
+  missing `/etc` copy, since it is about to write the checked template
+  there.
 
 A refusal names the file and the line, never the text. So a host without a good host.conf never gets the
 base unit installed, and can never restart on the base unit's `ExecStart`,
