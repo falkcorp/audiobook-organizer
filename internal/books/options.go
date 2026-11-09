@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-08
 
@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -177,8 +178,10 @@ func storeLocation(stateDir string) (string, error) {
 
 // OfflineOptions is ABO's app.Options for core's offline commands
 // (app.OfflineCommands, 06 §6.4.5), which cmd wraps as cobra commands: the
-// identity, and the store and state directory serve's Options names, so an
-// offline command and serve always reach the same database. It reads the
+// identity, the store and state directory serve's Options names, so an
+// offline command and serve always reach the same database, serve's
+// state-file table, the HNSW marker removal before a swap
+// (removeHNSWCleanStop) and the archive extractor (backup.ExtractStore). It reads the
 // loaded config (the root command's PersistentPreRun loads it) and builds
 // no server, logging pipeline or telemetry.
 func OfflineOptions() (app.Options, error) {
@@ -191,9 +194,23 @@ func OfflineOptions() (app.Options, error) {
 		return app.Options{}, err
 	}
 	return app.Options{
-		AppID:         AppID,
+		AppID: AppID,
+		// serve's Version: the binary ID a staged swap records hashes it, so
+		// a reset or restore staged offline must carry the one the serve
+		// boot computes, or its P0a rejects the intent as another binary's.
+		Version:       telemetry.Version(),
 		StateDir:      stateDir,
 		R1StoragePath: dbPath,
+		// The state files serve's checkpoints copy (the encryption key):
+		// storage restore-offline puts a checkpoint's copies back over them,
+		// and the offline open reads the same table serve's open does.
+		StorageStateFiles: StateFiles(stateDir, dbPath),
+		// Before storage restore-offline or storage reset stages or moves
+		// anything: the HNSW clean-stop marker of the store being replaced
+		// goes, so the next boot reconciles the vector graph.
+		R1BeforeSwap: removeHNSWCleanStop,
+		// storage restore-offline --archive: HEAD's backup archives.
+		R1ArchiveExtract: backup.ExtractStore,
 		// The process logger, through internal/logger (the slog guard):
 		// prune-checkpoints logs each deletion beside its stdout report.
 		Logger: logger.FromContext(context.Background()).With("subsystem", "offline"),
