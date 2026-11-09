@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.9.3
+# version: 1.9.4
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -73,6 +73,14 @@ DEPLOY_DB := /path/to/audiobooks.pebble
 # host name or address here in that case.
 DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 
+# Seconds the readiness wait allows after a restart, counted from when the
+# unit leaves `activating` (scripts/deploy-wait-ready.sh reads the unit over
+# ssh, so a first boot that migrates for minutes is not cut short). The
+# committed Makefile defaults it to 300; raise it for a release whose
+# warmup after the start is slower (R2's runbook: the measured first-boot
+# time). Uncomment to override:
+# DEPLOY_READY_TIMEOUT := 900
+
 ## deploy: Build via the committed `build-linux` target, ship it, preserve a
 ## .prev copy, restart, and verify the deployed version.
 #
@@ -95,10 +103,10 @@ deploy:
 	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
 	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
-	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
-	  sudo systemctl restart audiobook-organizer.service'
-	@echo "→ Waiting for /health to report ready (up to 300s; the in-memory warmup takes minutes)..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN)'
+	@ssh $(DEPLOY_HOST) 'sudo -n systemctl restart $(DEPLOY_UNIT)' || echo "   systemctl restart reported a failure; the wait below reads the unit and names the cause."
+	@echo "→ Waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating; the in-memory warmup takes minutes)..."
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
 	@echo "→ Post-deploy: verifying the deployed binary's version (--version-json over ssh)..."
 	@expected="$(VERSION)"; \
 	  deployed=$$(ssh $(DEPLOY_HOST) $(DEPLOY_BIN) --version-json 2>/dev/null | \
@@ -127,7 +135,7 @@ pprof-dropin:
 
 deploy-debug: pprof-dropin deploy
 	@echo "→ Checking the pprof listener answers..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
 	ssh $(DEPLOY_HOST) 'out=$$(curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1") && [ -n "$$out" ] && printf "%s\n" "$$out" | head -1'
 	@echo "✅ pprof listening on $(DEPLOY_HOST) localhost:6060. Turn off with: make pprof-off"
 
