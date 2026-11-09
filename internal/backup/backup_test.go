@@ -1,7 +1,7 @@
 // file: internal/backup/backup_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package backup
 
@@ -111,8 +111,8 @@ func TestRestoreBackupRejectsZipslipAttack(t *testing.T) {
 	// Then the error contract.
 	if err == nil {
 		t.Error("Expected RestoreBackup to fail with traversal attempt, but it succeeded")
-	} else if !strings.Contains(err.Error(), "escapes target directory") {
-		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
+	} else if !errors.Is(err, ErrArchiveEntryEscapes) {
+		t.Errorf("Expected ErrArchiveEntryEscapes, got: %v", err)
 	}
 }
 
@@ -295,8 +295,8 @@ func TestRestoreBackupRejectsDotDotInPath(t *testing.T) {
 
 	if err == nil {
 		t.Error("Expected RestoreBackup to fail with .. traversal, but it succeeded")
-	} else if !strings.Contains(err.Error(), "escapes target directory") {
-		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
+	} else if !errors.Is(err, ErrArchiveEntryEscapes) {
+		t.Errorf("Expected ErrArchiveEntryEscapes, got: %v", err)
 	}
 }
 
@@ -356,15 +356,17 @@ func TestRestoreBackupValidatesAllEntries(t *testing.T) {
 	// Then the error contract - should fail because second entry is malicious.
 	if err == nil {
 		t.Error("Expected RestoreBackup to fail on second malicious entry")
-	} else if !strings.Contains(err.Error(), "escapes target directory") {
-		t.Errorf("Expected 'escapes target directory' in error, got: %v", err)
+	} else if !errors.Is(err, ErrArchiveEntryEscapes) {
+		t.Errorf("Expected ErrArchiveEntryEscapes, got: %v", err)
 	}
 
-	// The valid first entry is still extracted before the failure; restore is
-	// not transactional. Assert that explicitly so a future change to
-	// fail-fast-and-clean-up semantics is noticed rather than absorbed.
-	if _, statErr := os.Stat(filepath.Join(restoreDir, "valid.txt")); statErr != nil {
-		t.Errorf("Expected the valid entry preceding the malicious one to have been extracted: %v", statErr)
+	// The valid first entry is NOT extracted: the restore reads every entry
+	// name before it writes anything and refuses the archive (R1-15 round 4,
+	// B1-r4). This used to assert the opposite, "so a future change to
+	// fail-fast semantics is noticed rather than absorbed"; this is that
+	// change.
+	if _, statErr := os.Stat(filepath.Join(restoreDir, "valid.txt")); !os.IsNotExist(statErr) {
+		t.Errorf("the valid entry preceding the malicious one was extracted (stat: %v); the archive must be refused before any write", statErr)
 	}
 }
 
