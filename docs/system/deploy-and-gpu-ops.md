@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -470,11 +470,29 @@ to hold moves to `/etc/systemd/system/audiobook-organizer.service.d/host.conf`,
 which the owner writes once as root (`sudoedit` it, then
 `sudo systemctl daemon-reload`). `deploy/local.conf.example` shows the block
 in comments: the `ExecStart=` reset and the full command line with its TLS
-and DB paths, and `TimeoutStopSec=`. Put `WorkingDirectory=`, `MemoryMax=` and
-any other host-specific setting there too. Do this before the first deploy
-with these helpers: until then `install-staged local-conf` refuses a
-`local.conf` that still holds them, and the deploy stops before it touches
-the binary.
+and DB paths. Put `WorkingDirectory=`, `MemoryMax=` and any other
+host-specific setting there too. Leave `TimeoutStopSec=` unset unless you
+need more than the base unit's 60 s, which is sized to the server's stop
+budget.
+
+host.conf must run nothing but the service user's `ExecStart=`: no other
+`Exec*=` line (`ExecStartPre=`, `ExecStopPost=`, ...), no `+` or `!` prefix,
+no `PermissionsStartOnly=` or `AmbientCapabilities=`, and no `User=` or
+`Group=` other than `service_user` and `service_group`. Every `Environment=`
+line `local.conf` deploys reaches whatever the unit runs, and a deploy user
+setting `LD_PRELOAD=` is harmless only while that is the service user's own
+binary, which the deploy user already controls. `install-staged local-conf`
+checks this, and refuses unless host.conf exists as a regular file (not a
+symlink), owned by root and not writable by group or others. A refusal names
+the line, never its text.
+
+Do this before the first deploy with these helpers. Until then
+`install-staged local-conf` refuses (host.conf is missing, or `local.conf`
+still holds the settings that belong in it), and the deploy stops before it
+touches the binary. By then `deploy` has already reinstalled the unit from
+the helper bundle and run `daemon-reload`; the service has not been
+restarted and keeps running, and the previous `local.conf` is still in place,
+so a later restart still uses its settings.
 
 Install them on the deploy host (as root):
 
