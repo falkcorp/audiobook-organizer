@@ -1,7 +1,7 @@
 // file: core/app/fastexit.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b77f70ae-262e-4c32-83d0-514fc4d5b9be
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package app
 
@@ -43,10 +43,10 @@ const (
 // vector the kernel's P2 compares a store against), before anything opens.
 // mods are the modules the host passes to New, enabled or not: a disabled
 // module's levels still bound what the build can read. The image probe
-// requires exit 0 and JSON, and R1-27's rollback guard asks the previous
-// binary for it; today's make rollback still reads the previous binary's
-// --print-storage-format (the legacy projection), which this flag does not
-// replace.
+// requires exit 0 and JSON, and make rollback's guard
+// (scripts/storage_format_guard.py) asks the previous binary for it,
+// falling back to --print-storage-format (the legacy projection) only for a
+// binary older than this flag.
 func FastExit(args []string, stdout io.Writer, mods ...module.Module) (handled bool, err error) {
 	if len(args) != 2 {
 		return false, nil
