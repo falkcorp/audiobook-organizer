@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.25.1
+// version: 1.25.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package config
 
@@ -301,10 +301,10 @@ func TestConfigurationValidation(t *testing.T) {
 	}
 }
 
-// TestResetToDefaults tests ResetToDefaults function
+// TestResetToDefaults tests ResetToDefaultsForTest function
 func TestResetToDefaults(t *testing.T) {
 	// Restore the WHOLE struct, not just the three paths this test used to put
-	// back by hand: ResetToDefaults rewrites every field, so the other ~119 were
+	// back by hand: ResetToDefaultsForTest rewrites every field, so the other ~119 were
 	// being left at factory defaults for whatever ran next.
 	before := Snapshot()
 	t.Cleanup(func() { Mutate(func(c *Config) { *c = before }) })
@@ -329,7 +329,7 @@ func TestResetToDefaults(t *testing.T) {
 	AppConfig.DiskQuotaPercent = 50
 
 	// Act: Reset to defaults
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	// Assert: Verify defaults are restored while paths are preserved
 	if AppConfig.RootDir != "/custom/root" {
@@ -395,7 +395,7 @@ func TestResetToDefaults(t *testing.T) {
 	}
 
 	// Verify ai_backend.local_base_url resets to empty, not a hardcoded LAN IP
-	// (TASK-018). ResetToDefaults previously reinstated
+	// (TASK-018). ResetToDefaultsForTest previously reinstated
 	// http://192.168.0.20:11434/v1 here independently of the viper default.
 	if AppConfig.AIBackend.LocalBaseURL != "" {
 		t.Errorf("expected AIBackend.LocalBaseURL to be reset to empty, got %q", AppConfig.AIBackend.LocalBaseURL)
@@ -496,7 +496,7 @@ func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
 // (http://192.168.0.20:11434/v1), which every other install silently
 // inherited as a dead endpoint default (TASK-018). It must never be
 // reinstated as a shipped default; see the SetDefault call site and
-// ResetToDefaults in config.go for the full rationale.
+// ResetToDefaultsForTest in config.go for the full rationale.
 func TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty(t *testing.T) {
 	viper.Reset()
 	InitConfig()

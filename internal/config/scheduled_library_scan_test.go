@@ -1,7 +1,7 @@
 // file: internal/config/scheduled_library_scan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f6a3c81-4b52-4e97-8d10-9c74be23a5df
-// last-edited: 2026-08-11
+// last-edited: 2026-11-09
 
 package config
 
@@ -13,7 +13,7 @@ import (
 )
 
 // TestStoredSettingsDoNotDisableTheScheduledLibraryScan is the guard against
-// the shape of bug that ResetToDefaults() already had: scheduled.library_scan
+// the shape of bug that ResetToDefaultsForTest() already had: scheduled.library_scan
 // is the ONE member of the scheduled.* family that ships enabled, so any code
 // path that rebuilds the Scheduled sub-struct without carrying it silently
 // turns automatic book discovery back off.
@@ -26,7 +26,7 @@ func TestStoredSettingsDoNotDisableTheScheduledLibraryScan(t *testing.T) {
 	restore := Snapshot()
 	t.Cleanup(func() { AppConfig = restore })
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 	require.True(t, AppConfig.Scheduled.LibraryScan.Enabled, "precondition: default should be enabled")
 	require.Equal(t, 360, AppConfig.Scheduled.LibraryScan.Interval, "precondition: default should be 360 min")
 
@@ -63,7 +63,7 @@ func TestScheduledLibraryScanSettingsAreApplicable(t *testing.T) {
 	restore := Snapshot()
 	t.Cleanup(func() { AppConfig = restore })
 
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	require.NoError(t, applySetting("scheduled_library_scan_interval", "30", "int"))
 	assert.Equal(t, 30, AppConfig.Scheduled.LibraryScan.Interval)
@@ -75,7 +75,7 @@ func TestScheduledLibraryScanSettingsAreApplicable(t *testing.T) {
 	assert.False(t, AppConfig.Scheduled.LibraryScan.Enabled)
 }
 
-// TestResetToDefaultsKeepsPeriodicScanOn pins the ResetToDefaults() literal,
+// TestResetToDefaultsKeepsPeriodicScanOn pins the ResetToDefaultsForTest() literal,
 // which builds a whole Config from scratch: omitting the Scheduled sub-struct
 // there would leave a factory-reset install with automatic discovery off while
 // viper's defaults claimed it was on.
@@ -84,7 +84,7 @@ func TestResetToDefaultsKeepsPeriodicScanOn(t *testing.T) {
 	t.Cleanup(func() { AppConfig = restore })
 
 	AppConfig.Scheduled.LibraryScan = ScheduledTaskConfig{Enabled: false, Interval: 0, OnStartup: true}
-	ResetToDefaults()
+	ResetToDefaultsForTest()
 
 	assert.True(t, AppConfig.Scheduled.LibraryScan.Enabled, "factory reset must leave the periodic scan enabled")
 	assert.Equal(t, 360, AppConfig.Scheduled.LibraryScan.Interval, "factory reset must restore the 6h interval")

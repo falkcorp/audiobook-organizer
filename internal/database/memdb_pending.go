@@ -1,7 +1,7 @@
 // file: internal/database/memdb_pending.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c4f2a71-6d93-4e05-b1a8-2f7e9c6d0b34
-// last-edited: 2026-08-06
+// last-edited: 2026-11-08
 
 package database
 
@@ -156,29 +156,6 @@ func (p *PebbleStore) endMemWarmupBuffering() {
 	p.memPending.ops = nil
 }
 
-// replaceMemStoreAfterReset installs m (which may be nil) as the live memdb and
-// cancels any warmup still in flight, as one atomic step.
-//
-// Used by Reset(), which wipes the Pebble keyspace. A warmup that started before
-// the wipe holds a snapshot of the deleted data; letting it publish would put
-// rows back that no longer exist in Pebble — the same "memdb disagrees with
-// Pebble" failure the pending buffer prevents, from the other direction.
-//
-// The abandon and the pointer swap share one critical section so a write-through
-// racing Reset cannot observe the in-between state (buffering already cancelled
-// but the new MemStore not yet installed) and be dropped.
-func (p *PebbleStore) replaceMemStoreAfterReset(m *MemStore) {
-	p.memPending.mu.Lock()
-	defer p.memPending.mu.Unlock()
-	if p.memPending.state == memPendingBuffering {
-		slog.Info("memdb warmup: abandoning in-flight warmup, its snapshot predates the reset",
-			"buffered_ops", len(p.memPending.ops))
-		p.memPending.state = memPendingAbandoned
-	}
-	p.memPending.ops = nil
-	p.memPtr.Store(m)
-}
-
 // publishWarmMemStore replays every buffered write-through into m and publishes
 // m as the live memdb. Reports whether it published.
 //
@@ -202,9 +179,9 @@ func (p *PebbleStore) publishWarmMemStore(m *MemStore) bool {
 			// succeeded in Pebble. Publishing it would be the original bug.
 			slog.Error("memdb warmup: refusing to publish an incomplete memdb; reads stay on Pebble (slower but correct) until the service is restarted")
 		} else {
-			// Reset superseded this snapshot and already installed a fresh empty
-			// MemStore. Routine, not a fault.
-			slog.Info("memdb warmup: discarding warmup snapshot superseded by Reset")
+			// The warmup was abandoned for a reason other than overflow.
+			// Routine, not a fault.
+			slog.Info("memdb warmup: discarding abandoned warmup snapshot")
 		}
 		p.memPending.state = memPendingInactive
 		p.memPending.ops = nil

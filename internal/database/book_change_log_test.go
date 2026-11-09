@@ -1,5 +1,5 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.2.3
+// version: 2.2.4
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
 // last-edited: 2026-11-08
 
@@ -108,33 +108,6 @@ func TestPebbleStore_BooksChangedSince(t *testing.T) {
 	require.Equal(t, s.LibraryGeneration().Value(), upTo)
 }
 
-// TestIDChangeLog_BumpAllForgetsEverything: a write that touched every id
-// (Reset) cannot be listed; a reader at any earlier generation is told to
-// rebuild, a reader at the new one is up to date, and the log works again
-// after it.
-func TestIDChangeLog_BumpAllForgetsEverything(t *testing.T) {
-	var g cache.Generation
-	var l idChangeLog
-	l.bump(&g, "a") // 1
-	l.bump(&g, "b") // 2
-	l.bumpAll(&g)   // 3
-	_, upTo, ok := l.since(&g, 0)
-	require.False(t, ok)
-	require.Equal(t, uint64(3), upTo)
-	_, _, ok = l.since(&g, 2)
-	require.False(t, ok, "the generation just before the wipe is behind it")
-	ids, upTo, ok := l.since(&g, 3)
-	require.True(t, ok)
-	require.Empty(t, ids)
-	require.Equal(t, uint64(3), upTo)
-	l.bump(&g, "c") // 4
-	ids, _, ok = l.since(&g, 3)
-	require.True(t, ok)
-	require.Equal(t, []string{"c"}, ids)
-	_, _, ok = l.since(&g, 1)
-	require.False(t, ok)
-}
-
 // TestPebbleStore_MetadataCacheChangedSince: every writer of the
 // "metadata_cache:" keyspace moves the generation by one and is logged
 // against its book -- Put, Delete, a raw key write (the id is the key's
@@ -181,40 +154,4 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 	_, upTo2, ok := s.MetadataCacheChangedSince(from)
 	require.True(t, ok)
 	require.Equal(t, from+2, upTo2, "a write that deletes no cache row does not move it")
-
-	// Reset wipes the keyspace: nothing before it is listable.
-	before := s.MetadataCacheGeneration()
-	require.NoError(t, s.Reset())
-	_, upTo, ok = s.MetadataCacheChangedSince(before)
-	require.False(t, ok)
-	require.Equal(t, before+1, upTo)
-	ids, _, ok = s.MetadataCacheChangedSince(upTo)
-	require.True(t, ok)
-	require.Empty(t, ids)
-}
-
-// TestPebbleStore_ResetMakesBookLogUnlistable: Reset wipes every book and
-// cannot name them, so the library change log refuses from before them and a
-// reader rebuilds.
-func TestPebbleStore_ResetMakesBookLogUnlistable(t *testing.T) {
-	open := func(t *testing.T) (*PebbleStore, *Book) {
-		s, err := NewPebbleStoreInMemory("db")
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = s.Close() })
-		s.WaitForWarmup()
-		b, err := s.CreateBook(&Book{Title: "A", FilePath: "/lib/A"})
-		require.NoError(t, err)
-		require.NoError(t, s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID}))
-		return s, b
-	}
-	t.Run("reset", func(t *testing.T) {
-		s, _ := open(t)
-		bg, cg := s.LibraryGeneration().Value(), s.MetadataCacheGeneration()
-		require.NoError(t, s.Reset())
-		_, upTo, ok := BooksChangedSinceOf(s, bg)
-		require.False(t, ok)
-		require.Equal(t, bg+1, upTo)
-		_, _, ok = s.MetadataCacheChangedSince(cg)
-		require.False(t, ok)
-	})
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.3.1
+// version: 2.3.2
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
-// last-edited: 2026-10-20
+// last-edited: 2026-11-08
 
 package handlers
 
@@ -722,19 +722,6 @@ func TestReviewSnapshot_FullBuildWhen(t *testing.T) {
 		s, err := bb.build(ctx, first)
 		require.NoError(t, err)
 		require.False(t, s.incremental)
-	})
-	t.Run("reset", func(t *testing.T) {
-		// Reset's bumpAll: the cache log refuses, so the build is full (over
-		// an empty store).
-		st, sv := reviewSeed(t, 5)
-		bb, _ := incrBuilder(t, st, sv)
-		s0, err := bb.build(ctx, nil)
-		require.NoError(t, err)
-		require.NoError(t, st.Reset())
-		s, err := bb.build(ctx, s0)
-		require.NoError(t, err)
-		require.False(t, s.incremental)
-		require.Empty(t, s.rows)
 	})
 	t.Run("older than maxAge", func(t *testing.T) {
 		*clock = first.builtAt.Add(reviewSnapshotMaxAge + time.Second)

@@ -1,7 +1,7 @@
 // file: internal/database/iface_system.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 92c85d7d-c1fb-43c0-a0a4-2ef742107420
-// last-edited: 2026-10-11
+// last-edited: 2026-11-08
 
 package database
 
@@ -95,7 +95,6 @@ type RawKVStore interface {
 // LifecycleStore covers store startup/teardown.
 type LifecycleStore interface {
 	Close() error
-	Reset() error
 }
 
 // ImportPathStore covers managed import path CRUD.

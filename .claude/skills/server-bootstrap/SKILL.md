@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-08 -->
 
 # Server Bootstrap
 
@@ -140,7 +140,7 @@ this"):
 - `POST /api/v1/auth/api-keys` with another user's `user_id` (and the retired
   `POST /api/v1/auth/api-keys/:id/rotate` on another user's key, which is still
   refused before it answers 410)
-- `POST /api/v1/system/reset`, `/system/factory-reset`, `/backup/restore`
+- `POST /api/v1/backup/restore`
 - `PUT /api/v1/config` when it changes a sign-in setting (`enable_auth`,
   `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`,
   `abs_auth_modes`, the ABS token lifetimes, `write_startup_readonly_key`)

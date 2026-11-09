@@ -1,10 +1,13 @@
 // file: scripts/record_demo.js
-// version: 2.3.1
-// last-edited: 2026-10-30
+// version: 2.3.2
+// last-edited: 2026-11-08
 // Playwright script to automatically record end-to-end demo with video - Phase 2 (Interactive)
 //
 // Phase 2 Approach:
-// - API calls: Used only for setup (factory reset, import files, fetch metadata, organize)
+// - API calls: Used only for setup (import files, fetch metadata, organize)
+// - Clean state: start the server on an empty store. There is no reset
+//   endpoint; stage a factory reset with the service stopped
+//   (`audiobook-organizer storage reset --confirm RESET`) before recording.
 // - UI interactions: Used for demo workflow (navigate, edit, view results)
 // This approach ensures clean state while showing realistic user interactions.
 
@@ -57,22 +60,6 @@ async function waitForServer(maxAttempts = 30) {
   return false;
 }
 
-// Helper to reset system to factory defaults (clean state for demo)
-async function resetToFactoryDefaults() {
-  console.log('🔄 Resetting system to factory defaults...');
-  try {
-    const response = await axiosInstance.post(`${BASE_URL}/api/v1/system/reset`, {});
-    if (response.status === 200) {
-      console.log('✅ System reset successfully');
-      return true;
-    }
-  } catch (error) {
-    console.error('⚠️  Factory reset failed:', error.message);
-    // Continue anyway - reset might not be critical
-  }
-  return false;
-}
-
 // Helper to take screenshot
 async function screenshot(page, name) {
   const filePath = path.join(SCREENSHOTS_DIR, `${Date.now()}-${name}.png`);
@@ -90,9 +77,6 @@ async function recordDemo() {
     console.error('Failed to connect to server');
     process.exit(1);
   }
-
-  // Reset system to ensure clean state
-  await resetToFactoryDefaults();
 
   // Launch browser with video recording
   const browser = await chromium.launch({

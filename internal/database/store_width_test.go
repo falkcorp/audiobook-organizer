@@ -1,7 +1,7 @@
 // file: internal/database/store_width_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package database
 
@@ -19,12 +19,13 @@ import (
 // This is a ratchet: it may only be lowered, by hand, in the PR that lowers
 // the count. The test fails only on a rise. 07-S3 lowered the companion
 // reference baseline in store_consumers_test.go (31 -> 28); 07-M14 is expected to
-// lower it next. Any PR that removes Store methods lowers this one.
+// lower it next. Any PR that removes Store methods lowers this one: R1-25
+// lowered it 445 -> 444 when the reset routes and LifecycleStore.Reset went.
 //
 // Why a test and not interfacebloat: that linter counts declared entries
-// (Store declares 6 embedded interfaces), so it cannot see the 445 methods
+// (Store declares 6 embedded interfaces), so it cannot see the 444 methods
 // the embeds flatten to.
-const storeMethodBaseline = 445
+const storeMethodBaseline = 444
 
 // flattenedMethodCount parses the non-test Go files in dir and returns the
 // number of distinct methods of the interface named iface, following
