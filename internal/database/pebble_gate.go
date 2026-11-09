@@ -1,5 +1,5 @@
 // file: internal/database/pebble_gate.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 3f8a1c62-9e4b-4d7a-b5c0-6e2d1f9a8b47
 // last-edited: 2026-11-09
 
@@ -871,11 +871,17 @@ func (d *GatedDB) syncWALForShutdown(stage string, deadline time.Time) error {
 	go func() {
 		defer d.gate.release()
 		err := d.syncWALLeased()
-		if d.lr != nil && errors.Is(err, storage.ErrClosed) {
+		switch {
+		case d.lr != nil && errors.Is(err, storage.ErrClosed):
 			// The kernel closed the core DB first (a boot that failed
 			// after books' Register: New closes core before serve's
 			// Release closes the store). Core's close synced the WAL and
 			// owns the engine, so books has nothing left to make durable.
+			err = nil
+		case d.lr != nil && errors.Is(err, storage.ErrReadOnly):
+			// A read-only open (an offline CLI read, R1-25) refuses the
+			// barrier as it refuses every write: it committed nothing, so
+			// there is nothing to make durable and the close is clean.
 			err = nil
 		}
 		res <- err
