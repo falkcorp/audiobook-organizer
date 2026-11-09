@@ -1,5 +1,5 @@
 // file: internal/backup/hnsw_entry_refusal_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9cd75ebf-5ec4-40ed-8d74-b6dd4f2da595
 // last-edited: 2026-11-08
 
@@ -434,4 +434,62 @@ func mustSymlink(t *testing.T, oldname, newname string) {
 	if err := os.Symlink(oldname, newname); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestPrepareRestoreIn_RefusesAnEmptyArchive (R1-15 round-4 verification
+// review, SHOULD-FIX 2): an archive with nothing to restore is refused in the
+// prepare step, so the handler never marks the snapshot diverged for it.
+func TestPrepareRestoreIn_RefusesAnEmptyArchive(t *testing.T) {
+	for _, codec := range []Codec{gzipCodec{}, zstdCodec{}, noneCodec{}} {
+		for _, verify := range []bool{false, true} {
+			name := codec.Name()
+			if verify {
+				name += "/verified"
+			}
+			t.Run(name, func(t *testing.T) {
+				dir := t.TempDir()
+				archive := filepath.Join(dir, "the-long-halloween"+codec.Extension())
+				writeArchive(t, archive, codec, nil)
+				if verify {
+					sealArchive(t, archive)
+				}
+				r, err := PrepareRestoreIn(dir, filepath.Base(archive), verify)
+				if !errors.Is(err, ErrArchiveEmpty) || r != nil {
+					t.Fatalf("PrepareRestoreIn = %v, %v; want ErrArchiveEmpty and no prepared restore", r, err)
+				}
+			})
+		}
+	}
+	// The extraction skips an entry whose name is empty once its leading
+	// slashes go, so an archive of only such entries restores nothing too.
+	t.Run("only a name the extraction skips", func(t *testing.T) {
+		dir := t.TempDir()
+		f, err := os.Create(filepath.Join(dir, "the-long-halloween.tar"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tw := tar.NewWriter(f)
+		if err := tw.WriteHeader(&tar.Header{Name: "/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
+			t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
+		}
+	})
+	// A 0-byte file sniffs as an uncompressed tar with no entries.
+	t.Run("zero bytes", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "the-long-halloween.tar"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PrepareRestoreIn(dir, "the-long-halloween.tar", false); !errors.Is(err, ErrArchiveEmpty) {
+			t.Fatalf("PrepareRestoreIn = %v; want ErrArchiveEmpty", err)
+		}
+	})
 }
