@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.9.0
+# version: 1.11.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-09
 
@@ -90,6 +90,20 @@ if "ActiveState" in sys.argv:
         print(open({state!r}).read().strip())
     except FileNotFoundError:
         print("inactive")
+if "FragmentPath" in sys.argv:
+    if os.path.exists({state!r} + ".show-fails"):
+        sys.exit(1)
+    try:
+        print(open({state!r} + ".fragment-show").read().strip())
+    except FileNotFoundError:
+        print("FragmentPath=\\nSourcePath=")
+if "Names" in sys.argv:
+    if os.path.exists({state!r} + ".show-fails"):
+        sys.exit(1)
+    try:
+        print(open({state!r} + ".names").read().strip())
+    except FileNotFoundError:
+        print("")
 if "DropInPaths" in sys.argv:
     if os.path.exists({state!r} + ".show-fails"):
         sys.exit(1)
@@ -887,8 +901,14 @@ class InstallStaged(unittest.TestCase):
         h = Host(self)
         # The other unit directories systemd reads drop-ins from (/run,
         # /usr/lib, ...), inside the sandbox.
-        self.unit_dirs = [h.root / "run-systemd", h.root / "usr-lib-systemd"]
+        self.unit_dirs = [
+            h.root / "run-systemd",
+            h.root / "usr-lib-systemd",
+            h.root / "run-generator",
+        ]
         h.mod.UNIT_DIRS = tuple(str(d) for d in self.unit_dirs)
+        # Where a unit file may live; the generator directory is not one.
+        h.mod.FRAGMENT_DIRS = tuple(str(d) for d in self.unit_dirs[:2])
         self.stage = h.root / "home"
         self.stage.mkdir()
         self.libdir = h.root / "libexec"
@@ -912,12 +932,22 @@ class InstallStaged(unittest.TestCase):
             HOST_CONF.replace("User=alfred", f"User={values['service_user']}")
         )
         self.host_conf_path.chmod(0o644)
+        # The unit's main file, a package-style copy under /usr/lib, so the
+        # /etc copy install-staged unit writes starts out absent.
+        self.lib_unit = self.unit_dirs[1] / values["unit"]
+        self.lib_unit.parent.mkdir(parents=True, exist_ok=True)
+        user = values["service_user"]
+        group = values.get("service_group") or user
+        self.lib_unit.write_text(
+            committed_unit(user).replace(f"Group={user}\n", f"Group={group}\n")
+        )
+        self.lib_unit.chmod(0o644)
         return h
 
     def changes(self, h: Host) -> list[list[str]]:
         """The tool calls that change something: every call but the
         read-only `systemctl show -p DropInPaths`."""
-        return [t["argv"] for t in h.tools() if t["argv"][:3] != ["show", "-p", "DropInPaths"]]
+        return [t["argv"] for t in h.tools() if t["argv"][:1] != ["show"]]
 
     def dropin(self, h: Host, name: str, text: str, root: Path | None = None, d: str = "") -> Path:
         p = (root or h.systemd) / (d or "audiobook-organizer.service.d") / name
@@ -1102,6 +1132,9 @@ class InstallStaged(unittest.TestCase):
             "TZDIR",
             "GLIBC_TUNABLES",
             "BASH_ENV",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "LOCPATH",
         )
         for key in keys:
             for form in (f"{key}=/tmp/batcave", f'"{key}=/tmp/batcave"', f"'{key}=/tmp/batcave'"):
@@ -1475,6 +1508,231 @@ class InstallStaged(unittest.TestCase):
         code, _, err = h.run("install", "unit")
         self.assertEqual(code, 1, err)
         self.assertFalse(self.unit_path(h).exists())
+
+    # -- the unit's main file (its fragment), wherever systemd finds it -----
+
+    def fragment_show(self, h: Host, text: str) -> None:
+        Path(str(h.root / "transient-state") + ".fragment-show").write_text(text)
+
+    def test_local_conf_needs_a_unit_file(self):
+        h = self.host()
+        self.lib_unit.unlink()
+        err = self.install_refused(h, "local-conf")
+        self.assertIn("unit file", err)
+
+    def test_the_unit_install_may_create_the_etc_copy(self):
+        """install-staged unit is about to write the checked template to
+        /etc, so no unit file anywhere yet is fine for it."""
+        h = self.host()
+        self.lib_unit.unlink()
+        self.template()
+        code, _, err = h.run("install", "unit")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(self.unit_path(h).exists())
+
+    def test_a_bad_unit_file_in_any_directory_is_refused(self):
+        bad = committed_unit().replace("[Service]\n", "[Service]\nExecStartPre=+/usr/bin/true\n", 1)
+        rootless = committed_unit().replace("User=alfred\n", "")
+        cases = {
+            "/usr/lib copy": lambda h: self.lib_unit.write_text(bad),
+            "/etc copy": lambda h: self.unit_path(h).write_text(bad),
+            "/run copy": lambda h: (
+                self.unit_dirs[0].mkdir(exist_ok=True),
+                (self.unit_dirs[0] / "audiobook-organizer.service").write_text(bad),
+            ),
+            "no User=": lambda h: self.lib_unit.write_text(rootless),
+            "group-writable": lambda h: self.lib_unit.chmod(0o664),
+            "generator copy": lambda h: (
+                self.unit_dirs[2].mkdir(exist_ok=True),
+                (self.unit_dirs[2] / "audiobook-organizer.service").write_text(committed_unit()),
+            ),
+        }
+        for what in ("unit", "local-conf"):
+            for name, make in cases.items():
+                if what == "unit" and name == "/etc copy":
+                    continue  # covered below: the template replaces it
+                with self.subTest(what=what, case=name):
+                    h = self.host()
+                    make(h)
+                    for p in h.systemd.glob("audiobook-organizer.service"):
+                        p.chmod(0o644)
+                    err = (
+                        self.install_refused(h, what)
+                        if name != "/etc copy"
+                        else self.local_conf_refused_keeping_etc(h)
+                    )
+                    self.assertNotIn("/usr/bin/true", err)
+
+    def local_conf_refused_keeping_etc(self, h: Host) -> str:
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 1, err)
+        self.assertNotIn(["daemon-reload"], self.changes(h))
+        self.assertFalse(self.conf_path(h).exists())
+        return err
+
+    def test_a_symlinked_unit_file_is_refused(self):
+        h = self.host()
+        real = h.root / "real.service"
+        real.write_text(committed_unit())
+        self.lib_unit.unlink()
+        self.lib_unit.symlink_to(real)
+        self.install_refused(h, "local-conf")
+
+    def test_fragment_path_outside_the_unit_directories_is_refused(self):
+        h = self.host()
+        elsewhere = h.root / "elsewhere" / "audiobook-organizer.service"
+        elsewhere.parent.mkdir()
+        elsewhere.write_text(committed_unit())
+        self.fragment_show(h, f"FragmentPath={elsewhere}\nSourcePath=")
+        self.assertIn("FragmentPath", self.install_refused(h, "local-conf"))
+
+    def test_fragment_path_systemd_reports_is_checked(self):
+        h = self.host()
+        self.lib_unit.write_text(
+            committed_unit().replace("[Service]\n", "[Service]\nExecReload=/usr/bin/true\n", 1)
+        )
+        self.fragment_show(h, f"FragmentPath={self.lib_unit}\nSourcePath=")
+        self.install_refused(h, "local-conf")
+        shows = [t["argv"] for t in h.tools() if "FragmentPath" in t["argv"]]
+        self.assertEqual(
+            shows,
+            [["show", "-p", "FragmentPath", "-p", "SourcePath", "audiobook-organizer.service"]],
+        )
+
+    def test_a_good_reported_fragment_passes(self):
+        h = self.host()
+        self.fragment_show(h, f"FragmentPath={self.lib_unit}\nSourcePath=")
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_a_generated_unit_is_refused(self):
+        h = self.host()
+        self.fragment_show(h, f"FragmentPath={self.lib_unit}\nSourcePath=/etc/fstab")
+        self.assertIn("SourcePath", self.install_refused(h, "local-conf"))
+
+    def test_an_unparsable_fragment_answer_is_refused(self):
+        for answer in (
+            "FragmentPath=relative/audiobook-organizer.service\nSourcePath=",
+            "FragmentPath=/etc/systemd/system/audiobook-organizer.service;id\nSourcePath=",
+            "FragmentPath=/x\nSourcePath=\nExtra=1",
+            "garbage",
+        ):
+            with self.subTest(answer=answer):
+                h = self.host()
+                self.fragment_show(h, answer)
+                self.install_refused(h, "local-conf")
+
+    def test_a_failed_systemctl_still_scans_for_unit_files(self):
+        h = self.host()
+        Path(str(h.root / "transient-state") + ".show-fails").write_text("")
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+        h2 = self.host()
+        Path(str(h2.root / "transient-state") + ".show-fails").write_text("")
+        self.lib_unit.unlink()
+        self.install_refused(h2, "local-conf")
+
+    # -- logical lines, the way systemd joins them -------------------------
+
+    def rules_refuse(self, text: str) -> str:
+        h = self.host()
+        self.dropin(h, "50-scarecrow.conf", text, self.unit_dirs[0])
+        return self.install_refused(h, "local-conf")
+
+    def rules_pass(self, text: str) -> None:
+        h = self.host()
+        self.dropin(h, "50-scarecrow.conf", text, self.unit_dirs[0])
+        self.stage_conf("[Service]\nEnvironment=A=1\n")
+        code, _, err = h.run("install", "local-conf")
+        self.assertEqual(code, 0, err)
+
+    def test_an_even_run_of_backslashes_does_not_continue(self):
+        """systemd continues a line only when it ends in an ODD number of
+        backslashes: `a\\\\` is a literal backslash, so the next line is a
+        directive of its own, here a root Exec line."""
+        err = self.rules_refuse("[Service]\nEnvironment=X=a\\\\\nExecStartPre=/bin/evil\n")
+        self.assertIn("line 3", err)
+
+    def test_a_continued_execstart_is_checked_joined(self):
+        """`ExecStart=\\` then `+/bin/evil` is one line to systemd, with the
+        backslash replaced by a space: a + prefix."""
+        err = self.rules_refuse("[Service]\nExecStart=\\\n+/bin/evil\n")
+        self.assertIn("line 2", err)
+
+    def test_comments_inside_a_continuation_are_skipped(self):
+        err = self.rules_refuse(
+            "[Service]\nExecStart=\\\n# a comment\n; another \\\n  !/bin/evil\n"
+        )
+        self.assertIn("line 2", err)
+
+    def test_an_odd_run_of_backslashes_continues(self):
+        """`b\\\\\\` ends in three backslashes: the next line is part of
+        the Environment= value, not a directive."""
+        self.rules_pass("[Service]\nEnvironment=A=b\\\\\\\nExecStartPre=/bin/evil\n")
+
+    def test_a_continuation_at_the_end_of_the_file_is_checked(self):
+        self.rules_refuse("[Service]\nExecStart=!/bin/evil \\")
+
+    # -- ExecStart prefixes: only @, - and : -------------------------------
+
+    def test_only_known_safe_execstart_prefixes_pass(self):
+        for value in (
+            "|/bin/evil",
+            "?/bin/evil",
+            "bin/evil",
+            "~/bin/evil",
+            "@+/bin/evil",
+            "$/bin/evil",
+        ):
+            with self.subTest(value=value):
+                self.rules_refuse(f"[Service]\nExecStart=\nExecStart={value}\n")
+        for value in (
+            "",
+            "/usr/local/bin/audiobook-organizer",
+            "-/usr/local/bin/x",
+            "@:/usr/local/bin/x name",
+            "-@:/x",
+        ):
+            with self.subTest(value=value):
+                self.rules_pass(f"[Service]\nExecStart=\nExecStart={value}\n")
+
+    # -- alias names: their drop-in directories apply too -------------------
+
+    def test_an_alias_dropin_directory_is_checked(self):
+        """systemctl show -p Names lists the unit's aliases; systemd applies
+        <alias>.d/ drop-ins as well."""
+        h = self.host()
+        Path(str(h.root / "transient-state") + ".names").write_text(
+            "audiobook-organizer.service batcave.service"
+        )
+        self.dropin(
+            h,
+            "x.conf",
+            "[Service]\nExecStartPre=+/bin/evil\n",
+            self.unit_dirs[1],
+            "batcave.service.d",
+        )
+        self.assertIn("batcave.service.d", self.install_refused(h, "local-conf"))
+        shows = [t["argv"] for t in h.tools() if "Names" in t["argv"]]
+        self.assertEqual(shows, [["show", "-p", "Names", "--value", "audiobook-organizer.service"]])
+
+    def test_an_alias_symlink_in_a_unit_directory_counts_too(self):
+        """An alias systemd has not loaded yet (a symlink beside the unit,
+        before a reload) is found by the scan."""
+        h = self.host()
+        (self.unit_dirs[1] / "wayne-manor.service").symlink_to(self.lib_unit)
+        self.dropin(h, "x.conf", "[Service]\nExecStartPre=+/bin/evil\n", d="wayne-manor.service.d")
+        self.assertIn("wayne-manor.service.d", self.install_refused(h, "local-conf"))
+
+    def test_an_unparsable_names_answer_is_refused(self):
+        for answer in ("audiobook-organizer.service ../x.service", "x.service;id", "batcave"):
+            with self.subTest(answer=answer):
+                h = self.host()
+                Path(str(h.root / "transient-state") + ".names").write_text(answer)
+                self.assertIn("Names", self.install_refused(h, "local-conf"))
 
     def test_a_good_host_conf_lets_local_conf_install(self):
         h = self.host()
