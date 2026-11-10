@@ -10,8 +10,8 @@
 // typed value; nothing in this package reads a file, an environment variable
 // or a store.
 //
-// The loader, the Store and Register, key state and locks, the OverrideStore,
-// the Importer, the JSON Schema reflection (Schema, SchemaFor, Overrides) and
+// The loader, the Store and Register, key state and locks, the stored-override layer,
+// the importer, the JSON Schema reflection (Schema, SchemaFor, Overrides) and
 // the configtest package arrive with F3-01 (04 §8.1 F2: "config holds only
 // the section declarations until F3"). Until then a declared section changes
 // no behaviour: nothing reads its keys before its owner adopts them
