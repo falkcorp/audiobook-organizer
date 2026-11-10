@@ -1,5 +1,5 @@
 // file: core/rbac/seeds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8a2f93-1d6e-4b47-9e0a-3f7b4d2c6e81
 // last-edited: 2026-11-10
 
@@ -287,9 +287,9 @@ func TestSeedMerge_RefusesForeignRows(t *testing.T) {
 // same declarations write nothing; over random release sequences the merge
 // keeps its invariants: every seed scope reaches the role (effective or
 // pending), nothing effective is outside the seed, a pending scope is a
-// restricted addition or was added to a role that came in empty (which the
-// merge treats as confined), admin stays {core:admin}, and committing again
-// is a no-op.
+// restricted addition (the pool has no Confining scope, so no role is ever
+// confined and nothing else may wait), admin stays {core:admin}, and
+// committing again is a no-op.
 func TestSeedMerge_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
@@ -361,12 +361,8 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 					if slices.Contains(eff, p) {
 						t.Fatalf("%s: %s holds %s both effective and pending", where, name, p)
 					}
-					// An unrestricted scope waits only when the role came
-					// into this release empty: the merge treats an empty
-					// role as confined (it may be a worker role a release
-					// emptied), so everything added to it waits.
-					if !restricted[p] && len(prev[name]) > 0 {
-						t.Fatalf("%s: %s holds an unrestricted %s pending though it held %v", where, name, p, prev[name])
+					if !restricted[p] {
+						t.Fatalf("%s: %s holds an unrestricted %s pending", where, name, p)
 					}
 					if prev == nil {
 						t.Fatalf("%s: a freshly created %s holds %s pending", where, name, p)
@@ -401,6 +397,154 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 	if held == 0 {
 		t.Fatal("no release held a scope: the property ran without its interesting case")
 	}
+}
+
+// TestSeedMerge_ConfinedFlagIsSticky (§4.8, §4.10; review round 2): the
+// merge keeps a worker role confined through a stored flag, not by reading
+// its current permissions against the current catalog. A confining release
+// sets Role.Confined; a release that flips the worker scope to
+// non-Confining, empties the role or re-adds the worker scope cannot clear
+// it; only an AcceptSeed that lands a non-Confining scope does. A plain role
+// whose scopes a release renames is never confined, so the new scope lands.
+func TestSeedMerge_ConfinedFlagIsSticky(t *testing.T) {
+	ctx := context.Background()
+	view := rbac.PermissionSpec{Name: "books:fingerprint.view", Title: "View fingerprints"}
+	withSeed := func(m module, seed ...string) module {
+		m.seeds = []rbac.RoleSeed{{Name: "fp-worker", Title: "Fingerprint worker", Permissions: perms(seed...)}}
+		return m
+	}
+	worker := func(t *testing.T, f *fixture) *rbac.Role {
+		t.Helper()
+		w := f.role("fp-worker")
+		if f.svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}}).Has("books:fingerprint.view") {
+			t.Fatalf("fp-worker = %v: a worker role gained a non-Confining scope unaccepted", w.Permissions())
+		}
+		return w
+	}
+
+	t.Run("created confined", func(t *testing.T) {
+		f := boot(t, newEnv(t), setup{modules: []module{books()}})
+		if !f.role("fp-worker").Confined {
+			t.Error("fp-worker created without the Confined flag")
+		}
+		for _, name := range []rbac.RoleName{rbac.RoleAdmin, rbac.RoleEditor, rbac.RoleViewer} {
+			if f.role(name).Confined {
+				t.Errorf("%s is flagged Confined", name)
+			}
+		}
+	})
+
+	// Probe E: the worker scope stops being Confining; the flag stays and
+	// the next release's plain addition waits.
+	t.Run("Confining flipped off", func(t *testing.T) {
+		e := newEnv(t)
+		boot(t, e, setup{modules: []module{books()}})
+		flip := books()
+		flip.specs[0].Confining = false
+		for range 2 {
+			w := worker(t, boot(t, e, setup{modules: []module{flip}}))
+			wantPerms(t, "after the flip", w.Permissions(), "books:fingerprint.worker")
+			if !w.Confined {
+				t.Fatal("the flip cleared the Confined flag")
+			}
+		}
+		add := withSeed(books(view), "books:fingerprint.worker", "books:fingerprint.view")
+		add.specs[0].Confining = false
+		for range 2 {
+			w := worker(t, boot(t, e, setup{modules: []module{add}}))
+			wantPerms(t, "pending after the follow-on release", w.PendingSeed, "books:fingerprint.view")
+		}
+	})
+
+	// Probe G2: emptied, then the worker scope re-added: a Confining
+	// addition to an existing role is restricted (§4.8), so it waits too.
+	t.Run("emptied, then the worker scope re-added", func(t *testing.T) {
+		e := newEnv(t)
+		boot(t, e, setup{modules: []module{books()}})
+		w := worker(t, boot(t, e, setup{modules: []module{withSeed(books())}}))
+		wantPerms(t, "emptied", w.Permissions())
+		for range 2 {
+			w = worker(t, boot(t, e, setup{modules: []module{books()}}))
+			wantPerms(t, "effective after the re-add", w.Permissions())
+			wantPerms(t, "pending after the re-add", w.PendingSeed, "books:fingerprint.worker")
+			if !w.Confined {
+				t.Fatal("the re-add cleared the Confined flag")
+			}
+		}
+	})
+
+	t.Run("a confining release flags an existing plain role", func(t *testing.T) {
+		e := newEnv(t)
+		boot(t, e, setup{modules: []module{withSeed(books(view), "books:fingerprint.view")}})
+		f := boot(t, e, setup{modules: []module{withSeed(books(view), "books:fingerprint.worker")}})
+		if w := f.role("fp-worker"); !w.Confined {
+			t.Fatalf("fp-worker = %+v after a confining release, want the Confined flag", w)
+		}
+		w := worker(t, boot(t, e, setup{modules: []module{withSeed(books(view), "books:fingerprint.view")}}))
+		wantPerms(t, "pending (the withdrawn worker scope is dropped)", w.PendingSeed, "books:fingerprint.view")
+	})
+
+	t.Run("AcceptSeed of a non-Confining scope clears the flag", func(t *testing.T) {
+		e := newEnv(t)
+		boot(t, e, setup{modules: []module{books()}})
+		f := boot(t, e, setup{modules: []module{withSeed(books(view), "books:fingerprint.view")}})
+		w := f.role("fp-worker")
+		wantPerms(t, "pending", w.PendingSeed, "books:fingerprint.view")
+		acc, err := f.svc.AcceptSeed(ctx, f.admin(), "fp-worker", w.Version)
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		if acc.Confined || f.role("fp-worker").Confined {
+			t.Fatal("accepting a non-Confining scope kept the Confined flag")
+		}
+		shelf := rbac.PermissionSpec{Name: "books:shelf", Title: "Shelf"}
+		g := boot(t, e, setup{modules: []module{withSeed(books(view, shelf), "books:fingerprint.view", "books:shelf")}})
+		wantPerms(t, "after the next release", g.role("fp-worker").Permissions(), "books:fingerprint.view", "books:shelf")
+	})
+
+	t.Run("AcceptSeed of a Confining scope keeps the flag", func(t *testing.T) {
+		e := newEnv(t)
+		relay := rbac.PermissionSpec{Name: "books:fingerprint.relay", Title: "Relay", Confining: true}
+		boot(t, e, setup{modules: []module{books(relay)}})
+		f := boot(t, e, setup{modules: []module{withSeed(books(relay), "books:fingerprint.worker", "books:fingerprint.relay")}})
+		w := f.role("fp-worker")
+		wantPerms(t, "pending", w.PendingSeed, "books:fingerprint.relay")
+		acc, err := f.svc.AcceptSeed(ctx, f.admin(), "fp-worker", w.Version)
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		if !acc.Confined {
+			t.Fatal("accepting a Confining scope cleared the Confined flag")
+		}
+		g := worker(t, boot(t, e, setup{modules: []module{withSeed(books(relay, view), "books:fingerprint.view")}}))
+		wantPerms(t, "pending after a plain release", g.PendingSeed, "books:fingerprint.view")
+	})
+
+	// Probe F: a plain module role whose scopes a release renames is not
+	// confined, so the renamed scope lands at once.
+	t.Run("plain role renamed", func(t *testing.T) {
+		e := newEnv(t)
+		boot(t, e, setup{modules: []module{gotham()}})
+		ren := gotham()
+		ren.specs = []rbac.PermissionSpec{
+			{Name: "gotham:beat", Title: "Beat", Class: rbac.ClassView, DefaultGrants: []rbac.RoleName{rbac.RoleEditor, rbac.RoleViewer}},
+			{Name: "gotham:signal", Title: "Bat-Signal", DefaultGrants: []rbac.RoleName{rbac.RoleEditor}},
+			{Name: "gotham:relay.worker", Title: "Relay worker", Confining: true},
+		}
+		ren.seeds = []rbac.RoleSeed{
+			{Name: "gotham.detective", Title: "Detective", Permissions: perms("gotham:beat")},
+			{Name: "relay-worker", Title: "Relay worker", Permissions: perms("gotham:relay.worker")},
+		}
+		for range 2 {
+			f := boot(t, e, setup{modules: []module{ren}})
+			d := f.role("gotham.detective")
+			wantPerms(t, "detective after the rename", d.Permissions(), "gotham:beat")
+			wantPerms(t, "detective pending", d.PendingSeed)
+			if d.Confined {
+				t.Error("a plain role is flagged Confined")
+			}
+		}
+	})
 }
 
 // editorSeed is core's editor seed plus m's grants to editor.
