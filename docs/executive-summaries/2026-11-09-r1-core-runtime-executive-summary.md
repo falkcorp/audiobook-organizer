@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-09-r1-core-runtime-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: ce0c598d-0803-4350-976d-12990013b6bc -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -32,10 +32,10 @@
   server is up, so the two can no longer collide.
 - Starting and stopping got more careful. The server tells the system when it
   is really ready, asks for more time during a slow start instead of being
-  killed, and gets a full minute to shut down cleanly. The deploy and rollback
-  tooling (waiting for the service itself to report ready, and a guarded
-  rollback that refuses when the data would no longer match the old program)
-  was still in review when this was written.
+  killed, and gets a full minute to shut down cleanly. Deploying now waits
+  for the service itself to report ready and checks the restart really
+  happened, and a guarded rollback refuses when the data would no longer match
+  the old program. Both are deployed and healthy.
 - The web page knows which version of the program it came from. If you leave a
   tab open across an upgrade, it now shows a banner asking you to reload,
   rather than quietly talking to a server it no longer matches.
@@ -106,11 +106,11 @@ leave the server looking up while it is not usable.
 
 **The fix.** Ready, stopping and "need more time" signals come from the
 foundation. The shutdown budget is 25 seconds inside a 60-second allowance.
-The deploy and rollback tooling (deploy waits for the service to report ready
-and verifies the restart took effect; rollback refuses when the data is newer
-than the old program, with a restore-based path for that case) and a
-continuous-test job that exercises a real service on a test machine were the
-last rows in review at the time of writing.
+Deploy waits for the service to report ready and verifies the restart took
+effect, and rollback refuses when the data is newer than the old program, with
+a restore-based path for that case; both are deployed and healthy. A
+continuous-test job that exercises a real service on a test machine was the
+last row still in review at the time of writing.
 
 ### The web page
 
@@ -148,6 +148,6 @@ R1-01 #4397; R1-02 #4407; R1-03 #4417; R1-04 #4438; R1-05 #4442; R1-06 #4498;
 R1-07 #4410; R1-08 #4444; R1-09 #4437; R1-10 #4430; R1-11 #4405; R1-12 #4411;
 R1-13 #4450; R1-14 #4452; R1-15 #4467; R1-16 #4470; R1-17 #4487; R1-18 #4485;
 R1-19 #4488; R1-20 #4453; R1-21 #4480; R1-22 #4406; R1-23 #4504; R1-24 #4507;
-R1-25 #4522; R1-26 #4528 (open); R1-27 #4527 (open); R1-28 #4524 (open);
+R1-25 #4522; R1-26 #4528; R1-27 #4531; R1-28 #4524 (open);
 R1-29 #4443; R1-30 #4495; R1-31 this summary; R1-32 #4436; R1-33 #4474;
 R1-34 #4477; R1-35 #4394; R1-36 #4445; R1-37 #4458.
