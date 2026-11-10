@@ -1,5 +1,5 @@
 // file: internal/books/production_shaped_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e522628-7990-43c4-8080-fa8436bdee80
 // last-edited: 2026-11-10
 
@@ -164,6 +164,19 @@ func shapedReady(c *composed) (bool, error) {
 	return doc.Data.Ready, nil
 }
 
+// pointConfigAtStore sets every path setting the stored blob carries to its
+// place under the store copy at work: the database, the library root and the
+// directories nested in the stage-1 layout. It creates nothing, so a store
+// missing its database or library still fails config.Validate or the boot
+// instead of being papered over (verifyStoreFiles has already vouched for
+// every file the manifest lists).
+func pointConfigAtStore(c *config.Config, work string) {
+	c.DatabasePath = filepath.Join(work, "db", "audiobooks.pebble")
+	c.RootDir = filepath.Join(work, "library")
+	c.PlaylistDir = filepath.Join(work, "playlists")
+	c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
+}
+
 // bootShapedStore boots the composition on the store copy at work as serve runs
 // it (on disk, the stored settings loaded, the key the corpus was written with)
 // and returns the boot's phase samples and the seconds from the start of the
@@ -184,7 +197,20 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		loadConfigFromDB = config.LoadConfigFromDatabase
+		// The stored settings are a blob the corpus' builder saved, and its
+		// path settings name the directories it ran in (a scratch checkout of
+		// stage 1). They are the one thing about the store that is not
+		// portable: a runner that never had those directories refuses to boot
+		// (config.Validate wants the parent of database_path and playlist_dir).
+		// Load them as serve does, then point each path at the copy's real
+		// location, so the boot never touches, or depends on, the builder's.
+		loadConfigFromDB = func(s database.SettingsStore) error {
+			if err := config.LoadConfigFromDatabase(s); err != nil {
+				return err
+			}
+			pointConfigAtStore(&config.AppConfig, work)
+			return nil
+		}
 		// The harness writes its own key into the state directory; the corpus'
 		// secrets are encrypted under the one stage 1 holds.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
@@ -202,6 +228,10 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 		require.Truef(t, time.Now().Before(deadline), "/health never reported ready within %s", wait)
 	}
 	seconds := time.Since(start).Seconds()
+	snap := config.Snapshot()
+	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir} {
+		require.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
+	}
 	phases := shapedBootPhases(t, r.app)
 	require.NoError(t, r.stop())
 	return phases, seconds
