@@ -102,6 +102,10 @@ core/internal/configstore.Store.Load
 core/internal/configstore.Store.Stage
 core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
+core/internal/taskstore.IdemKey
+core/internal/taskstore.IdemPrefix
+core/internal/taskstore.SerializedPrefixes
+core/internal/taskstore.StorageSpec
 core/kernel.bootConfig
 core/kernel.configBoot.HealthTokens
 core/kernel.configBoot.attachConfig
