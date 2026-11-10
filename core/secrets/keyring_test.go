@@ -173,14 +173,12 @@ func TestReadExportRecord_RegularAndBounded(t *testing.T) {
 	exportTo(t, e)
 	rec := filepath.Join(e.dir, "secrets.keyring.exported")
 	valid := fileBytes(t, rec)
-	elsewhere := filepath.Join(t.TempDir(), "record")
-	if err := os.WriteFile(elsewhere, valid, 0o600); err != nil {
+	// The link's target is inside the state directory, which os.Root would
+	// follow; only the regular-file check refuses it.
+	if err := os.Rename(rec, filepath.Join(e.dir, "record.real")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(rec); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, rec); err != nil {
+	if err := os.Symlink("record.real", rec); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readExportRecord(e.root, "secrets.keyring.exported"); err == nil {
