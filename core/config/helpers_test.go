@@ -1,5 +1,5 @@
 // file: core/config/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b5d04556-252d-45d5-96bd-ee0c3a1729aa
 // last-edited: 2026-11-10
 
@@ -44,7 +44,8 @@ const (
 	ptAPIKey     config.Path = "integrations.ai.openai.api_key"
 )
 
-// logRecorder is a slog handler that keeps every record's message.
+// logRecorder is a slog handler that keeps every record's message and
+// attributes, one line per record.
 type logRecorder struct {
 	mu   sync.Mutex
 	msgs []string
@@ -52,10 +53,22 @@ type logRecorder struct {
 
 func (l *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
 func (l *logRecorder) Handle(_ context.Context, r slog.Record) error {
+	line := r.Message
+	r.Attrs(func(a slog.Attr) bool {
+		line += " " + a.String()
+		return true
+	})
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.msgs = append(l.msgs, r.Message)
+	l.msgs = append(l.msgs, line)
 	return nil
+}
+
+// all is every recorded line, attributes included.
+func (l *logRecorder) all() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.msgs, "\n")
 }
 func (l *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return l }
 func (l *logRecorder) WithGroup(string) slog.Handler      { return l }

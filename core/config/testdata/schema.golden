@@ -1,0 +1,192 @@
+# file: core/config/testdata/schema.golden
+# version: 1.0.0
+# guid: 2b6e8d41-9a3c-4f17-b5e2-6c0d9f4a1e38
+# last-edited: 2026-11-10
+#
+# Store.Schema over the configtest fixture sections (05-config §1.3.4),
+# checked by TestSchema_Golden; regenerate with go test -run TestSchema_Golden -update.
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gotham",
+  "type": "object",
+  "properties": {
+    "core.batcave": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "debug",
+            "info",
+            "warn"
+          ],
+          "x-mediacore-reload": "live"
+        },
+        "interval": {
+          "type": "string",
+          "default": "1m30s",
+          "format": "duration",
+          "x-mediacore-reload": "live"
+        },
+        "workers": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 64,
+          "x-mediacore-reload": "restart"
+        },
+        "mode": {
+          "type": "string",
+          "default": "night",
+          "enum": [
+            "night",
+            "day"
+          ],
+          "x-mediacore-reload": "boot"
+        },
+        "path": {
+          "type": "string",
+          "default": "/batcave",
+          "format": "path",
+          "x-mediacore-protect": "admin",
+          "x-mediacore-reload": "live"
+        },
+        "signal": {
+          "type": "string",
+          "default": "bat-signal",
+          "x-mediacore-protect": "interactive",
+          "x-mediacore-reload": "live"
+        },
+        "owner_email": {
+          "type": "string",
+          "default": "",
+          "x-mediacore-protect": "owner",
+          "x-mediacore-reload": "live",
+          "x-mediacore-sensitive": true
+        },
+        "vault": {
+          "type": "string",
+          "default": "wayne-manor",
+          "x-mediacore-protect": "operator",
+          "x-mediacore-reload": "live"
+        },
+        "gadget": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "default": "batarang",
+              "x-mediacore-reload": "live"
+            },
+            "count": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "x-mediacore-reload": "live"
+            }
+          },
+          "required": [
+            "name",
+            "count"
+          ],
+          "additionalProperties": false
+        },
+        "allies": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "robin"
+          ],
+          "x-mediacore-reload": "live"
+        },
+        "api_key": {
+          "type": "string",
+          "writeOnly": true,
+          "x-mediacore-reload": "live",
+          "x-mediacore-secret": true
+        }
+      },
+      "required": [
+        "level",
+        "interval",
+        "workers",
+        "mode",
+        "path",
+        "signal",
+        "owner_email",
+        "vault",
+        "gadget",
+        "allies",
+        "api_key"
+      ],
+      "additionalProperties": false
+    },
+    "core.modules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "x-mediacore-reload": "boot"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "modules.gotham.watch": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "integer",
+          "default": 1,
+          "x-mediacore-reload": "live"
+        },
+        "max": {
+          "type": "integer",
+          "default": 10,
+          "x-mediacore-reload": "live"
+        },
+        "villains": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "joker"
+          ],
+          "x-mediacore-reload": "live"
+        },
+        "rogues": {
+          "type": "object",
+          "default": {
+            "arkham": "scarecrow"
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "x-mediacore-reload": "live"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "villains",
+        "rogues"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

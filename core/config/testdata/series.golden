@@ -1,0 +1,17 @@
+# file: core/config/testdata/series.golden
+# version: 1.0.0
+# guid: 7d3f9a2e-4c81-4b6a-9e05-1f8c6a2d5b73
+# last-edited: 2026-11-10
+#
+# The mediacore.config scope's series (05-config §1.8): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestConfigSeries_Golden. The families
+# are observable instruments over the store's tallies; retired_names_set and
+# fail_closed_overrides stay 0 until F3-02 fills those rules.
+mediacore_config_applies_total	counter	outcome
+mediacore_config_fail_closed_overrides	gauge	
+mediacore_config_generation	gauge	
+mediacore_config_post_commit_failures_total	counter	section
+mediacore_config_quarantined_overrides	gauge	
+mediacore_config_restart_pending_keys	gauge	
+mediacore_config_retired_names_set	gauge	
+mediacore_config_subscriber_panics_total	counter	section
