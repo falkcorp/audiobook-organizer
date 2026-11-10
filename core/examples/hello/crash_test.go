@@ -1,7 +1,7 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package hello_test
 
@@ -40,6 +40,47 @@ func TestBootCrashMatrix(t *testing.T) {
 			crashmatrix.Run(t, s.Scenario)
 		})
 	}
+	for _, c := range dataMigrationCells() {
+		t.Run("data-migration/"+c.label, func(t *testing.T) {
+			t.Parallel()
+			crashmatrix.RunChunks(t, c.ChunkScenario)
+		})
+	}
+}
+
+type dataMigrationCell struct {
+	label string
+	crashmatrix.ChunkScenario
+}
+
+// dataMigrationCells are the cells of the data-migration runner's three
+// boot writers (06 §6.5.1 "Boot writers"; F2-06): the plan with the
+// running state, each chunk's batch with its shard cursor, and the
+// verifying and done states. No hello boot writes them: hello declares no
+// data migration, and the boot call and Manifest.DataMigrations are
+// F2-16's. So each cell drives the kernel's P4b entry point directly
+// (kernel.NewDataMigrations, its Steps in storage.Open's DataSteps, then
+// Prepare and Migrate), over a store opened as hello's boot opens it
+// (hello's storage spec, plus the synthetic family's claim), with the
+// synthetic cutover migration of crashmatrix (2 400 rows, tasks.Fixed(4)):
+// it kills at that writer, boots again through the same entry point and
+// asserts no row lost or doubled and the migration done. These cells
+// exercise the entry point, not a full boot, until a manifest declares a
+// data migration (F3-07 registers M2, whose TestBootCrashMatrix_ABO cells
+// cover the boot path).
+func dataMigrationCells() []dataMigrationCell {
+	var out []dataMigrationCell
+	for _, l := range crashmatrix.DataMigrationLabels() {
+		s := crashmatrix.SyntheticCutover{Owner: "hello", Spec: hello.New().Manifest().Storage}.Scenario()
+		s.Labels = []string{l}
+		// The chunk's cell breaks every chunk boundary of every shard and a
+		// point inside each chunk; the plan's and the state's break their
+		// own writes only.
+		s.Inside = l == crashmatrix.DataMigrationLabels()[1]
+		s.NoChunkStarts = !s.Inside
+		out = append(out, dataMigrationCell{label: l, ChunkScenario: s})
+	}
+	return out
 }
 
 // TestBootCrashMatrixCoversEveryWriter: every row of 06 §6.5.1's writer
@@ -51,6 +92,11 @@ func TestBootCrashMatrixCoversEveryWriter(t *testing.T) {
 	observed := map[string]bool{}
 	for _, s := range crashScenarios(t) {
 		for l := range crashmatrix.Observed(t, s.Scenario) {
+			observed[l] = true
+		}
+	}
+	for _, c := range dataMigrationCells() {
+		for l := range crashmatrix.ObservedChunks(t, c.ChunkScenario) {
 			observed[l] = true
 		}
 	}
