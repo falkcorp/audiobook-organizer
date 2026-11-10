@@ -1,5 +1,5 @@
 // file: core/storage/migrate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
 // last-edited: 2026-11-10
 
@@ -294,6 +294,10 @@ func (db *DB) planDAG(ctx context.Context) error {
 				return err
 			}
 			if !done {
+				if b := n.data.Barrier; b > 0 && st.versions[n.ref.Owner] >= b {
+					return fmt.Errorf("%w: %s holds back %s version %d, and the store is at version %d",
+						ErrBarrierApplied, n.ref, n.ref.Owner, b, st.versions[n.ref.Owner])
+				}
 				pending[k] = n
 			}
 			continue
