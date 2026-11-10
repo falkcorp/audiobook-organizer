@@ -1,0 +1,1976 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/ping"
+      },
+      "response": {
+        "body": {
+          "success": true
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/status"
+      },
+      "response": {
+        "body": {
+          "app": "audiobookshelf",
+          "authFormData": {
+            "authLoginCustomMessage": ""
+          },
+          "authMethods": [
+            "local"
+          ],
+          "isInit": true,
+          "language": "en-us",
+          "serverVersion": "2.36.0"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": {
+          "deviceInfo": {
+            "clientName": "r2corpus-recorder",
+            "deviceId": "recorder-001"
+          },
+          "password": "<redacted>",
+          "username": "dick.grayson"
+        },
+        "headers": {
+          "accept": "application/json",
+          "user-agent": "r2corpus-recorder/1.0",
+          "x-return-tokens": "true"
+        },
+        "method": "POST",
+        "path": "/login"
+      },
+      "response": {
+        "body": {
+          "Source": "audiobook-organizer",
+          "ereaderDevices": [],
+          "serverSettings": {
+            "allowIframe": false,
+            "allowedOrigins": [],
+            "authActiveAuthMethods": [
+              "local"
+            ],
+            "authLoginCustomMessage": null,
+            "authOpenIDAuthorizationURL": null,
+            "authOpenIDAutoLaunch": false,
+            "authOpenIDAutoRegister": false,
+            "authOpenIDButtonText": "Login with OpenId",
+            "authOpenIDIssuerURL": null,
+            "authOpenIDJwksURL": null,
+            "authOpenIDLogoutURL": null,
+            "authOpenIDMatchExistingBy": null,
+            "authOpenIDTokenSigningAlgorithm": "RS256",
+            "authOpenIDTokenURL": null,
+            "authOpenIDUserInfoURL": null,
+            "backupPath": "/metadata/backups",
+            "backupSchedule": false,
+            "backupsToKeep": 2,
+            "bookshelfView": 1,
+            "buildNumber": 1,
+            "chromecastEnabled": false,
+            "dateFormat": "MM/dd/yyyy",
+            "homeBookshelfView": 1,
+            "id": "server-settings",
+            "language": "en-us",
+            "logLevel": 2,
+            "loggerDailyLogsToKeep": 7,
+            "loggerScannerLogsToKeep": 2,
+            "maxBackupSize": 1,
+            "metadataFileFormat": "json",
+            "podcastEpisodeSchedule": "0 * * * *",
+            "rateLimitLoginRequests": 15,
+            "rateLimitLoginWindow": 900000,
+            "scannerCoverProvider": "google",
+            "scannerDisableWatcher": false,
+            "scannerFindCovers": false,
+            "scannerParseSubtitle": false,
+            "scannerPreferMatchedMetadata": false,
+            "sortingIgnorePrefix": false,
+            "sortingPrefixes": [
+              "the",
+              "a"
+            ],
+            "storeCoverWithItem": false,
+            "storeMetadataWithItem": false,
+            "timeFormat": "HH:mm",
+            "timeZone": "UTC",
+            "version": "2.36.0"
+          },
+          "user": {
+            "accessToken": "<redacted>",
+            "bookmarks": [
+              {
+                "createdAt": 1794310418655,
+                "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "time": 0.15,
+                "title": "The Bane confrontation"
+              }
+            ],
+            "createdAt": 1794310392309,
+            "email": null,
+            "hasOpenIDLink": false,
+            "id": "01M72KQJFNXWXQMGSX75S0JC6H",
+            "isActive": true,
+            "isLocked": false,
+            "itemTagsSelected": [],
+            "lastSeen": null,
+            "librariesAccessible": [],
+            "mediaProgress": [
+              {
+                "currentTime": 0,
+                "duration": 0,
+                "ebookLocation": null,
+                "ebookProgress": 0,
+                "episodeId": null,
+                "finishedAt": null,
+                "hideFromContinueListening": false,
+                "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "isFinished": false,
+                "lastUpdate": 1794310418641,
+                "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "mediaItemType": "book",
+                "progress": 0,
+                "startedAt": 1794310418641,
+                "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+              }
+            ],
+            "permissions": {
+              "accessAllLibraries": true,
+              "accessAllTags": true,
+              "accessExplicitContent": true,
+              "createEreader": false,
+              "delete": false,
+              "download": true,
+              "selectedTagsNotAccessible": false,
+              "update": false,
+              "upload": false
+            },
+            "refreshToken": "<redacted>",
+            "seriesHideFromContinueListening": [],
+            "token": "<redacted>",
+            "type": "user",
+            "username": "dick.grayson"
+          },
+          "userDefaultLibraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/me"
+      },
+      "response": {
+        "body": {
+          "bookmarks": [
+            {
+              "createdAt": 1794310418655,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "time": 0.15,
+              "title": "The Bane confrontation"
+            }
+          ],
+          "createdAt": 1794310392309,
+          "email": null,
+          "hasOpenIDLink": false,
+          "id": "01M72KQJFNXWXQMGSX75S0JC6H",
+          "isActive": true,
+          "isLocked": false,
+          "itemTagsSelected": [],
+          "lastSeen": null,
+          "librariesAccessible": [],
+          "mediaProgress": [
+            {
+              "currentTime": 0,
+              "duration": 0,
+              "ebookLocation": null,
+              "ebookProgress": 0,
+              "episodeId": null,
+              "finishedAt": null,
+              "hideFromContinueListening": false,
+              "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "isFinished": false,
+              "lastUpdate": 1794310418641,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemType": "book",
+              "progress": 0,
+              "startedAt": 1794310418641,
+              "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+            }
+          ],
+          "permissions": {
+            "accessAllLibraries": true,
+            "accessAllTags": true,
+            "accessExplicitContent": true,
+            "createEreader": false,
+            "delete": false,
+            "download": true,
+            "selectedTagsNotAccessible": false,
+            "update": false,
+            "upload": false
+          },
+          "seriesHideFromContinueListening": [],
+          "token": "<redacted>",
+          "type": "user",
+          "username": "dick.grayson"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/me/progress"
+      },
+      "response": {
+        "body": {
+          "mediaProgress": [
+            {
+              "currentTime": 0,
+              "duration": 0,
+              "ebookLocation": null,
+              "ebookProgress": 0,
+              "episodeId": null,
+              "finishedAt": null,
+              "hideFromContinueListening": false,
+              "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "isFinished": false,
+              "lastUpdate": 1794310418641,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemType": "book",
+              "progress": 0,
+              "startedAt": 1794310418641,
+              "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+            }
+          ]
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/me/sessions"
+      },
+      "response": {
+        "body": {
+          "itemsPerPage": 10,
+          "numPages": 1,
+          "page": 0,
+          "sessions": [
+            {
+              "createdAt": 1794310418315,
+              "current": false,
+              "deviceInfo": {
+                "clientName": "r2corpus",
+                "deviceId": "robin-device-01"
+              },
+              "id": "01M72KRC05EMS0XYT8Y81RVETY",
+              "ipAddress": "127.0.0.1",
+              "updatedAt": 1794310418315,
+              "userAgent": "r2corpus-writer/1.0"
+            }
+          ],
+          "total": "<volatile>"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries"
+      },
+      "response": {
+        "body": {
+          "libraries": [
+            {
+              "createdAt": "<volatile>",
+              "displayOrder": 1,
+              "folders": [
+                {
+                  "addedAt": "<volatile>",
+                  "fullPath": "/tmp/r2corpus/stage1/library",
+                  "id": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                  "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053"
+                }
+              ],
+              "icon": "database",
+              "id": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "lastScan": "<volatile>",
+              "lastScanVersion": "2.36.0",
+              "lastUpdate": "<volatile>",
+              "mediaType": "book",
+              "name": "Books",
+              "provider": "audible",
+              "settings": {
+                "audiobooksOnly": false,
+                "autoScanCronExpression": null,
+                "coverAspectRatio": 1,
+                "disableWatcher": false,
+                "epubsAllowScriptedContent": false,
+                "hideSingleBookSeries": false,
+                "markAsFinishedPercentComplete": null,
+                "markAsFinishedTimeRemaining": 10,
+                "metadataPrecedence": [
+                  "folderStructure",
+                  "audioMetatags",
+                  "nfoFile",
+                  "txtFiles",
+                  "opfFile",
+                  "absMetadata"
+                ],
+                "onlyShowLaterBooksInContinueSeries": false,
+                "skipMatchingMediaWithAsin": false,
+                "skipMatchingMediaWithIsbn": false
+              }
+            }
+          ]
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/items?limit=10&page=0"
+      },
+      "response": {
+        "body": {
+          "collapseseries": false,
+          "include": "",
+          "limit": 10,
+          "mediaType": "book",
+          "minified": false,
+          "offset": 0,
+          "page": 0,
+          "results": [
+            {
+              "addedAt": 1794310405615,
+              "birthtimeMs": 1794310405615,
+              "ctimeMs": 1794310405618,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+              "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "The Long Halloween",
+                  "titleIgnorePrefix": "Long Halloween, The"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 1405,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405618,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
+              "relPath": "Alfred Pennyworth/The Long Halloween",
+              "size": 1405,
+              "updatedAt": 1794310405618
+            },
+            {
+              "addedAt": 1794310405655,
+              "birthtimeMs": 1794310405655,
+              "ctimeMs": 1794310405660,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+              "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "Year One",
+                  "titleIgnorePrefix": "Year One"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 876,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405660,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
+              "relPath": "Barbara Gordon/Year One",
+              "size": 876,
+              "updatedAt": 1794310405660
+            },
+            {
+              "addedAt": 1794310405690,
+              "birthtimeMs": 1794310405690,
+              "ctimeMs": 1794310405693,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "Knightfall",
+                  "titleIgnorePrefix": "Knightfall"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 876,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405693,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+              "relPath": "Lucius Fox/Knightfall",
+              "size": 876,
+              "updatedAt": 1794310405693
+            },
+            {
+              "addedAt": 1794310405721,
+              "birthtimeMs": 1794310405721,
+              "ctimeMs": 1794310405724,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+              "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "Hush",
+                  "titleIgnorePrefix": "Hush"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 9490,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405724,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
+              "relPath": "Selina Kyle/Hush",
+              "size": 9490,
+              "updatedAt": 1794310405724
+            },
+            {
+              "addedAt": 1794310405750,
+              "birthtimeMs": 1794310405750,
+              "ctimeMs": 1794310405765,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+              "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "The Killing Joke",
+                  "titleIgnorePrefix": "Killing Joke, The"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 876,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405765,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
+              "relPath": "Leslie Thompkins/The Killing Joke",
+              "size": 876,
+              "updatedAt": 1794310405765
+            },
+            {
+              "addedAt": 1794310405804,
+              "birthtimeMs": 1794310405804,
+              "ctimeMs": 1794310405806,
+              "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+              "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+              "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
+              "isFile": false,
+              "isInvalid": false,
+              "isMissing": false,
+              "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "media": {
+                "coverPath": null,
+                "duration": 0,
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "metadata": {
+                  "abridged": false,
+                  "asin": null,
+                  "authorName": "",
+                  "authorNameLF": "",
+                  "authors": [],
+                  "description": null,
+                  "descriptionPlain": null,
+                  "explicit": false,
+                  "genres": [],
+                  "isbn": null,
+                  "language": null,
+                  "narratorName": "",
+                  "narrators": [],
+                  "publishedDate": null,
+                  "publishedYear": null,
+                  "publisher": null,
+                  "series": [],
+                  "seriesName": "",
+                  "subtitle": null,
+                  "title": "Dark Victory",
+                  "titleIgnorePrefix": "Dark Victory"
+                },
+                "numAudioFiles": 0,
+                "numChapters": 0,
+                "numTracks": 0,
+                "size": 876,
+                "tags": []
+              },
+              "mediaType": "book",
+              "mtimeMs": 1794310405806,
+              "numFiles": 0,
+              "oldLibraryItemId": null,
+              "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
+              "relPath": "Harvey Bullock/Dark Victory",
+              "size": 876,
+              "updatedAt": 1794310405806
+            }
+          ],
+          "sortDesc": false,
+          "total": 6
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/personalized"
+      },
+      "response": {
+        "body": [
+          {
+            "entities": [
+              {
+                "addedAt": 1794310405804,
+                "birthtimeMs": 1794310405804,
+                "ctimeMs": 1794310405806,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Dark Victory",
+                    "titleIgnorePrefix": "Dark Victory"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405806,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
+                "relPath": "Harvey Bullock/Dark Victory",
+                "size": 876,
+                "updatedAt": 1794310405806
+              },
+              {
+                "addedAt": 1794310405750,
+                "birthtimeMs": 1794310405750,
+                "ctimeMs": 1794310405765,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "The Killing Joke",
+                    "titleIgnorePrefix": "Killing Joke, The"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405765,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
+                "relPath": "Leslie Thompkins/The Killing Joke",
+                "size": 876,
+                "updatedAt": 1794310405765
+              },
+              {
+                "addedAt": 1794310405721,
+                "birthtimeMs": 1794310405721,
+                "ctimeMs": 1794310405724,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Hush",
+                    "titleIgnorePrefix": "Hush"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 9490,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405724,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
+                "relPath": "Selina Kyle/Hush",
+                "size": 9490,
+                "updatedAt": 1794310405724
+              },
+              {
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Knightfall",
+                    "titleIgnorePrefix": "Knightfall"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405693,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+                "relPath": "Lucius Fox/Knightfall",
+                "size": 876,
+                "updatedAt": 1794310405693
+              },
+              {
+                "addedAt": 1794310405655,
+                "birthtimeMs": 1794310405655,
+                "ctimeMs": 1794310405660,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Year One",
+                    "titleIgnorePrefix": "Year One"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405660,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
+                "relPath": "Barbara Gordon/Year One",
+                "size": 876,
+                "updatedAt": 1794310405660
+              },
+              {
+                "addedAt": 1794310405615,
+                "birthtimeMs": 1794310405615,
+                "ctimeMs": 1794310405618,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "The Long Halloween",
+                    "titleIgnorePrefix": "Long Halloween, The"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 1405,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405618,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
+                "relPath": "Alfred Pennyworth/The Long Halloween",
+                "size": 1405,
+                "updatedAt": 1794310405618
+              }
+            ],
+            "id": "recently-added",
+            "label": "Recently Added",
+            "labelStringKey": "LabelRecentlyAdded",
+            "total": 6,
+            "type": "book"
+          },
+          {
+            "entities": [
+              {
+                "addedAt": 1794310405615,
+                "birthtimeMs": 1794310405615,
+                "ctimeMs": 1794310405618,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "The Long Halloween",
+                    "titleIgnorePrefix": "Long Halloween, The"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 1405,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405618,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
+                "relPath": "Alfred Pennyworth/The Long Halloween",
+                "size": 1405,
+                "updatedAt": 1794310405618
+              },
+              {
+                "addedAt": 1794310405655,
+                "birthtimeMs": 1794310405655,
+                "ctimeMs": 1794310405660,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Year One",
+                    "titleIgnorePrefix": "Year One"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405660,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
+                "relPath": "Barbara Gordon/Year One",
+                "size": 876,
+                "updatedAt": 1794310405660
+              },
+              {
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Knightfall",
+                    "titleIgnorePrefix": "Knightfall"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405693,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+                "relPath": "Lucius Fox/Knightfall",
+                "size": 876,
+                "updatedAt": 1794310405693
+              },
+              {
+                "addedAt": 1794310405721,
+                "birthtimeMs": 1794310405721,
+                "ctimeMs": 1794310405724,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Hush",
+                    "titleIgnorePrefix": "Hush"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 9490,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405724,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
+                "relPath": "Selina Kyle/Hush",
+                "size": 9490,
+                "updatedAt": 1794310405724
+              },
+              {
+                "addedAt": 1794310405750,
+                "birthtimeMs": 1794310405750,
+                "ctimeMs": 1794310405765,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "The Killing Joke",
+                    "titleIgnorePrefix": "Killing Joke, The"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405765,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
+                "relPath": "Leslie Thompkins/The Killing Joke",
+                "size": 876,
+                "updatedAt": 1794310405765
+              },
+              {
+                "addedAt": 1794310405804,
+                "birthtimeMs": 1794310405804,
+                "ctimeMs": 1794310405806,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "coverPath": null,
+                  "duration": 0,
+                  "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Dark Victory",
+                    "titleIgnorePrefix": "Dark Victory"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": []
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405806,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
+                "relPath": "Harvey Bullock/Dark Victory",
+                "size": 876,
+                "updatedAt": 1794310405806
+              }
+            ],
+            "id": "discover",
+            "label": "Discover",
+            "labelStringKey": "LabelDiscover",
+            "total": 6,
+            "type": "book"
+          }
+        ],
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/series"
+      },
+      "response": {
+        "body": {
+          "include": "",
+          "limit": 0,
+          "minified": false,
+          "page": 0,
+          "results": [],
+          "sortDesc": false,
+          "total": 0
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/authors"
+      },
+      "response": {
+        "body": {
+          "authors": []
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/narrators"
+      },
+      "response": {
+        "body": {
+          "narrators": []
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/search?q=Knightfall"
+      },
+      "response": {
+        "body": {
+          "authors": [],
+          "book": [
+            {
+              "libraryItem": {
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
+                "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "isFile": false,
+                "isInvalid": false,
+                "isMissing": false,
+                "lastScan": 1794310405693,
+                "libraryFiles": [],
+                "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+                "media": {
+                  "audioFiles": [],
+                  "chapters": [],
+                  "coverPath": null,
+                  "duration": 0,
+                  "ebookFile": null,
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                  "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                  "metadata": {
+                    "abridged": false,
+                    "asin": null,
+                    "authorName": "",
+                    "authorNameLF": "",
+                    "authors": [],
+                    "description": null,
+                    "descriptionPlain": null,
+                    "explicit": false,
+                    "genres": [],
+                    "isbn": null,
+                    "language": null,
+                    "narratorName": "",
+                    "narrators": [],
+                    "publishedDate": null,
+                    "publishedYear": null,
+                    "publisher": null,
+                    "series": [],
+                    "seriesName": "",
+                    "subtitle": null,
+                    "title": "Knightfall",
+                    "titleIgnorePrefix": "Knightfall"
+                  },
+                  "numAudioFiles": 0,
+                  "numChapters": 0,
+                  "numTracks": 0,
+                  "size": 876,
+                  "tags": [],
+                  "tracks": null
+                },
+                "mediaType": "book",
+                "mtimeMs": 1794310405693,
+                "numFiles": 0,
+                "oldLibraryItemId": null,
+                "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+                "relPath": "Lucius Fox/Knightfall",
+                "scanVersion": "2.36.0",
+                "size": 876,
+                "updatedAt": 1794310405693
+              }
+            }
+          ],
+          "genres": [],
+          "narrators": [],
+          "series": [],
+          "tags": []
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/libraries/b5e3a5b2-a76e-471f-b18b-915e4716d053/filterdata"
+      },
+      "response": {
+        "body": {
+          "authorCount": 0,
+          "authors": [],
+          "bookCount": 0,
+          "genres": [],
+          "languages": [],
+          "loadedAt": 0,
+          "narrators": [],
+          "numIssues": 0,
+          "podcastCount": 0,
+          "publishedDecades": [],
+          "publishers": [],
+          "series": [],
+          "seriesCount": 0,
+          "tags": []
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/items/37809ad2-89cf-4c45-9e37-f08a6405f4f2?expanded=1&include=progress"
+      },
+      "response": {
+        "body": {
+          "addedAt": 1794310405690,
+          "birthtimeMs": 1794310405690,
+          "ctimeMs": 1794310405693,
+          "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+          "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "isFile": false,
+          "isInvalid": false,
+          "isMissing": false,
+          "lastScan": 1794310405693,
+          "libraryFiles": [],
+          "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+          "media": {
+            "audioFiles": [],
+            "chapters": [],
+            "coverPath": null,
+            "duration": 0,
+            "ebookFile": null,
+            "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "metadata": {
+              "abridged": false,
+              "asin": null,
+              "authorName": "",
+              "authorNameLF": "",
+              "authors": [],
+              "description": null,
+              "descriptionPlain": null,
+              "explicit": false,
+              "genres": [],
+              "isbn": null,
+              "language": null,
+              "narratorName": "",
+              "narrators": [],
+              "publishedDate": null,
+              "publishedYear": null,
+              "publisher": null,
+              "series": [],
+              "seriesName": "",
+              "subtitle": null,
+              "title": "Knightfall",
+              "titleIgnorePrefix": "Knightfall"
+            },
+            "numAudioFiles": 0,
+            "numChapters": 0,
+            "numTracks": 0,
+            "size": 876,
+            "tags": [],
+            "tracks": null
+          },
+          "mediaType": "book",
+          "mtimeMs": 1794310405693,
+          "numFiles": 0,
+          "oldLibraryItemId": null,
+          "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+          "relPath": "Lucius Fox/Knightfall",
+          "scanVersion": "2.36.0",
+          "size": 876,
+          "updatedAt": 1794310405693,
+          "userMediaProgress": {
+            "currentTime": 0,
+            "duration": 0,
+            "ebookLocation": null,
+            "ebookProgress": 0,
+            "episodeId": null,
+            "finishedAt": null,
+            "hideFromContinueListening": false,
+            "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "isFinished": false,
+            "lastUpdate": 1794310418641,
+            "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "mediaItemType": "book",
+            "progress": 0,
+            "startedAt": 1794310418641,
+            "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/me/progress/37809ad2-89cf-4c45-9e37-f08a6405f4f2"
+      },
+      "response": {
+        "body": {
+          "currentTime": 0,
+          "duration": 0,
+          "ebookLocation": null,
+          "ebookProgress": 0,
+          "episodeId": null,
+          "finishedAt": null,
+          "hideFromContinueListening": false,
+          "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "isFinished": false,
+          "lastUpdate": 1794310418641,
+          "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "mediaItemType": "book",
+          "progress": 0,
+          "startedAt": 1794310418641,
+          "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/me/bookmarks/37809ad2-89cf-4c45-9e37-f08a6405f4f2"
+      },
+      "response": {
+        "body": {
+          "bookmarks": [
+            {
+              "createdAt": 1794310418655,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "time": 0.15,
+              "title": "The Bane confrontation"
+            }
+          ]
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": {
+          "deviceInfo": {
+            "clientName": "r2corpus-recorder",
+            "deviceId": "recorder-001"
+          },
+          "forceDirectPlay": true,
+          "mediaPlayer": "unknown"
+        },
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "POST",
+        "path": "/api/items/37809ad2-89cf-4c45-9e37-f08a6405f4f2/play"
+      },
+      "response": {
+        "body": {
+          "bookId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "chapters": [],
+          "coverPath": null,
+          "currentTime": 0,
+          "date": "<volatile>",
+          "dayOfWeek": "<volatile>",
+          "deviceInfo": {
+            "clientName": "r2corpus-recorder",
+            "clientVersion": "2.36.0",
+            "deviceId": "recorder-001",
+            "deviceName": "",
+            "deviceType": "unknown",
+            "id": "<volatile>",
+            "ipAddress": "127.0.0.1",
+            "manufacturer": "",
+            "model": "",
+            "sdkVersion": "",
+            "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+          },
+          "displayAuthor": "",
+          "displayTitle": "Knightfall",
+          "duration": 0,
+          "episodeId": null,
+          "id": "<volatile>",
+          "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+          "libraryItem": {
+            "addedAt": 1794310405690,
+            "birthtimeMs": 1794310405690,
+            "ctimeMs": 1794310405693,
+            "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
+            "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "isFile": false,
+            "isInvalid": false,
+            "isMissing": false,
+            "lastScan": 1794310405693,
+            "libraryFiles": [],
+            "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+            "media": {
+              "audioFiles": [],
+              "chapters": [],
+              "coverPath": null,
+              "duration": 0,
+              "ebookFile": null,
+              "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "metadata": {
+                "abridged": false,
+                "asin": null,
+                "authorName": "",
+                "authorNameLF": "",
+                "authors": [],
+                "description": null,
+                "descriptionPlain": null,
+                "explicit": false,
+                "genres": [],
+                "isbn": null,
+                "language": null,
+                "narratorName": "",
+                "narrators": [],
+                "publishedDate": null,
+                "publishedYear": null,
+                "publisher": null,
+                "series": [],
+                "seriesName": "",
+                "subtitle": null,
+                "title": "Knightfall",
+                "titleIgnorePrefix": "Knightfall"
+              },
+              "numAudioFiles": 0,
+              "numChapters": 0,
+              "numTracks": 0,
+              "size": 876,
+              "tags": [],
+              "tracks": null
+            },
+            "mediaType": "book",
+            "mtimeMs": 1794310405693,
+            "numFiles": 0,
+            "oldLibraryItemId": null,
+            "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
+            "relPath": "Lucius Fox/Knightfall",
+            "scanVersion": "2.36.0",
+            "size": 876,
+            "updatedAt": 1794310405693
+          },
+          "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "mediaMetadata": {
+            "abridged": false,
+            "asin": null,
+            "authorName": "",
+            "authorNameLF": "",
+            "authors": [],
+            "description": null,
+            "descriptionPlain": null,
+            "explicit": false,
+            "genres": [],
+            "isbn": null,
+            "language": null,
+            "narratorName": "",
+            "narrators": [],
+            "publishedDate": null,
+            "publishedYear": null,
+            "publisher": null,
+            "series": [],
+            "seriesName": "",
+            "subtitle": null,
+            "title": "Knightfall",
+            "titleIgnorePrefix": "Knightfall"
+          },
+          "mediaPlayer": "unknown",
+          "mediaType": "book",
+          "playMethod": 0,
+          "serverVersion": "2.36.0",
+          "startTime": 0,
+          "startedAt": "<volatile>",
+          "timeListening": 0,
+          "updatedAt": "<volatile>",
+          "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": {
+          "currentTime": 0.1,
+          "duration": 0.3,
+          "timeListened": 0.1
+        },
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "POST",
+        "path": "/api/session/<volatile>/sync"
+      },
+      "response": {
+        "body": {
+          "__non_json_body__": "OK"
+        },
+        "headers": {
+          "content-type": "text/plain; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <redacted>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "POST",
+        "path": "/api/session/<volatile>/close"
+      },
+      "response": {
+        "body": {
+          "__non_json_body__": "OK"
+        },
+        "headers": {
+          "content-type": "text/plain; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "abs",
+  "r0_tag": "v0.223.0",
+  "what": "the ABS conformance requests of scripts/abs_capture_fixtures.py on the corpus"
+}

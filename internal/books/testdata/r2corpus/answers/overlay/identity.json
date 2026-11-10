@@ -1,0 +1,712 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/users"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "count": 18,
+            "users": [
+              {
+                "created_at": "2026-11-10T11:33:10.797541296Z",
+                "email": "_system@local",
+                "id": "01M72KQH0DNEW356YZS9YA1EVD",
+                "merged_into_user_id": "",
+                "roles": null,
+                "status": "system",
+                "updated_at": "2026-11-10T11:33:10.797541296Z",
+                "username": "_system"
+              },
+              {
+                "created_at": "2026-11-10T11:33:11.732395684Z",
+                "email": "",
+                "id": "01M72KQHXM3TJDMDBTC8G90416",
+                "merged_into_user_id": "",
+                "roles": [
+                  "admin"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T11:33:12.043411726Z",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.309518046Z",
+                "email": "",
+                "id": "01M72KQJFNXWXQMGSX75S0JC6H",
+                "merged_into_user_id": "",
+                "roles": [
+                  "editor"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T11:33:12.309518046Z",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.387367718Z",
+                "email": "",
+                "id": "01M72KQJJ3QTYQ3XCF5F2Y7GS3",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T11:33:12.387367718Z",
+                "username": "barbara.gordon"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.463159712Z",
+                "email": "",
+                "id": "01M72KQJMFZN800720GC9GP2CY",
+                "merged_into_user_id": "",
+                "roles": [
+                  "admin"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T11:33:12.463159712Z",
+                "username": "lucius.fox"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.558766564Z",
+                "email": "",
+                "id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
+                "merged_into_user_id": "",
+                "roles": [
+                  "fp-worker"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T11:33:12.558766564Z",
+                "username": "fp.worker"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.634251104Z",
+                "email": "",
+                "id": "01M72KQJST31AAZEP9E25SE8MN",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "locked",
+                "updated_at": "2026-11-10T11:33:12.765316672Z",
+                "username": "jason.todd"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.083847053Z",
+                "email": "",
+                "id": "01M72T53DBP2XDD2PD88WE06XA",
+                "merged_into_user_id": "",
+                "roles": [
+                  "01M72T539N6NBY0XAB8F9JC74Z"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.083847053Z",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.194632668Z",
+                "email": "",
+                "id": "01M72T53GT8XVXA6932VQQTB4C",
+                "merged_into_user_id": "",
+                "roles": [
+                  "01M72T53DC4462PK1BAS938981"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.194632668Z",
+                "username": "harleen.quinzel"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.306161822Z",
+                "email": "",
+                "id": "01M72T53MANKP4E96EMX4NA31E",
+                "merged_into_user_id": "",
+                "roles": [
+                  "01M72T53GVE6R32Z8KHKTENGY3"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.306161822Z",
+                "username": "lucius.fox.jr"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.369001585Z",
+                "email": "",
+                "id": "01M72T53P8S0H4336XAC52H6KQ",
+                "merged_into_user_id": "",
+                "roles": [
+                  "01M72T53MANKP4E96EMXRWXSSV",
+                  "viewer"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.369001585Z",
+                "username": "talia.al.ghul"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.430431291Z",
+                "email": "",
+                "id": "01M72T53R60ZG8Y02P0PBVHEF8",
+                "merged_into_user_id": "",
+                "roles": [
+                  "01M72T53MANKP4E96EMXRWXSSV"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.430431291Z",
+                "username": "ubu"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.493886783Z",
+                "email": "",
+                "id": "01M72T53T5041H4ZY3YKWVW2GF",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": " Active",
+                "updated_at": "2026-11-10T13:25:27.493886783Z",
+                "username": "selina.kyle"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.556836248Z",
+                "email": "",
+                "id": "01M72T53W4DEBPJ0F7QZ8CR9P1",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "DISABLED",
+                "updated_at": "2026-11-10T13:25:27.556836248Z",
+                "username": "oswald.cobblepot"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.618645541Z",
+                "email": "",
+                "id": "01M72T53Y2K68Z0W815Y0KCJ2H",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "",
+                "updated_at": "2026-11-10T13:25:27.618645541Z",
+                "username": "edward.nygma"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.685086035Z",
+                "email": "",
+                "id": "01M72T5405ZSBY7NNGXWWDAWWS",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "inactive ",
+                "updated_at": "2026-11-10T13:25:27.685086035Z",
+                "username": "pamela.isley"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.746782214Z",
+                "email": "",
+                "id": "01M72T5422AZG8G97270C0B6MY",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "suspended",
+                "updated_at": "2026-11-10T13:25:27.746782214Z",
+                "username": "victor.fries"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.815366657Z",
+                "email": "alfred@wayne-manor.invalid",
+                "id": "01M72T54471KTPNFPNHRV28508",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T13:25:27.815366657Z",
+                "username": "alfred.pennyworth"
+              }
+            ]
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/users/invites"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "accepted": [
+              {
+                "accepted_at": "2026-11-10T13:25:27.815366657Z",
+                "accepted_user_id": "01M72T54471KTPNFPNHRV28508",
+                "email": "alfred@wayne-manor.invalid",
+                "email_binding": "bound",
+                "sso_grant": "granted",
+                "username": "alfred.pennyworth"
+              },
+              {
+                "accepted_at": "2026-11-10T11:33:12.634251104Z",
+                "accepted_user_id": "01M72KQJST31AAZEP9E25SE8MN",
+                "email": "redhood@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T11:33:12.750252894Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "jason.todd"
+              },
+              {
+                "accepted_at": "2026-11-10T11:33:12.558766564Z",
+                "accepted_user_id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
+                "email": "worker@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T11:33:12.559173331Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "fp.worker"
+              },
+              {
+                "accepted_at": "2026-11-10T11:33:12.463159712Z",
+                "accepted_user_id": "01M72KQJMFZN800720GC9GP2CY",
+                "email": "lucius@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T11:33:12.47139542Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "lucius.fox"
+              },
+              {
+                "accepted_at": "2026-11-10T11:33:12.387367718Z",
+                "accepted_user_id": "01M72KQJJ3QTYQ3XCF5F2Y7GS3",
+                "email": "batgirl@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T11:33:12.387799037Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "barbara.gordon"
+              },
+              {
+                "accepted_at": "2026-11-10T11:33:12.309518046Z",
+                "accepted_user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
+                "email": "robin@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T11:33:12.309900602Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "dick.grayson"
+              }
+            ],
+            "count": 1,
+            "guest_policy_sync_configured": false,
+            "invites": [
+              {
+                "created_at": "2026-11-10T11:33:12.779676764Z",
+                "created_by_user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "email": "tim@example.com",
+                "expires_at": "2036-11-07T11:33:12.779675572Z",
+                "id": "e3251484af3fd2b4d27af28f652aa68f",
+                "role_id": "viewer",
+                "username": "tim.drake"
+              }
+            ],
+            "mail_configured": false,
+            "mail_unavailable_reason": "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/auth/api-keys?all=true"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "api_keys": [
+              {
+                "created_at": "2026-11-10T11:33:11.750518644Z",
+                "days_since_last_use": "<volatile>",
+                "description": "Generated via bootstrap token exchange",
+                "expires_at": "2026-11-10T19:33:11.750514959Z",
+                "id": "01M72KQHY609X3XA43201NNBN5",
+                "identifier": "abk_af414140",
+                "name": "bootstrap-admin",
+                "never_used": true,
+                "revoked_at": "2026-11-10T11:33:12.136282697Z",
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "revoked",
+                "use_count": 0,
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T11:33:12.982913569Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:12.982910284Z",
+                "id": "01M72KQK4PT3EY30BZCQ9W6CMT",
+                "identifier": "abk_ec136681",
+                "name": "scoped-view",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.0111112Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.011107364Z",
+                "id": "01M72KQWY3JTKBCXKZD6EWMCC1",
+                "identifier": "abk_10c5cf66",
+                "name": "empty-scope",
+                "never_used": true,
+                "scopes": [],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.104934773Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.104931098Z",
+                "id": "01M72KQX1060J3V6FFS7YM43QV",
+                "identifier": "abk_a9336f2e",
+                "name": "every-atom",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.125603951Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.125601086Z",
+                "id": "01M72KQX1NYDQT302YXVR0GJ1V",
+                "identifier": "abk_cfb3e8ce",
+                "name": "admin-owned-for-robin",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "playlists.create"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.14171191Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.141708916Z",
+                "id": "01M72KQX25547VWRSM74HTTRYW",
+                "identifier": "abk_c7dfd9ae",
+                "name": "fp-worker-key",
+                "never_used": true,
+                "scopes": [
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
+                "username": "fp.worker"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.156189258Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.156186905Z",
+                "id": "01M72KQX2ME6QB882QEJSDSH3H",
+                "identifier": "abk_fe51f34d",
+                "name": "editor-own-key",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T11:33:23.170612451Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T11:33:23.170609927Z",
+                "id": "01M72KQX32CT6B9GCB26X5QSBT",
+                "identifier": "abk_2e41bdb4",
+                "name": "revoked-key",
+                "never_used": true,
+                "revoked_at": "2026-11-10T11:33:23.243831212Z",
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "revoked",
+                "use_count": 0,
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.431684874Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.43168288Z",
+                "id": "01M72T53R7R3YHP9F8QW2R9Y29",
+                "identifier": "abk_3480a69a",
+                "name": "outside-owner-roles",
+                "never_used": true,
+                "scopes": [
+                  "settings.manage",
+                  "users.manage"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72T53GT8XVXA6932VQQTB4C",
+                "username": "harleen.quinzel"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.432031131Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.432030169Z",
+                "id": "01M72T53R80KQV8DGNTJQWZMYS",
+                "identifier": "abk_1cf9d8f8",
+                "name": "every-atom-custom-owner",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.432359615Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.432358433Z",
+                "id": "01M72T53R80KQV8DGNTPC6ZK61",
+                "identifier": "abk_7108d8ae",
+                "name": "empty-scope-custom-owner",
+                "never_used": true,
+                "scopes": [],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72T53GT8XVXA6932VQQTB4C",
+                "username": "harleen.quinzel"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.747242454Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.747240069Z",
+                "id": "01M72T54239EVJM9G81JGAE03T",
+                "identifier": "abk_7ea221dd",
+                "name": "edge-padded-active",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": " Active",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.747722261Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.747720918Z",
+                "id": "01M72T54239EVJM9G81JZEXDVY",
+                "identifier": "abk_acebab53",
+                "name": "edge-upper-inactive",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "INACTIVE",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.74819261Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.748191418Z",
+                "id": "01M72T5424XQKDM1Y2RRSRCCNX",
+                "identifier": "abk_adf12b4c",
+                "name": "edge-empty",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.748677117Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.748675354Z",
+                "id": "01M72T5424XQKDM1Y2RVE6JWZY",
+                "identifier": "abk_0ecf2fcb",
+                "name": "edge-padded-revoked",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "Revoked ",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.749247103Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.74924567Z",
+                "id": "01M72T5425W4BXANF0QM4MNN5R",
+                "identifier": "abk_318b037b",
+                "name": "edge-active-revoked-at",
+                "never_used": true,
+                "revoked_at": "2026-11-10T13:26:27.749247103Z",
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.749750434Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "expires_at": "2027-11-10T13:25:27.74974868Z",
+                "id": "01M72T5425W4BXANF0QP968WMT",
+                "identifier": "abk_d247cb54",
+                "name": "edge-unknown",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "paused",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              },
+              {
+                "created_at": "2026-11-10T13:25:27.750236492Z",
+                "days_since_last_use": "<volatile>",
+                "description": "",
+                "id": "01M72T5426AW9H3XE30WHWBQX7",
+                "identifier": "abk_b7f85100",
+                "name": "edge-no-expiry",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72T53DBP2XDD2PD88WE06XA",
+                "username": "james.gordon"
+              }
+            ],
+            "count": "<volatile>",
+            "unreadable": 0
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "identity",
+  "r0_tag": "v0.223.0",
+  "what": "users, invites and API keys as R0 lists them (input of the M3 checks)"
+}

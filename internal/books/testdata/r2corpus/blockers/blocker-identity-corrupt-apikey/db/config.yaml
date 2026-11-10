@@ -1,0 +1,15 @@
+auto_organize: false
+concurrent_scans: 3
+database_path: /tmp/r2corpus/stage1/db/audiobooks.pebble
+enable_ai_parsing: true
+file_naming_pattern: '{title} - {track:02d}'
+folder_naming_pattern: '{author}/{title}'
+google_books_api_key: fixture-google-books-key-oracle
+hardcover_api_token: fixture-hardcover-token-oracle
+log_level: info
+openai_api_key: fixture-openai-key-oracle-alfred
+organization_strategy: copy
+playlist_dir: /tmp/r2corpus/stage1/playlists
+root_dir: /tmp/r2corpus/stage1/library
+scan_on_startup: false
+setup_complete: true
