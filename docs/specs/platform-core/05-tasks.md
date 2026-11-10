@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.15.1 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -334,12 +334,16 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // (ErrNoRunContext): checkpointing needs a run. A CPU() loop given a CPU()
 // item's context runs on that item's slot with one worker; a marked nested
 // loop does not call AcquireCPU, so the executor's semaphore needs no special
-// handling. Likewise an item's context carries the refs its item holds: a
-// nested loop locks those in a table of its own (its items still exclude each
-// other) and only the rest in the run's table, ic.LockRefs and LockRefs skip
-// them, and a ref that overlaps a held one without being covered by it is
-// refused (ErrHeldOverlap) rather than waited for. Both marks live on in
-// contexts derived from the item's, so a goroutine must not outlive its item.
+// handling. Likewise an item that took ExclusiveRefs carries its refs and one
+// lock table of its own: every nested lock under it (a nested loop's
+// ExclusiveRefs, ic.LockRefs, LockRefs) is taken in that table and may name
+// only refs the item holds or a held ref covers. A ref that overlaps a held
+// one without being covered by it is refused with ErrHeldOverlap; any other
+// ref with ErrNestedLockNotHeld, because locks taken in stages can deadlock
+// against a sibling item. An item declares every ref it needs in its own
+// ExclusiveRefs. Inside an item, use ic.LockRefs, not rc.LockRefs. Both marks
+// live on in contexts derived from the item's, so a goroutine must not
+// outlive its item.
 func ForEach[T any](ctx context.Context, par Parallelism, items []T,
 	fn func(ctx context.Context, item T) error, opts ...ItemsOptions[T]) (ItemsResult, error)
 
