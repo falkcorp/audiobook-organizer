@@ -1,5 +1,5 @@
 // file: core/rbac/compile_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8d3f1a64-2e7b-4c95-b6a0-9f4e2c7d1b58
 // last-edited: 2026-11-10
 
@@ -231,7 +231,7 @@ func TestSeed_NoNonConfiningScopeOnConfinedRole(t *testing.T) {
 
 	// Review MAJOR-C and its extension: a worker role a release empties, or
 	// whose worker scope a release stops declaring, keeps its stored
-	// Confined flag, so a later release cannot refill it with a
+	// SeedConfined flag, so a later release cannot refill it with a
 	// non-Confining scope unless an administrator accepts it.
 	view := rbac.PermissionSpec{Name: "books:fingerprint.view", Title: "View fingerprints"}
 	withSeed := func(seed []rbac.Permission, extra ...rbac.PermissionSpec) module {

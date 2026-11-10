@@ -1,5 +1,5 @@
 // file: core/rbac/rbactest/storesuite.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3a7e5c1d-94b2-4f68-8d0e-2b6f1a9c7e43
 // last-edited: 2026-11-10
 
@@ -184,17 +184,17 @@ func roundTrip(t *testing.T, h Harness) {
 	if got := get(t, fx, s.Name); !reflect.DeepEqual(got, s) {
 		t.Fatalf("GetRole(seed) = %+v, want %+v (every field is stored)", got, s)
 	}
-	// The sticky confinement flag of a seed role survives the round trip,
-	// set and then cleared.
+	// A seed role's SeedConfined flag survives the round trip, set and then
+	// cleared.
 	w := seed("relay-worker", 1, "gotham:relay.worker")
-	w.Confined = true
+	w.SeedConfined = true
 	put(t, fx, w)
-	if got := get(t, fx, w.Name); !reflect.DeepEqual(got, w) || !got.Confined {
-		t.Fatalf("GetRole(confined seed) = %+v, want %+v", got, w)
+	if got := get(t, fx, w.Name); !reflect.DeepEqual(got, w) || !got.SeedConfined {
+		t.Fatalf("GetRole(SeedConfined seed) = %+v, want %+v", got, w)
 	}
 	cleared := seed("relay-worker", 2, "gotham:relay.worker", "gotham:patrol")
 	put(t, fx, cleared)
-	if got := get(t, fx, w.Name); !reflect.DeepEqual(got, cleared) || got.Confined {
+	if got := get(t, fx, w.Name); !reflect.DeepEqual(got, cleared) || got.SeedConfined {
 		t.Fatalf("GetRole(cleared seed) = %+v, want %+v", got, cleared)
 	}
 }
@@ -412,8 +412,8 @@ func brokenImports() map[string]*rbac.Role {
 	seedOrigin.Origin = rbac.OriginSeed
 	noOrigin := ok("custom.alfred", "gotham:patrol")
 	noOrigin.Origin = 0
-	confined := ok("custom.alfred", "gotham:relay.worker")
-	confined.Confined = true
+	seedConfined := ok("custom.alfred", "gotham:relay.worker")
+	seedConfined.SeedConfined = true
 	return map[string]*rbac.Role{
 		"unknown scope":          ok("custom.alfred", "gotham:patrol", "gotham:batmobile"),
 		"unknown namespace":      ok("custom.alfred", "metropolis:*"),
@@ -434,7 +434,7 @@ func brokenImports() map[string]*rbac.Role {
 		"pending seed":           pending,
 		"seed origin":            seedOrigin,
 		"zero origin":            noOrigin,
-		"confined flag":          confined,
+		"SeedConfined flag":      seedConfined,
 	}
 }
 
