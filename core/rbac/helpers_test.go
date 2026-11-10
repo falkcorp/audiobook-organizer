@@ -277,10 +277,8 @@ func (c *checker) Satisfies(r rbac.Requirement) bool {
 		}
 		return len(r.Permissions()) > 0
 	case rbac.KindAnyOf:
-		for _, p := range r.Permissions() {
-			if c.Has(p) {
-				return true
-			}
+		if slices.ContainsFunc(r.Permissions(), c.Has) {
+			return true
 		}
 	}
 	return false

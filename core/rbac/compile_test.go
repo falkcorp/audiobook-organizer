@@ -70,13 +70,13 @@ func TestWorkerKey_Confined(t *testing.T) {
 	}{
 		{"admin-owned worker key",
 			rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Scopes: perms("books:fingerprint.worker")},
-			rbac.CompileInput{CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Scopes: perms("books:fingerprint.worker")}, RolePatterns: perms("core:admin")}},
+			rbac.CompileInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Scopes: perms("books:fingerprint.worker"), RolePatterns: perms("core:admin")}},
 		{"fp-worker user's key",
 			rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}, Scopes: perms("books:fingerprint.worker")},
-			rbac.CompileInput{CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}, Scopes: perms("books:fingerprint.worker")}, RolePatterns: perms("books:fingerprint.worker")}},
+			rbac.CompileInput{Roles: []rbac.RoleName{"fp-worker"}, Scopes: perms("books:fingerprint.worker"), RolePatterns: perms("books:fingerprint.worker")}},
 		{"fp-worker session",
 			rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}, Interactive: true},
-			rbac.CompileInput{CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}, Interactive: true}, RolePatterns: perms("books:fingerprint.worker")}},
+			rbac.CompileInput{Roles: []rbac.RoleName{"fp-worker"}, Interactive: true, RolePatterns: perms("books:fingerprint.worker")}},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
@@ -455,6 +455,40 @@ func TestRequire_DeniesByDefault(t *testing.T) {
 	errIs(t, "Require on an unbound context", rbac.Require(rbac.WithChecker(bare, grant(cat, true)), "gotham:signal"), rbac.ErrDenied)
 	if len(f.audit.denials()) != unbound {
 		t.Error("an unbound context recorded a denial")
+	}
+}
+
+// TestConfined_AdminNeverConfined (§4.4): a set granting core:admin is never
+// confined, whatever catalog it is judged against, and an empty set is not
+// confined either.
+func TestConfined_AdminNeverConfined(t *testing.T) {
+	bare, err := rbac.NewCatalog(rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true}, rbac.PermissionSpec{Name: "books:view"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := rbac.NewCatalog(append(rbac.CoreScopes(), rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cat := range []*rbac.Catalog{bare, full} {
+		for _, ps := range [][]rbac.Permission{
+			perms("core:admin", "books:fingerprint.worker"),
+			perms("core:*", "books:fingerprint.worker"),
+			nil,
+		} {
+			if rbac.Confined(cat, ps) {
+				t.Errorf("Confined(%v) holds", ps)
+			}
+		}
+		if !rbac.Confined(cat, perms("books:fingerprint.worker")) {
+			t.Error("the worker scope alone is not confined")
+		}
+	}
+	if rbac.Confined(nil, perms("books:fingerprint.worker")) {
+		t.Error("Confined without a catalog holds")
+	}
+	if rbac.Confined(bare, perms("books:fingerprint.worker", "books:view")) {
+		t.Error("a mixed set is confined")
 	}
 }
 

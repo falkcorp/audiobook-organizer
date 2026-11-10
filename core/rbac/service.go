@@ -13,6 +13,7 @@ import (
 	"hash/fnv"
 	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -1031,7 +1032,7 @@ func (s *Service) Compile(in CheckerInput) Checker {
 		s.ctr.unknownRoles.Add(uint64(unknown))
 	}
 	ci := CompileInput{
-		CheckerInput: CheckerInput{Roles: slices.Clone(in.Roles), Scopes: slices.Clone(in.Scopes), Interactive: in.Interactive},
+		Roles: slices.Clone(in.Roles), Scopes: slices.Clone(in.Scopes), Interactive: in.Interactive,
 		RolePatterns: normalize(patterns),
 	}
 	c := s.deps.Compile(ci, st.cat)
@@ -1187,10 +1188,7 @@ type cacheEntry struct {
 }
 
 func newCheckerCache(size int) *checkerCache {
-	per := (size + cacheShards - 1) / cacheShards
-	if per < 1 {
-		per = 1
-	}
+	per := max((size+cacheShards-1)/cacheShards, 1)
 	c := &checkerCache{}
 	for i := range c.shards {
 		c.shards[i] = cacheShard{cap: per, items: map[string]*list.Element{}, order: list.New()}
@@ -1354,9 +1352,7 @@ func (c *counters) snapshotDenials() map[denialKey]uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make(map[denialKey]uint64, len(c.denials))
-	for k, v := range c.denials {
-		out[k] = v
-	}
+	maps.Copy(out, c.denials)
 	return out
 }
 
