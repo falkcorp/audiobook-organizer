@@ -79,6 +79,10 @@ type FileOptions struct {
 	// Source is the writing binary's ID, written into a line whose Source is
 	// empty (app.BinaryID; R5-7).
 	Source string
+
+	// wrap, when set, wraps the opened file (the failure tests' seam; unset
+	// outside this package's tests, and not settable from outside it).
+	wrap func(lineFile) lineFile
 }
 
 // File is the file-backed RevocationJournal: one JSON line per revocation,
@@ -118,15 +122,29 @@ type lineFile interface {
 // crash inside a write that never returned and so never let its revocation
 // commit, is cut off.
 //
-// A complete line that does not decode, a seq out of order, or a last seq
-// below the store's committed journal_head is ErrCorrupt. Nothing is written
-// to such a file, but OpenFile still returns a File alongside the error:
-// §5B.5 keeps the app open on a broken journal ("chain broken or truncated
-// below the live store's head": health degraded, coverage closed), so the
-// revoking callers still need Gap. That File's Append fails with the same
-// error, Gap works, and it holds the lock until Close, so no second writer
-// numbers the file meanwhile. The caller reports revocation_journal_broken
-// (F4-11). Every other error returns a nil File.
+// One rule for every failure: with a path and the c/backup/ keyspace, OpenFile
+// always returns a File, and a non-nil error means that File is broken. Its
+// Append fails with the error and stages nothing, its Gap works (Gap needs
+// only the keyspace, never the file), and Close releases what it holds. A
+// disk problem never blocks a security action and never stops a gap being
+// recorded (§5B.3.6 rows "Append failure" and "Writers"; §5B.5 keeps the app
+// open on a broken journal), so the revoking callers always have a Gap to
+// call. The failures:
+//
+//   - the store's journal_head cannot be read;
+//   - the file cannot be opened, locked (ErrLocked; errors.ErrUnsupported
+//     where flock(2) is absent) or read;
+//   - ErrCorrupt: a complete line that does not decode, a seq out of order,
+//     or a last seq below the store's committed journal_head; nothing is
+//     written to such a file;
+//   - the incomplete last line cannot be cut, or the header line cannot be
+//     written or made durable (a full disk).
+//
+// When the file was opened, the broken File keeps it locked until Close, so
+// no second writer numbers it meanwhile. The caller reports the failure
+// (revocation_journal_broken or revocation_journal_unwritable, F4-11). Only an
+// empty path or another owner's keyspace, a caller's mistake, returns a nil
+// File.
 func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if o.Path == "" {
 		return nil, errors.New("journal: OpenFile without a path")
@@ -134,40 +152,50 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if o.Keyspace.Owner() != Owner {
 		return nil, fmt.Errorf("journal: OpenFile needs the %s keyspace, got %q", Owner, o.Keyspace.Owner())
 	}
+	j := &File{path: o.Path, ks: o.Keyspace, source: o.Source}
 	head, err := readHead(o.Keyspace.Get(ctx, []byte(headKey)))
 	if err != nil {
-		return nil, fmt.Errorf("journal: read %s: %w", headKey, err)
+		return j.fail(fmt.Errorf("journal: read %s: %w", headKey, err))
 	}
 	f, data, err := openJournal(o.Path)
 	if err != nil {
-		return nil, err
+		return j.fail(err)
 	}
-	j := &File{path: o.Path, f: f, ks: o.Keyspace, source: o.Source}
+	j.f = f
+	if o.wrap != nil {
+		j.f = o.wrap(f)
+	}
 	valid, last, lines, err := scan(data)
 	if err != nil {
-		j.broken = fmt.Errorf("%s: %w", o.Path, err)
-		return j, j.broken
+		return j.fail(fmt.Errorf("%s: %w", o.Path, err))
 	}
 	if head.Seq > last {
-		j.broken = fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",
-			ErrCorrupt, o.Path, last, headKey, head.Seq)
-		return j, j.broken
+		return j.fail(fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",
+			ErrCorrupt, o.Path, last, headKey, head.Seq))
 	}
 	if valid < int64(len(data)) {
-		if err := errors.Join(f.Truncate(valid), f.Sync()); err != nil {
-			return nil, errors.Join(fmt.Errorf("journal: cut the incomplete last line of %s: %w", o.Path, err), f.Close())
+		if err := errors.Join(j.f.Truncate(valid), j.f.Sync()); err != nil {
+			return j.fail(fmt.Errorf("journal: cut the incomplete last line of %s: %w", o.Path, err))
 		}
 	}
 	j.size, j.last = valid, last
 	if lines == 0 {
 		if err := j.writeLine(encodeHeader()); err != nil {
-			return nil, errors.Join(err, f.Close())
+			return j.fail(err)
 		}
 		if err := syncDir(filepath.Dir(o.Path)); err != nil {
-			return nil, errors.Join(err, f.Close())
+			return j.fail(err)
 		}
 	}
 	return j, nil
+}
+
+// fail marks j broken with err and returns both: OpenFile's one failure
+// shape. (A header write whose rollback failed already set j.broken; the
+// error writeLine returned joins that rollback error, so err replaces it.)
+func (j *File) fail(err error) (*File, error) {
+	j.broken = err
+	return j, err
 }
 
 // openJournal is the one place the journal file is opened: read-write,
@@ -445,5 +473,8 @@ func (j *File) Close() error {
 		return nil
 	}
 	j.closed = true
+	if j.f == nil { // a broken File whose file never opened
+		return nil
+	}
 	return j.f.Close()
 }

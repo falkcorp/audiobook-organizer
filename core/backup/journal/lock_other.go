@@ -15,9 +15,10 @@ import (
 )
 
 // lockJournal fails closed where flock(2) is absent: without an exclusive
-// lock a second writer could reuse seqs, so the journal does not open, and
-// the revoking callers record gaps (§5B.3.6 row "Append failure"). The
-// release targets are linux and darwin.
+// lock a second writer could reuse seqs, so OpenFile returns a broken File
+// with this error. Its Append fails and its Gap works, so the revoking
+// callers still commit their revocations with journal_gap/ records (§5B.3.6
+// row "Append failure"). The release targets are linux and darwin.
 func lockJournal(f *os.File) error {
 	return fmt.Errorf("journal: no exclusive file lock for %s on %s: %w", f.Name(), runtime.GOOS, errors.ErrUnsupported)
 }
