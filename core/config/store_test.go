@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -686,9 +686,7 @@ func TestKeys_NeverContainSecretValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.logs.mu.Lock()
-	logs := strings.Join(r.logs.msgs, "\n")
-	r.logs.mu.Unlock()
+	logs := r.logs.all()
 	for name, s := range map[string]string{"keys": keysJSON(t, r.st), "snapshot": mustJSON(t, r.cave.Get()), "pending": mustJSON(t, r.cave.Pending()), "schema": string(schema), "logs": logs} {
 		if strings.Contains(s, "wayne-tech") {
 			t.Errorf("%s holds the secret value", name)
@@ -729,5 +727,33 @@ func TestNoStoreWriteBeforeCheckpoint(t *testing.T) {
 	}
 	if _, err := r.st.Attach(ctx, r.mem, r.cm); err == nil {
 		t.Error("a second Attach succeeded")
+	}
+}
+
+// TestSensitiveValueNeverInErrors (05-config §1.3.1): an invalid value of a
+// sensitive key is refused or quarantined with an error that names the key
+// and never the value, in Apply's error, the AttachReport and the logs.
+func TestSensitiveValueNeverInErrors(t *testing.T) {
+	bad := `{"email":"bruce@example.com"}`
+	r := started(t, rigOpts{rows: map[config.Path]string{kOwner: bad}})
+	var fe *config.FieldError
+	_, err := r.apply(admin(), map[config.Path]string{kOwner: bad})
+	if !errors.As(err, &fe) || fe.Path != kOwner {
+		t.Fatalf("Apply = %v, want a FieldError on %s", err, kOwner)
+	}
+	r2 := newRig(t, rigOpts{rows: map[config.Path]string{kOwner: bad}})
+	rep := r2.start()
+	if rep.Quarantined[kOwner] == nil {
+		t.Fatal("the bad row was not quarantined")
+	}
+	ks, _ := r2.st.Lookup(kOwner)
+	for name, s := range map[string]string{"Apply": err.Error(), "report": rep.Quarantined[kOwner].Error(), "KeyState": ks.Quarantined.Error(), "logs": r.logs.all() + r2.logs.all()} {
+		if strings.Contains(s, "bruce") {
+			t.Errorf("%s carries the sensitive value: %s", name, s)
+		}
+	}
+	// A key that is not sensitive keeps the validator's detail.
+	if _, err := r.apply(admin(), map[config.Path]string{kLevel: `"loud"`}); err == nil || !strings.Contains(err.Error(), "loud") {
+		t.Errorf("a plain key's error lost its detail: %v", err)
 	}
 }

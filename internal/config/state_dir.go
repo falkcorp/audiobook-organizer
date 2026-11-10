@@ -1,5 +1,5 @@
 // file: internal/config/state_dir.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b5e0a4d7-1c63-4f28-9a71-3d06e8c5f294
 // last-edited: 2026-11-10
 
@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	coreconfig "github.com/falkcorp/mediacore/config"
 )
 
 // SecureStateDirEnv overrides SecureStateDir. It exists so tests, dev boxes and
@@ -137,26 +139,27 @@ func ResetStateDirForTest() {
 // it captured at start instead of racing a concurrent config writer; a caller
 // on the main path passes Snapshot().DatabasePath.
 func EnsureSecureStateDir(databasePath string) (string, error) {
-	dir := configuredStateDir()
-	err := os.MkdirAll(dir, 0o700)
-	if err == nil {
-		rememberStateDir(dir)
-		return dir, nil
+	// The rule itself is core's config.ResolveStateDir, the one pre-boot
+	// resolver (05-config §1.7, OPS4-8), so ABO and the kernel cannot drift.
+	// This wrapper keeps ABO's env name, its memoisation and its warning.
+	want := configuredStateDir()
+	var wantErr error
+	mkdir := func(d string) error {
+		err := os.MkdirAll(d, 0o700)
+		if d == want && err != nil {
+			wantErr = err
+		}
+		return err
 	}
-	if strings.TrimSpace(os.Getenv(SecureStateDirEnv)) != "" {
-		return dir, err // explicitly requested: report the failure, do not guess
+	dir, fellBack, err := coreconfig.ResolveStateDir(os.Getenv(SecureStateDirEnv), DefaultSecureStateDir, databasePath, mkdir)
+	if err != nil {
+		return dir, err // an explicit directory, or a default with no usable fallback
 	}
-
-	fallback := filepath.Dir(strings.TrimSpace(databasePath))
-	if fallback == "" || fallback == "." || !filepath.IsAbs(fallback) {
-		return dir, err
+	rememberStateDir(dir)
+	if fellBack {
+		slog.Warn("credential directory is not creatable — falling back to the database directory",
+			"wanted", want, "wanted_err", wantErr, "using", dir,
+			"note", "set "+SecureStateDirEnv+" to choose this deliberately")
 	}
-	if ferr := os.MkdirAll(fallback, 0o700); ferr != nil {
-		return dir, err // report the real target's error, not the fallback's
-	}
-	rememberStateDir(fallback)
-	slog.Warn("credential directory is not creatable — falling back to the database directory",
-		"wanted", dir, "wanted_err", err, "using", fallback,
-		"note", "set "+SecureStateDirEnv+" to choose this deliberately")
-	return fallback, nil
+	return dir, nil
 }
