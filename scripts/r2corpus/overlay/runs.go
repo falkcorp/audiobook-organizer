@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/runs.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3e8b2c5f-7a14-4d96-a0c3-5b9e1f6d2a47
 // last-edited: 2026-11-10
 
@@ -24,16 +24,6 @@ import (
 // the opv2 mirror row in one batch), never written field by field.
 
 var systemActor = database.Actor{UserID: "", AuthMethod: "system"}
-
-// runKeys are the primary keys of one run: its record and its progress half.
-// The run's opv2 mirror row, written in the same batch by the tag's
-// InsertRunV3/TransitionRunV3, is not listed: main's
-// TestOpsV2RowWritesGoThroughStageOpRow keeps every mention of that row key
-// in the module reviewed, and this program never touches the row itself (the
-// manifest's stage2.keys says so).
-func runKeys(id string) []string {
-	return []string{"opv3:run:" + id, "opv3:prog:" + id}
-}
 
 // newRun inserts a queued run of defID through InsertRunV3.
 func (w *writer) newRun(defID string, params any, waitReason string) string {
@@ -100,16 +90,11 @@ func (w *writer) running(defID string, params any) string {
 	return id
 }
 
-func (w *writer) runKeysFull(id string) []string {
-	return append(runKeys(id), "opv3:ckpt:"+id, "opv3:ledger:"+id)
-}
-
 // emptyParams is the params of a maintenance op that takes none.
 var emptyParams = map[string]any{}
 
 func writeRunRunning(w *writer, label string) {
-	id := w.running("maintenance.temp-file-cleanup", emptyParams)
-	w.record(label, w.runKeysFull(id)...)
+	w.running("maintenance.temp-file-cleanup", emptyParams)
 }
 
 // stoppingCases are the stopping reasons (state.StopReasons), one run each.
@@ -124,24 +109,27 @@ var stoppingCases = []struct{ label, defID, reason string }{
 func scanParams() map[string]any { return map[string]any{"folder_path": storeRoot + "/import"} }
 
 func writeRunStopping(w *writer, label string) {
+	found := false
 	for _, c := range stoppingCases {
 		if c.label != label {
 			continue
 		}
+		found = true
 		var params any = emptyParams
 		if c.defID == "library.scan" {
 			params = scanParams()
 		}
 		id := w.running(c.defID, params)
 		w.step(id, state.EvStopRequested, database.TransitionRequest{StopReason: c.reason})
-		w.record(label, w.runKeysFull(id)...)
+	}
+	if !found {
+		must(fmt.Errorf("no table entry for case %s", label), "case table")
 	}
 }
 
 func writeRunInterruptedCrash(w *writer, label string) {
 	id := w.running("maintenance.activity-filter-index-backfill", emptyParams)
 	w.step(id, state.EvBootSweep, database.TransitionRequest{InterruptedWhy: state.WhyCrash, Error: "interrupted: the process exited mid-run"})
-	w.record(label, w.runKeysFull(id)...)
 }
 
 func writeRunInterruptedQuiesced(w *writer, label string) {
@@ -151,20 +139,17 @@ func writeRunInterruptedQuiesced(w *writer, label string) {
 		StopReason: state.StopQuiesce, InterruptedWhy: state.WhyQuiesced,
 		Error: "quiesced: stood down for a maintenance op holding the scan gate",
 	})
-	w.record(label, w.runKeysFull(id)...)
 }
 
 func writeRunQueuedDeps(w *writer, label string) {
 	book := firstBookID(w)
-	id := w.newRun("dedup.check-book", map[string]any{"subject": map[string]string{"type": "book", "id": book}}, state.WaitDeps)
-	w.record(label, runKeys(id)...)
+	w.newRun("dedup.check-book", map[string]any{"subject": map[string]string{"type": "book", "id": book}}, state.WaitDeps)
 }
 
 func writeRunDropped(w *writer, label string) {
 	id := w.running("maintenance.purge-deleted", emptyParams)
 	w.step(id, state.EvBootSweep, database.TransitionRequest{InterruptedWhy: state.WhyCrash})
 	w.step(id, state.EvDecideDrop, database.TransitionRequest{Error: "dropped by the owner after a crash"})
-	w.record(label, runKeys(id)...)
 }
 
 // writeRunAwaitingDecision is a repairs plan (a Fixer preview) waiting for its
@@ -192,24 +177,28 @@ func writeRunAwaitingDecision(w *writer, label string) {
 		},
 	}
 	must(repairs.SavePlan(w.db, id, plan), "save plan rows")
+	planRunID = id
 	w.step(id, state.EvAsk, database.TransitionRequest{})
-	w.record(label, w.runKeysFull(id)...)
-	w.record(label, "opv2:row:"+id+":"+repairs.PlanRowPrefix+"row-hush", "opv2:rowix:"+id+":"+repairs.PlanRowPrefix+"row-hush",
-		"opv2:row:"+id+":"+repairs.PlanRowPrefix+"row-year-one", "opv2:rowix:"+id+":"+repairs.PlanRowPrefix+"row-year-one")
 }
+
+// planRunID is run-awaiting-decision's plan run, the plan the apply case
+// applies (so its PlanOpID names a run that exists).
+var planRunID string
 
 // writeRunInterruptedApplyRowMarks is an interrupted Fixer apply with one row
 // applied: its per-row apply marker (opv3:rowmark:) says so, and a resume must
-// not apply that row again (pebble_store_ops_v3_rowmarks.go).
+// not apply that row again (pebble_store_ops_v3_rowmarks.go). It applies
+// run-awaiting-decision's plan and its one applicable row.
 func writeRunInterruptedApplyRowMarks(w *writer, label string) {
+	if planRunID == "" {
+		must(fmt.Errorf("run-awaiting-decision must be written first"), label)
+	}
 	live := false
 	id := w.running(repairs.ApplyOpID, repairs.ApplyParams{
-		FixerID: "fix-read-by-narrator", PlanOpID: newID(), RowIDs: []string{"row-hush", "row-knightfall"}, DryRun: &live,
+		FixerID: "fix-read-by-narrator", PlanOpID: planRunID, RowIDs: []string{"row-hush"}, DryRun: &live,
 	})
 	must(w.db.PutRowMarkV3(id, database.RowMarkV3{RowID: "row-hush", MarkedAt: time.Now().UTC()}), "row mark")
 	w.step(id, state.EvBootSweep, database.TransitionRequest{InterruptedWhy: state.WhyCrash})
-	w.record(label, w.runKeysFull(id)...)
-	w.record(label, "opv3:rowmark:"+id+":row-hush")
 }
 
 // ── markers, buckets and stamps ────────────────────────────────────────────
@@ -236,9 +225,6 @@ func writeStandDownMarker(w *writer, label string) {
 	blob, err := json.Marshal(scanStandDownMarker{HolderOpID: holder, ScanOpID: scan, LeaseExpiryUTC: time.Now().UnixNano()})
 	must(err, "encode stand-down marker")
 	must(w.db.SetSetting("registry.scan_standdown", string(blob), "json", false), "write stand-down marker")
-	w.record(label, "setting:registry.scan_standdown")
-	w.record(label, w.runKeysFull(scan)...)
-	w.record(label, w.runKeysFull(holder)...)
 }
 
 // writeDebounceBucket leaves one pending subject in a Batchable op's
@@ -246,7 +232,6 @@ func writeStandDownMarker(w *writer, label string) {
 func writeDebounceBucket(w *writer, label string) {
 	book := firstBookID(w)
 	must(w.db.AddToBatchBucket("dedup.check-book", database.OpSubject{Type: "book", ID: book}), "batch bucket")
-	w.record(label, "op:batch:dedup.check-book:book:"+book)
 }
 
 // writeRequiresStamps records a dependency revision and a completion stamp for
@@ -258,7 +243,6 @@ func writeRequiresStamps(w *writer, label string) {
 	rev, err := w.db.BumpDepRev(sub)
 	must(err, "bump dep rev")
 	must(w.db.RecordOpCompletion(sub, "dedup.check-book", "", rev), "record completion")
-	w.record(label, "op:deprev:book:"+book, "op:completion:book:"+book+":dedup.check-book")
 }
 
 // writeCorruptRun leaves a finished run whose record no longer decodes while
@@ -270,7 +254,6 @@ func writeCorruptRun(w *writer, label string) {
 	id := w.running("maintenance.transcode-temp-cleanup", emptyParams)
 	w.step(id, state.EvReturnNil, database.TransitionRequest{Result: json.RawMessage(`{"removed":0}`)})
 	w.setTorn("opv3:run:"+id, `{"v":3,"id":"`+id+`","def_id":"maintenance.transcode-temp-cleanup","state":"succ`)
-	w.record(label, "opv3:run:"+id)
 }
 
 var firstBook string

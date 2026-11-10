@@ -1,5 +1,5 @@
 # file: scripts/tests/test_build_overlay.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 4e8b1f27-6c3a-4d95-a0e2-9b7c5d1f3a86
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/overlay/build_overlay.py and the stage-2 corpus (F2-13).
@@ -107,6 +107,29 @@ class DriverTest(unittest.TestCase):
         self.assertEqual(overlay, [c.label for c in b.overlay_cases()])
         self.assertEqual(blockers, [(c.label, c.store or c.label) for c in b.blocker_cases()])
 
+    def test_record_answers_passes_the_settle_timeout(self):
+        calls = []
+
+        class Done:
+            returncode = 0
+
+        def fake_run(cmd, *a, **kw):
+            calls.append(cmd)
+            return Done()
+
+        args = b.build_parser().parse_args(["--regenerate"])
+        real = b.subprocess.run
+        b.subprocess.run = fake_run
+        try:
+            b.record_answers(args, b.OVERLAY_ANSWERS_DIR)
+        finally:
+            b.subprocess.run = real
+        self.assertEqual(len(calls), 1)
+        cmd = calls[0]
+        self.assertIn("--settle-timeout", cmd)
+        self.assertEqual(cmd[cmd.index("--settle-timeout") + 1], "900")
+        self.assertEqual(b.SETTLE_TIMEOUT, 900)
+
     def test_every_go_file_carries_the_build_constraint(self):
         files = sorted(PROGRAM.glob("*.go"))
         self.assertTrue(files)
@@ -135,6 +158,51 @@ class CommittedManifestTest(unittest.TestCase):
                 self.assertEqual(e[field], getattr(c, field), f"{c.label}.{field}")
             self.assertEqual(e["store"], c.store_rel(), c.label)
             self.assertTrue(e["keys"], c.label)
+            self.assertEqual(e["keys"], sorted(e["keys"]), c.label)
+            self.assertIsInstance(e["removed_keys"], list, c.label)
+            self.assertTrue(set(e["corrupt_keys"]) <= set(e["keys"]), c.label)
+            self.assertEqual(e.get("imported_as"), b.IMPORTED_AS.get(c.label), c.label)
+
+    def test_imported_as_is_pinned(self):
+        # Pinned here independently of the driver's table: 05-tasks §5T.8.3's
+        # map from HEAD's run state to the native state, and 05-authn §11's
+        # status rules (trim, lower-case, empty user status active, a key with
+        # revoked_at revoked, an unknown status disabled).
+        want = {
+            "run-running": {"state": "interrupted"},
+            "run-stopping-shutdown": {"state": "interrupted"},
+            "run-stopping-user": {"state": "canceled"},
+            "run-stopping-quiesce": {"state": "interrupted_quiesced"},
+            "run-stopping-timeout": {"state": "timed_out"},
+            "run-stopping-watchdog": {"state": "failed", "reason": "watchdog"},
+            "run-interrupted-crash": {"state": "interrupted"},
+            "run-interrupted-quiesced": {"state": "interrupted_quiesced"},
+            "run-queued-deps": {"state": "waiting_deps"},
+            "run-dropped": {"state": "interrupted_dropped"},
+            "run-awaiting-decision": {"state": "awaiting_decision"},
+            "run-interrupted-apply-rowmarks": {"state": "interrupted"},
+            "status-edge-user-padded-active": {"status": "active"},
+            "status-edge-user-upper-disabled": {"status": "disabled"},
+            "status-edge-user-empty": {"status": "active"},
+            "status-edge-user-padded-inactive": {"status": "disabled"},
+            "status-edge-user-unknown": {"status": "disabled"},
+            "status-edge-key-padded-active": {"status": "active"},
+            "status-edge-key-upper-inactive": {"status": "disabled"},
+            "status-edge-key-empty": {"status": "active"},
+            "status-edge-key-padded-revoked": {"status": "revoked"},
+            "status-edge-key-active-revoked-at": {"status": "revoked"},
+            "status-edge-key-unknown": {"status": "disabled"},
+            "status-edge-key-no-expiry": {"status": "active"},
+        }
+        got = {e["label"]: e["imported_as"] for e in manifest()["overlay"] if "imported_as" in e}
+        self.assertEqual(got, want)
+        for label in want:
+            self.assertEqual(b.IMPORTED_AS[label], want[label])
+
+    def test_corrupt_cases_name_their_corrupt_keys(self):
+        for e in manifest()["overlay"] + manifest()["blockers"]:
+            corrupt = e["label"].startswith(("corrupt-", "blocker-identity-corrupt-"))
+            self.assertEqual(bool(e["corrupt_keys"]), corrupt, e["label"])
 
     def test_every_store_is_listed_with_its_files(self):
         m = manifest()
@@ -201,6 +269,7 @@ class CommittedManifestTest(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["name"], a["name"])
             self.assertIsInstance(a["changed"], bool)
+            self.assertEqual(a.get("note"), b.ANSWER_NOTES.get(a["name"]), a["name"])
 
     def test_no_store_file_is_git_ignored(self):
         p = subprocess.run(

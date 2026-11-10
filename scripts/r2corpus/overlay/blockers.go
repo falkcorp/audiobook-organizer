@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/blockers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2a9d4c-1e6b-4b83-9d05-8c3e6a1b4f72
 // last-edited: 2026-11-10
 
@@ -26,21 +26,18 @@ import (
 func writeBlockerCorruptUser(w *writer, label string) {
 	id := newID()
 	w.setTorn("u:"+id, `{"id":"`+id+`","username":"jervis.tetch","email":"","password_hash_algo":"argon2id","password_hash":"$argon2id$v=19$m=65536,t=3,p=2$`)
-	w.record(label, "u:"+id)
 }
 
 func writeBlockerCorruptAPIKey(w *writer, label string) {
 	id := newID()
 	owner := mustUser(w.db, "lucius.fox")
 	w.setTorn("apikey:"+id, `{"id":"`+id+`","user_id":"`+owner.ID+`","name":"mad-hatter","description":"","token_hash":"`)
-	w.record(label, "apikey:"+id)
 }
 
 func writeBlockerCorruptOAuthID(w *writer, label string) {
 	id := newID()
 	owner := mustUser(w.db, "barbara.gordon")
-	w.setTorn("oauthid:"+id, `{"id":"`+id+`","provider":"github","subject":"19400401","email":"oracle@clocktower.invalid","user_id":"`+owner.ID)
-	w.record(label, "oauthid:"+id)
+	w.setTorn("oauthid:"+id, `{"id":"`+id+`","provider":"github","subject":"spoiler-1992","email":"oracle@clocktower.invalid","user_id":"`+owner.ID)
 }
 
 // writeBlockerUserRejected writes a user row that decodes but that
@@ -48,26 +45,23 @@ func writeBlockerCorruptOAuthID(w *writer, label string) {
 // every user by its folded name). HEAD's handlers refuse an empty name; its
 // store writer does not, so this is what an out-of-band write leaves.
 func writeBlockerUserRejected(w *writer, label string) {
-	u := w.createUser("", []string{"viewer"}, "active")
-	w.record(label, userKeys(u)...)
+	w.createUser("", []string{"viewer"}, "active")
 }
 
 // writeBlockerAPIKeyOrphan writes a decodable key whose owner does not exist.
 func writeBlockerAPIKeyOrphan(w *writer, label string) {
 	ghost := &database.User{ID: newID()}
-	k := w.createKey(ghost, "owner-gone", []string{"library.view"}, "active")
-	w.record(label, keyKeys(k)...)
+	w.createKey(ghost, "owner-gone", []string{"library.view"}, "active")
 }
 
 // writeBlockerOAuthIDOrphan writes a decodable identity whose user does not
 // exist.
 func writeBlockerOAuthIDOrphan(w *writer, label string) {
 	ghost := newID()
-	id, err := w.db.CreateOAuthIdentity(&database.OAuthIdentity{
+	_, err := w.db.CreateOAuthIdentity(&database.OAuthIdentity{
 		Provider: "google", Subject: "red-hood-1988", Email: "red.hood@crime-alley.invalid", UserID: ghost,
 	})
 	must(err, "create orphan oauth identity")
-	w.record(label, "oauthid:"+id.ID, "idx:oauth:sub:google:red-hood-1988", "idx:oauth:user:"+ghost+":"+id.ID)
 }
 
 // ── merge journals (05-authn §11 "Merges at the cutover") ──────────────────
@@ -148,7 +142,6 @@ func writeBlockerMergeApplying(w *writer, label string) {
 	s, a := w.mergePair("harvey.dent", "two.face")
 	j := w.applyMerge(w.mergeService(), s, a, "merging")
 	expectJournal(w, j.ID, usermerge.StatusApplying)
-	w.record(label, database.UserMergeJournalPrefix+j.ID)
 }
 
 // writeBlockerMergeUndoing applies a merge, then starts its undo with a context
@@ -167,7 +160,6 @@ func writeBlockerMergeUndoing(w *writer, label string) {
 		must(fmt.Errorf("the undo was to stop part-way, got %v", err), "undo merge")
 	}
 	expectJournal(w, j.ID, usermerge.StatusUndoing)
-	w.record(label, database.UserMergeJournalPrefix+j.ID)
 }
 
 // writeBlockerMergeApplied is a finished merge: the control that must not
@@ -176,7 +168,6 @@ func writeBlockerMergeApplied(w *writer, label string) {
 	s, a := w.mergePair("jean.paul.valley", "azrael")
 	j := w.applyMerge(w.mergeService(), s, a, "")
 	expectJournal(w, j.ID, usermerge.StatusApplied)
-	w.record(label, database.UserMergeJournalPrefix+j.ID)
 }
 
 // writeBlockerMergeUndone is a merge applied and then undone in full: the
@@ -188,7 +179,6 @@ func writeBlockerMergeUndone(w *writer, label string) {
 	_, err := svc.Undo(context.Background(), usermerge.UndoRequest{JournalID: j.ID}, nil)
 	must(err, "undo merge")
 	expectJournal(w, j.ID, usermerge.StatusUndone)
-	w.record(label, database.UserMergeJournalPrefix+j.ID)
 }
 
 // ── the case lists ─────────────────────────────────────────────────────────
@@ -268,7 +258,6 @@ var overlayCases = []overlayCase{
 func writeCorruptRole(w *writer, label string) {
 	id := newID()
 	w.setTorn("role:"+id, `{"id":"`+id+`","name":"Court of Owls","permissions":["library.view","library.ed`)
-	w.record(label, "role:"+id)
 }
 
 // writeCorruptInviteAllow is an invite allow-list row that does not decode:
@@ -277,5 +266,4 @@ func writeCorruptRole(w *writer, label string) {
 func writeCorruptInviteAllow(w *writer, label string) {
 	key := "inviteallow:owlman@court-of-owls.invalid"
 	w.setTorn(key, `{"user_id":"`+newID()+`","granted_at":"2026-11-10T`)
-	w.record(label, key)
 }
