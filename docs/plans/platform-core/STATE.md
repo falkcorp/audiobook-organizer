@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.55.0 -->
+<!-- version: 1.56.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -128,11 +128,19 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W34 | F2-08 | #4543 `2101b9845` | T2: fixed `core:*` scope catalog declared by the kernel (dark). Re-cut of #4538 (merge-queue `merge_conflict` on the deadcode baseline). Merged 2026-11-10 |
 | W34 | F2-09 | #4544 `f797a0217` | T2: every core config section declared, 208 keys in 32 sections (dark). Re-cut of #4539. Open seams for F3-01, F3-02, F3-06 in `seams.d/F2-09.md`. Merged 2026-11-10, deployed with the wave, healthy |
 | W34 | F2-12 | #4542 `954f7a35a` | T3: R2 corpus stage 1 written by R0 v0.223.0 on a GitHub-hosted linux/amd64 runner (temporary workflow, removed), 1.8 MB. T3 review: four MAJORs fixed and regenerated; re-verify 0 BLOCKER. A follow-up PR fixes the remaining answer normalization before F2-15. Merged 2026-11-10 |
+| W35 | F2-01 | #4547 `330d40d58` | T2: tasks public API and the `taskstest` kit (dark). Follow-ups #4551 `3cd26c7dc` and #4554 `bc8ce00ab`. Merged 2026-11-10 |
+| W35 | F2-13 | #4549 `83b77f605` | T3: R2 corpus stage 2, the overlay and blockers (dark, test data only). Follow-up #4555 `5c3cf2ba1`. Merged 2026-11-10 |
+| W35 | F4-01 | #4548 `702da1347` | T3: core RBAC store, service and seeds (dark). Merged 2026-11-10 |
+| W35 | F3-01 | #4563 `b6d4e986b` | T3: core config loader, override store and importer (dark), inside the announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`. Re-cut of #4550, #4557, #4559 and #4560 after rebase conflicts and a coverage-floor fix. Review follow-up #4564 `a371841d1`. Merged 2026-11-10, deployed, healthy; the move window is closed |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
 collected by hand), #4403 `5c6d4d598` (merge-queue runs never cancelled); github-common #386–#388 (Rust toolchain
 input, minimatch override, changelog collection lands through a PR when direct push is refused).
+
+Side PRs 2026-11-10 (not plan rows): #4553 `77d62638b` (server `afterListen` and stop data-race fix) with follow-ups #4558 `2edd4879e`, #4561 `c21dffe73` and #4562 `f4ae268ee`; #4565 (Dockerfile `go mod download` retry) is in the merge queue.
+
+Note (2026-11-10, from the F2-01 follow-up and F3-01 reviews): `recoverAutoFetchFileOp` (`internal/server/file_io_pool.go`) still reads `config.AppConfig.WriteBackMetadata` directly on a file-I/O pool worker. That is outside the `afterListen` guard, and is recorded for the config-cutover row.
 
 Merge queue: on since 2026-11-05 (repo ruleset 26660812, REBASE, ALLGREEN, no bypass actors). Required checks (11, all
 GitHub Actions): Changes, TODO Fragment Headers, Interface Width Ratchet, Errcheck Ratchet, Deadcode Ratchet, Repo
@@ -152,7 +160,9 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 ## Next action
 
-W24 (the first F2 wave) is merged, 7 of 7, and deployed 2026-11-10. Next is W25: F2-01, F2-13, F3-01 (inside an announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`) and F4-01. F2-14 waits for OWNER-04, the owner's read-only production counts. The F2-12 follow-up (answer normalization and lapse guards) lands before F2-15. The deadcode ratchet carries staged entries for F2-07, F2-08, F2-09, F2-10 and F4-04 until their boot rows wire them. The R1-27 owner action is still pending. In plain terms: the first set of R2 building blocks is in production, switched off.
+W25 is merged, 4 of 4 (F2-01, F2-13, F3-01 and F4-01), and deployed 2026-11-10 (main `a371841d1`, `make deploy-debug` at 15:42 EST; active, NRestarts=0, `/health` ready after a 143 s warm-up). W26 is in progress: F2-02, F2-06, F3-03, F3-05 and F4-09, all dispatched 15:50 EST. F2-14 still waits for OWNER-04, the owner's read-only production counts. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: W25 adds more dark building blocks (the task API kit, the R2 corpus overlay, core RBAC and the core config engine); nothing users see has changed.
+
+Before W25: W24 (the first F2 wave) is merged, 7 of 7, and deployed 2026-11-10. Next is W25: F2-01, F2-13, F3-01 (inside an announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`) and F4-01. F2-14 waits for OWNER-04, the owner's read-only production counts. The F2-12 follow-up (answer normalization and lapse guards) lands before F2-15. The deadcode ratchet carries staged entries for F2-07, F2-08, F2-09, F2-10 and F4-04 until their boot rows wire them. The R1-27 owner action is still pending. In plain terms: the first set of R2 building blocks is in production, switched off.
 
 Before W24: R1 is released as v0.224.0 and deployed (OWNER-03, 2026-11-10), and `RELEASE_FREEZE` is cleared. Next is the W24 wave: F2-07, F2-08, F2-09, F2-10, F2-12, F4-04 and F4-10, landing dark (no route, schedule or stored row changes), plus OWNER-04, the owner's read-only production counts, which F2-14 and F3-07 wait for. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: R1 is a published release running in production; the next stage builds R2's pieces switched off.
 
