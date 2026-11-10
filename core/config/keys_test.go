@@ -1,5 +1,5 @@
 // file: core/config/keys_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f224e583-1d6b-4802-b4f3-62ff97c8cc3e
 // last-edited: 2026-11-10
 
@@ -152,10 +152,6 @@ type shadowEmbeddedFirst struct {
 	signalFreq
 	Mode string `json:"mode" protect:"owner"`
 }
-type shadowSameDepth struct {
-	Oracle string `json:"frequency" protect:"owner"`
-	Robin  string `json:"frequency"`
-}
 type shadowNested struct {
 	Cave struct {
 		Mode string `json:"mode" protect:"owner"`
@@ -169,11 +165,13 @@ type embedsSignalPointer struct {
 
 // TestRegister_DuplicateJSONNameRefused (T4 review MAJOR-1): two fields with
 // one JSON name in one JSON object, through an embedded struct in either
-// order, at the same depth or inside a nested struct, are refused with
+// order or inside a nested struct, are refused with
 // ErrDuplicate naming both fields. encoding/json would decode at most one of
 // them while one keyInfo stood for both, so a non-admin could write the
 // owner-tagged field through its untagged twin. An embedded *struct is
-// refused too: its promoted keys depend on a pointer config never sees.
+// refused too: its promoted keys depend on a pointer config never sees. The
+// same-depth clash is TestWalk_SameDepthDuplicateRefused: go vet refuses to
+// compile it as a declared type.
 func TestRegister_DuplicateJSONNameRefused(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -183,7 +181,6 @@ func TestRegister_DuplicateJSONNameRefused(t *testing.T) {
 	}{
 		{"owner field first, embedded twin second", config.Define("core.gotham.signal", shadowOuterFirst{}), config.ErrDuplicate, []string{"shadowOuterFirst.Mode", "signalFreq.Mode"}},
 		{"embedded twin first, owner field second", config.Define("core.gotham.signal", shadowEmbeddedFirst{}), config.ErrDuplicate, []string{"signalFreq.Mode", "shadowEmbeddedFirst.Mode"}},
-		{"same depth", config.Define("core.gotham.signal", shadowSameDepth{}), config.ErrDuplicate, []string{"shadowSameDepth.Oracle", "shadowSameDepth.Robin"}},
 		{"inside a nested struct", config.Define("core.gotham.signal", shadowNested{}), config.ErrDuplicate, []string{".Mode", "signalFreq.Mode"}},
 		{"embedded pointer to a struct", config.Define("core.gotham.signal", embedsSignalPointer{signalFreq: &signalFreq{}}), config.ErrInvalid, []string{"embedsSignalPointer.signalFreq"}},
 	}
