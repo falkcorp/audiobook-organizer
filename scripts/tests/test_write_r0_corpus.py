@@ -1,5 +1,5 @@
 # file: scripts/tests/test_write_r0_corpus.py
-# version: 1.0.3
+# version: 1.1.0
 # guid: e61bb4fe-2238-459c-be02-94efbf991c39
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/write_r0_corpus.py (F2-12).
@@ -330,6 +330,61 @@ class HygieneTest(unittest.TestCase):
         self.assertNotIn('"expires_in_days": 30', out)
         self.assertNotIn('"expires_in": 72,', out)
 
+    def test_lapses_keep_the_answers_valid_for_most_of_a_year(self):
+        now = datetime.datetime(2026, 11, 10, 11, 0, tzinfo=datetime.timezone.utc)
+        lapses = w.lapses(now)
+        self.assertEqual(lapses["answers_valid_until"], "2027-11-10T11:00:00Z")
+        self.assertEqual(lapses["web_sessions"], "2026-11-17T11:00:00Z")
+        self.assertGreater(lapses["abs_sessions"], lapses["answers_valid_until"])
+        env = w.boot_env(w.Layout(pathlib.Path(w.DEFAULT_WORKDIR)), w.DEFAULT_PORT)
+        self.assertEqual(env["ABS_REFRESH_TOKEN_TTL"], f"{w.ABS_SESSION_TTL_HOURS}h")
+
+    def test_grace_guard(self):
+        w.check_grace_left({})
+        w.check_grace_left({"standdown_grace_started": 100.0}, now=100.0 + 60)
+        with self.assertRaises(w.CorpusError):
+            w.check_grace_left(
+                {"standdown_grace_started": 100.0},
+                now=100.0 + w.STANDDOWN_GRACE_SECONDS - w.GRACE_MARGIN_SECONDS + 1,
+            )
+
+    def test_standdown_rows_are_read_back_from_the_store(self):
+        def chunk(payload):
+            return b"\x00" * 4 + len(payload).to_bytes(2, "little") + b"\x01" + payload
+
+        def rec(op, status):
+            # Go writes compact JSON, and the lookup prefix assumes it.
+            return json.dumps(
+                {"ID": op, "DefID": "library.scan", "Status": status}, separators=(",", ":")
+            ).encode()
+
+        ids = {"op_quiesced": "Q" * 26, "op_queued": "N" * 26}
+        with tempfile.TemporaryDirectory() as d:
+            db = pathlib.Path(d) / "audiobooks.pebble"
+            db.mkdir()
+            wal = db / "000014.log"
+            # The newest write of each key wins: running, then interrupted_quiesced.
+            wal.write_bytes(
+                chunk(b"k" + rec("Q" * 26, "running")) + chunk(b"k" + rec("Q" * 26, "interrupted_quiesced"))
+                + chunk(b"k" + rec("N" * 26, "queued"))
+            )  # fmt: skip
+            self.assertEqual(
+                w.check_standdown_rows(db, ids),
+                ["op_quiesced=interrupted_quiesced", "op_queued=queued"],
+            )
+            wal.write_bytes(
+                chunk(b"k" + rec("Q" * 26, "interrupted_quiesced")) + chunk(b"k" + rec("N" * 26, "queued"))
+                + chunk(b"k" + rec("N" * 26, "completed"))
+            )  # fmt: skip
+            with self.assertRaises(w.CorpusError):
+                w.check_standdown_rows(db, ids)
+
+    def test_the_committed_store_holds_the_standdown_rows(self):
+        db = REPO_ROOT / w.STAGE1_REL / "db" / "audiobooks.pebble"
+        rec = w.pebble_bytes.latest_record(db, b'{"key":"registry.scan_standdown"')
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["value"], "")
+
     def test_maintenance_window_guard(self):
         utc = datetime.timezone.utc
         for hour in (1, 2, 4, 5):
@@ -399,6 +454,30 @@ class HygieneTest(unittest.TestCase):
             blocks = w.pebble_bytes.table_blocks(sst.read_bytes())
             self.assertEqual([b[2] for b in blocks], [b"Batman: Year One" * 4, self.SECRET])
             self.assertIn("000016.sst: abk_ API key", "\n".join(w.scan_for_leaks(pathlib.Path(d))))
+
+    def test_a_final_block_of_an_unknown_compression_type_is_refused(self):
+        pb = w.pebble_bytes
+        # Type 2 (zlib) in a short final block: once it would have been taken
+        # for the footer; now its checksum finds it and the type is refused.
+        table = self._table([(0, b"Batman: Year One" * 4), (2, b"x" * 20)])
+        with self.assertRaises(pb.StoreDecodeError):
+            pb.table_blocks(table)
+        # A tail that is not a known footer length is refused too.
+        with self.assertRaises(pb.StoreDecodeError):
+            pb.table_blocks(self._table([(0, b"Batman")])[:-61] + b"\x00" * 40 + pb.PEBBLE_MAGIC)
+
+    def test_zap_stored_fields_are_decompressed(self):
+        pb = w.pebble_bytes
+        zap = REPO_ROOT / w.STAGE1_REL / "db" / "library.bleve" / "store"
+        segs = sorted(zap.glob("*.zap"))
+        self.assertTrue(segs)
+        docs = pb.zap_stored_fields(segs[0].read_bytes())
+        self.assertTrue(docs)
+        self.assertTrue(any(b"Knightfall" in d for d in docs))
+        bad = bytearray(segs[0].read_bytes())
+        bad[-8:-4] = (99).to_bytes(4, "big")
+        with self.assertRaises(pb.StoreDecodeError):
+            pb.zap_stored_fields(bytes(bad))
 
     def test_scan_fails_closed_on_an_unreadable_table(self):
         with tempfile.TemporaryDirectory() as d:
