@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -173,8 +173,18 @@ func (s *Store) query() sourceQuery {
 // flagJSON converts an explicitly set flag's text into JSON for key k:
 // strict, as 05-config §1.3.6 decodes every operator value (true/false for a
 // bool, a Go duration, a number, JSON for an object or array, the text itself
-// for a string).
+// for a string). A sensitive key's error never quotes the text: strconv and
+// time echo their input.
 func flagJSON(k *keyInfo, p Path, text string) (json.RawMessage, error) {
+	out, err := flagJSONOf(k, p, text)
+	if err != nil && k != nil && k.sensitive {
+		return nil, &FieldError{Path: p, Err: errSensitiveRedacted()}
+	}
+	return out, err
+}
+
+// flagJSONOf is flagJSON without the redaction.
+func flagJSONOf(k *keyInfo, p Path, text string) (json.RawMessage, error) {
 	if k == nil {
 		return json.Marshal(text) // a passthrough path: config does not own its type
 	}
