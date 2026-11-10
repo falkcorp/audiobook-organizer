@@ -1,5 +1,5 @@
 // file: core/kernel/migrate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 065a3401-6518-4976-9508-a0b36d3bcb96
 // last-edited: 2026-11-10
 
@@ -44,6 +44,12 @@ import (
 // LevelStep is F3-04's too (the level step, §5S.3.7): with it nil, a
 // pending migration that would raise a stamp above the store's fails the
 // boot before its first chunk (datamigrate.ErrLevelStepNotWired).
+//
+// One more seam belongs to the first Cutover importer over a Serialized
+// family: a chunk's batch is not a migration step's exclusive batch, so a
+// plain Set an importer stages into a Serialized keyspace range through
+// StepWriter.Batch fails the chunk (storage.ErrBlindWrite). That importer
+// needs an exclusive chunk batch or an Expect per key (todo.d).
 type DataMigrationsConfig struct {
 	ChunkBytes  int64 // core.storage.data_migration.chunk_bytes; 0 = 4 MiB
 	ChunkItems  int   // core.storage.data_migration.chunk_items; 0 = 2 000

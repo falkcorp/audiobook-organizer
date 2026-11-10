@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/runner.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 600161b2-5090-4249-bc97-6b5f97787ee2
 // last-edited: 2026-11-10
 
@@ -44,6 +44,11 @@ import (
 // are F3-04's (core/storage/quarantine.go), which supplies the writer
 // through the kernel. sensitive is true when key lies under one of the
 // step's Sensitive prefixes. Name coined by F2-06.
+//
+// Shard workers call it concurrently, each with its own chunk's batch, so
+// it must be safe for concurrent use. It stages into b only: it commits
+// nothing and allocates nothing durable outside b, so a lost chunk loses
+// its records with it.
 type QuarantineWriter func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error
 
 // LevelStep raises owner's level stamp to level (sidecar first, §5S.3.7)

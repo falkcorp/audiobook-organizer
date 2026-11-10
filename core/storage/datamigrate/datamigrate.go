@@ -1,5 +1,5 @@
 // file: core/storage/datamigrate/datamigrate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1796b752-c949-4f2a-9ec8-9f61fcf89823
 // last-edited: 2026-11-10
 
@@ -96,6 +96,13 @@ type DataMigration struct {
 // sees only these methods. Keys are relative to the migration's source
 // handle: the owner's keyspace when Source lies in it, the owner's legacy
 // range (absolute keys) when Source lies in its claims.
+//
+// A chunk writes each key at most once, through any of the methods below
+// (ErrKeyWrittenTwice): a precondition is checked against the committed
+// state at the chunk's commit, so two items' SetIfAbsent of one key would
+// both pass and the second write would replace the first. Across chunks the
+// preconditions catch it (ErrConflict); a plain Set of one key by two items
+// of different chunks is a step defect the runner cannot see.
 type StepWriter struct{ s Sink }
 
 // Set and Delete are refused (ErrNotSerialized) in an Online migration, whose
@@ -134,6 +141,16 @@ func (w *StepWriter) Quarantine(key, raw []byte, reason string) error {
 // Batch is the chunk's batch for an importer's participant staging (§5S.3.2):
 // the importer binds its own handle, and its writes commit with the chunk and
 // the shard cursor. Cutover only.
+//
+// The batch is for staging. A step that commits or closes it fails its
+// chunk with a StepError wrapping storage.ErrBatchDone, and what it
+// committed is durable without the shard's cursor: a step defect. Writes
+// staged through it, including through its origin (the Source handle), are
+// outside the unvisited-write rule and the one-write-per-key rule: an
+// importer writes only the handles it binds. A keyspace write in a
+// Serialized range needs an Expect (storage.ErrBlindWrite): a chunk's batch
+// is not a migration step's exclusive batch, a seam an importer over a
+// Serialized family will need.
 func (w *StepWriter) Batch() *storage.Batch { return w.sink().Batch() }
 
 // sink is the writer's chunk. A StepWriter only a runner can build has one;
@@ -240,6 +257,10 @@ var (
 	// has visited yet, by a migration that does not declare RewritesInPlace
 	// (§5S.3.6 "Own writes are never revisited").
 	ErrUnvisitedWrite = errors.New("datamigrate: write into the unvisited part of the source")
+	// ErrKeyWrittenTwice: a chunk wrote one key twice (two of its items, or
+	// one item twice). A precondition is checked against the committed
+	// state only, so the second write would silently replace the first.
+	ErrKeyWrittenTwice = errors.New("datamigrate: a chunk wrote one key twice")
 	// ErrInvalidMigration: a declaration the runner refuses at registration.
 	ErrInvalidMigration = errors.New("datamigrate: invalid data migration")
 	// ErrLevelStepNotWired: a pending migration raises its owner's level
