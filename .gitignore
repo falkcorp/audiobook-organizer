@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.5
+# version: 1.0.6
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-10-21
+# last-edited: 2026-11-10
 
 # Local overrides
 Makefile.local
@@ -378,3 +378,11 @@ testdata/abs-oracle/library/
 
 # `make ci-remote` per-commit logs, plan and merged coverage (scripts/ci_remote.py).
 /.ci-remote/
+
+# R2 fixture corpus (F2-12): the R0 binary's store, WAL, index, logs and fixture key are testdata.
+!/internal/books/testdata/r2corpus/**
+/internal/books/testdata/r2corpus/**/.bootstrap-token
+/internal/books/testdata/r2corpus/**/*.api-token
+/internal/books/testdata/r2corpus/**/.claude/
+# The startup read-only key file holds a raw abk_ key; the writer deletes it like .bootstrap-token.
+/internal/books/testdata/r2corpus/**/.readonly-key
