@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.9
+// version: 2.64.10
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -249,7 +249,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// pipelineManager and aiScanStore are all wired before setupRoutes
 	// (wireServerFromContainer) and aiScanStore is only re-nilled during
 	// shutdown, so snapshotting them here is safe. s.scheduler is the exception:
-	// it is assigned in Start() AFTER this runs, so it is passed as a lazy
+	// it is assigned in afterListen AFTER this runs (atomically), so it is passed as a lazy
 	// provider closure (below) instead of a snapshot.
 	var opsOpReg operations.OperationsRegistry
 	if s.opRegistry != nil {
@@ -274,10 +274,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// closure so a nil *scheduler.TaskScheduler is not boxed into a non-nil
 		// interface (which would defeat the handler's nil check).
 		func() operations.Scheduler {
-			if s.scheduler == nil {
-				return nil
+			if ts := s.scheduler.Load(); ts != nil {
+				return ts
 			}
-			return s.scheduler
+			return nil
 		},
 		opsPipeline,
 		opsScanStore,
@@ -317,10 +317,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	schedulerH := handlers.NewSchedulerHandler(
 		s.storeForWiring(),
 		func() handlers.Scheduler {
-			if s.scheduler == nil {
-				return nil
+			if ts := s.scheduler.Load(); ts != nil {
+				return ts
 			}
-			return s.scheduler
+			return nil
 		},
 	)
 

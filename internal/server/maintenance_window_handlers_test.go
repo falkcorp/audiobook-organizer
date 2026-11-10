@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_window_handlers_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d5e6f7a8-b9c0-1234-efab-456789012345
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -39,13 +39,13 @@ func setupMaintenanceTestServer(t *testing.T) *Server {
 	})
 
 	srv := newTestServer(t, store)
-	srv.scheduler = scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
+	srv.scheduler.Store(scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
 		Store:               func() scheduler.SchedulerStore { return srv.storeForWiring() },
 		OpRegistry:          srv.opRegistry,
 		HasMetadataFetchSvc: func() bool { return false },
 		HasActivitySvc:      func() bool { return false },
 		HasBatchPoller:      func() bool { return false },
-	})
+	}))
 	return srv
 }
 
