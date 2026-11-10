@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.0.3
+# version: 1.1.0
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -102,14 +102,29 @@ SEARCH_QUERIES = (
 ABS_USER = "dick.grayson"
 
 # What a replay cannot reproduce (manifest.json "volatile_fields"). Found by
-# recording the same corpus twice, 70 s apart, and diffing the answers, plus the
-# fields R0 computes from the clock at day granularity (a 70 s diff cannot show
-# them). "normalize" writes "<volatile>" in place of the value; "drop" removes
-# the matched list element (the recorder's own artefacts). Paths: dotted keys,
-# [*] every element, [?field==JSON] the elements whose field equals JSON.
+# recording the same corpus twice and diffing the answers, plus the fields R0
+# computes from the clock at day granularity (a short diff cannot show them).
+#
+# A rule names an answer, a request ("METHOD /path", "*" = one path or query
+# segment) and a path into the exchange's response body. Paths: dotted keys,
+# [*] every element, [?field==JSON] the elements whose field equals JSON,
+# [?field^=JSON] the elements whose string field starts with JSON. Actions:
+# "normalize" writes "<volatile>" in place of the value; "drop" removes the
+# matched list element (the recorder's own artefacts); "mask" (with target
+# "request.path") writes "<volatile>" over each "*" segment of the recorded
+# request path. Every rule must match at least once, or the recording fails:
+# a rule that matches nothing is stale and proves nothing.
+#
 # Stored timestamps (created_at, a key's expires_at, the pause marker's since,
-# ABS item times) come from the store and are NOT volatile: a replay on a copy
-# of the store reads the same values.
+# ABS item times, root_dir books' updated_at) come from the store and are NOT
+# volatile: a replay on a copy of the store reads the same values.
+IMPORT_PREFIX = str(w.Layout(pathlib.Path(w.DEFAULT_WORKDIR)).import_dir) + "/"
+_IMPORT_ROWS = f"data.items[?file_path^={json.dumps(IMPORT_PREFIX)}]"
+_BOOT_RESCAN = (
+    "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the "
+    "import root (a scan without force_update leaves root_dir out), stamping the import "
+    "root's books with the boot's clock"
+)
 VOLATILE_FIELDS: tuple[dict[str, str], ...] = (
     {"answer": "schedules", "request": "GET /api/v1/tasks",
      "path": "data[?run_on_startup==true].last_run", "action": "normalize",
@@ -118,19 +133,12 @@ VOLATILE_FIELDS: tuple[dict[str, str], ...] = (
      "path": "data.next_run_estimate", "action": "normalize",
      "why": "the next window start computed from the current date"},
     {"answer": "search", "request": "GET /api/v1/audiobooks?*",
-     "path": "data.items[*].updated_at", "action": "normalize",
-     "why": "the corpus' queued library scan runs at every boot (runs.standdown) and "
-            "rescans the import root, stamping the books it touches with the boot's clock"},
+     "path": f"{_IMPORT_ROWS}.updated_at", "action": "normalize", "why": _BOOT_RESCAN},
     {"answer": "search", "request": "GET /api/v1/audiobooks?*",
-     "path": "data.items[*].last_scan_mtime", "action": "normalize",
-     "why": "the boot-time rescan stores each file's mtime, which a checkout sets"},
+     "path": f"{_IMPORT_ROWS}.last_scan_mtime", "action": "normalize",
+     "why": "the boot-time rescan stores each import-root file's mtime, which a checkout sets"},
     {"answer": "library", "request": "GET /api/v1/audiobooks?*",
-     "path": "data.items[*].updated_at", "action": "normalize",
-     "why": "the corpus' queued library scan runs at every boot (runs.standdown) and "
-            "rescans the import root, stamping the books it touches with the boot's clock"},
-    {"answer": "library", "request": "GET /api/v1/audiobooks?*",
-     "path": "data.items[*].last_scan_mtime", "action": "normalize",
-     "why": "the boot-time rescan stores each file's mtime, which a checkout sets"},
+     "path": f"{_IMPORT_ROWS}.updated_at", "action": "normalize", "why": _BOOT_RESCAN},
     {"answer": "identity", "request": "GET /api/v1/auth/api-keys?all=true",
      "path": "data.api_keys[?name==\"r2-answers\"]", "action": "drop",
      "why": "the recorder's own key, minted on the copy by the bootstrap exchange"},
@@ -170,15 +178,29 @@ VOLATILE_FIELDS: tuple[dict[str, str], ...] = (
     {"answer": "abs", "request": "POST /api/items/*/play",
      "path": "updatedAt", "action": "normalize",
      "why": "the time the recorder opened the playback session"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "date", "action": "normalize",
+     "why": "the session's start date (abs/play.go: s.StartedAt at request time)"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "dayOfWeek", "action": "normalize",
+     "why": "the session's start weekday (abs/play.go: s.StartedAt at request time)"},
+    {"answer": "abs", "request": "POST /api/session/*/sync",
+     "target": "request.path", "path": "", "action": "mask",
+     "why": "the playback session ID the recorder's /play just minted"},
+    {"answer": "abs", "request": "POST /api/session/*/close",
+     "target": "request.path", "path": "", "action": "mask",
+     "why": "the playback session ID the recorder's /play just minted"},
 )  # fmt: skip
 
-# A drop rule must match: if the recorder's artefact is not found, the rule (or
-# the recorder) is stale and the answer would hold the artefact undetected.
-_PATH_TOKEN = re.compile(r"\.?([A-Za-z0-9_]+)|\[\*\]|\[\?([A-Za-z0-9_]+)==(.+?)\]")
+_PATH_TOKEN = re.compile(r"\.?([A-Za-z0-9_]+)|\[\*\]|\[\?([A-Za-z0-9_]+)(==|\^=)(.+?)\]")
 
 
 def parse_path(path: str) -> list[tuple[str, Any]]:
-    """Tokens of a volatile-field path: ("key", k), ("all", None), ("where", (k, v))."""
+    """Tokens of a volatile-field path.
+
+    ("key", k), ("all", None), ("where", (k, v)) for [?k==v], and
+    ("prefix", (k, v)) for [?k^=v] (v must be a JSON string).
+    """
     out: list[tuple[str, Any]] = []
     pos = 0
     while pos < len(path):
@@ -188,7 +210,13 @@ def parse_path(path: str) -> list[tuple[str, Any]]:
         if m.group(1):
             out.append(("key", m.group(1)))
         elif m.group(2):
-            out.append(("where", (m.group(2), json.loads(m.group(3)))))
+            value = json.loads(m.group(4))
+            if m.group(3) == "^=":
+                if not isinstance(value, str):
+                    raise ValueError(f"[?{m.group(2)}^=...] needs a JSON string in {path!r}")
+                out.append(("prefix", (m.group(2), value)))
+            else:
+                out.append(("where", (m.group(2), value)))
         else:
             out.append(("all", None))
         pos = m.end()
@@ -215,6 +243,13 @@ def apply_rule(body: Any, tokens: list[tuple[str, Any]], action: str) -> int:
         return 0
     if kind == "all":
         idx = list(range(len(body)))
+    elif kind == "prefix":
+        field, want = arg
+        idx = [
+            i
+            for i, e in enumerate(body)
+            if isinstance(e, dict) and isinstance(e.get(field), str) and e[field].startswith(want)
+        ]
     else:
         field, want = arg
         idx = [i for i, e in enumerate(body) if isinstance(e, dict) and e.get(field) == want]
@@ -229,23 +264,54 @@ def apply_rule(body: Any, tokens: list[tuple[str, Any]], action: str) -> int:
     return hits
 
 
-def _request_matches(pattern: str, method: str, path: str) -> bool:
+def _request_regex(pattern: str) -> tuple[str, re.Pattern[str]]:
     want_method, want_path = pattern.split(" ", 1)
-    regex = "^" + re.escape(want_path).replace(r"\*", "[^/?]+") + "$"
-    return method == want_method and re.match(regex, path) is not None
+    regex = "^" + re.escape(want_path).replace(r"\*", "([^/?]+)") + "$"
+    return want_method, re.compile(regex)
 
 
-def normalize_answers(files: dict[str, dict[str, Any]]) -> None:
-    """Apply VOLATILE_FIELDS to the recorded responses; a drop rule must hit."""
-    for rule in VOLATILE_FIELDS:
-        tokens = parse_path(rule["path"])
+def _request_matches(pattern: str, method: str, path: str) -> bool:
+    want_method, regex = _request_regex(pattern)
+    return method == want_method and regex.match(path) is not None
+
+
+def mask_path(pattern: str, path: str) -> str:
+    """The request path with each segment the pattern's "*" matched as <volatile>."""
+    _, regex = _request_regex(pattern)
+    m = regex.match(path)
+    if not m:
+        return path
+    out, last = [], 0
+    for i in range(1, (m.lastindex or 0) + 1):
+        out += [path[last : m.start(i)], VOLATILE]
+        last = m.end(i)
+    return "".join(out) + path[last:]
+
+
+def normalize_answers(
+    files: dict[str, dict[str, Any]], rules: tuple[dict[str, str], ...] = VOLATILE_FIELDS
+) -> None:
+    """Apply the volatile-field rules to the recorded exchanges; every rule must hit.
+
+    Response rules run first and request-path masks last, so every response
+    rule matches against the path as it was sent.
+    """
+    ordered = sorted(rules, key=lambda r: r.get("target") == "request.path")
+    for rule in ordered:
         hits = 0
         for ex in files[rule["answer"]]["exchanges"]:
             req = ex["request"]
-            if _request_matches(rule["request"], req["method"], req["path"]):
-                hits += apply_rule(ex["response"]["body"], tokens, rule["action"])
-        if rule["action"] == "drop" and hits == 0:
-            raise w.CorpusError(f"volatile-field drop rule matched nothing: {rule}")
+            if not _request_matches(rule["request"], req["method"], req["path"]):
+                continue
+            if rule.get("target") == "request.path":
+                if rule["action"] != "mask":
+                    raise w.CorpusError(f"a request.path rule must mask: {rule}")
+                req["path"] = mask_path(rule["request"], req["path"])
+                hits += 1
+            else:
+                hits += apply_rule(ex["response"]["body"], parse_path(rule["path"]), rule["action"])
+        if hits == 0:
+            raise w.CorpusError(f"volatile-field rule matched nothing (stale rule): {rule}")
 
 
 def placeholder(name: str) -> str:
@@ -460,24 +526,18 @@ def wait_for_boot_runs(client: Any, auth: str, timeout: float = 300.0) -> list[d
 def pick_abs_item(results: list[dict[str, Any]], progressed: set[str]) -> str | None:
     """The item the per-item requests read: one the user has progress on.
 
-    The corpus holds two multi-file items titled Knightfall (the import root's
-    and root_dir's copy); the writer stored progress and a bookmark on one of
-    them. Preferring an item in the user's mediaProgress makes the progress and
-    bookmark requests read stored rows instead of answering 404.
+    The ABS items list serves root_dir only (one Knightfall, the organized
+    copy) and reports ``media.numAudioFiles`` as 0 for every item, so the old
+    "first multi-file item" choice never matched and fell back to the first
+    item (The Long Halloween), on which the user has no progress: the progress
+    request answered 404. The writer stored progress and a bookmark on
+    Knightfall, which is in the user's mediaProgress, so that is the pick. With
+    no progressed item in the list, the first item is used.
     """
-    for want in (
-        lambda res: (
-            str(res.get("id")) in progressed
-            and (res.get("media") or {}).get("numAudioFiles", 0) > 1
-        ),
-        lambda res: str(res.get("id")) in progressed,
-        lambda res: (res.get("media") or {}).get("numAudioFiles", 0) > 1,
-        lambda res: True,
-    ):
-        for res in results:
-            if want(res):
-                return str(res["id"])
-    return None
+    for res in results:
+        if str(res.get("id")) in progressed:
+            return str(res["id"])
+    return str(results[0]["id"]) if results else None
 
 
 def mint_answer_key(ctx: Any) -> None:
@@ -515,6 +575,27 @@ def touch_like_a_checkout(root: pathlib.Path) -> None:
             os.utime(p, (now, now))
 
 
+def check_answers_still_valid(manifest: dict[str, Any], now: Any = None) -> None:
+    """Refuse to record once an answer-visible row of the corpus has lapsed.
+
+    Past ``lapses.answers_valid_until`` the store's API keys (or its open
+    invite, or its ABS sessions) have expired, so R0 would answer differently
+    from the day the corpus was written: regenerate the corpus instead.
+    """
+    until = (manifest.get("lapses") or {}).get("answers_valid_until")
+    if not until:
+        raise w.CorpusError(
+            "manifest.json has no lapses.answers_valid_until: regenerate the corpus"
+        )
+    now = now or w._dt.datetime.now(w._dt.timezone.utc)
+    limit = w._dt.datetime.strptime(until, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=w._dt.timezone.utc)
+    if now >= limit:
+        raise w.CorpusError(
+            f"the corpus' rows lapsed at {until} (manifest lapses): regenerate the corpus "
+            "with write_r0_corpus.py --regenerate before recording answers"
+        )
+
+
 def scan_answers(answers_dir: pathlib.Path) -> list[str]:
     bad = []
     for p in sorted(answers_dir.glob("*.json")):
@@ -527,6 +608,7 @@ def record(args: argparse.Namespace) -> int:
     corpus_store = pathlib.Path(args.corpus).resolve()
     manifest_path = corpus_store.parent / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    check_answers_still_valid(manifest)
     tag = args.tag or w.read_r0_tag()
     if manifest["r0_tag"] != tag:
         raise w.CorpusError(f"manifest r0_tag {manifest['r0_tag']} != {tag}")

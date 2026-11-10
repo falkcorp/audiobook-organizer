@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.0.3
+# version: 1.1.0
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -125,6 +125,15 @@ STEPS = ("M2", "M3", "M4", "M5", "M6", "books")
 # lapses (``lapses``): a replay after that date sees expired keys.
 KEY_TTL_DAYS = 365
 INVITE_TTL_HOURS = 10 * 365 * 24
+# An ABS login session's idle TTL (ABS_REFRESH_TOKEN_TTL, absauth/config.go
+# DefaultRefreshTTL is 60 days, no maximum). /api/me/sessions hides a session
+# past its expires_at (abs/me.go), so the default would empty that answer 60
+# days after a regeneration. Ten years, set in the env layer.
+ABS_SESSION_TTL_HOURS = 10 * 365 * 24
+# A web session's remember-me TTL is a constant in R0 (handlers/auth.go
+# rememberMeSessionTTL, 7 days) that no flag, env or setting changes. No answer
+# reads web sessions; manifest.json records the date anyway.
+WEB_SESSION_TTL_DAYS = 7
 
 # The maintenance window the corpus configures (tasks.schedules) and the env
 # layer's MAINTENANCE_WINDOW_START, in UTC (TZ=UTC). Window tasks would run
@@ -301,6 +310,9 @@ def boot_env(layout: Layout, port: int) -> dict[str, str]:
         "ABS_API_ENABLED": "true",
         "ABS_AUTH_MODES": "jwt",
         "ABS_JWT_SECRET": "fixture-abs-jwt-secret-for-the-r2-corpus-only-0001",
+        # The ABS session idle TTL: long enough that the corpus' ABS sessions
+        # outlive every other answer-visible expiry (ABS_SESSION_TTL_HOURS).
+        "ABS_REFRESH_TOKEN_TTL": f"{ABS_SESSION_TTL_HOURS}h",
     }
 
 
@@ -905,6 +917,49 @@ def _quiesce_scan_under_standdown(ctx: Ctx) -> None:
     if st != "queued":
         raise CorpusError(f"the scan enqueued during the grace is {st!r}, not queued")
     ctx.ids.update(op_quiesced=scan, op_standdown_holder=holder, op_queued=queued)
+    ctx.ids["standdown_grace_started"] = time.monotonic()
+
+
+# The rows the stand-down case leaves, and the status each must still have in
+# the store after the clean stop.
+STANDDOWN_ROWS = (("op_quiesced", "interrupted_quiesced"), ("op_queued", "queued"))
+# Seconds of the grace the writer must still have left when it stops R0.
+GRACE_MARGIN_SECONDS = 60
+
+
+def check_grace_left(ids: dict[str, Any], now: float | None = None) -> None:
+    """Refuse to stop R0 if the stand-down's re-queue grace may have run out.
+
+    When the grace ends, R0 re-queues the quiesced scan and dispatches both
+    scans, so neither row would be left as the case wrote it.
+    """
+    started = ids.get("standdown_grace_started")
+    if started is None:
+        return
+    elapsed = (time.monotonic() if now is None else now) - started
+    if elapsed > STANDDOWN_GRACE_SECONDS - GRACE_MARGIN_SECONDS:
+        raise CorpusError(
+            f"{elapsed:.0f} s since the stand-down grace started (grace "
+            f"{STANDDOWN_GRACE_SECONDS} s): the quiesced and queued scans may have run"
+        )
+
+
+def check_standdown_rows(db: pathlib.Path, ids: dict[str, Any]) -> list[str]:
+    """After the stop: the stand-down case's rows survived in the store as written.
+
+    Reads the run records (``{"ID": ..., "Status": ...}``) from the Pebble files
+    themselves (pebble_bytes.latest_record), not through R0: booting R0 to look
+    would dispatch the very rows being checked.
+    """
+    found = []
+    for key, want in STANDDOWN_ROWS:
+        op_id = ids[key]
+        rec = pebble_bytes.latest_record(db, b'{"ID":"' + str(op_id).encode() + b'"')
+        got = rec.get("Status") if isinstance(rec, dict) else None
+        if got != want:
+            raise CorpusError(f"after the stop, run {op_id} ({key}) is {got!r}, not {want!r}")
+        found.append(f"{key}={got}")
+    return found
 
 
 def hook_bootstrap(ctx: Ctx) -> None:
@@ -1742,6 +1797,31 @@ def store_files(store: pathlib.Path) -> list[dict[str, Any]]:
     return out
 
 
+def lapses(now: _dt.datetime) -> dict[str, str]:
+    """When the corpus' expiring rows lapse, and the date the answers stop holding.
+
+    ``answers_valid_until`` is the earliest lapse an answer can see (API key
+    status, the open invite, ABS sessions); the recorder refuses to record past
+    it. Web sessions lapse sooner, but no answer reads them.
+    """
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    visible = {
+        "api_keys": now + _dt.timedelta(days=KEY_TTL_DAYS),
+        "invites": now + _dt.timedelta(hours=INVITE_TTL_HOURS),
+        "abs_sessions": now + _dt.timedelta(hours=ABS_SESSION_TTL_HOURS),
+    }
+    out = {k: v.strftime(fmt) for k, v in visible.items()}
+    out["web_sessions"] = (now + _dt.timedelta(days=WEB_SESSION_TTL_DAYS)).strftime(fmt)
+    out["answers_valid_until"] = min(visible.values()).strftime(fmt)
+    out["why"] = (
+        f"R0 caps an API key at {KEY_TTL_DAYS} days; keys, invites and ABS sessions get "
+        "the longest life R0 allows, and a replay after answers_valid_until sees expired "
+        f"rows. Web sessions keep R0's fixed {WEB_SESSION_TTL_DAYS}-day remember-me TTL; "
+        "no answer reads them"
+    )
+    return out
+
+
 def build_manifest(
     tag: str,
     binary_sha: str,
@@ -1758,12 +1838,7 @@ def build_manifest(
         "r0_tag": tag,
         "r0_binary_sha256": binary_sha,
         "written_at": now.strftime(fmt),
-        "lapses": {
-            "api_keys": (now + _dt.timedelta(days=KEY_TTL_DAYS)).strftime(fmt),
-            "invites": (now + _dt.timedelta(hours=INVITE_TTL_HOURS)).strftime(fmt),
-            "why": f"R0 caps an API key at {KEY_TTL_DAYS} days; every fixture key and invite "
-            "gets the longest life R0 allows, and a replay after a lapse sees expired rows",
-        },
+        "lapses": lapses(now),
         "credentials": "every credential in this corpus is a generated fixture value "
         "(invariant 2); API keys in answer files are <api-key:NAME> placeholders",
         "boot": boot,
@@ -1832,7 +1907,9 @@ def write_corpus(args: argparse.Namespace) -> int:
         with contextlib.suppress(Exception):
             proc.stop()
         raise
+    check_grace_left(ctx.ids)
     proc.stop()
+    print(f"stand-down rows after the stop: {check_standdown_rows(layout.db, ctx.ids)}")
     removed = scrub_one_boot_credentials(layout)
     print(f"removed one-boot credentials: {removed}")
     findings = scan_for_leaks(layout.store)

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_answers.py
-# version: 1.0.3
+# version: 1.1.0
 # guid: 0317d881-99be-4394-8279-b5df7ce3cfa7
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/record_r0_answers.py and its committed answers (F2-12).
@@ -175,28 +175,100 @@ class VolatileFieldsTest(unittest.TestCase):
             )
         )
 
-    def test_a_drop_rule_that_matches_nothing_fails(self):
+    def test_a_rule_that_matches_nothing_fails(self):
         files = {name: {"exchanges": []} for name, _ in r.ANSWERS}
         with self.assertRaises(r.w.CorpusError):
             r.normalize_answers(files)
+        # A normalize rule fails as a drop rule does.
+        ex = {"request": {"method": "GET", "path": "/x"}, "response": {"body": {"a": 1}}}
+        files = {"search": {"exchanges": [ex]}}
+        rule = {
+            "answer": "search",
+            "request": "GET /x",
+            "path": "b",
+            "action": "normalize",
+            "why": "t",
+        }
+        with self.assertRaises(r.w.CorpusError):
+            r.normalize_answers(files, (rule,))
+        r.normalize_answers(files, ({**rule, "path": "a"},))
+        self.assertEqual(ex["response"]["body"], {"a": r.VOLATILE})
+
+    def test_prefix_predicate_narrows_to_import_rows(self):
+        body = {"data": {"items": [
+            {"file_path": r.IMPORT_PREFIX + "Selina Kyle/Hush/Hush.flac", "updated_at": "t1"},
+            {"file_path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush/Hush.flac", "updated_at": "t0"},
+            {"updated_at": "t2"},
+        ]}}  # fmt: skip
+        tokens = r.parse_path(f"data.items[?file_path^={json.dumps(r.IMPORT_PREFIX)}].updated_at")
+        self.assertEqual(tokens[2][0], "prefix")
+        self.assertEqual(r.apply_rule(body, tokens, "normalize"), 1)
+        self.assertEqual([i["updated_at"] for i in body["data"]["items"]], [r.VOLATILE, "t0", "t2"])
+        with self.assertRaises(ValueError):
+            r.parse_path("data[?file_path^=3]")
+
+    def test_session_ids_are_masked_in_request_paths(self):
+        self.assertEqual(
+            r.mask_path("POST /api/session/*/sync", "/api/session/3216421d-333e/sync"),
+            "/api/session/<volatile>/sync",
+        )
+        ex = {"request": {"method": "POST", "path": "/api/session/s-1/close"},
+              "response": {"body": {"__non_json_body__": "OK"}}}  # fmt: skip
+        rules = (
+            {"answer": "abs", "request": "POST /api/session/*/close", "target": "request.path",
+             "path": "", "action": "mask", "why": "t"},
+            {"answer": "abs", "request": "POST /api/session/*/close", "path": "__non_json_body__",
+             "action": "normalize", "why": "t"},
+        )  # fmt: skip
+        # The mask is listed first but applied last, so the response rule still
+        # matches the path as it was sent.
+        r.normalize_answers({"abs": {"exchanges": [ex]}}, rules)
+        self.assertEqual(ex["request"]["path"], "/api/session/<volatile>/close")
+        self.assertEqual(ex["response"]["body"]["__non_json_body__"], r.VOLATILE)
 
     def test_every_rule_parses_and_names_a_recorded_answer(self):
         names = {name for name, _ in r.ANSWERS}
         for rule in r.VOLATILE_FIELDS:
             self.assertIn(rule["answer"], names, rule)
-            self.assertIn(rule["action"], ("normalize", "drop"), rule)
             self.assertTrue(rule["why"], rule)
+            if rule.get("target") == "request.path":
+                # A path mask: each * in the request pattern is the masked part.
+                self.assertEqual(rule["action"], "mask", rule)
+                self.assertEqual(rule["path"], "", rule)
+                self.assertIn("*", rule["request"], rule)
+                continue
+            self.assertNotIn("target", rule, rule)
+            self.assertIn(rule["action"], ("normalize", "drop"), rule)
             r.parse_path(rule["path"])
 
 
 class PickAbsItemTest(unittest.TestCase):
     def test_prefers_the_item_with_progress(self):
-        two = {"media": {"numAudioFiles": 3}}
-        results = [{"id": "a", **two}, {"id": "b", **two}, {"id": "c", "media": {}}]
+        # The list view reports numAudioFiles 0 for every item, as R0 does.
+        zero = {"media": {"numAudioFiles": 0}}
+        results = [{"id": "a", **zero}, {"id": "b", **zero}, {"id": "c", **zero}]
         self.assertEqual(r.pick_abs_item(results, {"b"}), "b")
-        self.assertEqual(r.pick_abs_item(results, {"c"}), "c")
+        self.assertEqual(r.pick_abs_item(results, {"zz", "c"}), "c")
         self.assertEqual(r.pick_abs_item(results, set()), "a")
         self.assertIsNone(r.pick_abs_item([], {"a"}))
+
+
+class LapseGuardTest(unittest.TestCase):
+    def test_refuses_past_the_earliest_answer_lapse(self):
+        utc = r.w._dt.timezone.utc
+        m = {"lapses": {"answers_valid_until": "2027-11-10T11:04:19Z"}}
+        r.check_answers_still_valid(m, r.w._dt.datetime(2027, 11, 10, 11, 4, 18, tzinfo=utc))
+        with self.assertRaises(r.w.CorpusError):
+            r.check_answers_still_valid(m, r.w._dt.datetime(2027, 11, 10, 11, 4, 19, tzinfo=utc))
+        with self.assertRaises(r.w.CorpusError):
+            r.check_answers_still_valid({"lapses": {}})
+
+    def test_committed_manifest_names_the_lapses(self):
+        lapses = json.loads(MANIFEST.read_text(encoding="utf-8"))["lapses"]
+        for key in ("api_keys", "invites", "abs_sessions", "web_sessions", "answers_valid_until"):
+            self.assertIn(key, lapses)
+        visible = min(lapses["api_keys"], lapses["invites"], lapses["abs_sessions"])
+        self.assertEqual(lapses["answers_valid_until"], visible)
 
 
 class CommittedNormalizationTest(unittest.TestCase):
@@ -223,6 +295,23 @@ class CommittedNormalizationTest(unittest.TestCase):
         paths = [e["request"]["path"] for e in ex]
         self.assertTrue(paths[-3].endswith("/play"), paths[-3:])
         self.assertTrue(paths[-1].endswith("/close"), paths[-3:])
+
+    def test_no_playback_session_id_or_start_date_survives(self):
+        for e in self._answer("abs")["exchanges"]:
+            p = e["request"]["path"]
+            if p.startswith("/api/session/"):
+                self.assertIn("/<volatile>/", p)
+            if p.endswith("/play"):
+                for k in ("id", "date", "dayOfWeek", "startedAt", "updatedAt"):
+                    self.assertEqual(e["response"]["body"][k], r.VOLATILE, k)
+
+    def test_root_dir_books_keep_their_stored_updated_at(self):
+        lib = self._answer("library")["exchanges"][0]["response"]["body"]["data"]["items"]
+        for b in lib:
+            if b["file_path"].startswith(r.IMPORT_PREFIX):
+                self.assertEqual(b["updated_at"], r.VOLATILE, b["file_path"])
+            else:
+                self.assertNotEqual(b["updated_at"], r.VOLATILE, b["file_path"])
 
     def test_abs_per_item_requests_read_stored_progress(self):
         for e in self._answer("abs")["exchanges"]:
