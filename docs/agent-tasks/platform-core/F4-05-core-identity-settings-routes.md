@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F4-05-core-identity-settings-routes.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: cbdb5377-2585-4a6d-bc8d-b935127d7e1e -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F4-05 — Core identity and settings routes, dark: `internal/authhttp` (with the OIDC start and callback and the app hand-off), `internal/uihttp`, `internal/modulehttp`, `internal/storagehttp` (factory reset), the native settings, role and audit routes
 
@@ -180,6 +180,11 @@ skill and `scripts/`, books' real `AppHandoff` and `TestOIDC_AppHandoffMintsABSC
 ## Rollback
 
 Revert the PR; ABO mounts none of it.
+
+## Coordinator additions (2026-11-10)
+
+- **Empty Subject (F3-01 review NEW-5).** Apply must refuse an empty Subject. Today a Commit with `By == ""` and an empty context actor is accepted and writes an audit record with no actor. Refusing is the recommended fix; the alternative is to soften 05-config's "c.By is set on every commit".
+- **Wrong-layer quarantined rows (F3-01 follow-up review NIT-2).** Wrong-layer quarantined `c/config` rows (boot keys, secret keys) are never cleared by Apply or Unset. Give them an explicit delete path, and fix the 05-config §1.4 step 6 wording that says Apply makes "the quarantine clear or Apply refuse" by adding the wrong-layer exception.
 
 ## Repo rules
 

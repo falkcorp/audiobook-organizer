@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F2-03-executor-parity-suites.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: f8fddedf-5163-4b6b-a6b2-d8e1133ec889 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F2-03 — `core/internal/executor` written fresh, the resume/cancel/shutdown parity suites, and the executor cell of `TestABOMetricsGatherNoDuplicate`
 
@@ -213,6 +213,10 @@ HEAD's engine (F5-18).
 
 If `core/internal/executor` exists with a `WriteRuns` implementation, run the acceptance instead. Rollback = revert
 the PR; nothing in ABO or the kernel imports the executor yet.
+
+## Coordinator additions (2026-11-10)
+
+- Add a descendant-lock counter: `lockFor` refuses with `ErrLockAlreadyHeld` while a nested child item holds a run-table lock. This comes from the #4554 verify. Cover it with a test in which a child item holds its lock and the parent's `lockFor` is refused.
 
 ## Repo rules
 
