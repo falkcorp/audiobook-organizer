@@ -1,13 +1,18 @@
 {
   "_header": {
     "file": "internal/books/testdata/r2corpus/manifest.json",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "guid": "d808d644-1404-4e9f-b549-f20bbbb939bd",
     "last-edited": "2026-11-10"
   },
   "r0_tag": "v0.223.0",
   "r0_binary_sha256": "6f33d9dd7e41c2e43c3aa80342ed2c5b940df749ae6fdd6773bce9053837dc6f",
-  "written_at": "2026-11-10T10:07:51Z",
+  "written_at": "2026-11-10T11:04:19Z",
+  "lapses": {
+    "api_keys": "2027-11-10T11:04:19Z",
+    "invites": "2036-11-07T11:04:19Z",
+    "why": "R0 caps an API key at 365 days; every fixture key and invite gets the longest life R0 allows, and a replay after a lapse sees expired rows"
+  },
   "credentials": "every credential in this corpus is a generated fixture value (invariant 2); API keys in answer files are <api-key:NAME> placeholders",
   "boot": {
     "workdir": "/tmp/r2corpus",
@@ -71,7 +76,7 @@
       "case": "users.invited",
       "family": "user, invite, session",
       "step": "M3",
-      "how": "invites for every seeded role, accepted (each sets a session)",
+      "how": "invites for every seeded role (admin, editor, viewer, fp-worker), accepted (each sets a session)",
       "store": "internal/books/testdata/r2corpus/stage1"
     },
     {
@@ -148,7 +153,7 @@
       "case": "runs.succeeded",
       "family": "opv2:run (succeeded), op history",
       "step": "M4",
-      "how": "a library scan run that succeeds (takes the scan stand-down while it runs)",
+      "how": "a library scan run that succeeds",
       "store": "internal/books/testdata/r2corpus/stage1"
     },
     {
@@ -162,7 +167,7 @@
       "case": "runs.canceled",
       "family": "opv2:run (canceled)",
       "step": "M4",
-      "how": "a run started and canceled through DELETE /operations/v2/:id",
+      "how": "a slow library scan canceled while running through DELETE /operations/v2/:id (retried until the run ends canceled, not completed)",
       "store": "internal/books/testdata/r2corpus/stage1"
     },
     {
@@ -201,6 +206,13 @@
       "store": "internal/books/testdata/r2corpus/stage1"
     },
     {
+      "case": "runs.standdown",
+      "family": "setting:registry.scan_standdown, opv2:run (interrupted_quiesced), opv2:run (queued)",
+      "step": "M4",
+      "how": "a running library scan stood down by maintenance.metadata-refresh (R0's scans never take the stand-down; maintenance ops do), then a second scan held queued by the stand-down's re-queue grace; the stop leaves both rows as they are",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
       "case": "runs.paused",
       "family": "operations pause marker",
       "step": "M4",
@@ -225,9 +237,9 @@
       "why": "AI jobs are created only through the OpenAI Batch API (no fake endpoint in R0)"
     },
     {
-      "family": "opv2:run (running, stopping, queued)",
+      "family": "opv2:run (running, stopping)",
       "step": "M4",
-      "why": "a clean stop drains or interrupts open runs; F2-13 writes these states"
+      "why": "a clean stop cannot leave a run running or stopping: Registry.Shutdown (internal/operations/registry/registry.go at the R0 tag) cancels every running op with ErrShutdown and marks what has not drained interrupted per its ResumePolicy; F2-13 writes these states"
     }
   ],
   "overlay": [],
@@ -236,13 +248,13 @@
     "internal/books/testdata/r2corpus/stage1": [
       {
         "path": "db/audiobooks.pebble/000014.log",
-        "size": 728056,
-        "sha256": "8edd150f4b3363966ef2e71d0236d3886f365d6b9fc2ffaaeccef09005e6c92c"
+        "size": 806429,
+        "sha256": "3df24a6a286f472e96c4a3219b0e485a294faa9190a158c394f1616cb82a60a6"
       },
       {
         "path": "db/audiobooks.pebble/000016.sst",
-        "size": 507205,
-        "sha256": "5f5f5251bb9eec2721f5e0bedc87fe0c3448b6336285eb5769d23266fbe0330d"
+        "size": 407301,
+        "sha256": "3a997629bcab2eaeda0ffcc95066f6d1cc5e0fd4f9e759c644c5ecc04baf9706"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -252,12 +264,12 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000008",
         "size": 174,
-        "sha256": "7753a61ee0529c64764184a37a35b9778992d37d9e0ca71695819663672b0c63"
+        "sha256": "8846f7371ee69fc1c02434509f1ab980e26937ee0933ac1141c71960eabe81bb"
       },
       {
         "path": "db/audiobooks.pebble/MANIFEST-000013",
         "size": 426,
-        "sha256": "e5f9ea30fc13cd7847ddede446b1616832e7013f8c5d5746b1e9d964e65eb13f"
+        "sha256": "9ac860d1c4b87fb4e640d6b5b5c4941163348f9307ea6ac6b8d5585d7b8fd2de"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000015",
@@ -290,14 +302,14 @@
         "sha256": "6e47169208d1b28483a0654246537f68ad90852725e92cad5852561b9ab086b8"
       },
       {
-        "path": "db/library.bleve/store/000000000093.zap",
-        "size": 46789,
-        "sha256": "ea386793141a2eea65cedcc14b9339a944a0b537d82b530179c71aeec2f768ce"
+        "path": "db/library.bleve/store/00000000006c.zap",
+        "size": 46689,
+        "sha256": "895d096ce446a5e35c162e4c90476ccd607eb9e74e2a82a18a1a4c6370547417"
       },
       {
         "path": "db/library.bleve/store/root.bolt",
-        "size": 262144,
-        "sha256": "1d6ed8e0f072631cc9572d609a441d4f189288bbedeaa390f1f9586bb705fac8"
+        "size": 131072,
+        "sha256": "0cad0eea2615798b1acf720d4fc6b8d43d9c9eed2cf0553e362b93961d20dca1"
       },
       {
         "path": "db/library.bleve.mapping",
@@ -311,8 +323,8 @@
       },
       {
         "path": "db/logs/audiobook-organizer-2026-11-10.log",
-        "size": 222893,
-        "sha256": "756044ee4c6e972028518017f6648d977cae25ce704e94adb29054ef77d548e5"
+        "size": 214628,
+        "sha256": "cb60032ba0162d7c161753bd240e7359d193eccb6fab7d56e415486b51584a9a"
       },
       {
         "path": "import/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
@@ -392,7 +404,7 @@
       {
         "path": "state/.encryption_key",
         "size": 32,
-        "sha256": "c8fe06328424f912b21ea4e36563a8bcc2d852208393305c4f76aa5abd3a9f63"
+        "sha256": "13f479739f5e635dd0e808c0fe2427d48188c7e4a5deb687c82d7387a17a0306"
       }
     ]
   },
@@ -425,7 +437,142 @@
     {
       "name": "library",
       "file": "internal/books/testdata/r2corpus/answers/library.json",
-      "what": "books, playlists and recent runs as R0 lists them"
+      "what": "books, playlists and import roots as R0 lists them. No run listing: booting the copy re-queues and dispatches the corpus' quiesced and queued scans, so runs listed on the copy are boot-time transitions under fresh run IDs"
+    }
+  ],
+  "volatile_fields": [
+    {
+      "answer": "schedules",
+      "request": "GET /api/v1/tasks",
+      "path": "data[?run_on_startup==true].last_run",
+      "action": "normalize",
+      "why": "a run_on_startup task runs at every boot, so its last run is the boot's clock"
+    },
+    {
+      "answer": "schedules",
+      "request": "GET /api/v1/maintenance-window/status",
+      "path": "data.next_run_estimate",
+      "action": "normalize",
+      "why": "the next window start computed from the current date"
+    },
+    {
+      "answer": "search",
+      "request": "GET /api/v1/audiobooks?*",
+      "path": "data.items[*].updated_at",
+      "action": "normalize",
+      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root, stamping the books it touches with the boot's clock"
+    },
+    {
+      "answer": "search",
+      "request": "GET /api/v1/audiobooks?*",
+      "path": "data.items[*].last_scan_mtime",
+      "action": "normalize",
+      "why": "the boot-time rescan stores each file's mtime, which a checkout sets"
+    },
+    {
+      "answer": "library",
+      "request": "GET /api/v1/audiobooks?*",
+      "path": "data.items[*].updated_at",
+      "action": "normalize",
+      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root, stamping the books it touches with the boot's clock"
+    },
+    {
+      "answer": "library",
+      "request": "GET /api/v1/audiobooks?*",
+      "path": "data.items[*].last_scan_mtime",
+      "action": "normalize",
+      "why": "the boot-time rescan stores each file's mtime, which a checkout sets"
+    },
+    {
+      "answer": "identity",
+      "request": "GET /api/v1/auth/api-keys?all=true",
+      "path": "data.api_keys[?name==\"r2-answers\"]",
+      "action": "drop",
+      "why": "the recorder's own key, minted on the copy by the bootstrap exchange"
+    },
+    {
+      "answer": "identity",
+      "request": "GET /api/v1/auth/api-keys?all=true",
+      "path": "data.count",
+      "action": "normalize",
+      "why": "counts the recorder's own key"
+    },
+    {
+      "answer": "identity",
+      "request": "GET /api/v1/auth/api-keys?all=true",
+      "path": "data.api_keys[*].days_since_last_use",
+      "action": "normalize",
+      "why": "days between the key's stored last use and the current date"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/me/sessions",
+      "path": "sessions[?current==true]",
+      "action": "drop",
+      "why": "the recorder's own ABS login session (the one making the request)"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/me/sessions",
+      "path": "total",
+      "action": "normalize",
+      "why": "counts the recorder's own ABS login session"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/libraries",
+      "path": "libraries[*].createdAt",
+      "action": "normalize",
+      "why": "R0's ABS library view stamps the request time, not a stored time"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/libraries",
+      "path": "libraries[*].lastScan",
+      "action": "normalize",
+      "why": "R0's ABS library view stamps the request time, not a stored time"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/libraries",
+      "path": "libraries[*].lastUpdate",
+      "action": "normalize",
+      "why": "R0's ABS library view stamps the request time, not a stored time"
+    },
+    {
+      "answer": "abs",
+      "request": "GET /api/libraries",
+      "path": "libraries[*].folders[*].addedAt",
+      "action": "normalize",
+      "why": "R0's ABS library view stamps the request time, not a stored time"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "id",
+      "action": "normalize",
+      "why": "the playback session the recorder opens gets a fresh ID"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "deviceInfo.id",
+      "action": "normalize",
+      "why": "the playback session the recorder opens gets a fresh ID"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "startedAt",
+      "action": "normalize",
+      "why": "the time the recorder opened the playback session"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "updatedAt",
+      "action": "normalize",
+      "why": "the time the recorder opened the playback session"
     }
   ]
 }
