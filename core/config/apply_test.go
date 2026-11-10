@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -650,4 +650,33 @@ func FuzzPatchDecode(f *testing.F) {
 		}
 		t.Fatalf("Apply(%q, %q, unset %v): untyped error %v", p, v, unset, err)
 	})
+}
+
+// TestApply_CommitCarriesBy (T4 review MAJOR-3): every Commit names the
+// Actor's Subject as Commit.By, including one that only unsets a key and one
+// that only changes a boot key, so the committer can name the audit actor of
+// a commit with no row to read it from.
+func TestApply_CommitCarriesBy(t *testing.T) {
+	r := started(t, rigOpts{})
+	steps := []struct {
+		name  string
+		set   map[config.Path]string
+		unset []config.Path
+	}{
+		{"set", map[config.Path]string{kLevel: `"warn"`}, nil},
+		{"unset only", nil, []config.Path{kLevel}},
+		{"boot only", map[config.Path]string{kMode: `"day"`}, nil},
+	}
+	for i, s := range steps {
+		if _, err := r.apply(admin(), s.set, s.unset...); err != nil {
+			t.Fatalf("%s: %v", s.name, err)
+		}
+		cms := r.cm.Commits()
+		if len(cms) != i+1 {
+			t.Fatalf("%s: %d commits, want %d", s.name, len(cms), i+1)
+		}
+		if got := cms[i]; got.By != "alfred" {
+			t.Errorf("%s: Commit.By = %q, want alfred (set %d, unset %d, boot %d)", s.name, got.By, len(got.Set), len(got.Unset), len(got.Boot))
+		}
+	}
 }
