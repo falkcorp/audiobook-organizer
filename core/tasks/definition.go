@@ -1,5 +1,5 @@
 // file: core/tasks/definition.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 91c4b2c9-bbf5-484e-b81c-2622f4951d42
 // last-edited: 2026-11-10
 
@@ -162,7 +162,7 @@ type BatchSpec[P, T, R any] struct {
 	ExclusiveRefs func(T) []entity.Ref // many refs per item: overlapping items never run at once (5T.3.4)
 	ChunkSize     int                  // 0 = 256
 	ItemTimeout   time.Duration        // clock starts after the pause gate and ref locks
-	OnItemError   ErrorMode            // zero = Collect (count failed, continue)
+	OnItemError   ErrorMode            // the zero value is FailFast; the Batch runner (F2-03) applies Collect (count failed, continue; v3 Continue) when it is unset, so a Batch cannot ask for FailFast yet
 	Label         func(T) string       // pure function of the item; runs in workers
 }
 
@@ -271,6 +271,7 @@ func (s *spec) parallelismProblems() {
 // namespaces, declared resources, schedule key ownership, Every outside the
 // relay, PrioritySystem on a module kind) are the kernel's at registration.
 func newSpec(kind Kind, shape Shape, c Common) *spec {
+	c = c.clone() // the definition owns its Common: a caller's later edit changes nothing
 	d := &spec{kind: kind, shape: shape, common: c}
 	if _, err := ParseKind(string(kind)); err != nil {
 		d.problems = append(d.problems, err)
@@ -357,13 +358,34 @@ func Problems(d Definition) []error {
 	return slices.Clone(d.spec().problems)
 }
 
-// CommonOf returns the Common a definition was built with, as given (no
-// defaults applied). For the kernel and the executor. Name coined by F2-01.
+// CommonOf returns a copy of the Common a definition was built with, as
+// given (no defaults applied): editing it, or what its pointers and slices
+// reach, never changes the definition. For the kernel and the executor. Name
+// coined by F2-01.
 func CommonOf(d Definition) Common {
 	if d == nil {
 		return Common{}
 	}
-	return d.spec().common
+	return d.spec().common.clone()
+}
+
+// clone deep-copies the pointers and slices of c, so a definition and the
+// caller that built it never share Schedule, Approval, Debounce, NotWhile,
+// Ready or Lanes.
+func (c Common) clone() Common {
+	c.NotWhile = slices.Clone(c.NotWhile)
+	c.Ready = slices.Clone(c.Ready)
+	c.Lanes = slices.Clone(c.Lanes)
+	c.Schedule = c.Schedule.clone()
+	if c.Approval != nil {
+		a := *c.Approval
+		c.Approval = &a
+	}
+	if c.Debounce != nil {
+		db := *c.Debounce
+		c.Debounce = &db
+	}
+	return c
 }
 
 // ParallelismOf returns a Batch's or Fixer's declared Parallelism; a Task has

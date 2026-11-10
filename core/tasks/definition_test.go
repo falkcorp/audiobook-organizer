@@ -1,5 +1,5 @@
 // file: core/tasks/definition_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1173dc91-1e44-4449-bd9f-f6ef42138906
 // last-edited: 2026-11-10
 
@@ -217,6 +217,57 @@ func TestSchedule_ModeAndBuilders(t *testing.T) {
 	}
 	if p := writerTask(tasks.Every(0).Live()); !strings.Contains(p, "positive") {
 		t.Fatalf("Every(0) accepted: %q", p)
+	}
+}
+
+// TestCommon_NoAliasing: one base schedule seeds a Live and a Preview
+// definition without either seeing the other's mode, and neither the
+// caller's later edits nor edits to CommonOf's result reach a definition's
+// Approval, Debounce, NotWhile, Ready or Lanes.
+func TestCommon_NoAliasing(t *testing.T) {
+	task := func(c tasks.Common) tasks.Definition {
+		return tasks.Task("gotham.cases.close", tasks.TaskSpec[struct{}, struct{}]{
+			Common: c, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
+		})
+	}
+	base := tasks.ScheduleFromConfig("modules.gotham.cases.schedules.close").Params(map[string]int{"n": 1})
+	live, preview := writerCommon(), writerCommon()
+	live.Schedule, preview.Schedule = base.Live(), base.Preview()
+	dl, dp := task(live), task(preview)
+	if p := problemText(dl) + problemText(dp); p != "" {
+		t.Fatalf("Live and Preview built from one base schedule: %q", p)
+	}
+	if s := tasks.CommonOf(dl).Schedule; !s.IsLive() || s.IsPreview() {
+		t.Fatal("the Live definition's schedule took the Preview mode")
+	}
+	if s := tasks.CommonOf(dp).Schedule; s.IsLive() || !s.IsPreview() {
+		t.Fatal("the Preview definition's schedule took the Live mode")
+	}
+	if base.IsLive() || base.IsPreview() {
+		t.Fatal("a builder changed its receiver")
+	}
+	base.RunParams()[0] = 'x'
+	if string(tasks.CommonOf(dl).Schedule.RunParams()) != `{"n":1}` {
+		t.Fatal("RunParams shares its bytes")
+	}
+
+	c := writerCommon()
+	c.Approval = &tasks.Approval{PlanRequired: true}
+	c.Debounce = &tasks.Debounce{Window: time.Second}
+	c.NotWhile = []tasks.Kind{"gotham.cases.sweep"}
+	c.Ready = []tasks.ReadySignal{tasks.SignalStorage}
+	c.Lanes = []tasks.LaneID{"gotham.lab"}
+	d := task(c)
+	c.Approval.PlanRequired = false
+	c.Debounce.Window = time.Hour
+	c.NotWhile[0], c.Ready[0], c.Lanes[0] = "joker.gas.vent", "joker.gas", "joker.lab"
+	got := tasks.CommonOf(d)
+	got.Approval.MaxPlanAge = time.Minute
+	got.NotWhile[0] = "joker.gas.vent"
+	got = tasks.CommonOf(d)
+	if !got.Approval.PlanRequired || got.Approval.MaxPlanAge != 0 || got.Debounce.Window != time.Second ||
+		got.NotWhile[0] != "gotham.cases.sweep" || got.Ready[0] != tasks.SignalStorage || got.Lanes[0] != "gotham.lab" {
+		t.Fatalf("a definition's Common changed after construction: %+v", got)
 	}
 }
 

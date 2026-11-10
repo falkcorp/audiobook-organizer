@@ -1,5 +1,5 @@
 // file: core/tasks/schedule.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 231e5481-a9cd-411a-9926-86fc95b5dc49
 // last-edited: 2026-11-10
 
@@ -8,6 +8,7 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 // Schedule is a definition's one timer declaration (5T.3.8). Build it with
 // ScheduleFromConfig (every kind but the outbox relay) or Every (the relay
 // only); a malformed declaration is recorded on the Schedule and reported as
-// a constructor problem of the definition that carries it.
+// a constructor problem of the definition that carries it. A Schedule is a
+// value: each builder method returns a changed copy and leaves its receiver
+// as it was, so one base schedule can seed several definitions.
 type Schedule struct {
 	key      string        // ScheduleFromConfig
 	every    time.Duration // Every
@@ -116,33 +119,47 @@ func Every(d time.Duration) *Schedule {
 	return s
 }
 
-// OnStart also fires the schedule once when the scheduler starts.
-func (s *Schedule) OnStart() *Schedule { s.onStart = true; return s }
-
-// When adds a non-timing gate re-read each poll (e.g. updater mode).
-func (s *Schedule) When(gate func() bool) *Schedule { s.when = gate; return s }
-
-// Params sets the params of every scheduled run; p is JSON-encoded now, and
-// an encoding error is recorded as a problem.
-func (s *Schedule) Params(p any) *Schedule {
-	raw, err := json.Marshal(p)
-	if err != nil {
-		s.problems = append(s.problems, fmt.Sprintf("Schedule.Params: %v", err))
-		return s
+// clone copies s (nil stays nil); builders change the copy only.
+func (s *Schedule) clone() *Schedule {
+	if s == nil {
+		return nil
 	}
-	s.params = raw
-	return s
+	c := *s
+	c.params = slices.Clone(s.params)
+	c.problems = slices.Clone(s.problems)
+	return &c
 }
 
-// Live runs scheduled runs in ModeLive. A scheduled writer must state Live or
-// Preview (v3 rule D8); stating both is a problem.
-func (s *Schedule) Live() *Schedule { s.live = true; return s }
+// OnStart returns a copy that also fires once when the scheduler starts.
+func (s *Schedule) OnStart() *Schedule { c := s.clone(); c.onStart = true; return c }
 
-// Preview runs scheduled runs in ModePreview.
-func (s *Schedule) Preview() *Schedule { s.preview = true; return s }
+// When returns a copy with a non-timing gate re-read each poll (e.g. updater
+// mode).
+func (s *Schedule) When(gate func() bool) *Schedule { c := s.clone(); c.when = gate; return c }
 
-// Missed sets what a fire missed while the process was down does.
-func (s *Schedule) Missed(p MissedPolicy) *Schedule { s.missed = p; return s }
+// Params returns a copy whose scheduled runs get params p, JSON-encoded now;
+// an encoding error is recorded as a problem.
+func (s *Schedule) Params(p any) *Schedule {
+	c := s.clone()
+	raw, err := json.Marshal(p)
+	if err != nil {
+		c.problems = append(c.problems, fmt.Sprintf("Schedule.Params: %v", err))
+		return c
+	}
+	c.params = raw
+	return c
+}
+
+// Live returns a copy that runs scheduled runs in ModeLive. A scheduled
+// writer must state Live or Preview (v3 rule D8); stating both is a problem.
+func (s *Schedule) Live() *Schedule { c := s.clone(); c.live = true; return c }
+
+// Preview returns a copy that runs scheduled runs in ModePreview.
+func (s *Schedule) Preview() *Schedule { c := s.clone(); c.preview = true; return c }
+
+// Missed returns a copy with the policy for a fire missed while the process
+// was down.
+func (s *Schedule) Missed(p MissedPolicy) *Schedule { c := s.clone(); c.missed = p; return c }
 
 // ConfigKey is ScheduleFromConfig's key ("" for Every). Accessor coined by F2-01.
 func (s *Schedule) ConfigKey() string { return s.key }
@@ -156,8 +173,9 @@ func (s *Schedule) RunsOnStart() bool { return s.onStart }
 // Open reports the When gate (true without one). Accessor coined by F2-01.
 func (s *Schedule) Open() bool { return s.when == nil || s.when() }
 
-// RunParams is the encoded Params (nil when unset). Accessor coined by F2-01.
-func (s *Schedule) RunParams() json.RawMessage { return s.params }
+// RunParams is a copy of the encoded Params (nil when unset). Accessor coined
+// by F2-01.
+func (s *Schedule) RunParams() json.RawMessage { return slices.Clone(s.params) }
 
 // IsLive reports Live. Accessor coined by F2-01.
 func (s *Schedule) IsLive() bool { return s.live }

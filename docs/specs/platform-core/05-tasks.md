@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.14.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # 05 — Tasks (`core/tasks`)
 
@@ -207,7 +207,7 @@ type BatchSpec[P, T, R any] struct {
 	ExclusiveRefs func(T) []entity.Ref       // many refs per item: overlapping items never run at once (5T.3.4)
 	ChunkSize     int                        // 0 = 256
 	ItemTimeout   time.Duration              // clock starts after the pause gate and ref locks
-	OnItemError   ErrorMode                  // zero = Collect (count failed, continue)
+	OnItemError   ErrorMode                  // the zero value is FailFast; the Batch runner applies Collect (count failed, continue; v3 Continue) when it is unset, so a Batch cannot ask for FailFast yet
 	Label         func(T) string             // pure function of the item; runs in workers
 }
 
@@ -331,7 +331,9 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // error shape, Label and ExclusiveRefs rules. When ctx descends from an RC
 // context, ForEach joins that run's CPU budget, pause gate, ref-lock table and
 // liveness; otherwise it is a plain bounded pool. Watermark is refused
-// (ErrNoRunContext): checkpointing needs a run.
+// (ErrNoRunContext): checkpointing needs a run. A CPU() loop given a CPU()
+// item's context runs on that item's slot with one worker and never calls
+// AcquireCPU (no nested-slot deadlock; the executor's semaphore honours the mark).
 func ForEach[T any](ctx context.Context, par Parallelism, items []T,
 	fn func(ctx context.Context, item T) error, opts ...ItemsOptions[T]) (ItemsResult, error)
 

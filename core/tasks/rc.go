@@ -1,5 +1,5 @@
 // file: core/tasks/rc.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
 // last-edited: 2026-11-10
 
@@ -42,18 +42,18 @@ func (m Mode) String() string {
 }
 
 // ModeRequest is the mode a start asks for: unset, preview or live. Only the
-// HTTP route and Client.Start resolve ModeUnset (Preview for writers, Live for
+// HTTP route and Client.Start resolve ModeRequestUnset (Preview for writers, Live for
 // ReadOnly defs, 5T.3.7); every other starter must state it (ErrModeUnset).
 // The constant names are coined by F2-01.
 type ModeRequest uint8
 
 const (
-	ModeUnset ModeRequest = iota
+	ModeRequestUnset ModeRequest = iota
 	ModeRequestPreview
 	ModeRequestLive
 )
 
-// Mode is the requested mode, false for ModeUnset or an unknown value.
+// Mode is the requested mode, false for ModeRequestUnset or an unknown value.
 // Accessor coined by F2-01.
 func (r ModeRequest) Mode() (Mode, bool) {
 	switch r {
