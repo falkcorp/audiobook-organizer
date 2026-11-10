@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -473,10 +473,10 @@ type authOIDC struct {
 // AllowedEmails and AllowedDomains are ProtectOwner (SEC3-6). The list is one
 // key (05-config §1.3.6), and config protects whole keys, so the list is
 // ProtectOwner: Register refuses an element tag stricter than its key
-// (F3-01). 05-authn's table gives the other entry fields ProtectAdmin, but an
+// (F3-01). That covers every entry field, as 05-authn §8's table says: an
 // admin who may repoint a provider's issuer or client_id while its
 // allowed_emails name the owner could mint the owner's identity, so the
-// owner-trust root covers the whole entry (seams.d/F3-01.md).
+// owner-trust root covers the whole entry.
 type authOIDCProvider struct {
 	ID                  string   `json:"id"`
 	Kind                string   `json:"kind" schema:"enum=oidc|github"`
