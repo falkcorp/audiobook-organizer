@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -192,6 +192,7 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 	for _, pth := range bootChg {
 		delete(s.bootQuar, pth)
 	}
+	s.syncQuarantineHealth()
 	s.gen.Store(gen)
 	if len(writes) > 0 {
 		s.noteSecretWrites(ctx, writes, a.Subject, now)

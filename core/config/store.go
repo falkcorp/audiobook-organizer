@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -65,6 +65,7 @@ type Store struct {
 	bootVals    map[Path]json.RawMessage // usable boot values: known boot keys, canonical, not quarantined (current)
 	bootAtLoad  map[Path]json.RawMessage // bootVals as Load saw them: what boot keys are effective with
 	bootQuar    map[Path]error
+	bootBadFile bool // the boot record was unparsable and set aside as .bad this boot
 	bootUnknown []Path
 	bootIgnored map[Path]string // usable boot values an operator layer locks -> lock reason
 	bootLogged  map[Path]bool   // bootIgnored keys already logged this boot
@@ -326,6 +327,7 @@ func (s *Store) readBootRecord() error {
 	}
 	rec, perr := parseBootRecord(b)
 	if perr != nil {
+		s.bootBadFile = true
 		s.health[healthBootRecordQuarantined] = perr.Error()
 		s.log.Warn("config: the boot record is unparsable; renamed to "+bootRecordBad+" and ignored",
 			"file", bootRecordName, "err", perr)
@@ -893,6 +895,32 @@ func (s *Store) startSub(sub *subscription) {
 func (s *Store) subscriberPanicked(sec Path, r any) {
 	s.log.Error("config: an OnChange subscriber panicked; recovered", "section", sec, "panic", fmt.Sprint(r))
 	s.met.subscriberPanic(sec)
+}
+
+// syncQuarantineHealth makes the two quarantine health tokens match the
+// quarantine state after an Apply, as Attach and Load set them: each is raised
+// while its layer holds a quarantined value and lowered once none is left
+// (05-config §1.4 step 6, §1.5). Apply only clears quarantines today, so in
+// practice it lowers them; raising is here so the tokens follow the state
+// whichever way it moves. A boot record set aside whole as .bad keeps
+// config_boot_record_quarantined raised for the rest of the boot: no Apply
+// undoes that, and the operator still has the .bad file to look at.
+func (s *Store) syncQuarantineHealth() {
+	set := func(token string, on bool, msg string) {
+		_, raised := s.health[token]
+		switch {
+		case !on:
+			delete(s.health, token)
+		case !raised:
+			s.health[token] = msg
+		}
+	}
+	set(healthOverridesQuarantined, len(s.quar) > 0, fmt.Sprintf("%d stored overrides ignored", len(s.quar)))
+	bootMsg := fmt.Sprintf("%d boot-record values ignored", len(s.bootQuar))
+	if s.bootBadFile {
+		bootMsg = "the boot record was unparsable and set aside as " + bootRecordBad
+	}
+	set(healthBootRecordQuarantined, len(s.bootQuar) > 0 || s.bootBadFile, bootMsg)
 }
 
 // HealthTokens lists the store's raised health tokens (name coined by
