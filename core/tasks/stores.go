@@ -1,5 +1,5 @@
 // file: core/tasks/stores.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e87dda23-11e8-4a65-9769-3ac16d0b3c05
 // last-edited: 2026-11-10
 
@@ -20,8 +20,9 @@ import (
 // builds it once at P4c (06 §6.5.1) as NativeStores over c/tasks/ (5T.6.1);
 // there is no other implementation and no app-supplied store (D10). Core code
 // reaches runs, clocks, the pause marker and stand-down markers only through
-// these interfaces and never names a stored key. (NativeStores, Importer and
-// RunData land with the native store, F2-02.)
+// these interfaces and never names a stored key; the key layout lives in
+// internal/taskstore (native.go). Importer (importer.go) is the one-shot path
+// that writes v1 rows into the same keyspace.
 type Stores struct {
 	Runs      RunStore
 	Clocks    ClockStore

@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-10
 
@@ -68,6 +68,10 @@ var coreLayerOf = map[string]int{
 	// compiled checker and the two privileged checkers, so it takes rbac's
 	// layer (R4).
 	"internal/authz": 4,
+	// internal/taskstore is the c/tasks/ key layout and raw staging under
+	// tasks' NativeStores and Importer (F2-02, 5T.6.1), so it takes tasks'
+	// layer (R4).
+	"internal/taskstore": 4,
 	// internal/configstore (F3-01) is a bridge too: config's native override
 	// store and the kernel's committer, which joins config, storage, secrets
 	// and audit, its highest import.
