@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.13 -->
+<!-- version: 1.13.14 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -136,9 +136,11 @@ func (d *Duration) UnmarshalJSON(b []byte) error
 // It runs on every candidate snapshot before commit; return errors.Join of field errors
 // wrapped with FieldError so the UI can attach them to keys.
 // A Validator never formats a sensitive field's value into its error: these errors reach logs,
-// AttachReport, KeyState and API responses. Config enforces it in a section that holds a sensitive
-// key: a FieldError on a sensitive key loses its message, and any part of the error that is not a
-// FieldError on one of the section's keys is replaced by a fixed message (fail closed).
+// AttachReport, KeyState and API responses. Config does not trust it to: in a section that holds a
+// sensitive key, no message a Validator writes is kept (fail closed). A FieldError on one of the
+// section's keys, sensitive or plain, keeps its path and gets a fixed message in place of its own,
+// and any other part of the error is replaced by a fixed message on the section. A section with no
+// sensitive key keeps its Validator's messages as written.
 type Validator interface{ Validate() error }
 
 type FieldError struct {

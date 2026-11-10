@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -451,14 +451,16 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 // redact keeps a sensitive value out of a decode or Validator error of this
 // section (05-config §1.3.1: a sensitive value is redacted in logs). These
 // errors reach AttachReport.Quarantined, KeyState.Quarantined, the logs and
-// Apply's error, and a Validator's message may quote the value it rejects.
-// In a section that holds a sensitive key, each part of the error (errors.Join
-// parts are taken one by one) is kept only when it is a *FieldError on a
-// non-sensitive key of the section; a *FieldError on a sensitive key keeps its
-// path and loses its message; anything else (a bare error, a wrapped one, a
-// *FieldError on the section itself or on a path that is not a key) is
-// replaced whole by a fixed message on the section, failing closed. A section
-// without a sensitive key is returned as is.
+// Apply's error, and a Validator's message may quote any field it checks: a
+// cross-field check on a plain key can quote the sensitive key beside it. So
+// in a section that holds a sensitive key, no Validator-authored message is
+// kept (fail closed). Each part of the error (errors.Join parts are taken one
+// by one) that is a *FieldError on one of the section's keys, sensitive or
+// plain, keeps its path and gets a fixed message in place of its own; anything
+// else (a bare error, a wrapped one, a *FieldError on the section itself or
+// on a path that is not a key) is replaced whole by a fixed message on the
+// section. A section without a sensitive key is returned as is, messages
+// included.
 func (s *section) redact(err error) error {
 	if err == nil || !slices.ContainsFunc(s.keys, func(k *keyInfo) bool { return k.sensitive }) {
 		return err
@@ -477,11 +479,8 @@ func (s *section) redactPart(err error) error {
 		return errors.Join(out...)
 	}
 	if fe, ok := err.(*FieldError); ok {
-		if k := s.concreteKey(fe.Path); k != nil {
-			if k.sensitive {
-				return &FieldError{Path: fe.Path, Err: errSensitiveRedacted()}
-			}
-			return fe
+		if s.concreteKey(fe.Path) != nil {
+			return &FieldError{Path: fe.Path, Err: errors.New("the value fails the section's Validator (detail redacted: the section holds a sensitive key)")}
 		}
 	}
 	return &FieldError{Path: s.path, Err: errors.New("the section fails validation (detail redacted: the section holds a sensitive key)")}
