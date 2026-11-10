@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/log"
 )
 
 // This file is the kernel's core-section list (05-config §1.12.1, "Every core
@@ -216,22 +217,10 @@ func coreSections() []any {
 			Quarantine: libraryQuarantine{Retention: 0},
 		}),
 
-		// 05-logging §8: core.log, and the journal's two sections, which a later
-		// row (F5-15) swaps to the logjournal types in this same list.
-		config.Define("core.log", logSettings{
-			Level:  "info",
-			Levels: map[string]string{},
-			Format: "text",
-			Output: "stderr",
-			File: logFile{
-				Path:      "",
-				MaxSizeMB: 100,
-				MaxFiles:  7,
-				TeeStderr: true,
-			},
-			AddSource:  false,
-			RedactKeys: []string{},
-		}),
+		// 05-logging §8: core.log is log.Settings; the journal's two sections are
+		// kernel structs that a later row (F5-15) swaps to the logjournal types
+		// in this same list.
+		config.Define("core.log", log.DefaultSettings()),
 		config.Define("core.log.journal", logJournalSettings{
 			Enabled:       true,
 			MinLevel:      "info",
@@ -683,26 +672,12 @@ type libraryQuarantine struct {
 }
 
 // ---- core.log, core.log.journal, core.log.schedules (05-logging §8) ----
-
-// logSettings is the core.log section. It declares neither "journal" nor
-// "schedules": those are the sections core.log.journal and the schedules
-// section of core.log.
-type logSettings struct {
-	Level      string            `json:"level" schema:"enum=trace|debug|info|warn|error"`
-	Levels     map[string]string `json:"levels"` // "books" or "books.scanner" -> level
-	Format     string            `json:"format" reload:"restart" schema:"enum=text|json"`
-	Output     string            `json:"output" reload:"restart" schema:"enum=stderr|stdout|file"`
-	File       logFile           `json:"file"`
-	AddSource  bool              `json:"add_source"`
-	RedactKeys []string          `json:"redact_keys"`
-}
-
-type logFile struct {
-	Path      string `json:"path" reload:"restart" protect:"admin" schema:"format=path"` // relative to the state dir
-	MaxSizeMB int    `json:"max_size_mb" reload:"restart" schema:"minimum=1"`
-	MaxFiles  int    `json:"max_files" reload:"restart" schema:"minimum=1"`
-	TeeStderr bool   `json:"tee_stderr" reload:"restart"`
-}
+//
+// core.log is log.Settings, the type 05-logging §3 names for it, with
+// log.DefaultSettings as its defaults; log (L0) cannot import config, so the
+// kernel registers it. log.Settings declares neither "journal" nor
+// "schedules": the sections below are the journal's, whose types do not exist
+// until F5-15 and are kernel structs until then.
 
 type logJournalSettings struct {
 	Enabled       bool   `json:"enabled" reload:"restart"`
