@@ -22,7 +22,9 @@ import (
 
 // The registration errors (05-events §5E.7: closed, boot fails). Declare and
 // Subscribe wrap one of them per refused entry and join the results, so
-// errors.Is finds each; the kernel maps them to module problems.
+// errors.Is finds each; the kernel maps them to module problems. Each refusal
+// wraps exactly one sentinel (a cause is formatted with %v, never a second
+// %w), so it stays one leaf of the join and becomes one problem.
 var (
 	ErrTopicName             = errors.New("events: bad topic name")
 	ErrDuplicateTopic        = errors.New("events: topic declared twice")
@@ -96,7 +98,7 @@ func validateTopic(owner string, s TopicSpec) (*topicState, error) {
 		errs = append(errs, fmt.Errorf("%w: %s declared by %s", ErrTopicNamespace, s.Name, owner))
 	}
 	if s.schemaErr != nil {
-		errs = append(errs, fmt.Errorf("%w: %s: %w", ErrBadSchema, s.Name, s.schemaErr))
+		errs = append(errs, fmt.Errorf("%w: %s: %v", ErrBadSchema, s.Name, s.schemaErr))
 	}
 	errs = append(errs, checkPermission(owner, s)...)
 	if (s.Realtime != nil || s.Notify != nil) && len(s.Schema) == 0 {
@@ -109,9 +111,9 @@ func validateTopic(owner string, s TopicSpec) (*topicState, error) {
 	if len(s.Schema) > 0 && s.schemaErr == nil {
 		var sc jsonschema.Schema
 		if err := json.Unmarshal(s.Schema, &sc); err != nil {
-			errs = append(errs, fmt.Errorf("%w: %s: %w", ErrBadSchema, s.Name, err))
+			errs = append(errs, fmt.Errorf("%w: %s: %v", ErrBadSchema, s.Name, err))
 		} else if ts.resolved, err = sc.Resolve(nil); err != nil {
-			errs = append(errs, fmt.Errorf("%w: %s: %w", ErrBadSchema, s.Name, err))
+			errs = append(errs, fmt.Errorf("%w: %s: %v", ErrBadSchema, s.Name, err))
 		}
 	}
 	if len(errs) > 0 {
@@ -192,7 +194,7 @@ func (b *Bus) Subscribe(moduleID string, subs ...Subscription) error {
 // checkSubscription applies the subscription rules; b.mu is held.
 func (b *Bus) checkSubscription(owner string, s Subscription) error {
 	if s.err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrInvalidSubscription, s.name, s.err)
+		return fmt.Errorf("%w: %s: %v", ErrInvalidSubscription, s.name, s.err)
 	}
 	if s.deliver == nil {
 		return fmt.Errorf("%w: a Subscription not built by On or OnRaw", ErrInvalidSubscription)
