@@ -1,7 +1,7 @@
 // file: core/httpapi/router.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -633,6 +633,7 @@ func (r *Router) Build() (http.Handler, error) {
 	r.built = true
 	r.chain = r.newChain()
 	errs := slices.Clone(r.errs)
+	errs = append(errs, r.checkCoreFixed()...)
 	errs = append(errs, r.checkClaims()...)
 	mux := http.NewServeMux()
 	seen := map[string]string{}

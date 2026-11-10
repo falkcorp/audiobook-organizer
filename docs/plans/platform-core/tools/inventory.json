@@ -2000,10 +2000,12 @@
   ],
   "files": [
    "core/httpapi/corefixed.go",
-   "core/httpapi/corefixed_test.go"
+   "core/httpapi/corefixed_test.go",
+   "core/httpapi/router.go",
+   "core/httpapi/legacy.go"
   ],
   "spec": "05-http-api §3.5 (CoreFixedGroup, CoreExactPatterns), §4.9",
-  "notes": "Tier: two router members and a build-time refusal. Used only by core/internal/authhttp (F4-05) for the OAuth callback base ABO supplies in app.Options.Auth. May add two one-line calls into the file holding R1-13's Build and its claim checks."
+  "notes": "Tier: two router members and a build-time refusal. Used only by core/internal/authhttp (F4-05) for the OAuth callback base ABO supplies in app.Options.Auth. Adds one call into router.go (Build) and one into legacy.go (the shadow graph, nativeNodes); recorded here as files, see seams.d/F4-10.md."
  },
  {
   "id": "F4-01",

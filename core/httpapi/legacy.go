@@ -1,7 +1,7 @@
 // file: core/httpapi/legacy.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -546,8 +546,12 @@ func (r *Router) rootHandler() http.Handler {
 // nativeNodes are the routes Build registered itself, as graph nodes.
 func (r *Router) nativeNodes() []*node {
 	var out []*node
+	bases := r.fixedBases()
 	for _, e := range r.routes {
-		if len(e.errs) > 0 || e.handler == nil {
+		if len(e.errs) > 0 || e.handler == nil || isCoreExact(e, bases) {
+			// A CoreExactPatterns() route sits inside the legacy owner's claim
+			// by declaration (§4.9): checkCoreFixed refuses every manifest
+			// route over it, so it never shadows one (ErrShadow) here.
 			continue
 		}
 		key := strings.TrimSpace(e.info.Method + " " + e.info.Pattern)
