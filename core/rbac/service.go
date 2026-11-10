@@ -418,7 +418,9 @@ func checkRoleSeed(d *moduleDecl, seed RoleSeed) error {
 // fixed scopes, computes the seed of every seed role (§4.8) and loads the
 // stored roles into the role cache, then bumps the generation. It writes
 // nothing: CommitSeeds writes the seed rows at P7. Every problem is returned,
-// joined; on error the service stays unfrozen.
+// joined; on error the service stays unfrozen. Once the declarations pass,
+// Freeze seals Deps.Store's importer when it implements ImportSealer, before
+// the role cache loads.
 func (s *Service) Freeze(ctx context.Context) error {
 	s.declMu.Lock()
 	defer s.declMu.Unlock()
@@ -443,6 +445,13 @@ func (s *Service) Freeze(ctx context.Context) error {
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("rbac: freeze: %w", err)
+	}
+	// Seal the store's importer before the role cache loads, so no import
+	// can land after the load that would have had to see it. A load that
+	// then fails leaves imports sealed: refusing is the fail-closed side,
+	// and a failed Freeze aborts the boot.
+	if sealer, ok := s.deps.Store.(ImportSealer); ok {
+		sealer.SealImports()
 	}
 	roles, err := s.loadRoles(ctx)
 	if err != nil {

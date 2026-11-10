@@ -10,7 +10,10 @@
 // kernel and by tests. It holds no cache and no lock: every read goes to the
 // keyspace, and every write stages into the caller's batch with an Expect on
 // the stored record, so the batch's Commit fails with storage.ErrConflict when
-// another writer got there first.
+// another writer got there first. Its one piece of state is the import seal
+// (rbac.ImportSealer): rbac.Service.Freeze seals it, and from then on
+// ImportRole refuses, because a role imported after the service loaded its
+// role cache would be stored but invisible until a restart.
 package rbacstore
 
 import (
@@ -19,6 +22,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -65,11 +69,15 @@ type Store struct {
 	ks  storage.Keyspace
 	cat *rbac.Catalog
 	now func() time.Time
+	// sealed is set by SealImports and never cleared: once the service is
+	// frozen, every ImportRole is refused.
+	sealed atomic.Bool
 }
 
 var (
-	_ rbac.Store    = (*Store)(nil)
-	_ rbac.Importer = (*Store)(nil)
+	_ rbac.Store        = (*Store)(nil)
+	_ rbac.Importer     = (*Store)(nil)
+	_ rbac.ImportSealer = (*Store)(nil)
 )
 
 // New returns the store over ks, which must be Owner's keyspace.
@@ -83,6 +91,11 @@ func New(ks storage.Keyspace, opts Options) (*Store, error) {
 	}
 	return &Store{ks: ks, cat: opts.Catalog, now: now}, nil
 }
+
+// SealImports makes every later ImportRole refuse with an error wrapping
+// rbac.ErrImportRejected and rbac.ErrFrozen. rbac.Service.Freeze calls it;
+// it cannot be undone.
+func (s *Store) SealImports() { s.sealed.Store(true) }
 
 // NewBatch opens a write batch over the role keyspace. The kernel hands it to
 // rbac.Service as Deps.NewBatch, so the service's role writes, their audit
@@ -224,6 +237,8 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 // OriginCustom, Version 1, Added the sorted, de-duplicated r.Added. It refuses
 // with an error wrapping rbac.ErrImportRejected, staging nothing:
 //
+//   - any import once SealImports has run (the error also wraps
+//     rbac.ErrFrozen): the cutover runs before rbac.Service.Freeze;
 //   - a name that is not custom.<slug> (every seed role's name is not);
 //   - an Origin other than OriginCustom, or seed bookkeeping (SeedPermissions,
 //     SeedDigest, PendingSeed, Locked) on the record;
@@ -237,6 +252,9 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 //     it is a broken mapping, not an admin role;
 //   - a role that is already stored.
 func (s *Store) ImportRole(b *storage.Batch, r *rbac.Role) error {
+	if s.sealed.Load() {
+		return fmt.Errorf("%w: the role service is frozen: %w", rbac.ErrImportRejected, rbac.ErrFrozen)
+	}
 	if b == nil {
 		return fmt.Errorf("%w: no batch", rbac.ErrImportRejected)
 	}
