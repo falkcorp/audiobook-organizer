@@ -1,5 +1,5 @@
 // file: core/secrets/open_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
 // last-edited: 2026-11-10
 
@@ -123,8 +123,9 @@ func TestOpen_AppIDMismatchRefuses(t *testing.T) {
 
 // TestOpen_MissingKeyringWithRecordsRefuses (05-config §2.9): with sealed
 // records and no keyring, Open refuses with ErrKeyMissing naming the file,
-// the exported copy and the override, and writes nothing. Cleared and
-// unreadable markers need no keyring.
+// the exported copy and the override, and writes nothing. A malformed
+// record counts as sealed (it may be a value Open cannot parse, and a new
+// keyring would orphan it). Cleared and unreadable markers need no keyring.
 func TestOpen_MissingKeyringWithRecordsRefuses(t *testing.T) {
 	e := newEnv(t)
 	s := e.open(t, nil)
@@ -150,6 +151,22 @@ func TestOpen_MissingKeyringWithRecordsRefuses(t *testing.T) {
 	}
 	if after := rows(t, e.ks); len(after) != len(before) {
 		t.Error("a refused Open changed c/secrets/")
+	}
+
+	// Only a malformed record: still refused.
+	g := newEnv(t)
+	if err := g.open(t, nil).Close(); err != nil {
+		t.Fatal(err)
+	}
+	rawSet(t, g.ks, recordKey(nameGate), []byte(`{"v":1,"kid":"k1","nonce":`))
+	if err := os.Remove(g.keyringPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(context.Background(), g.opts()); !errors.Is(err, ErrKeyMissing) {
+		t.Fatalf("Open with only a malformed record = %v, want ErrKeyMissing", err)
+	}
+	if _, serr := os.Stat(g.keyringPath()); !errors.Is(serr, os.ErrNotExist) {
+		t.Error("a refused Open created a keyring over a malformed record")
 	}
 
 	// Only markers: no keyring is needed, so a new one is generated.

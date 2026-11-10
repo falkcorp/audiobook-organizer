@@ -1,5 +1,5 @@
 // file: core/secrets/value_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: adb6b331-c577-44b6-8aa4-93c55c31c6e3
 // last-edited: 2026-11-10
 
@@ -74,15 +74,19 @@ func TestValue_NeverFormats(t *testing.T) {
 func TestKeyMaterial_NeverFormats(t *testing.T) {
 	m := keyMaterial(bytes.Repeat([]byte{0xb4}, keyBytes))
 	hexed := fmt.Sprintf("%x", []byte(m))
+	raw := string(m[:4])
 	for path, s := range formatted(m) {
-		if strings.Contains(s, hexed) || strings.Contains(strings.ToLower(s), "b4b4b4") {
+		if strings.Contains(s, hexed) || strings.Contains(strings.ToLower(s), "b4b4b4") || strings.Contains(s, raw) {
 			t.Errorf("%s leaks key material", path)
+		}
+		if !strings.Contains(s, redacted) {
+			t.Errorf("%s does not print %s", path, redacted)
 		}
 	}
 	b64 := base64.StdEncoding.EncodeToString(m)[:12]
 	k := keyringKey{ID: "k1", Use: useData, Status: statusActive, Material: m}
 	for path, s := range formatted(k) {
-		if strings.Contains(strings.ToLower(s), "b4b4b4") || strings.Contains(s, "180 180") || strings.Contains(s, b64) {
+		if strings.Contains(strings.ToLower(s), "b4b4b4") || strings.Contains(s, "180 180") || strings.Contains(s, b64) || strings.Contains(s, raw) {
 			t.Errorf("a keyring key formatted with %s leaks its material", path)
 		}
 	}
