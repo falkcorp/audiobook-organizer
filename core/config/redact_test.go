@@ -1,5 +1,5 @@
 // file: core/config/redact_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0d8e3a51-6b2f-4c97-a1e4-5f7b9c2d8e63
 // last-edited: 2026-11-10
 
@@ -329,6 +329,107 @@ func TestValidatorPathNamesOnlyAnExistingEntry(t *testing.T) {
 		var fe *config.FieldError
 		if !errors.As(err, &fe) || fe.Path != c.want || strings.Contains(strings.ToLower(err.Error()), "riddler") {
 			t.Errorf("%s: Apply = %v, want a fixed FieldError on %s without the code", c.label, err, c.want)
+		}
+	}
+}
+
+const grappleSection config.Path = "core.grapples"
+
+// grappleMap's Validator adds an entry to the candidate, named from an
+// entry's sensitive code, and then names a FieldError path by that new
+// entry: a Validator that grows the map it checks.
+type grappleMap map[string]gadgetEntry
+
+func (m *grappleMap) Validate() error {
+	for _, e := range *m {
+		if e.Label != "grow" {
+			continue
+		}
+		(*m)[e.Code] = gadgetEntry{Label: "grown"}
+		return &config.FieldError{Path: grappleSection + "." + config.Path(e.Code) + ".label", Err: fmt.Errorf("the code %q grew an entry", e.Code)}
+	}
+	return nil
+}
+
+// TestValidatorAddedEntryNeverKeepsItsPath (a test name coined by F3-03 for
+// the coordinator's NIT-1 on registry.go's decode, 05-config §1.3.1): the
+// entry IDs a map section's Validator path is checked against are taken
+// before Validate runs, so an entry the Validator adds (here named from the
+// sensitive code) is not an entry of the candidate. Its path collapses to
+// the section on every surface (Apply's error, AttachReport.Quarantined,
+// KeyState.Quarantined, the logs), and the sensitive value reaches none of
+// them. The default holds the batarang entry, so its keys are effective and
+// carry KeyState (the key index lists effective keys only: a stored entry
+// that never applied has none). Collecting the IDs after Validate fails this
+// test.
+func TestValidatorAddedEntryNeverKeepsItsPath(t *testing.T) {
+	ctx := context.Background()
+	logs := &logRecorder{}
+	st, err := config.NewStore(config.Options{AppID: "gotham", Logger: slog.New(logs)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := config.Register(st.Registry(), config.Define(grappleSection, grappleMap{"batarang": {Label: "plain"}})); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mem := configtest.NewMemory()
+	mem.Put(config.Override{Path: grappleSection + ".batarang.code", Value: json.RawMessage(`"scarecrow"`), By: "alfred"})
+	mem.Put(config.Override{Path: grappleSection + ".batarang.label", Value: json.RawMessage(`"grow"`), By: "alfred"})
+	rep, err := st.Attach(ctx, mem, configtest.NewCommitter(mem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Quarantined) == 0 {
+		t.Fatal("the rows failing the Validator were not quarantined")
+	}
+	surfaces := map[string]string{}
+	for p, e := range rep.Quarantined {
+		if strings.HasPrefix(string(p), string(grappleSection)+".scarecrow") {
+			t.Errorf("AttachReport.Quarantined names the added entry: %s", p)
+		}
+		var fe *config.FieldError
+		if errors.As(e, &fe) && fe.Path != grappleSection {
+			t.Errorf("AttachReport.Quarantined[%s] = %v, want a FieldError on %s", p, e, grappleSection)
+		}
+		surfaces["AttachReport.Quarantined["+string(p)+"]"] = string(p) + " " + e.Error()
+	}
+	quarantined := 0
+	for _, p := range []config.Path{grappleSection + ".batarang.code", grappleSection + ".batarang.label"} {
+		if ks, ok := st.Lookup(p); ok && ks.Quarantined != nil {
+			quarantined++
+			surfaces["KeyState.Quarantined["+string(p)+"]"] = ks.Quarantined.Error()
+		}
+	}
+	if quarantined == 0 {
+		t.Fatal("no KeyState.Quarantined is set")
+	}
+	if logs.count(string(grappleSection)) == 0 {
+		t.Fatal("the quarantine was not logged")
+	}
+	admin := config.Actor{Subject: "alfred", Interactive: true, Can: func(string) bool { return true }}
+	_, applyErr := st.Apply(ctx, config.Patch{Set: map[config.Path]json.RawMessage{
+		grappleSection + ".grapnel.code":  json.RawMessage(`"riddler"`),
+		grappleSection + ".grapnel.label": json.RawMessage(`"grow"`),
+	}}, admin)
+	var fe *config.FieldError
+	if !errors.Is(applyErr, config.ErrInvalid) || !errors.As(applyErr, &fe) || fe.Path != grappleSection {
+		t.Errorf("Apply = %v, want ErrInvalid with a fixed FieldError on %s", applyErr, grappleSection)
+	}
+	surfaces["Apply"] = fmt.Sprint(applyErr)
+	surfaces["logs"] = logs.all()
+	for name, s := range surfaces {
+		for _, v := range []string{"scarecrow", "riddler"} {
+			if strings.Contains(strings.ToLower(s), v) {
+				t.Errorf("%s carries the sensitive code %q", name, v)
+			}
 		}
 	}
 }
