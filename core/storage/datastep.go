@@ -1,5 +1,5 @@
 // file: core/storage/datastep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bce49c80-c743-47cf-91bc-803ce9df2291
 // last-edited: 2026-11-10
 
@@ -7,6 +7,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -28,7 +29,11 @@ import (
 // is not done. Its edges: every After; its owner's versioned steps below
 // Barrier (all of them when Barrier is 0), so it runs after them; and, when
 // Barrier is set, the owner's versioned step Barrier runs after it (so every
-// later version waits for it, §5S.3.6 "Barrier versions stay blocked"). A
+// later version waits for it, §5S.3.6 "Barrier versions stay blocked").
+// Barrier must name one of the owner's registered versions (a SpecError at
+// Open otherwise), and a pending step whose Barrier version the store has
+// already applied fails the boot with ErrBarrierApplied: the version it was
+// to hold back ran before it. A
 // core owner's step also runs after the highest books legacy step, as a core
 // versioned step does. Ties fall to the owner order of §5S.3.5, then the
 // owner's versioned steps before its data steps, data steps in the order
@@ -50,6 +55,12 @@ type DataStep struct {
 
 	order int // declaration index, the tie-break among one owner's data steps
 }
+
+// ErrBarrierApplied: a pending data step's Barrier version is already
+// applied on this store, so the version the step was to hold back already
+// ran (a release that added the step with a Barrier at or below a shipped
+// version). The boot fails before any step runs. Name coined by F2-06.
+var ErrBarrierApplied = errors.New("storage: a data step's Barrier version is already applied")
 
 // ref is the step's StepRef.
 func (s *DataStep) ref() StepRef { return StepRef{Owner: s.Owner, DataMigration: s.ID} }
@@ -107,6 +118,8 @@ func attachDataSteps(owners map[Owner]*ownerInfo, steps []DataStep) error {
 			probs = append(probs, name+": no Run")
 		case s.Barrier < 0:
 			probs = append(probs, fmt.Sprintf("%s: Barrier %d is negative", name, s.Barrier))
+		case s.Barrier > 0 && !slices.ContainsFunc(o.spec.Migrations, func(m Migration) bool { return m.Version == s.Barrier }):
+			probs = append(probs, fmt.Sprintf("%s: Barrier %d names no registered version of %s", name, s.Barrier, s.Owner))
 		}
 		for _, a := range s.After {
 			if (a.Version > 0) == (a.DataMigration != "") || a.Version < 0 || a.Owner == "" {
