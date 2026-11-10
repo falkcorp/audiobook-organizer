@@ -1,14 +1,16 @@
 // file: core/storage/migrate.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package storage
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 )
@@ -100,25 +102,40 @@ func specProblems(o *ownerInfo) []string {
 	return probs
 }
 
-// stepNode is one migration step of the DAG.
+// stepNode is one migration step of the DAG: a books legacy step, a
+// versioned step or a data migration (DataStep).
 type stepNode struct {
 	ref    StepRef
 	owner  *ownerInfo
 	legacy *LegacyMigration
 	mig    *Migration
+	data   *DataStep
 	deps   []StepRef
 }
 
 func (n *stepNode) name() string {
-	if n.legacy != nil {
+	switch {
+	case n.legacy != nil:
 		return n.legacy.Name
+	case n.data != nil:
+		return n.data.ID
 	}
 	return n.mig.Name
 }
 
+// order is the node's place among its owner's steps for the tie-break:
+// versioned and legacy steps by version, then data steps as declared.
+func (n *stepNode) order() int {
+	if n.data != nil {
+		return math.MaxInt32 + n.data.order
+	}
+	return n.ref.Version
+}
+
 // stepGraph builds every registered owner's step nodes with their edges: the
-// owner's previous version, every After, and the implicit edge from every
-// core owner's steps to the highest legacy step (§5S.3.5 "Order").
+// owner's previous version, every After, the implicit edge from every core
+// owner's steps to the highest legacy step (§5S.3.5 "Order"), and a data
+// step's edges (DataStep).
 func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 	nodes := map[string]*stepNode{}
 	var legacyTops []StepRef
@@ -134,8 +151,33 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 			m := &o.spec.Migrations[i]
 			nodes[StepRef{Owner: o.owner, Version: m.Version}.String()] = &stepNode{ref: StepRef{Owner: o.owner, Version: m.Version}, owner: o, mig: m}
 		}
+		for _, d := range o.data {
+			nodes[d.ref().String()] = &stepNode{ref: d.ref(), owner: o, data: d}
+		}
 	}
 	for _, n := range nodes {
+		if n.data != nil {
+			n.deps = append(n.deps, n.data.After...)
+			// After the owner's versioned steps below Barrier (all when 0):
+			// the highest of them, since an owner's versions chain.
+			below := highestVersion(n.owner.spec)
+			if b := n.data.Barrier; b > 0 {
+				below = min(below, b-1)
+			}
+			if below > 0 {
+				n.deps = append(n.deps, StepRef{Owner: n.ref.Owner, Version: below})
+			}
+			if n.owner.core {
+				n.deps = append(n.deps, legacyTops...)
+			}
+			// The Barrier version, and so every later one, after this step.
+			if b := n.data.Barrier; b > 0 {
+				if bn, ok := nodes[StepRef{Owner: n.ref.Owner, Version: b}.String()]; ok {
+					bn.deps = append(bn.deps, n.ref)
+				}
+			}
+			continue
+		}
 		if n.ref.Version > 1 {
 			n.deps = append(n.deps, StepRef{Owner: n.ref.Owner, Version: n.ref.Version - 1})
 		}
@@ -155,7 +197,7 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 func checkDAGShape(owners map[Owner]*ownerInfo) error {
 	var probs []string
 	for _, o := range sortedInfos(owners) {
-		if o.core && (len(o.spec.Migrations) > 0 || len(o.spec.Legacy) > 0) && !slices.Contains(coreOrder(), coreSub(o.owner)) {
+		if o.core && (len(o.spec.Migrations) > 0 || len(o.spec.Legacy) > 0 || len(o.data) > 0) && !slices.Contains(coreOrder(), coreSub(o.owner)) {
 			probs = append(probs, fmt.Sprintf("%s declares steps and is not in the kernel's core order (unordered owner)", o.owner))
 		}
 	}
@@ -232,19 +274,30 @@ func compareNodes(a, b *stepNode) int {
 	if c := strings.Compare(sa, sb); c != 0 {
 		return c
 	}
-	return a.ref.Version - b.ref.Version
+	return cmp.Compare(a.order(), b.order())
 }
 
 // planDAG computes the boot's runnable steps in order and the deferred ones.
-// A step is pending when its version is above the owner's applied version.
-// A pending step of a disabled owner is deferred, and so is every pending
-// step with an unapplied dependency that is deferred or whose owner is
-// absent; an edge to an applied step is satisfied whoever owns it.
+// A versioned step is pending when its version is above the owner's applied
+// version, a data step while its record is not done. A pending step of a
+// disabled owner is deferred (a cutover data step is not, 06 A5), and so is
+// every pending step with an unapplied dependency that is deferred or whose
+// owner is absent; an edge to an applied step is satisfied whoever owns it.
 func (db *DB) planDAG(ctx context.Context) error {
 	st := db.boot
 	nodes := stepGraph(db.owners)
 	pending := map[string]*stepNode{}
 	for k, n := range nodes {
+		if n.data != nil {
+			done, err := db.stepDone(ctx, n.ref)
+			if err != nil {
+				return err
+			}
+			if !done {
+				pending[k] = n
+			}
+			continue
+		}
 		if n.ref.Version > st.versions[n.ref.Owner] {
 			pending[k] = n
 		}
@@ -266,7 +319,7 @@ func (db *DB) planDAG(ctx context.Context) error {
 			if deferred[k] {
 				continue
 			}
-			def := !n.owner.enabled
+			def := !n.owner.enabled && (n.data == nil || !n.data.Cutover)
 			for _, d := range n.deps {
 				if def {
 					break
@@ -335,8 +388,9 @@ func (db *DB) Plan() (runnable, deferred []StepRef) {
 
 // Migrate runs §5S.4 steps 8-9 (06 P4b): every runnable step in DAG order,
 // each versioned step as one batch with its bookkeeping (and level stamp),
-// then the claim ledgers, the store generation, the sidecars, the books
-// marker and the checkpoint's completion. A failed step halts with
+// each data step through its Run (DataStep), then the claim ledgers, the
+// store generation, the sidecars, the books marker and the checkpoint's
+// completion. A failed step halts with
 // ErrMigrationFailed, wrapping a *StepError when the step itself failed;
 // earlier steps stay committed and the attempt's checkpoint stays open.
 func (db *DB) Migrate(ctx context.Context) error {
@@ -351,17 +405,25 @@ func (db *DB) Migrate(ctx context.Context) error {
 	for _, n := range st.plan {
 		st.opts.ExtendStart("storage.migration " + n.ref.String())
 		var err error
-		if n.legacy != nil {
+		switch {
+		case n.data != nil:
+			// A data step labels and commits its own writes (its runner's
+			// plan, chunk and state records), so no region wraps it here: an
+			// outer region would win over the runner's (internal/bootseam).
+			err = n.data.Run(ctx, db)
+		case n.legacy != nil:
 			// A legacy step's Up writes through the owner's LegacyRange
 			// before its bookkeeping batch: the whole step is one row.
 			err = db.labelled(labelStepBatch, func() error { return db.runLegacy(ctx, n) })
-		} else {
+		default:
 			err = db.runStep(ctx, n)
 		}
 		if err != nil {
 			return &ErrMigrationFailed{Step: n.ref, Err: err}
 		}
-		st.versions[n.ref.Owner] = n.ref.Version
+		if n.data == nil {
+			st.versions[n.ref.Owner] = n.ref.Version
+		}
 		db.log.Info("storage: migration step applied", "step", n.ref.String(), "name", n.name())
 	}
 	return db.finish(ctx)
