@@ -133,7 +133,7 @@
               "backup_max_total_bytes": 0,
               "backup_retention_days": 0,
               "basic_auth_enabled": false,
-              "basic_auth_password": "********le",
+              "basic_auth_password": "",
               "basic_auth_username": "",
               "bleve_description_max_chars": 500,
               "bulk_apply_max_items": 5000,

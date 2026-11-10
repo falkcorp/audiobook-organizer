@@ -1,7 +1,7 @@
 {
   "_header": {
     "file": "internal/books/testdata/r2corpus/manifest.json",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "guid": "d808d644-1404-4e9f-b549-f20bbbb939bd",
     "last-edited": "2026-11-10"
   },
@@ -254,11 +254,15 @@
       "step": "M2",
       "key_prefix": "setting:",
       "keys": [
-        "setting:openai_api_key"
+        "setting:basic_auth_password"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "setting:basic_auth_password"
       ],
       "outcome": "quarantined",
       "reported": false,
-      "expected": "a setting record whose ciphertext HEAD's key does not decrypt: the ciphertext is quarantined sealed with the keyring, an unreadable marker is written under the secret's name, health raises secrets_undecryptable and Settings shows it must be re-entered; the step completes",
+      "expected": "the basic_auth_password setting record with a value HEAD's key does not decrypt (the gap-fill config.yaml does not name it, so R0's own answer shows it unset): the ciphertext is quarantined sealed with the keyring, an unreadable marker is written under the secret's name, health raises secrets_undecryptable and Settings shows it must be re-entered; the step completes",
       "spec": "05-config \u00a71.12.2 (HEAD's key); 05-storage \u00a75S.3.13 TestCutoverQuarantinesUndecodableRows",
       "store": "internal/books/testdata/r2corpus/overlay"
     },
@@ -271,6 +275,8 @@
       "keys": [
         "setting:config_blob#batcomputer_uplink_mode"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "quarantined",
       "reported": false,
       "expected": "a settings-blob field no rename-table row names: moved into a quarantine record (sealed), reported in health, the key keeping its default; the step completes",
@@ -286,9 +292,11 @@
       "keys": [
         "idx:role:name:gcpd command",
         "idx:user:username:james.gordon",
-        "role:01M72T539N6NBY0XAB8F9JC74Z",
-        "u:01M72T53DBP2XDD2PD88WE06XA"
+        "role:01M731PAT6GSYY06M5E1FCD9GY",
+        "u:01M731PAXHJA74MGPRM4RC9T2G"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a custom role holding every atom: imported as custom.<slug of its ID> with the union of the 13 rows' native scopes plus the ambient scopes, never core:admin; its holder james.gordon's role list is rewritten to the new name",
@@ -304,9 +312,11 @@
       "keys": [
         "idx:role:name:arkham staff",
         "idx:user:username:harleen.quinzel",
-        "role:01M72T53DC4462PK1BAS938981",
-        "u:01M72T53GT8XVXA6932VQQTB4C"
+        "role:01M731PAXVV5KY3QJ39HNH4T6P",
+        "u:01M731PB206E61WD4FWY6NHZ1C"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a custom role holding a subset of the atoms: imported as custom.<slug> with the union of its atoms' native scopes plus the ambient scopes",
@@ -322,9 +332,11 @@
       "keys": [
         "idx:role:name:wayne enterprises",
         "idx:user:username:lucius.fox.jr",
-        "role:01M72T53GVE6R32Z8KHKTENGY3",
-        "u:01M72T53MANKP4E96EMX4NA31E"
+        "role:01M731PB29NMM8BSJ4YWEP5Y6S",
+        "u:01M731PB6AZAWZKSYQ5SYQ1VC3"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": true,
       "expected": "a custom role naming one atom outside 05-rbac \u00a76.1's table (batcave.access): imported, the unknown atom grants nothing, and the role is named in the dry-run report and in health",
@@ -341,10 +353,12 @@
         "idx:role:name:league of shadows",
         "idx:user:username:talia.al.ghul",
         "idx:user:username:ubu",
-        "role:01M72T53MANKP4E96EMXRWXSSV",
-        "u:01M72T53P8S0H4336XAC52H6KQ",
-        "u:01M72T53R60ZG8Y02P0PBVHEF8"
+        "role:01M731PB6K05668MX7XJZ7Z3RV",
+        "u:01M731PB8ZQDGMQ4DQP9EN9KTH",
+        "u:01M731PBB982454BR3F9C27EXS"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "quarantined",
       "reported": false,
       "expected": "a custom role whose every atom is unknown: quarantined together with the role-list entries that name it (talia.al.ghul keeps viewer; ubu's role list ends empty, as _system's is)",
@@ -358,7 +372,11 @@
       "step": "M3",
       "key_prefix": "role:",
       "keys": [
-        "role:01M72T53R6489BFKJH4GZNBQA7"
+        "role:01M731PBBK3AYXT3G3JY7DQAYF"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "role:01M731PBBK3AYXT3G3JY7DQAYF"
       ],
       "outcome": "quarantined",
       "reported": false,
@@ -375,6 +393,10 @@
       "keys": [
         "inviteallow:owlman@court-of-owls.invalid"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "inviteallow:owlman@court-of-owls.invalid"
+      ],
       "outcome": "quarantined",
       "reported": false,
       "expected": "an invite allow-list row that does not decode: the preflight does not read the allow-list, and M3 quarantines the row; the step completes",
@@ -388,10 +410,12 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T53R7R3YHP9F8QW2R9Y29",
-        "idx:apikey:hash:3480a69a72a9a99f9e1024b53204630c0d0bc6ed855133e38b58823d36ae0c79",
-        "idx:apikey:user:01M72T53GT8XVXA6932VQQTB4C:01M72T53R7R3YHP9F8QW2R9Y29"
+        "apikey:01M731PBC8MYZ7S5856HVGDC6R",
+        "idx:apikey:hash:f11fd6f24f92bbded31056973180947c51d7ddce09e5ed59858f35fffd060a47",
+        "idx:apikey:user:01M731PB206E61WD4FWY6NHZ1C:01M731PBC8MYZ7S5856HVGDC6R"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an API key whose atoms (settings.manage, users.manage) lie outside its owner's roles: imported with the intersection, which is empty, so it keeps only the ambient scopes",
@@ -405,10 +429,12 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T53R80KQV8DGNTJQWZMYS",
-        "idx:apikey:hash:1cf9d8f80a81b7322f592a73dd11b9e5dee747ebd230166f6a31d38c605e01ec",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T53R80KQV8DGNTJQWZMYS"
+        "apikey:01M731PBCK236V8E8ERQ6AH9QS",
+        "idx:apikey:hash:b4d294783f9dda99b4c54ea6e249000f17f9179e5aeca21ed7be7fffa9c77fc3",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBCK236V8E8ERQ6AH9QS"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an every-atom key whose owner holds a custom every-atom role, not HEAD's admin: imported with the 13 rows' union \u2229 the owner's role set plus the ambient scopes, never core:admin",
@@ -422,10 +448,12 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T53R80KQV8DGNTPC6ZK61",
-        "idx:apikey:hash:7108d8ae3e3167bc90441b5249e9dc51a85d1c2d0bac89540af854fcdd1c192c",
-        "idx:apikey:user:01M72T53GT8XVXA6932VQQTB4C:01M72T53R80KQV8DGNTPC6ZK61"
+        "apikey:01M731PBCWCRJSHHS4BPA0HV0W",
+        "idx:apikey:hash:f519ed8ff30335d15d288cd6ce68642ad68c4948f5a62baff5a7557a36700abe",
+        "idx:apikey:user:01M731PB206E61WD4FWY6NHZ1C:01M731PBCWCRJSHHS4BPA0HV0W"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an empty scope list (HEAD's 'all of the owner's role permissions') under a custom-role owner: imported with the owner's native role set plus the ambient scopes, never empty",
@@ -440,13 +468,18 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:selina.kyle",
-        "u:01M72T53T5041H4ZY3YKWVW2GF"
+        "u:01M731PBFQ1JHQXGS79HP2APC6"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "user status ' Active': HEAD's UserIsActive trims and folds it, so it imports active",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "active"
+      }
     },
     {
       "case": "status-edge-user-upper-disabled",
@@ -456,13 +489,18 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:oswald.cobblepot",
-        "u:01M72T53W4DEBPJ0F7QZ8CR9P1"
+        "u:01M731PBKB28CMAFBQ6J83X62R"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": true,
       "expected": "user status 'DISABLED': not active, so it imports disabled and is reported by name (it is not 'inactive')",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "disabled"
+      }
     },
     {
       "case": "status-edge-user-empty",
@@ -472,13 +510,18 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:edward.nygma",
-        "u:01M72T53Y2K68Z0W815Y0KCJ2H"
+        "u:01M731PBNXXRVYB143XNKPMBAD"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "user status '': an empty user status is active at HEAD, so it imports active",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "active"
+      }
     },
     {
       "case": "status-edge-user-padded-inactive",
@@ -488,13 +531,18 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:pamela.isley",
-        "u:01M72T5405ZSBY7NNGXWWDAWWS"
+        "u:01M731PBRESVTDD6P9GZSH0BQ1"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "user status 'inactive ': trimmed to inactive, so it imports disabled and is not reported",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "disabled"
+      }
     },
     {
       "case": "status-edge-user-unknown",
@@ -504,13 +552,18 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:victor.fries",
-        "u:01M72T5422AZG8G97270C0B6MY"
+        "u:01M731PBTZZDNZ75S7E4KKE1N2"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": true,
       "expected": "user status 'suspended': not active, so it imports disabled and is reported by name",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "disabled"
+      }
     },
     {
       "case": "status-edge-key-padded-active",
@@ -519,15 +572,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T54239EVJM9G81JGAE03T",
-        "idx:apikey:hash:7ea221dd9b5f9fb7b3df73cf4c45db699b4215b2cf140243588963f00fae5073",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T54239EVJM9G81JGAE03T"
+        "apikey:01M731PBV8M9RPKZN49PVFS0P2",
+        "idx:apikey:hash:40c2d21c0fe7ca6dbbde0be4bc9bd28fdf200345f1db333b3cdc34ff876d1198",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBV8M9RPKZN49PVFS0P2"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "key status ' Active': trimmed and lower-cased, imports active",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "active"
+      }
     },
     {
       "case": "status-edge-key-upper-inactive",
@@ -536,15 +594,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T54239EVJM9G81JZEXDVY",
-        "idx:apikey:hash:acebab534c48973a8c233438c50f71685f8dbe8bdb416b2f362fe223f0ff8a67",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T54239EVJM9G81JZEXDVY"
+        "apikey:01M731PBVKXDBRCVG99NR26ZR1",
+        "idx:apikey:hash:8a6386039fff3956d41979617b9643722775e77047c6c4c46fe1742cb905afe9",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBVKXDBRCVG99NR26ZR1"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "key status 'INACTIVE': lower-cased to inactive, imports disabled",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "disabled"
+      }
     },
     {
       "case": "status-edge-key-empty",
@@ -553,15 +616,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5424XQKDM1Y2RRSRCCNX",
-        "idx:apikey:hash:adf12b4cb997dbfa3eff21fa4edf25899c17b03de24dac5e5fd36cd30854ad93",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T5424XQKDM1Y2RRSRCCNX"
+        "apikey:01M731PBVZD9RCX18G36G6TA5N",
+        "idx:apikey:hash:b7e05a601f6afc5a4a3ccdf173c0a8bc49e8c1540c731958fc4cd54afd63b3da",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBVZD9RCX18G36G6TA5N"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "key status '': HEAD admits it, imports active",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "active"
+      }
     },
     {
       "case": "status-edge-key-padded-revoked",
@@ -570,15 +638,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5424XQKDM1Y2RVE6JWZY",
-        "idx:apikey:hash:0ecf2fcb95bbe7317bcabc9f84bfbba8eadbe7761a1849c26e8c8947dc3ee125",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T5424XQKDM1Y2RVE6JWZY"
+        "apikey:01M731PBWBWXCW3FC1Z9P0D546",
+        "idx:apikey:hash:92e0a66a8c2669af9a0dd4cd8ef331214e7ee451f8df7ffe44d74ff4fb163b8b",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBWBWXCW3FC1Z9P0D546"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "key status 'Revoked ': trimmed and lower-cased, imports revoked",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "revoked"
+      }
     },
     {
       "case": "status-edge-key-active-revoked-at",
@@ -587,15 +660,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5425W4BXANF0QM4MNN5R",
-        "idx:apikey:hash:318b037bed71167e91320f9f0d2e1afc40d09fcce7f791bb41ef179e8cf309a9",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T5425W4BXANF0QM4MNN5R"
+        "apikey:01M731PBWQAEVJVPV1QXEBD3QF",
+        "idx:apikey:hash:ec09e41ff5647385dae736be5043280b0f734d598342741a46fa2c1d67ca7b16",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBWQAEVJVPV1QXEBD3QF"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "key status 'active' with revoked_at set: imports revoked (early fix 3's rule)",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "revoked"
+      }
     },
     {
       "case": "status-edge-key-unknown",
@@ -604,15 +682,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5425W4BXANF0QP968WMT",
-        "idx:apikey:hash:d247cb547f5e8b4c515317fadaca382d94167d4ff70cbe2ac94d26eaaf3f3dfe",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T5425W4BXANF0QP968WMT"
+        "apikey:01M731PBX2F186GASP86YP48VB",
+        "idx:apikey:hash:c09b8d0dc4ede6d5fb6adeca19919e7d631f15eb479e0f0448d68eda4bf5b3da",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBX2F186GASP86YP48VB"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": true,
       "expected": "key status 'paused': not a known status, imports disabled and is reported by key ID",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "disabled"
+      }
     },
     {
       "case": "status-edge-key-no-expiry",
@@ -621,15 +704,20 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5426AW9H3XE30WHWBQX7",
-        "idx:apikey:hash:b7f8510090bc24f55d06a606707e6d397db4d84db2d41ec3fe6784d4f8962de0",
-        "idx:apikey:user:01M72T53DBP2XDD2PD88WE06XA:01M72T5426AW9H3XE30WHWBQX7"
+        "apikey:01M731PBXDTTCRJFNXNHA8H1ZH",
+        "idx:apikey:hash:0974ff18a100f6854582866207c89096fb61ef1cc6e76068499fbd3dad6f05c3",
+        "idx:apikey:user:01M731PAXHJA74MGPRM4RC9T2G:01M731PBXDTTCRJFNXNHA8H1ZH"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an active key with no expiry: imports active with HEAD's one-shot stamp (cutover time plus the default TTL)",
       "spec": "05-authn \u00a711 (statuses: SEC-11); 09 \u00a79.2.3 M3",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "status": "active"
+      }
     },
     {
       "case": "oauthid-linked",
@@ -638,10 +726,12 @@
       "step": "M3",
       "key_prefix": "oauthid:",
       "keys": [
-        "idx:oauth:sub:github:19390501",
-        "idx:oauth:user:01M72KQJJ3QTYQ3XCF5F2Y7GS3:01M72T5427KBZXZVGP4N1DET6H",
-        "oauthid:01M72T5427KBZXZVGP4N1DET6H"
+        "idx:oauth:sub:github:oracle-clocktower-1989",
+        "idx:oauth:user:01M72KQJJ3QTYQ3XCF5F2Y7GS3:01M731PBXSTQF8FDKHW5TSYJ1N",
+        "oauthid:01M731PBXSTQF8FDKHW5TSYJ1N"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an OAuth identity linked to barbara.gordon (R0's API writes one only through an SSO sign-in): imported to c/auth/identity/ with (provider, subject) and user kept",
@@ -655,11 +745,14 @@
       "step": "M3",
       "key_prefix": "inviteallow:",
       "keys": [
+        "idx:user:email:alfred@wayne-manor.invalid",
         "idx:user:username:alfred.pennyworth",
-        "invite:r2corpus-overlay-invite-01m72t5427hcp448qan8b0hdsv",
+        "invite:r2corpus-overlay-invite-01m731pby4g7hgdmj8pd2tagcb",
         "inviteallow:alfred@wayne-manor.invalid",
-        "u:01M72T54471KTPNFPNHRV28508"
+        "u:01M731PC0GT903F98P9WA7P2EP"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "the allow-list row an emailed invite's acceptance writes (with its user alfred.pennyworth): imported to c/auth/inviteallow/ with the folded e-mail kept",
@@ -673,16 +766,35 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T5447AXQHJ1YPH9PXEZHG",
-        "opv3:ledger:01M72T5447AXQHJ1YPH9PXEZHG",
-        "opv3:prog:01M72T5447AXQHJ1YPH9PXEZHG",
-        "opv3:run:01M72T5447AXQHJ1YPH9PXEZHG"
+        "opv2:act:01M731PC0SK43T7036V3AHDJB4",
+        "opv2:op:01M731PC0SK43T7036V3AHDJB4",
+        "opv2:open:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:ckpt:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:evt:01M731PC0SK43T7036V3AHDJB4:01794325032985097730:000001",
+        "opv3:evt:01M731PC0SK43T7036V3AHDJB4:01794325032985993638:000002",
+        "opv3:intent:01M731PC0SK43T7036V3AHDJB4:0000000001",
+        "opv3:item:01M731PC0SK43T7036V3AHDJB4:failed:Year One",
+        "opv3:ix:def:maintenance.temp-file-cleanup:01794325032985097730:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:ix:state:running:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:ledger:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:log:01M731PC0SK43T7036V3AHDJB4:01794325032986282994:0000000001",
+        "opv3:log:01M731PC0SK43T7036V3AHDJB4:01794325032986282994:0000000002",
+        "opv3:mark:01M731PC0SK43T7036V3AHDJB4:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC0SK43T7036V3AHDJB4:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC0SK43T7036V3AHDJB4",
+        "opv3:run:01M731PC0SK43T7036V3AHDJB4"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a running run with a checkpoint, a chunk ledger with marks and a lease, an open intent, an item outcome and log lines: imported as interrupted with all of them",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted"
+      }
     },
     {
       "case": "run-stopping-shutdown",
@@ -691,16 +803,36 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544AA42FS7NG7J3JPEHE",
-        "opv3:ledger:01M72T544AA42FS7NG7J3JPEHE",
-        "opv3:prog:01M72T544AA42FS7NG7J3JPEHE",
-        "opv3:run:01M72T544AA42FS7NG7J3JPEHE"
+        "opv2:act:01M731PC13R2X86GAXJKKVE6W7",
+        "opv2:op:01M731PC13R2X86GAXJKKVE6W7",
+        "opv2:open:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:ckpt:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:evt:01M731PC13R2X86GAXJKKVE6W7:01794325032995933363:000001",
+        "opv3:evt:01M731PC13R2X86GAXJKKVE6W7:01794325032996483701:000002",
+        "opv3:evt:01M731PC13R2X86GAXJKKVE6W7:01794325032998006873:000003",
+        "opv3:intent:01M731PC13R2X86GAXJKKVE6W7:0000000001",
+        "opv3:item:01M731PC13R2X86GAXJKKVE6W7:failed:Year One",
+        "opv3:ix:def:maintenance.transcode-temp-cleanup:01794325032995933363:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:ix:state:stopping:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:ledger:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:log:01M731PC13R2X86GAXJKKVE6W7:01794325032996757763:0000000003",
+        "opv3:log:01M731PC13R2X86GAXJKKVE6W7:01794325032996757763:0000000004",
+        "opv3:mark:01M731PC13R2X86GAXJKKVE6W7:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC13R2X86GAXJKKVE6W7:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC13R2X86GAXJKKVE6W7",
+        "opv3:run:01M731PC13R2X86GAXJKKVE6W7"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "stopping with StopReason shutdown: imported as interrupted",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted"
+      }
     },
     {
       "case": "run-stopping-user",
@@ -709,16 +841,36 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544DWTS6NEW5EGNMC2J1",
-        "opv3:ledger:01M72T544DWTS6NEW5EGNMC2J1",
-        "opv3:prog:01M72T544DWTS6NEW5EGNMC2J1",
-        "opv3:run:01M72T544DWTS6NEW5EGNMC2J1"
+        "opv2:act:01M731PC1ECT951336W0DCWKZP",
+        "opv2:op:01M731PC1ECT951336W0DCWKZP",
+        "opv2:open:01M731PC1ECT951336W0DCWKZP",
+        "opv3:ckpt:01M731PC1ECT951336W0DCWKZP",
+        "opv3:evt:01M731PC1ECT951336W0DCWKZP:01794325033006203986:000001",
+        "opv3:evt:01M731PC1ECT951336W0DCWKZP:01794325033006616937:000002",
+        "opv3:evt:01M731PC1ECT951336W0DCWKZP:01794325033008151656:000003",
+        "opv3:intent:01M731PC1ECT951336W0DCWKZP:0000000001",
+        "opv3:item:01M731PC1ECT951336W0DCWKZP:failed:Year One",
+        "opv3:ix:def:maintenance.purge-old-logs:01794325033006203986:01M731PC1ECT951336W0DCWKZP",
+        "opv3:ix:state:stopping:01M731PC1ECT951336W0DCWKZP",
+        "opv3:ledger:01M731PC1ECT951336W0DCWKZP",
+        "opv3:log:01M731PC1ECT951336W0DCWKZP:01794325033006964159:0000000005",
+        "opv3:log:01M731PC1ECT951336W0DCWKZP:01794325033006964159:0000000006",
+        "opv3:mark:01M731PC1ECT951336W0DCWKZP:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC1ECT951336W0DCWKZP:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC1ECT951336W0DCWKZP",
+        "opv3:run:01M731PC1ECT951336W0DCWKZP"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "stopping with StopReason user: imported as canceled",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "canceled"
+      }
     },
     {
       "case": "run-stopping-quiesce",
@@ -727,16 +879,36 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544F6JT1KF9WQ9XHD9HP",
-        "opv3:ledger:01M72T544F6JT1KF9WQ9XHD9HP",
-        "opv3:prog:01M72T544F6JT1KF9WQ9XHD9HP",
-        "opv3:run:01M72T544F6JT1KF9WQ9XHD9HP"
+        "opv2:act:01M731PC1RWT417F2PQDP96F0B",
+        "opv2:op:01M731PC1RWT417F2PQDP96F0B",
+        "opv2:open:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:ckpt:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:evt:01M731PC1RWT417F2PQDP96F0B:01794325033016112293:000001",
+        "opv3:evt:01M731PC1RWT417F2PQDP96F0B:01794325033016550623:000002",
+        "opv3:evt:01M731PC1RWT417F2PQDP96F0B:01794325033017918411:000003",
+        "opv3:intent:01M731PC1RWT417F2PQDP96F0B:0000000001",
+        "opv3:item:01M731PC1RWT417F2PQDP96F0B:failed:Year One",
+        "opv3:ix:def:library.scan:01794325033016112293:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:ix:state:stopping:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:ledger:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:log:01M731PC1RWT417F2PQDP96F0B:01794325033016808711:0000000007",
+        "opv3:log:01M731PC1RWT417F2PQDP96F0B:01794325033016808711:0000000008",
+        "opv3:mark:01M731PC1RWT417F2PQDP96F0B:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC1RWT417F2PQDP96F0B:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC1RWT417F2PQDP96F0B",
+        "opv3:run:01M731PC1RWT417F2PQDP96F0B"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "stopping with StopReason quiesce (a library.scan): imported as interrupted_quiesced",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted_quiesced"
+      }
     },
     {
       "case": "run-stopping-timeout",
@@ -745,16 +917,36 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544JG5FK3PB9Y470V01T",
-        "opv3:ledger:01M72T544JG5FK3PB9Y470V01T",
-        "opv3:prog:01M72T544JG5FK3PB9Y470V01T",
-        "opv3:run:01M72T544JG5FK3PB9Y470V01T"
+        "opv2:act:01M731PC229AAP482JVGV6B3PB",
+        "opv2:op:01M731PC229AAP482JVGV6B3PB",
+        "opv2:open:01M731PC229AAP482JVGV6B3PB",
+        "opv3:ckpt:01M731PC229AAP482JVGV6B3PB",
+        "opv3:evt:01M731PC229AAP482JVGV6B3PB:01794325033026298569:000001",
+        "opv3:evt:01M731PC229AAP482JVGV6B3PB:01794325033026684519:000002",
+        "opv3:evt:01M731PC229AAP482JVGV6B3PB:01794325033028242864:000003",
+        "opv3:intent:01M731PC229AAP482JVGV6B3PB:0000000001",
+        "opv3:item:01M731PC229AAP482JVGV6B3PB:failed:Year One",
+        "opv3:ix:def:maintenance.opchange-book-index-rebuild:01794325033026298569:01M731PC229AAP482JVGV6B3PB",
+        "opv3:ix:state:stopping:01M731PC229AAP482JVGV6B3PB",
+        "opv3:ledger:01M731PC229AAP482JVGV6B3PB",
+        "opv3:log:01M731PC229AAP482JVGV6B3PB:01794325033027076439:0000000009",
+        "opv3:log:01M731PC229AAP482JVGV6B3PB:01794325033027076439:0000000010",
+        "opv3:mark:01M731PC229AAP482JVGV6B3PB:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC229AAP482JVGV6B3PB:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC229AAP482JVGV6B3PB",
+        "opv3:run:01M731PC229AAP482JVGV6B3PB"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "stopping with StopReason timeout: imported as timed_out",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "timed_out"
+      }
     },
     {
       "case": "run-stopping-watchdog",
@@ -763,16 +955,37 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544P72VVNP70BB5XT4V8",
-        "opv3:ledger:01M72T544P72VVNP70BB5XT4V8",
-        "opv3:prog:01M72T544P72VVNP70BB5XT4V8",
-        "opv3:run:01M72T544P72VVNP70BB5XT4V8"
+        "opv2:act:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv2:op:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv2:open:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:ckpt:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:evt:01M731PC2CDWVHEYFQ8H2872NH:01794325033036259666:000001",
+        "opv3:evt:01M731PC2CDWVHEYFQ8H2872NH:01794325033036734570:000002",
+        "opv3:evt:01M731PC2CDWVHEYFQ8H2872NH:01794325033038287006:000003",
+        "opv3:intent:01M731PC2CDWVHEYFQ8H2872NH:0000000001",
+        "opv3:item:01M731PC2CDWVHEYFQ8H2872NH:failed:Year One",
+        "opv3:ix:def:maintenance.book-hash-index-repair:01794325033036259666:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:ix:state:stopping:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:ledger:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:log:01M731PC2CDWVHEYFQ8H2872NH:01794325033037103726:0000000011",
+        "opv3:log:01M731PC2CDWVHEYFQ8H2872NH:01794325033037103726:0000000012",
+        "opv3:mark:01M731PC2CDWVHEYFQ8H2872NH:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC2CDWVHEYFQ8H2872NH:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC2CDWVHEYFQ8H2872NH",
+        "opv3:run:01M731PC2CDWVHEYFQ8H2872NH"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "stopping with StopReason watchdog: imported as failed with reason watchdog",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "failed",
+        "reason": "watchdog"
+      }
     },
     {
       "case": "run-interrupted-crash",
@@ -781,16 +994,36 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544RAC12BW7B4Y9F05EY",
-        "opv3:ledger:01M72T544RAC12BW7B4Y9F05EY",
-        "opv3:prog:01M72T544RAC12BW7B4Y9F05EY",
-        "opv3:run:01M72T544RAC12BW7B4Y9F05EY"
+        "opv2:done:01794325033048803799:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv2:op:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:ckpt:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:evt:01M731PC2PP2KJ2BECZ2W2QY0F:01794325033046810810:000001",
+        "opv3:evt:01M731PC2PP2KJ2BECZ2W2QY0F:01794325033047334218:000002",
+        "opv3:evt:01M731PC2PP2KJ2BECZ2W2QY0F:01794325033048803799:000003",
+        "opv3:intent:01M731PC2PP2KJ2BECZ2W2QY0F:0000000001",
+        "opv3:item:01M731PC2PP2KJ2BECZ2W2QY0F:failed:Year One",
+        "opv3:ix:def:maintenance.activity-filter-index-backfill:01794325033046810810:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:ix:done:01794325033048803799:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:ix:state:interrupted:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:ledger:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:log:01M731PC2PP2KJ2BECZ2W2QY0F:01794325033047622632:0000000013",
+        "opv3:log:01M731PC2PP2KJ2BECZ2W2QY0F:01794325033047622632:0000000014",
+        "opv3:mark:01M731PC2PP2KJ2BECZ2W2QY0F:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC2PP2KJ2BECZ2W2QY0F:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC2PP2KJ2BECZ2W2QY0F",
+        "opv3:run:01M731PC2PP2KJ2BECZ2W2QY0F"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "interrupted with InterruptedWhy crash: imported as interrupted",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted"
+      }
     },
     {
       "case": "run-interrupted-quiesced",
@@ -799,16 +1032,37 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T544VRM9JCDF77K25F5YW",
-        "opv3:ledger:01M72T544VRM9JCDF77K25F5YW",
-        "opv3:prog:01M72T544VRM9JCDF77K25F5YW",
-        "opv3:run:01M72T544VRM9JCDF77K25F5YW"
+        "opv2:done:01794325033059434623:01M731PC31G35VK7G5GHGZ4873",
+        "opv2:op:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:ckpt:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:evt:01M731PC31G35VK7G5GHGZ4873:01794325033057077727:000001",
+        "opv3:evt:01M731PC31G35VK7G5GHGZ4873:01794325033057420733:000002",
+        "opv3:evt:01M731PC31G35VK7G5GHGZ4873:01794325033059123946:000003",
+        "opv3:evt:01M731PC31G35VK7G5GHGZ4873:01794325033059434623:000004",
+        "opv3:intent:01M731PC31G35VK7G5GHGZ4873:0000000001",
+        "opv3:item:01M731PC31G35VK7G5GHGZ4873:failed:Year One",
+        "opv3:ix:def:library.scan:01794325033057077727:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:ix:done:01794325033059434623:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:ix:state:interrupted:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:ledger:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:log:01M731PC31G35VK7G5GHGZ4873:01794325033057730630:0000000015",
+        "opv3:log:01M731PC31G35VK7G5GHGZ4873:01794325033057730630:0000000016",
+        "opv3:mark:01M731PC31G35VK7G5GHGZ4873:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC31G35VK7G5GHGZ4873:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC31G35VK7G5GHGZ4873",
+        "opv3:run:01M731PC31G35VK7G5GHGZ4873"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "interrupted with InterruptedWhy quiesced (a library.scan): imported as interrupted_quiesced",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted_quiesced"
+      }
     },
     {
       "case": "run-queued-deps",
@@ -817,14 +1071,26 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:prog:01M72T544YNP9E84BNE0H47GKS",
-        "opv3:run:01M72T544YNP9E84BNE0H47GKS"
+        "opv2:op:01M731PC3CN2PK426CR6361BQ0",
+        "opv2:open:01M731PC3CN2PK426CR6361BQ0",
+        "opv2:wait:01M731PC3CN2PK426CR6361BQ0",
+        "opv3:evt:01M731PC3CN2PK426CR6361BQ0:01794325033068416016:000001",
+        "opv3:ix:def:dedup.check-book:01794325033068416016:01M731PC3CN2PK426CR6361BQ0",
+        "opv3:ix:state:queued:01M731PC3CN2PK426CR6361BQ0",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC3CN2PK426CR6361BQ0",
+        "opv3:run:01M731PC3CN2PK426CR6361BQ0"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "queued with WaitReason deps (dedup.check-book on a book): imported as waiting_deps",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "waiting_deps"
+      }
     },
     {
       "case": "run-dropped",
@@ -833,14 +1099,34 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:prog:01M72T544YNP9E84BNE44S333V",
-        "opv3:run:01M72T544YNP9E84BNE44S333V"
+        "opv2:done:01794325033082952813:01M731PC3RVNE299N0HPZZV8DX",
+        "opv2:op:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:ckpt:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:evt:01M731PC3RVNE299N0HPZZV8DX:01794325033080275074:000001",
+        "opv3:evt:01M731PC3RVNE299N0HPZZV8DX:01794325033081104592:000002",
+        "opv3:evt:01M731PC3RVNE299N0HPZZV8DX:01794325033082952813:000003",
+        "opv3:evt:01M731PC3RVNE299N0HPZZV8DX:01794325033083250761:000004",
+        "opv3:intent:01M731PC3RVNE299N0HPZZV8DX:0000000001",
+        "opv3:item:01M731PC3RVNE299N0HPZZV8DX:failed:Year One",
+        "opv3:ix:def:maintenance.purge-deleted:01794325033080275074:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:ix:done:01794325033082952813:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:ix:state:dropped:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:log:01M731PC3RVNE299N0HPZZV8DX:01794325033081732397:0000000017",
+        "opv3:log:01M731PC3RVNE299N0HPZZV8DX:01794325033081732397:0000000018",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC3RVNE299N0HPZZV8DX",
+        "opv3:run:01M731PC3RVNE299N0HPZZV8DX"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "dropped by the owner after a crash: imported as interrupted_dropped",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted_dropped"
+      }
     },
     {
       "case": "run-awaiting-decision",
@@ -849,20 +1135,41 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:row:01M72T5451034P4RCHK5HAM7V2:plan/row-hush",
-        "opv2:row:01M72T5451034P4RCHK5HAM7V2:plan/row-year-one",
-        "opv2:rowix:01M72T5451034P4RCHK5HAM7V2:plan/row-hush",
-        "opv2:rowix:01M72T5451034P4RCHK5HAM7V2:plan/row-year-one",
-        "opv3:ckpt:01M72T5451034P4RCHK5HAM7V2",
-        "opv3:ledger:01M72T5451034P4RCHK5HAM7V2",
-        "opv3:prog:01M72T5451034P4RCHK5HAM7V2",
-        "opv3:run:01M72T5451034P4RCHK5HAM7V2"
+        "opv2:done:01794325033095458202:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv2:op:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv2:row:01M731PC45NGKDVXDXWY0TRG4V:plan/row-hush",
+        "opv2:row:01M731PC45NGKDVXDXWY0TRG4V:plan/row-year-one",
+        "opv2:rowix:01M731PC45NGKDVXDXWY0TRG4V:plan/row-hush",
+        "opv2:rowix:01M731PC45NGKDVXDXWY0TRG4V:plan/row-year-one",
+        "opv3:ckpt:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:evt:01M731PC45NGKDVXDXWY0TRG4V:01794325033093538614:000001",
+        "opv3:evt:01M731PC45NGKDVXDXWY0TRG4V:01794325033094044375:000002",
+        "opv3:evt:01M731PC45NGKDVXDXWY0TRG4V:01794325033095458202:000003",
+        "opv3:evt:01M731PC45NGKDVXDXWY0TRG4V:01794325033096424356:000004",
+        "opv3:intent:01M731PC45NGKDVXDXWY0TRG4V:0000000001",
+        "opv3:item:01M731PC45NGKDVXDXWY0TRG4V:failed:Year One",
+        "opv3:ix:def:repairs.plan:01794325033093538614:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:ix:done:01794325033095458202:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:ix:state:awaiting_decision:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:ledger:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:log:01M731PC45NGKDVXDXWY0TRG4V:01794325033094383205:0000000019",
+        "opv3:log:01M731PC45NGKDVXDXWY0TRG4V:01794325033094383205:0000000020",
+        "opv3:mark:01M731PC45NGKDVXDXWY0TRG4V:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC45NGKDVXDXWY0TRG4V:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC45NGKDVXDXWY0TRG4V",
+        "opv3:run:01M731PC45NGKDVXDXWY0TRG4V"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a repairs plan awaiting its approver, with its two plan rows (opv2:row: and opv2:rowix:, written by HEAD's repairs.SavePlan): imported as awaiting_decision with its rows under c/tasks/row/",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0 (DATA-3)",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "awaiting_decision"
+      }
     },
     {
       "case": "run-interrupted-apply-rowmarks",
@@ -871,17 +1178,37 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:ckpt:01M72T5458ASZ4RZZ9XG9XFT95",
-        "opv3:ledger:01M72T5458ASZ4RZZ9XG9XFT95",
-        "opv3:prog:01M72T5458ASZ4RZZ9XG9XFT95",
-        "opv3:rowmark:01M72T5458ASZ4RZZ9XG9XFT95:row-hush",
-        "opv3:run:01M72T5458ASZ4RZZ9XG9XFT95"
+        "opv2:done:01794325033109149386:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv2:op:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:ckpt:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:evt:01M731PC4KT6TMXV8QM6VB69YH:01794325033107083658:000001",
+        "opv3:evt:01M731PC4KT6TMXV8QM6VB69YH:01794325033107618173:000002",
+        "opv3:evt:01M731PC4KT6TMXV8QM6VB69YH:01794325033109149386:000003",
+        "opv3:intent:01M731PC4KT6TMXV8QM6VB69YH:0000000001",
+        "opv3:item:01M731PC4KT6TMXV8QM6VB69YH:failed:Year One",
+        "opv3:ix:def:repairs.apply:01794325033107083658:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:ix:done:01794325033109149386:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:ix:state:interrupted:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:ledger:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:log:01M731PC4KT6TMXV8QM6VB69YH:01794325033107920808:0000000021",
+        "opv3:log:01M731PC4KT6TMXV8QM6VB69YH:01794325033107920808:0000000022",
+        "opv3:mark:01M731PC4KT6TMXV8QM6VB69YH:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC4KT6TMXV8QM6VB69YH:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC4KT6TMXV8QM6VB69YH",
+        "opv3:rowmark:01M731PC4KT6TMXV8QM6VB69YH:row-hush",
+        "opv3:run:01M731PC4KT6TMXV8QM6VB69YH"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an interrupted live repairs.apply with one row's apply marker (opv3:rowmark:): imported with the marker under c/tasks/mark/, so a resume does not apply that row again",
       "spec": "05-tasks \u00a75T.8.3; \u00a75T.9 TestCutover_TasksFixtureFromR0 (DATA-3)",
-      "store": "internal/books/testdata/r2corpus/overlay"
+      "store": "internal/books/testdata/r2corpus/overlay",
+      "imported_as": {
+        "state": "interrupted"
+      }
     },
     {
       "case": "run-standdown-marker",
@@ -890,16 +1217,48 @@
       "step": "M4",
       "key_prefix": "setting:registry.scan_standdown",
       "keys": [
-        "opv3:ckpt:01M72T545BK072FJ8FBYX0BM06",
-        "opv3:ckpt:01M72T545FHKDN47708YFA90YR",
-        "opv3:ledger:01M72T545BK072FJ8FBYX0BM06",
-        "opv3:ledger:01M72T545FHKDN47708YFA90YR",
-        "opv3:prog:01M72T545BK072FJ8FBYX0BM06",
-        "opv3:prog:01M72T545FHKDN47708YFA90YR",
-        "opv3:run:01M72T545BK072FJ8FBYX0BM06",
-        "opv3:run:01M72T545FHKDN47708YFA90YR",
+        "opv2:done:01794325033123232570:01M731PC50M22CHZ6PBT70QG91",
+        "opv2:done:01794325033125160531:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv2:op:01M731PC50M22CHZ6PBT70QG91",
+        "opv2:op:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:ckpt:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:ckpt:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:evt:01M731PC50M22CHZ6PBT70QG91:01794325033120927011:000001",
+        "opv3:evt:01M731PC50M22CHZ6PBT70QG91:01794325033121404410:000002",
+        "opv3:evt:01M731PC50M22CHZ6PBT70QG91:01794325033122896985:000003",
+        "opv3:evt:01M731PC50M22CHZ6PBT70QG91:01794325033123232570:000004",
+        "opv3:evt:01M731PC530V3SFHTAVV5WZ4Q1:01794325033123515486:000001",
+        "opv3:evt:01M731PC530V3SFHTAVV5WZ4Q1:01794325033123857550:000002",
+        "opv3:evt:01M731PC530V3SFHTAVV5WZ4Q1:01794325033125160531:000003",
+        "opv3:intent:01M731PC50M22CHZ6PBT70QG91:0000000001",
+        "opv3:intent:01M731PC530V3SFHTAVV5WZ4Q1:0000000001",
+        "opv3:item:01M731PC50M22CHZ6PBT70QG91:failed:Year One",
+        "opv3:item:01M731PC530V3SFHTAVV5WZ4Q1:failed:Year One",
+        "opv3:ix:def:library.scan:01794325033120927011:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:ix:def:maintenance.metadata-refresh:01794325033123515486:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:ix:done:01794325033123232570:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:ix:done:01794325033125160531:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:ix:state:interrupted:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:ix:state:interrupted:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:ledger:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:ledger:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:log:01M731PC50M22CHZ6PBT70QG91:01794325033121729679:0000000023",
+        "opv3:log:01M731PC50M22CHZ6PBT70QG91:01794325033121729679:0000000024",
+        "opv3:log:01M731PC530V3SFHTAVV5WZ4Q1:01794325033124168098:0000000025",
+        "opv3:log:01M731PC530V3SFHTAVV5WZ4Q1:01794325033124168098:0000000026",
+        "opv3:mark:01M731PC50M22CHZ6PBT70QG91:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC50M22CHZ6PBT70QG91:touched\u0000book:year-one",
+        "opv3:mark:01M731PC530V3SFHTAVV5WZ4Q1:touched\u0000book:the-long-halloween",
+        "opv3:mark:01M731PC530V3SFHTAVV5WZ4Q1:touched\u0000book:year-one",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:prog:01M731PC530V3SFHTAVV5WZ4Q1",
+        "opv3:run:01M731PC50M22CHZ6PBT70QG91",
+        "opv3:run:01M731PC530V3SFHTAVV5WZ4Q1",
         "setting:registry.scan_standdown"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a scan stand-down marker naming a quiesced library.scan and the interrupted maintenance op holding the gate (its lease already expired when written): imported as one StandDown for the converted scan kind",
@@ -915,6 +1274,8 @@
       "keys": [
         "op:batch:dedup.check-book:book:01M72KQYE310SSXK8P6KZHNDG4"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "one pending subject in dedup.check-book's debounce bucket: imported as a Debounce holding a pending start",
@@ -931,6 +1292,8 @@
         "op:completion:book:01M72KQYE310SSXK8P6KZHNDG4:dedup.check-book",
         "op:deprev:book:01M72KQYE310SSXK8P6KZHNDG4"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "a book's dependency revision and its dedup.check-book completion stamp: imported as a Stamp with subject books/books and the renamed kind",
@@ -944,7 +1307,26 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv3:run:01M72T545J28QHC3C9WC50MX8Z"
+        "opv2:done:01794325033162705414:01M731PC68J15F6MDMEJMZEEX0",
+        "opv2:op:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:ckpt:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:evt:01M731PC68J15F6MDMEJMZEEX0:01794325033160786777:000001",
+        "opv3:evt:01M731PC68J15F6MDMEJMZEEX0:01794325033161301532:000002",
+        "opv3:evt:01M731PC68J15F6MDMEJMZEEX0:01794325033162705414:000003",
+        "opv3:intent:01M731PC68J15F6MDMEJMZEEX0:0000000001",
+        "opv3:item:01M731PC68J15F6MDMEJMZEEX0:failed:Year One",
+        "opv3:ix:def:maintenance.transcode-temp-cleanup:01794325033160786777:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:ix:done:01794325033162705414:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:ix:state:succeeded:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:log:01M731PC68J15F6MDMEJMZEEX0:01794325033161615674:0000000027",
+        "opv3:log:01M731PC68J15F6MDMEJMZEEX0:01794325033161615674:0000000028",
+        "opv3:meta:counts",
+        "opv3:prog:01M731PC68J15F6MDMEJMZEEX0",
+        "opv3:run:01M731PC68J15F6MDMEJMZEEX0"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "opv3:run:01M731PC68J15F6MDMEJMZEEX0"
       ],
       "outcome": "quarantined",
       "reported": false,
@@ -959,7 +1341,11 @@
       "step": "M5",
       "key_prefix": "syslog:",
       "keys": [
-        "syslog:2026-11-10T13:25:27.862670187Z:r2corpus-overlay"
+        "syslog:2026-11-10T15:37:13.179512786Z:r2corpus-overlay"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "syslog:2026-11-10T15:37:13.179512786Z:r2corpus-overlay"
       ],
       "outcome": "quarantined",
       "reported": false,
@@ -976,6 +1362,8 @@
       "keys": [
         "setting:config_blob#ai_endpoints"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": true,
       "expected": "an AI endpoint row (oracle-relay) whose URL does not parse: M6 writes the native ai/oracle-relay instance, keeps it and reports it misconfigured (not quarantined: no integration field can be undecodable while R0 still boots, see seams.d/F2-13.md)",
@@ -991,6 +1379,10 @@
       "keys": [
         "import_path:9"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "import_path:9"
+      ],
       "outcome": "quarantined",
       "reported": false,
       "expected": "an import_path: row that does not decode, whose path (import/Selina Kyle) prefixes the Hush book's rows: quarantined; those books rows stay byte-identical and are named in the report and health; the step completes",
@@ -1004,7 +1396,11 @@
       "step": "M6",
       "key_prefix": "aijob:",
       "keys": [
-        "aijob:01M72T545R33ZM7BRVGT0CSTY2"
+        "aijob:01M731PC80XRKWT53PV5E2M8AD"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "aijob:01M731PC80XRKWT53PV5E2M8AD"
       ],
       "outcome": "quarantined",
       "reported": false,
@@ -1019,9 +1415,11 @@
       "step": "M6",
       "key_prefix": "aijob:",
       "keys": [
-        "aijob:01M72T545R33ZM7BRVGW1WQRWP",
-        "aijob_payload:01M72T545R33ZM7BRVGW1WQRWP"
+        "aijob:01M731PC8DNNJSBXAQST2BWP2N",
+        "aijob_payload:01M731PC8DNNJSBXAQST2BWP2N"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an AI job pending (R0's API makes one only through the OpenAI Batch API): imported into c/ai/",
@@ -1035,10 +1433,12 @@
       "step": "M6",
       "key_prefix": "aijob:",
       "keys": [
-        "aijob:01M72T545STPHXJM38PPVQ0N7N",
-        "aijob_batch:batch_r2corpus_01m72t545stphxjm38ppvq0n7n",
-        "aijob_payload:01M72T545STPHXJM38PPVQ0N7N"
+        "aijob:01M731PC8R0X608KAZC5B5ADVY",
+        "aijob_batch:batch_r2corpus_01m731pc8r0x608kazc5b5advy",
+        "aijob_payload:01M731PC8R0X608KAZC5B5ADVY"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an AI job submitted with its batch index row: imported into c/ai/",
@@ -1052,10 +1452,12 @@
       "step": "M6",
       "key_prefix": "aijob:",
       "keys": [
-        "aijob:01M72T545STPHXJM38PR0SEYVA",
-        "aijob_batch:batch_r2corpus_01m72t545stphxjm38pr0seyva",
-        "aijob_payload:01M72T545STPHXJM38PR0SEYVA"
+        "aijob:01M731PC94TET30BZB3PZNR869",
+        "aijob_batch:batch_r2corpus_01m731pc94tet30bzb3pznr869",
+        "aijob_payload:01M731PC94TET30BZB3PZNR869"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an AI job completed with one row error: imported into c/ai/",
@@ -1069,9 +1471,11 @@
       "step": "M6",
       "key_prefix": "aijob:",
       "keys": [
-        "aijob:01M72T545T6XT3D6GYXNBMBMXV",
-        "aijob_payload:01M72T545T6XT3D6GYXNBMBMXV"
+        "aijob:01M731PC9GA2RPP9C4QYS3KKW5",
+        "aijob_payload:01M731PC9GA2RPP9C4QYS3KKW5"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "imported",
       "reported": false,
       "expected": "an AI job failed: imported into c/ai/",
@@ -1087,7 +1491,11 @@
       "step": "M3",
       "key_prefix": "u:",
       "keys": [
-        "u:01M72T547Q2YKE105KJ1ARAG88"
+        "u:01M731PCWW8140RBE27AA0P5M9"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "u:01M731PCWW8140RBE27AA0P5M9"
       ],
       "outcome": "refused",
       "reported": false,
@@ -1102,7 +1510,11 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T5490PG57EHYF51XCTVVF"
+        "apikey:01M731PDF3NCXWBNDWNEYDVNAY"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "apikey:01M731PDF3NCXWBNDWNEYDVNAY"
       ],
       "outcome": "refused",
       "reported": false,
@@ -1117,7 +1529,11 @@
       "step": "M3",
       "key_prefix": "oauthid:",
       "keys": [
-        "oauthid:01M72T54A9GX9Q046272JEQPZS"
+        "oauthid:01M731PE1AJHC4E6M3SCW38XN7"
+      ],
+      "removed_keys": [],
+      "corrupt_keys": [
+        "oauthid:01M731PE1AJHC4E6M3SCW38XN7"
       ],
       "outcome": "refused",
       "reported": false,
@@ -1133,8 +1549,10 @@
       "key_prefix": "u:",
       "keys": [
         "idx:user:username:",
-        "u:01M72T54F2J184B7YARBV102J7"
+        "u:01M731PEQXKMNAPEJCT6GF1BJK"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "refused",
       "reported": false,
       "expected": "a decodable user row auth.Importer rejects (an empty username): the preflight refuses the boot (storage.ErrCutoverBlocked, exit 78); the report names the key and its reason, never its value; store and directory byte-identical, no checkpoint",
@@ -1148,10 +1566,12 @@
       "step": "M3",
       "key_prefix": "apikey:",
       "keys": [
-        "apikey:01M72T54GMJWWA01WNS53KZRXM",
-        "idx:apikey:hash:ca6a36ccf69e47c9731b3a062a0319ccb1443ff52930f5e3fcde790c3b1de795",
-        "idx:apikey:user:01M72T54GM6DS9NQSTQTA9B1YH:01M72T54GMJWWA01WNS53KZRXM"
+        "apikey:01M731PFAD0FPTETYSW6E7QDGZ",
+        "idx:apikey:hash:0928f10fa0d5922095442842a613c3b3859bfba11ebee176ae21298c78b50e8b",
+        "idx:apikey:user:01M731PFADK02Z1BMDAA38STCW:01M731PFAD0FPTETYSW6E7QDGZ"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "refused",
       "reported": false,
       "expected": "a decodable API key whose user does not exist: the preflight refuses the boot (storage.ErrCutoverBlocked, exit 78); the report names the key and its reason, never its value; store and directory byte-identical, no checkpoint",
@@ -1166,9 +1586,11 @@
       "key_prefix": "oauthid:",
       "keys": [
         "idx:oauth:sub:google:red-hood-1988",
-        "idx:oauth:user:01M72T54HYZ9G0Q0WZ4CT0YGCM:01M72T54HYX18EDQNHHWN895DT",
-        "oauthid:01M72T54HYX18EDQNHHWN895DT"
+        "idx:oauth:user:01M731PFWKAAC7J1GHDJGDBHM6:01M731PFWKXXBAC5TD8D26JVFH",
+        "oauthid:01M731PFWKXXBAC5TD8D26JVFH"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "refused",
       "reported": false,
       "expected": "a decodable OAuth identity whose user does not exist: the preflight refuses the boot (storage.ErrCutoverBlocked, exit 78); the report names the key and its reason, never its value; store and directory byte-identical, no checkpoint",
@@ -1182,8 +1604,22 @@
       "step": "M3",
       "key_prefix": "usermerge:journal:",
       "keys": [
-        "usermerge:journal:01M72T54VK6JRK0Y119Y7C74SB"
+        "apikey:01M731PGPZ2JSF1AAKPD5G82Z5",
+        "idx:apikey:hash:99285f487b7c47fe40617510e5f10dafc7274e627171596fa8df907b64d19785",
+        "idx:apikey:user:01M731PGJXYG38EKX62YA9D6MY:01M731PGPZ2JSF1AAKPD5G82Z5",
+        "idx:invite:username:two.face.guest",
+        "idx:oauth:sub:github:merge-01m731pgpyngmg4ke7p9n65jng",
+        "idx:oauth:user:01M731PGJXYG38EKX62YA9D6MY:01M731PGPZ2JSF1AAKPGWEDK8Y",
+        "idx:user:username:harvey.dent",
+        "idx:user:username:two.face",
+        "invite:r2corpus-merge-invite-01m731pgpzwph5rnpsdqs35jxt",
+        "oauthid:01M731PGPZ2JSF1AAKPGWEDK8Y",
+        "u:01M731PGJXYG38EKX62YA9D6MY",
+        "u:01M731PGPYNGMG4KE7P9N65JNG",
+        "usermerge:journal:01M731PGQ15Q6476PDBV2884TM"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "refused",
       "reported": false,
       "expected": "a merge journal at applying (HEAD's merge canceled mid-apply): the preflight refuses the boot naming the merge and the fix (finish or undo it on the pre-freeze release), nothing written",
@@ -1197,8 +1633,22 @@
       "step": "M3",
       "key_prefix": "usermerge:journal:",
       "keys": [
-        "usermerge:journal:01M72T554XY7RT974N3F5HCXY9"
+        "apikey:01M731PHHZRMENH16X9Z5TQZZA",
+        "idx:apikey:hash:9b69d1b025d69b46d4cabcca1c4bc3e11f3e00c0694a9bfee371e67156a83e11",
+        "idx:apikey:user:01M731PHDW69CZEHZY6EQGEJGD:01M731PHHZRMENH16X9Z5TQZZA",
+        "idx:invite:username:nightwing.guest",
+        "idx:oauth:sub:github:merge-01m731phhy79k7yh75txk251xr",
+        "idx:oauth:user:01M731PHDW69CZEHZY6EQGEJGD:01M731PHHZRMENH16XA2CD7DSX",
+        "idx:user:username:dick.grayson.sr",
+        "idx:user:username:nightwing",
+        "invite:r2corpus-merge-invite-01m731phhzn5p06cm31tny08c7",
+        "oauthid:01M731PHHZRMENH16XA2CD7DSX",
+        "u:01M731PHDW69CZEHZY6EQGEJGD",
+        "u:01M731PHHY79K7YH75TXK251XR",
+        "usermerge:journal:01M731PHJ1DSSC2NW0CCJ12P3Z"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "refused",
       "reported": false,
       "expected": "a merge journal at undoing (HEAD's undo started and canceled): refused as above",
@@ -1212,8 +1662,22 @@
       "step": "M3",
       "key_prefix": "usermerge:journal:",
       "keys": [
-        "usermerge:journal:01M72T55E3CNBF6HHTGCDSVAQC"
+        "apikey:01M731PJD17HY86P9SG5T3HRVV",
+        "idx:apikey:hash:d7a7892bdf332fffc4fc4c867c31d67296c8b1ae6da95adb220a3f035a32b0bd",
+        "idx:apikey:user:01M731PJ8T6RQSB6F08CC13EE2:01M731PJD17HY86P9SG5T3HRVV",
+        "idx:invite:username:azrael.guest",
+        "idx:oauth:sub:github:merge-01m731pjd0ndr2jqymv0rf8wr7",
+        "idx:oauth:user:01M731PJ8T6RQSB6F08CC13EE2:01M731PJD2ZVBJWEREVWVR56BT",
+        "idx:user:username:azrael",
+        "idx:user:username:jean.paul.valley",
+        "invite:r2corpus-merge-invite-01m731pjd2ktbryc62075hs87g",
+        "oauthid:01M731PJD2ZVBJWEREVWVR56BT",
+        "u:01M731PJ8T6RQSB6F08CC13EE2",
+        "u:01M731PJD0NDR2JQYMV0RF8WR7",
+        "usermerge:journal:01M731PJD43MGJD7CMR1JC1E8M"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "not_blocking",
       "reported": false,
       "expected": "a finished merge (applied, the absorbed account retired): does not block; its merge is imported, M3 rewrites the journal once with its invite tokens hashed, and an undo after R2 answers 409 merge_permanent. Shares its store with blocker-merge-undone: both are controls",
@@ -1227,8 +1691,22 @@
       "step": "M3",
       "key_prefix": "usermerge:journal:",
       "keys": [
-        "usermerge:journal:01M72T55JCVAF7W3D6NGWHVCN2"
+        "apikey:01M731PJJH5F7XS7TPZEVNXEWJ",
+        "idx:apikey:hash:1e36624e812371f07c1741ed4e247747529e71d4ceabfdb08352a145bf4aebf5",
+        "idx:apikey:user:01M731PJJH5F7XS7TPZC1HZ1Q9:01M731PJJH5F7XS7TPZEVNXEWJ",
+        "idx:invite:username:red.robin.guest",
+        "idx:oauth:sub:github:merge-01m731pjjh5f7xs7tpzc1hz1q9",
+        "idx:oauth:user:01M731PJJH5F7XS7TPZC1HZ1Q9:01M731PJJH5F7XS7TPZG840HVM",
+        "idx:user:username:red.robin",
+        "idx:user:username:tim.drake",
+        "invite:r2corpus-merge-invite-01m731pjjht7anpksg5cwdd4q4",
+        "oauthid:01M731PJJH5F7XS7TPZG840HVM",
+        "u:01M731PJFXB4AFGPPBB0Y0MC40",
+        "u:01M731PJJH5F7XS7TPZC1HZ1Q9",
+        "usermerge:journal:01M731PJJK4VJPSZC6YRAR9Z57"
       ],
+      "removed_keys": [],
+      "corrupt_keys": [],
       "outcome": "not_blocking",
       "reported": false,
       "expected": "a merge applied and then undone in full: does not block (terminal), kept read-only. Shares its store with blocker-merge-applied",
@@ -1401,19 +1879,14 @@
     ],
     "internal/books/testdata/r2corpus/overlay": [
       {
-        "path": "db/audiobooks.pebble/000016.sst",
-        "size": 407311,
-        "sha256": "2a1cee81bad7d9dd050392600fb1d79cde5d751d1774f99b1067c5d92cf07bf0"
-      },
-      {
-        "path": "db/audiobooks.pebble/000018.sst",
-        "size": 250564,
-        "sha256": "9ff96bdd3fddd005e83f8d9f2cc4a1534364a159fe6c1e6888a3f819aafe1d88"
-      },
-      {
         "path": "db/audiobooks.pebble/000020.log",
-        "size": 217032,
-        "sha256": "3bd6e3a43e1671d298c161b1e96290d222b3766460f1af70958a382abddbea6f"
+        "size": 216940,
+        "sha256": "9b9e50ae40be6cade3390e909ceb6b7a9e9f1203c970514a00fbab0b1d5afcd7"
+      },
+      {
+        "path": "db/audiobooks.pebble/000022.sst",
+        "size": 539046,
+        "sha256": "f16a261718e4e54f280a664ebc7ff57ed90a22490f80d1d431ce6a9e7558d106"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -1427,8 +1900,8 @@
       },
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
-        "size": 338,
-        "sha256": "513ddf3b50e4c99eeb0e6825b05a9dd2508efd7f25fd340fd7973cf78d7cae30"
+        "size": 471,
+        "sha256": "8c8edeeda33df817148d58b980c35e7383b23590303dff084198ebbd7c94b2a5"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -1580,7 +2053,7 @@
       {
         "path": "db/audiobooks.pebble/000020.log",
         "size": 300,
-        "sha256": "f56badcc452f17ae9d3c4ac4a81b85e9ee6a78fb0284ac148d65488939084c41"
+        "sha256": "8ab6227899b5cd668408f8aa3f41b22a799831cf4929f9860ba003c50cf6d05b"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -1595,7 +2068,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "56a584b561906bbe64835b31e3d4f5bcc1a83b43a868f0893b8257a61da2bb7e"
+        "sha256": "c9d7af1d329fd1cdb4462130f5dffc991d897ad2561757000d651d2c8abba935"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -1747,7 +2220,7 @@
       {
         "path": "db/audiobooks.pebble/000020.log",
         "size": 278,
-        "sha256": "4992eae2aa014bd685d6b457d8e9954f7fc710cd1f9e8f18bdbcfe760a731caf"
+        "sha256": "6a20ccc38163609e9c357e6be4af6a8f1f465e3092ca407d11ce81598b70a4a8"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -1762,7 +2235,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "56a584b561906bbe64835b31e3d4f5bcc1a83b43a868f0893b8257a61da2bb7e"
+        "sha256": "9d3a2802cbd9480d1f584e848b1bb82a9631c60b8147ae908e8c941ece621840"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -1913,8 +2386,8 @@
       },
       {
         "path": "db/audiobooks.pebble/000020.log",
-        "size": 303,
-        "sha256": "6e5c049139e70d5dec0249cc27abaaafb734d6a329a7e4b05a162d07b1a05287"
+        "size": 307,
+        "sha256": "72358b94acdb7fae3c97cf6b3cda04d8cef98b593a56fcb1d9a86c3fae0a9b6f"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -1929,7 +2402,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "9d3a2802cbd9480d1f584e848b1bb82a9631c60b8147ae908e8c941ece621840"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2081,7 +2554,7 @@
       {
         "path": "db/audiobooks.pebble/000020.log",
         "size": 536,
-        "sha256": "4906bca07890181921e4ed00d15ac66dad94ab06201fe28d1f450494bd7f64cf"
+        "sha256": "652faf432533e054d356796dabee39bc6c81b0cc227b62717d24041cc9ce4e64"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2096,7 +2569,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "0207314058dbef17e8a99563ed3609c17a7076cb69bb66b8a2f0bb293043a311"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2248,7 +2721,7 @@
       {
         "path": "db/audiobooks.pebble/000020.log",
         "size": 668,
-        "sha256": "00768d5abd6dc8163e7a04e384d10c55db7708a7a41e257740e41738c57454db"
+        "sha256": "8c50daf9652f1bfb8cb904448db311e2fa3cf6e219b23ffcfe30e883eea9ce20"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2263,7 +2736,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "ec7cde727a9e9afbe327abd14d35a0262b100cfe0d33055e360fd21b29a11a63"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2415,7 +2888,7 @@
       {
         "path": "db/audiobooks.pebble/000020.log",
         "size": 486,
-        "sha256": "a4dc04315f7509d072d625b652305adb90d2b185d3e4ed4359403bb0186d78dc"
+        "sha256": "c0c59619c3565541e44068327291959ce0e9b9ef81a2e697c49f518e52a01bb9"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2430,7 +2903,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "ec7cde727a9e9afbe327abd14d35a0262b100cfe0d33055e360fd21b29a11a63"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2581,8 +3054,8 @@
       },
       {
         "path": "db/audiobooks.pebble/000020.log",
-        "size": 18133,
-        "sha256": "8377c5028f745154d42b4760233004fc958c1bf6fe5b39ab9c17b720b336bd1d"
+        "size": 18132,
+        "sha256": "6ed31e1d9b009478333479b6e7a96e4a749cda2392f7fc8194731d39ea7ed39e"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2597,7 +3070,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "311a036ebd2e6e74182dd341fba1f52a376afa121c561634da51c8dcffcc63c1"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2748,8 +3221,8 @@
       },
       {
         "path": "db/audiobooks.pebble/000020.log",
-        "size": 24791,
-        "sha256": "89a0d892914271aacd74854065d916cd5205ba8b8a9e0aa0fcc910d60162f80f"
+        "size": 24788,
+        "sha256": "c8c595dc946d5c689b177386e4972fd552882bf427bd2affc3e3c94aeaad9b9d"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2764,7 +3237,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "7a12680234fd92759c61870a878fe8614397020cb413c7be2a2c12e9fddccea5"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -2915,8 +3388,8 @@
       },
       {
         "path": "db/audiobooks.pebble/000020.log",
-        "size": 52456,
-        "sha256": "e3276fc429bf26b854d0266d9e3b6b60e9370e78a1c0aa278dad4527d3b5826b"
+        "size": 52467,
+        "sha256": "9e1ab69a85f0bb8feafe48e743479f2263657d86b5897f779f0d51df71e24295"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -2931,7 +3404,7 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000019",
         "size": 338,
-        "sha256": "adb2cfa9162de0f872d0d5944ed3e0fa0354d72db939c79cc665060d04adb7ad"
+        "sha256": "7a12680234fd92759c61870a878fe8614397020cb413c7be2a2c12e9fddccea5"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -3271,7 +3744,8 @@
       "refused": "the cutover preflight refuses the boot (storage.ErrCutoverBlocked, exit 78) and writes nothing",
       "not_blocking": "read by the preflight and let through; converted by its step"
     },
-    "keys": "every key the case wrote (primary rows and the indexes the writer kept with them); setting:config_blob#<field> names one field of the settings blob. A run's opv2 mirror row (opv2:op:<id>, written in the same batch as opv3:run:<id> by the tag's InsertRunV3 and TransitionRunV3) is not listed"
+    "keys": "every key the case added or changed, found by iterating the whole store before and after the case (so the writers' indexes, counters, audit rows and shared rows such as opv3:meta:counts are included); a change to the settings blob is named per field as setting:config_blob#<field>. removed_keys: keys the case deleted. corrupt_keys: the keys whose value the case wrote not to decode (a torn JSON value) or not to decrypt",
+    "imported_as": "the machine-readable result of an imported case: state (M4, 05-tasks \u00a75T.8.3) or status (M3, 05-authn \u00a711)"
   },
   "overlay_answers": [
     {
@@ -3308,7 +3782,8 @@
       "name": "search",
       "file": "internal/books/testdata/r2corpus/answers/overlay/search.json",
       "what": "GET /api/v1/audiobooks?search= over a fixed query list (the search oracle)",
-      "changed": true
+      "changed": true,
+      "note": "changed is an artifact of stage 1's committed answer, not of an overlay row: the query ^The answers 4 books here (the corpus' two 'The ...' titles in import/ and library/) and 0 in stage 1's answer, recorded seconds after boot while R0 rebuilt its search index (seams.d/F2-13.md)"
     }
   ]
 }
