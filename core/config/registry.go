@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -159,7 +159,7 @@ func buildSection(sp *sectionSpec) (*section, error) {
 		if isLeaf(elem) {
 			err = w.add(sp.path.String()+" entry", elem, nil, nil, tagSet{})
 		} else {
-			err = w.walk(elem, nil, nil, tagSet{})
+			err = w.walk(elem, nil, nil, tagSet{}, map[string]string{})
 		}
 		if err != nil {
 			return nil, err
@@ -169,7 +169,7 @@ func buildSection(sp *sectionSpec) (*section, error) {
 			return nil, err
 		}
 	default:
-		if err := w.walk(t, nil, nil, tagSet{}); err != nil {
+		if err := w.walk(t, nil, nil, tagSet{}, map[string]string{}); err != nil {
 			return nil, err
 		}
 	}
