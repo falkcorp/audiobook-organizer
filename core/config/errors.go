@@ -1,5 +1,5 @@
 // file: core/config/errors.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 00f06753-8c6a-48c9-adf5-5229340bfd87
 // last-edited: 2026-11-10
 
@@ -18,9 +18,10 @@ import (
 // §1.3.1). Config does not trust it to: in a section that holds a sensitive
 // key, no message a Validator writes is kept (fail closed). A FieldError on
 // one of the section's keys, sensitive or plain, keeps its path and gets a
-// fixed message in place of its own, and any other part of the error is
-// replaced by a fixed message on the section. A section with no sensitive
-// key keeps its Validator's messages as written.
+// fixed message in place of its own (in a map section, only a key of an entry
+// the checked candidate holds: the path is Validator text too), and any other
+// part of the error is replaced by a fixed message on the section. A section
+// with no sensitive key keeps its Validator's messages as written.
 type Validator interface{ Validate() error }
 
 // FieldError attaches a validation failure to the key it concerns.

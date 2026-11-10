@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.14 -->
+<!-- version: 1.13.15 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -138,9 +138,10 @@ func (d *Duration) UnmarshalJSON(b []byte) error
 // A Validator never formats a sensitive field's value into its error: these errors reach logs,
 // AttachReport, KeyState and API responses. Config does not trust it to: in a section that holds a
 // sensitive key, no message a Validator writes is kept (fail closed). A FieldError on one of the
-// section's keys, sensitive or plain, keeps its path and gets a fixed message in place of its own,
-// and any other part of the error is replaced by a fixed message on the section. A section with no
-// sensitive key keeps its Validator's messages as written.
+// section's keys, sensitive or plain, keeps its path and gets a fixed message in place of its own
+// (in a map section, only a key of an entry the checked candidate holds: the path is Validator text
+// too), and any other part of the error is replaced by a fixed message on the section. A section
+// with no sensitive key keeps its Validator's messages as written.
 type Validator interface{ Validate() error }
 
 type FieldError struct {
@@ -743,7 +744,9 @@ services and before any listener opens.
    opened, then `Store.Attach` with core's native store and the kernel's committer (`core/internal/configstore`):
    `OverrideStore.Load` reads, nothing is written. Rows are decoded per section; if a section fails decode or
    `Validate` with its overrides but passes without them, **all of that section's overrides are quarantined**
-   (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues. FailClosed keys whose
+   (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues. An `Apply` that sets a
+   quarantined key, or a quarantined boot-record entry, to its stored bytes is never skipped as unchanged: the value is
+   written and validated again, so the quarantine clears or `Apply` refuses with `ErrInvalid`. FailClosed keys whose
    stored value wins are reported in `AttachReport.FailClosed` with health token `config_fail_closed_override`
    (§1.3.5). Rationale: an operator cannot repair the DB without booting; ABO's equivalent path is fatal
    (`cmd/root.go:385-391`). Services built after this step (06 P5) see the DB layer; nothing built before it reads

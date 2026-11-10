@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -428,7 +428,7 @@ func (s *section) assemble(vals map[Path]json.RawMessage, ids []string) (json.Ra
 func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error) {
 	v := reflect.New(s.spec.typ)
 	if err := strictDecode(raw, v.Interface()); err != nil {
-		return nil, s.redact(&FieldError{Path: s.path, Err: err})
+		return nil, s.redact(&FieldError{Path: s.path, Err: err}, nil)
 	}
 	for _, k := range s.keys {
 		if !k.secret {
@@ -441,8 +441,9 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 		f.Set(reflect.ValueOf(secrets.RefTo(secrets.Name(k.path(""))).Bind(res)))
 	}
 	if val, ok := v.Interface().(Validator); ok {
+		ids := s.entryIDs(v) // before Validate, which could add an entry
 		if err := val.Validate(); err != nil {
-			return nil, s.redact(asFieldError(s.path, err))
+			return nil, s.redact(asFieldError(s.path, err), ids)
 		}
 	}
 	return v.Interface(), nil
@@ -460,26 +461,43 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 // else (a bare error, a wrapped one, a *FieldError on the section itself or
 // on a path that is not a key) is replaced whole by a fixed message on the
 // section. A section without a sensitive key is returned as is, messages
-// included.
-func (s *section) redact(err error) error {
+// included. In a map section the kept path is Validator text too, so it is
+// kept only when its entry ID is one of ids, the entries of the candidate the
+// Validator checked; a path naming any other ID (one invented from a
+// sensitive value, say) is replaced like any other part.
+func (s *section) redact(err error, ids map[string]bool) error {
 	if err == nil || !slices.ContainsFunc(s.keys, func(k *keyInfo) bool { return k.sensitive }) {
 		return err
 	}
-	return s.redactPart(err)
+	return s.redactPart(err, ids)
+}
+
+// entryIDs is the entry IDs of a map section's decoded candidate v (a *T);
+// nil for a struct section.
+func (s *section) entryIDs(v reflect.Value) map[string]bool {
+	if !s.isMap {
+		return nil
+	}
+	m := v.Elem()
+	ids := make(map[string]bool, m.Len())
+	for _, k := range m.MapKeys() {
+		ids[k.String()] = true
+	}
+	return ids
 }
 
 // redactPart is redact for one part of the error tree.
-func (s *section) redactPart(err error) error {
+func (s *section) redactPart(err error, ids map[string]bool) error {
 	if j, ok := err.(interface{ Unwrap() []error }); ok {
 		parts := j.Unwrap()
 		out := make([]error, 0, len(parts))
 		for _, e := range parts {
-			out = append(out, s.redactPart(e))
+			out = append(out, s.redactPart(e, ids))
 		}
 		return errors.Join(out...)
 	}
 	if fe, ok := err.(*FieldError); ok {
-		if s.concreteKey(fe.Path) != nil {
+		if s.concreteKey(fe.Path, ids) != nil {
 			return &FieldError{Path: fe.Path, Err: errors.New("the value fails the section's Validator (detail redacted: the section holds a sensitive key)")}
 		}
 	}
@@ -487,8 +505,9 @@ func (s *section) redactPart(err error) error {
 }
 
 // concreteKey is the key p names in this section: a struct section's key, or
-// a map entry's "<section>.<id>.<rel>". nil when p is not a key of s.
-func (s *section) concreteKey(p Path) *keyInfo {
+// a map entry's "<section>.<id>.<rel>" whose id is one of ids, the entries of
+// the candidate. nil when p is not such a key of s.
+func (s *section) concreteKey(p Path, ids map[string]bool) *keyInfo {
 	if !s.isMap {
 		if p == s.path {
 			return nil // the section itself: a section-level error
@@ -500,7 +519,7 @@ func (s *section) concreteKey(p Path) *keyInfo {
 		return nil
 	}
 	id, rel, _ := strings.Cut(rest, pathSep)
-	if !validSegment(id) {
+	if !ids[id] {
 		return nil
 	}
 	return s.byRel[rel]
