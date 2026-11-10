@@ -1,5 +1,5 @@
 // file: core/tasks/effects.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 850e3379-fae5-47cf-87e7-5de835a26db5
 // last-edited: 2026-11-10
 
@@ -45,14 +45,15 @@ func FormatRef(r entity.Ref) string {
 
 // LockRefs is rc.LockRefs for code that holds only a ctx (COR2-16): when ctx
 // descends from an RC it takes that executor's ref-lock table (same sorted
-// all-or-wait rule); otherwise it returns ErrNoRunContext. Inside an item it
-// skips the refs the item already holds (see ForEach).
+// all-or-wait rule); otherwise it returns ErrNoRunContext. Inside an item that
+// holds refs it may name only those, and locks them in the item's own table
+// (see ForEach).
 func LockRefs(ctx context.Context, refs ...entity.Ref) (release func(), err error) {
 	h := hostFrom(ctx)
 	if h == nil {
 		return nil, ErrNoRunContext
 	}
-	return lockUnheld(ctx, h, refs)
+	return lockFor(ctx, h, refs)
 }
 
 // Effects is what a definition reads and writes. Build it with ReadOnly or

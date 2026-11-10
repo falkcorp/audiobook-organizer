@@ -1,5 +1,5 @@
 // file: core/tasks/items.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4939aca5-9ac9-469d-bb84-fc497d308458
 // last-edited: 2026-11-10
 
@@ -133,13 +133,19 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // one could deadlock the budget. A nested loop must therefore be given the
 // item's context (ic.Context()); a RunItems over the outer *RC sees no mark.
 //
-// Nested ref locks: an item's context also carries the refs its item holds.
-// A nested loop given that context locks the refs the item already holds in
-// a table of its own (its items still exclude each other on them) and only
-// the rest in the run's table; ic.LockRefs and LockRefs skip held refs. A
-// requested ref that overlaps a held one without being covered by it (a
-// whole kind while the item holds one ID of it) is refused rather than
-// waited for, because the item would wait on itself.
+// Nested ref locks: an item that took ExclusiveRefs carries, in its context,
+// the refs it holds and one lock table of its own. Every nested lock under
+// that item (a nested loop's ExclusiveRefs, ic.LockRefs, LockRefs) is taken
+// in the item's table, so two nested loops or goroutines of one item still
+// exclude each other, and may name only refs the item holds or a held ref
+// covers. Anything else is refused, never waited for: a ref that overlaps a
+// held one without being covered by it (a whole kind while the item holds
+// one ID) with ErrHeldOverlap, because the item would wait on itself; any
+// other ref with ErrNestedLockNotHeld, because taking locks in stages (hold
+// X, then wait for Y) can deadlock against a sibling item holding Y and
+// waiting for X. An item declares every ref it needs in its own
+// ExclusiveRefs. The item's table is not re-entrant: one goroutine must
+// release a ref before locking it again.
 //
 // Both marks live on in every context derived from the item's, so a
 // goroutine started by an item must not outlive it (F2-17's tasklint is
@@ -326,21 +332,29 @@ func (ic *ItemRC) Lane(id LaneID) (LaneLease, error) {
 	return ic.h.Lane(ic.ctx, id)
 }
 
-// LockRefs takes the executor's keyed ref locks for refs (5T.3.4). Refs the
-// item already holds are skipped (see ForEach).
+// LockRefs takes the executor's keyed ref locks for refs (5T.3.4). Inside an
+// item that holds refs it may name only those, and locks them in the item's
+// own table (see ForEach).
 func (ic *ItemRC) LockRefs(refs ...entity.Ref) (release func(), err error) {
 	if ic.h == nil {
 		return nil, ErrNoRunContext
 	}
-	return lockUnheld(ic.ctx, ic.h, refs)
+	return lockFor(ic.ctx, ic.h, refs)
 }
 
-// heldRefsKey marks an item context with the refs its item holds.
+// heldRefsKey marks an item context with the item's *itemHold.
 type heldRefsKey struct{}
 
-func heldRefs(ctx context.Context) []entity.Ref {
-	held, _ := ctx.Value(heldRefsKey{}).([]entity.Ref)
-	return held
+// itemHold is what an item that took ExclusiveRefs holds: its refs, and the
+// one table every nested lock under the item is taken in.
+type itemHold struct {
+	refs  []entity.Ref
+	table *refTable
+}
+
+func holdOf(ctx context.Context) *itemHold {
+	h, _ := ctx.Value(heldRefsKey{}).(*itemHold)
+	return h
 }
 
 // covers reports that holding h includes r: the same ref, or r is one ID of
@@ -353,36 +367,44 @@ func covers(h, r entity.Ref) bool {
 // already holds without being covered by it. Name coined by F2-01.
 var ErrHeldOverlap = errors.New("tasks: the lock overlaps a ref this item holds without being covered by it; it would wait on itself")
 
-// splitHeld splits refs into those an enclosing item already holds and the
-// rest, refusing one that overlaps a held ref without being covered by it.
-func splitHeld(ctx context.Context, refs []entity.Ref) (held, rest []entity.Ref, err error) {
-	have := heldRefs(ctx)
-	if len(have) == 0 {
-		return nil, refs, nil
-	}
+// ErrNestedLockNotHeld refuses a nested lock on a ref the calling item
+// neither holds nor covers: taking locks in stages can deadlock against a
+// sibling item. Declare the ref in the item's own ExclusiveRefs. Name coined
+// by F2-01's follow-up.
+var ErrNestedLockNotHeld = errors.New("tasks: a nested lock may name only refs the item holds; declare every ref the item needs in its ExclusiveRefs")
+
+// check refuses any ref the hold does not cover (see ForEach).
+func (h *itemHold) check(refs []entity.Ref) error {
 	for _, r := range refs {
 		switch {
-		case slices.ContainsFunc(have, func(h entity.Ref) bool { return covers(h, r) }):
-			held = append(held, r)
-		case slices.ContainsFunc(have, func(h entity.Ref) bool { return Overlaps(h, r) }):
-			return nil, nil, fmt.Errorf("%w: %s", ErrHeldOverlap, FormatRef(r))
+		case slices.ContainsFunc(h.refs, func(have entity.Ref) bool { return covers(have, r) }):
+		case slices.ContainsFunc(h.refs, func(have entity.Ref) bool { return Overlaps(have, r) }):
+			return fmt.Errorf("%w: %s", ErrHeldOverlap, FormatRef(r))
 		default:
-			rest = append(rest, r)
+			return fmt.Errorf("%w: %s", ErrNestedLockNotHeld, FormatRef(r))
 		}
 	}
-	return held, rest, nil
+	return nil
 }
 
-// lockUnheld takes the run's locks for the refs ctx's item does not hold yet.
-func lockUnheld(ctx context.Context, h RunHost, refs []entity.Ref) (func(), error) {
-	_, rest, err := splitHeld(ctx, refs)
-	if err != nil {
+// lock takes refs, all covered by the hold, in the item's table.
+func (h *itemHold) lock(ctx context.Context, refs []entity.Ref) (func(), error) {
+	if err := h.check(refs); err != nil {
 		return nil, err
 	}
-	if len(rest) == 0 {
+	if len(refs) == 0 {
 		return func() {}, nil
 	}
-	return h.LockRefs(ctx, rest...)
+	return h.table.lock(ctx, refs)
+}
+
+// lockFor is ic.LockRefs and LockRefs: inside an item that holds refs, the
+// item's table; otherwise the run's.
+func lockFor(ctx context.Context, h RunHost, refs []entity.Ref) (func(), error) {
+	if hold := holdOf(ctx); hold != nil {
+		return hold.lock(ctx, refs)
+	}
+	return h.LockRefs(ctx, refs...)
 }
 
 // PanicError is the item error a recovered panic in fn, Label, Key or
@@ -392,6 +414,12 @@ func lockUnheld(ctx context.Context, h RunHost, refs []entity.Ref) (func(), erro
 type PanicError struct {
 	Value any    // what was passed to panic
 	Stack []byte // the panicking goroutine's stack (runtime/debug.Stack)
+
+	// logged is set by the loop that logs the stack, so a panic that
+	// surfaces again through an enclosing loop's item error is not logged
+	// twice. Written and read by one loop's worker, then by enclosing loops
+	// only after the nested loop returned.
+	logged bool
 }
 
 // Error is "panic: <value>" on one line.
@@ -452,7 +480,7 @@ type loop[T any] struct {
 	itemsCtx context.Context // child of ctx, canceled with ErrItemsStopped on a FailFast stop
 	stop     context.CancelCauseFunc
 	stopped  atomic.Bool
-	locks    *refTable // this loop's own ref locks: every ref without a run, and inside a run the refs an enclosing item holds
+	locks    *refTable // a plain pool's own ref locks (ExclusiveRefs without a run or an enclosing item's hold)
 	counters counters
 
 	started   atomic.Int64
@@ -483,7 +511,7 @@ func newLoop[T any](ctx context.Context, h RunHost, par Parallelism, o ItemsOpti
 	itemsCtx, stop := context.WithCancelCause(ctx)
 	l := &loop[T]{ctx: ctx, h: h, par: par, opts: o, itemsCtx: itemsCtx, stop: stop, firstIdx: -1}
 	l.counters.m = make(map[string]*atomic.Int64)
-	if o.ExclusiveRefs != nil {
+	if o.ExclusiveRefs != nil && h == nil {
 		l.locks = &refTable{}
 	}
 	if o.Watermark != "" {
@@ -649,8 +677,8 @@ func (l *loop[T]) one(i int, item T, fn func(ic *ItemRC, item T) error) {
 			return
 		}
 		releases = append(releases, release)
-		if len(refs) > 0 { // a nested loop or ic.LockRefs skips these
-			ctx = context.WithValue(ctx, heldRefsKey{}, append(slices.Clone(heldRefs(ctx)), refs...))
+		if len(refs) > 0 { // nested locks under this item use its own table and may name only these refs
+			ctx = context.WithValue(ctx, heldRefsKey{}, &itemHold{refs: slices.Clone(refs), table: &refTable{}})
 		}
 	}
 	if l.h != nil && l.par.UsesCPUBudget() && !l.inheritsCPUSlot() {
@@ -709,37 +737,21 @@ func guarded[V any](what string, f func() (V, error)) (v V, err error) {
 	return f()
 }
 
-// lockRefs takes an item's ExclusiveRefs. Without a run they all go to the
-// loop's own table. Inside a run, refs an enclosing item already holds go to
-// the loop's own table first (so this loop's items still exclude each other
-// on them, and the run's table never sees a ref its holder asks for again)
-// and the rest to the run's table; every item takes them in that order.
+// lockRefs takes an item's ExclusiveRefs, all at once (never in stages):
+// under an enclosing item that holds refs, in that item's table and only refs
+// it covers; otherwise in the run's table, or the loop's own without a run.
+// The run's table therefore never sees a holder ask again for a ref it holds.
 func (l *loop[T]) lockRefs(ctx context.Context, refs []entity.Ref) (func(), error) {
 	if len(refs) == 0 {
 		return func() {}, nil
 	}
+	if hold := holdOf(ctx); hold != nil {
+		return hold.lock(ctx, refs)
+	}
 	if l.h == nil {
 		return l.locks.lock(ctx, refs)
 	}
-	held, rest, err := splitHeld(ctx, refs)
-	if err != nil {
-		return nil, err
-	}
-	releaseHeld := func() {}
-	if len(held) > 0 {
-		if releaseHeld, err = l.locks.lock(ctx, held); err != nil {
-			return nil, err
-		}
-	}
-	if len(rest) == 0 {
-		return releaseHeld, nil
-	}
-	releaseRest, err := l.h.LockRefs(ctx, rest...)
-	if err != nil {
-		releaseHeld()
-		return nil, err
-	}
-	return func() { releaseRest(); releaseHeld() }, nil
+	return l.h.LockRefs(ctx, refs...)
 }
 
 // complete records one finished item in completion order, under one lock:
@@ -781,13 +793,15 @@ func (l *loop[T]) complete(i int, key, label string, err error, skip *string) {
 }
 
 // logPanic logs a recovered panic's stack once, through the run's logger at
-// Error level (a plain ForEach has no run logger; the stack stays on the
-// error).
+// Error level: the innermost loop inside a run logs it and marks it logged,
+// so an enclosing loop that sees it again in its item's error does not (a
+// plain ForEach has no run logger and leaves it to the enclosing run's loop).
 func (l *loop[T]) logPanic(i int, err error) {
 	var pe *PanicError
-	if l.h == nil || !errors.As(err, &pe) {
+	if l.h == nil || !errors.As(err, &pe) || pe.logged {
 		return
 	}
+	pe.logged = true
 	l.h.Log().Error("tasks: item panicked", "item", i, "error", err.Error(), "stack", string(pe.Stack))
 }
 
