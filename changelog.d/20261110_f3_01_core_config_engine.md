@@ -10,4 +10,4 @@
 
 ### Fixed
 
-- Core: an invalid value of a sensitive setting no longer appears in errors or logs. A boot-record value that fails to decode now raises a health warning instead of being ignored silently.
+- Core: an invalid value of a sensitive setting no longer appears in errors or logs, whether the schema, the type check, a flag or a section's own validation rejects it. In a section with a sensitive setting, a validation message that is not tied to one plain setting is replaced by a fixed one. A boot-record value that fails to decode now raises a health warning instead of being ignored silently.

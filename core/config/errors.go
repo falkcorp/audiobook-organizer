@@ -1,5 +1,5 @@
 // file: core/config/errors.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 00f06753-8c6a-48c9-adf5-5229340bfd87
 // last-edited: 2026-11-10
 
@@ -13,7 +13,12 @@ import (
 
 // Validator is implemented by section types that need cross-field checks. It
 // runs on every candidate snapshot before commit; return errors.Join of field
-// errors wrapped with FieldError so the UI can attach them to keys.
+// errors wrapped with FieldError so the UI can attach them to keys. A
+// Validator never formats a sensitive field's value into its error (05-config
+// §1.3.1). In a section that holds a sensitive key, config enforces it: a
+// FieldError on a sensitive key loses its message, and any part of the error
+// that is not a FieldError on one of the section's keys is replaced by a
+// fixed message (fail closed).
 type Validator interface{ Validate() error }
 
 // FieldError attaches a validation failure to the key it concerns.
