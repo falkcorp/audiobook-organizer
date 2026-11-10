@@ -57,8 +57,9 @@ func On[T any](t Topic[T], name string, h Handler[T], opts ...SubOption) Subscri
 
 // OnRaw is how a module subscribes to ANOTHER module's topic without importing
 // it (R3): by name, with the JSON payload validated against the declared
-// schema. The JSON form is encoded once per publish, lazily, only when a raw
-// subscriber exists.
+// schema. The JSON form is encoded once per publish, only when the topic has
+// a raw subscriber, on the publisher's goroutine inside Publish (so a payload
+// the publisher changes afterwards is not raced).
 func OnRaw(topic, name string, h RawHandler, opts ...SubOption) Subscription {
 	s := Subscription{topic: topic, name: name, raw: true}
 	if h == nil {
@@ -113,8 +114,11 @@ func QueueSize(n int) SubOption {
 // The default policy is DropNewest (keep queued, reject incoming).
 func DropOldest() SubOption { return func(c *subConfig) { c.dropOldest = true } }
 
-// KeyFilter delivers only events whose Key f accepts; the filter runs on the
-// publisher's goroutine, so it must be cheap and must not block.
+// KeyFilter delivers only events whose Key f accepts. The filter runs on the
+// subscription's own goroutine, under the same panic recover as its handler,
+// never on the publisher's: a slow filter delays only this subscription, and
+// a panicking one is counted in handler_panics and skips that event. An
+// event the filter refuses still takes a queue slot until it is reached.
 func KeyFilter(f func(key string) bool) SubOption {
 	return func(c *subConfig) { c.keyFilter = f }
 }

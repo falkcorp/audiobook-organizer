@@ -45,9 +45,9 @@ type sub struct {
 
 	signal    chan struct{} // cap 1: something was queued
 	stop      chan struct{} // closed by beginClose
-	inHandler atomic.Bool
-	lastWarn  atomic.Int64 // unix nanos of the last drop warning
-	lastPanic atomic.Int64 // unix nanos of the last panic log
+	exited    atomic.Bool   // run returned: this subscription runs no handler again (Close's report)
+	lastWarn  atomic.Int64  // unix nanos of the last drop warning
+	lastPanic atomic.Int64  // unix nanos of the last panic log
 }
 
 func newSub(b *Bus, s Subscription, ts *topicState) *sub {
@@ -224,6 +224,7 @@ func (s *sub) run(ctx context.Context) {
 		for range co.due(true) {
 			s.b.inst.dropped(s, reasonClosed)
 		}
+		s.exited.Store(true)
 		if s.b.running.Add(-1) == 0 {
 			close(s.b.allDone)
 		}
@@ -240,7 +241,14 @@ func (s *sub) run(ctx context.Context) {
 				s.b.inst.dropped(s, reasonClosed)
 				continue
 			}
-			if s.cfg.coalesce > 0 && ev.key != "" && !closing {
+			if s.skip(ev) {
+				continue
+			}
+			// Coalescing goes on while Close drains: an event taken after
+			// Close began replaces its key's held event, and co.due(true)
+			// below flushes every held key, so a key's last delivery is its
+			// newest event, never an older one after it.
+			if s.cfg.coalesce > 0 && ev.key != "" {
 				co.add(ev, s.cfg.coalesce)
 				continue
 			}
@@ -276,14 +284,31 @@ func (s *sub) run(ctx context.Context) {
 	}
 }
 
+// skip runs the subscription's KeyFilter, here on its own goroutine and
+// under the same recover as its handler, never on the publisher's: a slow
+// filter delays only this subscription, and a panicking one is counted as a
+// handler panic and skips the event. The price is that an event the filter
+// refuses still takes a queue slot until this goroutine reaches it.
+func (s *sub) skip(ev *event) bool {
+	if s.cfg.keyFilter == nil {
+		return false
+	}
+	keep := false
+	if s.recovered(func() { keep = s.cfg.keyFilter(ev.key) }) {
+		return true
+	}
+	return !keep
+}
+
 // call runs the handler once, isolated: a panic is recovered, counted and
 // logged with its stack at most once per minute, and the subscription keeps
 // running (§5E.5.1 "Panic isolation").
 func (s *sub) call(ctx context.Context, ev *event) {
-	s.inHandler.Store(true)
 	start := time.Now()
-	reason := s.invoke(ctx, ev)
-	s.inHandler.Store(false)
+	var reason string
+	// A handler that panicked was still called: it counts as delivered, as
+	// before this handler shared recovered with KeyFilter.
+	s.recovered(func() { reason = s.call0(ctx, ev) })
 	if reason != "" {
 		cause := ""
 		if reason == reasonEncode {
@@ -298,9 +323,13 @@ func (s *sub) call(ctx context.Context, ev *event) {
 	s.b.inst.delivered(s, time.Since(start))
 }
 
-func (s *sub) invoke(ctx context.Context, ev *event) (reason string) {
+// recovered runs fn, the subscription's code (its handler or its
+// KeyFilter), and reports whether it panicked. A panic is counted and logged
+// with its type and stack at most once per minute.
+func (s *sub) recovered(fn func()) (panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
+			panicked = true
 			s.b.inst.panicked(s)
 			now := time.Now().UnixNano()
 			last := s.lastPanic.Load()
@@ -313,5 +342,6 @@ func (s *sub) invoke(ctx context.Context, ev *event) (reason string) {
 			}
 		}
 	}()
-	return s.call0(ctx, ev)
+	fn()
+	return false
 }
