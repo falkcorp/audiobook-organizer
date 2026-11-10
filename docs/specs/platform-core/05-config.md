@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.10 -->
+<!-- version: 1.13.11 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -379,7 +379,9 @@ type OverrideStore interface {
 // Importer is config's write side for a one-way cutover step (03 §3.3 "importers"; §1.12.2). An app's
 // migration step decodes its own pre-core rows and hands canonical values here, into the step's batch; the
 // importer reads no app row and names no app key (03 rule R1). The kernel hands it to the app's steps as
-// module.Importers.Config (06 §6.4.2); it is valid after Load, when every enabled section is registered.
+// module.Importers.Config (06 §6.4.2); it is valid after Load, when every enabled section is registered, and
+// Stage is refused once Attach has run: cutover steps run before P4d, and every later write goes through Apply,
+// with its protection checks and its audit record.
 type Importer interface {
 	// Stage validates v against p's registered schema and stages p's c/config/ row into b, binding c/config/ to
 	// b (participant binding, 05-storage D-S10). A value equal to p's default stages nothing (C4). It refuses with

@@ -1,5 +1,5 @@
 // file: core/config/importer.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c9586e1-b071-417e-a1e0-e58dc0945411
 // last-edited: 2026-11-10
 
@@ -20,7 +20,9 @@ type storeImporter struct{ s *Store }
 
 // Importer returns config's write side for a one-way cutover step. It is
 // valid after Load, when every enabled section is registered, and stages
-// through the override store SetImportTarget handed over.
+// through the override store SetImportTarget handed over. Stage is refused
+// once Attach has run (05-config §1.3.3): it checks no protection and writes
+// no audit record, which is right only for a cutover step before P4d.
 func (s *Store) Importer() Importer { return storeImporter{s: s} }
 
 // importKey resolves p for the importer: registered, owned, and a key the
@@ -51,8 +53,11 @@ func (i storeImporter) Stage(b *storage.Batch, p Path, v json.RawMessage, by str
 	s := i.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	switch {
+	case s.closed:
 		return errClosed
+	case s.attached:
+		return fmt.Errorf("config: the Importer stages only before Attach; %s is written through Apply now, with its protection checks and audit record", p)
 	}
 	ck, err := s.importKey(p)
 	if err != nil {
