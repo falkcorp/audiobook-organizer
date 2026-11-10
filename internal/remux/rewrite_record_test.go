@@ -1,7 +1,7 @@
 // file: internal/remux/rewrite_record_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e1c5a39-2f84-4b6d-8a07-c3d9e6b2f415
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package remux
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnosis"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )

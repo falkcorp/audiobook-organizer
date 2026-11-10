@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_repoint_retired_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e1b4c92-5d38-4a06-b8f1-3c9a02d6e415
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredPathFiles answers like the production store: the plain path getter

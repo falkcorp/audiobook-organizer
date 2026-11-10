@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_swap_stuck_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: db0d3556-7233-4032-9246-a1b38825670c
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // CreateIngestVersion into a book whose version swap did not finish
 // (TODO-INGEST-ACTIVE-WHILE-SWAP-STUCK): the book has no active version, but
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ingestDownload ingests a new file (outside the book's folder, like a Deluge

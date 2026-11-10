@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_gone_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4a4124a6-9e47-439e-bf24-3e5da4f68289
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredLibraryRoutes are the cache and activity-maintenance routes retired by

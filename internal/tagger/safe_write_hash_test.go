@@ -1,14 +1,14 @@
 // file: internal/tagger/safe_write_hash_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3d7f1a92-6b4e-4c85-a0d3-e29b8c5f7146
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package tagger
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pathRecorder is a fileops.BookFileHashRecorder over a fixed path -> row map.

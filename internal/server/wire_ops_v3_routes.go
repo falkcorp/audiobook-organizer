@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,8 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"

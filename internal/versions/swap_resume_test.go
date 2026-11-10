@@ -1,7 +1,7 @@
 // file: internal/versions/swap_resume_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b7f0c5e-9a14-4d82-8e63-5c2a1f6d9b70
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )
 

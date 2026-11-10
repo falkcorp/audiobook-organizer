@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_relink_trashed_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3b8d5e72-0c4f-4a91-9e26-d71f84a3c6b0
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/abandon_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a69f495d-437b-4cc8-be64-db0a76852163
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )

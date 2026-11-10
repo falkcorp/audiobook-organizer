@@ -1,7 +1,7 @@
 // file: internal/server/handlers/split_book_merge_recheck_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9f2a6d84-3c17-4b50-8e91-a4d7c0b35f62
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,8 +16,8 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

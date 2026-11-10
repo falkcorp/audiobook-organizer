@@ -1,0 +1,305 @@
+// file: internal/books/store/series_bookref.go
+// version: 1.11.1
+// guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+)
+
+// Unfiltered series reference counting, for DELETION decisions.
+//
+// WHY THIS EXISTS SEPARATELY FROM GetAllSeriesBookCounts
+//
+// GetAllSeriesBookCounts (and GetBooksBySeriesIDCore) skip two categories of
+// book:
+//
+//	if b.MarkedForDeletion != nil && *b.MarkedForDeletion { continue }
+//	if b.IsPrimaryVersion  != nil && !*b.IsPrimaryVersion  { continue }
+//
+// That is CORRECT for a display count — the trash and secondary versions must
+// not inflate a badge. It is WRONG as an existence test for deletion, and
+// executeSeriesPrune used it as exactly that: a series whose books are all
+// trashed, or all non-primary, counted 0 and was deleted while those books
+// stayed on disk pointing at a series ID that no longer resolves.
+//
+// Measured on production 2026-08-14, before this fix: 21,190 distinct series
+// IDs were referenced by books but only 14,626 series rows existed — 6,893
+// phantom IDs held by 13,322 live books plus 702 trashed ones, all rendering
+// with no series at all. The op runs in the NIGHTLY maintenance window
+// (scheduler task "series_prune" -> dedup.series-prune), so the damage
+// accumulated a night at a time.
+//
+// These counters therefore apply NO filters. Every book row that names a
+// series counts, whatever its deletion or primary-version state. "Is anything
+// still pointing at this row?" is a different question from "how many books
+// should I show the user", and conflating them is what caused the damage.
+
+// SeriesBookRefStore is a narrow capability interface, deliberately kept OUT of
+// database.Store — same rationale as BookSigMigrateStore: widening Store forces
+// every implementation and generated mock to grow with it. Reach it through
+// AsSeriesBookRefStore, which looks through any store decorator.
+type SeriesBookRefStore interface {
+	// GetAllSeriesBookRefCounts returns seriesID -> number of book rows that
+	// reference it, counting trashed and non-primary books. A series absent
+	// from the map is referenced by NOTHING and is safe to delete.
+	GetAllSeriesBookRefCounts() (map[int]int, error)
+}
+
+// AsSeriesBookRefStore returns s as a SeriesBookRefStore, or nil if the backing
+// store cannot answer the unfiltered question. Callers MUST nil-check and MUST
+// fail rather than falling back to the filtered counter — that fallback is the
+// bug this file exists to remove, and it would be silent.
+func AsSeriesBookRefStore(s any) SeriesBookRefStore {
+	if s == nil {
+		return nil
+	}
+	if rs, ok := AsCapability[SeriesBookRefStore](s); ok {
+		return rs
+	}
+	return nil
+}
+
+// GetAllSeriesBookRefCounts counts every book in the memdb that names a series,
+// with NO deletion or primary-version filtering. Contrast
+// GetAllSeriesBookCounts directly above, which scans only the
+// memIdxIsPrimaryVersion=true index and skips trashed rows.
+// It REFUSES rather than answering when the books table is known to be missing
+// rows. memdb is a lossy projection — warmup drops rows it cannot decode or
+// cannot insert — and a short scan here returns a map in which a still-
+// referenced series is simply absent, which every caller reads as "safe to
+// delete". See memdb_integrity.go.
+func (m *MemStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	if err := m.requireTablesComplete("series reference count", memTableBooks); err != nil {
+		return nil, err
+	}
+
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb books scan: %w", err)
+	}
+	out := make(map[int]int)
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if b.SeriesID == nil {
+			continue
+		}
+		out[*b.SeriesID]++
+	}
+	return out, nil
+}
+
+// GetAllSeriesBookRefCounts prefers the memdb when it is warm (the prod
+// default) and otherwise scans Pebble directly.
+//
+// When the memdb refuses because its books table is known-incomplete, this
+// falls through to the Pebble scan rather than propagating the refusal. Pebble
+// is the source of truth and its scan is hardened to abort on an undecodable
+// row, so the fall-through yields a CORRECT answer where the refusal would only
+// have yielded a safe one — the nightly prune keeps working instead of stalling
+// until the next restart.
+//
+// The cost is NOT once-off. lostRows is sticky for the life of the process --
+// only publishLostRows and Reset clear it, and nothing re-warms in steady state
+// -- so once anything taints the store, EVERY call takes the full Pebble scan
+// until restart. No caller counts inside a loop (both handler sites and all
+// three job sites build the map once per operation), but the handler sites are
+// per-request. Still the right trade against deleting a referenced series; just
+// a standing cost rather than a rare blip.
+//
+// Also note the trigger is broader than "warmup lost a books row": a runtime
+// memSync failure is attributed to memTableUnknown, which taints every table.
+//
+// Any other error is propagated unchanged. Falling back to a full scan on an
+// unrecognized failure would be guessing at its cause.
+func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it three
+	// times could report a refusal from one MemStore next to the (empty) loss
+	// map of its freshly-reset replacement -- a log line contradicting itself.
+	if m := p.memOrFallback("GetAllSeriesBookRefCounts"); m != nil {
+		counts, err := m.GetAllSeriesBookRefCounts()
+		if err == nil {
+			return counts, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		// Error, not Warn: this does not clear without a restart, and until then
+		// every OTHER memdb reader is served from the same known-short projection
+		// with no guard at all. This counter is the only reader that notices.
+		slog.Error("series ref count: memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
+	}
+	return p.getAllSeriesBookRefCountsPebble()
+}
+
+// getAllSeriesBookRefCountsPebble applies GetAllSeriesBookCounts_Pebble's
+// row-shape guard, minus the IsPrimaryVersion filter, and without skipping
+// trashed rows.
+//
+// It deliberately does NOT mirror that function's key range. The range was
+// ["book:0", "book:;") -- copied from the sibling, as the word "mirrors" here
+// used to admit -- which admits only '0'-'9' and ':' as the first byte after
+// the prefix. Book IDs are ULIDs and today's ULIDs lead with a digit, so this
+// was latent; but CreateBook mints a ULID only when book.ID == "", making a
+// caller-supplied letter-leading ID constructible and invisible to the scan.
+// Invisible here means ABSENT from the returned map, and absence is precisely
+// the signal three delete sites read as "referenced by nothing, safe to
+// remove" (series_dedup.go:486, cleanup_series.go:120 and :307). Undercounting
+// is fail-OPEN for every one of them.
+//
+// Widening is safe here only because the structural filter below already
+// existed. The same bounds fix on getBooksBySeriesIDFull had to ADD that filter
+// in the same commit: a wider range admits the secondary indexes, whose values
+// are bare book IDs rather than book JSON, and the unmarshal below is fatal.
+// Bounds and filter are one change; do not separate them.
+func (p *PebbleStore) getAllSeriesBookRefCountsPebble() (map[int]int, error) {
+	counts := make(map[int]int)
+	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
+		key := bookRowPrefix + rowID
+		var b Book
+		if err := json.Unmarshal(rowValue, &b); err != nil {
+			// FATAL, not skippable. A row we cannot decode may well carry a
+			// series_id; dropping it undercounts, and undercounting is
+			// fail-OPEN for every caller -- the delete proceeds and strands
+			// the very row we could not read.
+			return fmt.Errorf("series ref scan: undecodable book row %q: %w", key, err)
+		}
+		if b.SeriesID == nil {
+			return nil
+		}
+		counts[*b.SeriesID]++
+		return nil
+	}); err != nil {
+		// A truncated map with a nil error would answer "nothing else references
+		// anything" (the permissive answer) to callers that delete on the strength of
+		// it. This is the counter a delete guard consults, so a read error the helper
+		// reports must reach the caller unchanged. Do not justify this by "every
+		// other scan checks": that sibling survey was written here once and was
+		// false within nine days. A survey of sibling code is a claim with an
+		// expiry date; the reason above stands on its own.
+		return nil, err
+	}
+
+	return counts, nil
+}
+
+// SeriesRefCounts returns, per series ID, how many books reference it in ANY
+// state — including books in the trash and non-primary (duplicate) versions.
+// A series ID absent from the map is referenced by nothing and is the only
+// thing safe to delete.
+//
+// It is the exported twin of the entities package's private seriesRefCounts,
+// promoted here so the packages that cannot import internal/server (dedup and
+// maintenance/jobs) reach the same guard instead of growing a third and fourth
+// inline copy of it.
+//
+// It fails CLOSED. If the store cannot answer the unfiltered question, the
+// caller must refuse to delete rather than fall back to the filtered count,
+// because that fallback is precisely the bug: it deletes rows while reporting
+// success. See the file comment above for the production damage that caused.
+//
+// Resolution goes through AsSeriesBookRefStore, and therefore through
+// AsCapability, so it looks THROUGH the decorator chain. A bare type assertion
+// against *PebbleStore is wrong in production, where the Bleve search-index
+// decorator always wraps the store.
+func SeriesRefCounts(store any) (map[int]int, error) {
+	refCounter := AsSeriesBookRefStore(store)
+	if refCounter == nil {
+		return nil, fmt.Errorf("store cannot count unfiltered series references (got %T); "+
+			"refusing to delete from a filtered count, which silently strands "+
+			"books whose series is trashed or non-primary", store)
+	}
+	return refCounter.GetAllSeriesBookRefCounts()
+}
+
+// seriesRefCountLog carries GetSeriesBookRefCount's diagnostics through the
+// log-injection barrier.
+var seriesRefCountLog = logger.New("database.series-ref-count")
+
+// SeriesBookRefCounter answers the unfiltered question for ONE series: how
+// many book rows, in any state (trashed and non-primary included), name it.
+// It is the per-series twin of SeriesBookRefStore, for a delete that must
+// re-check its one series immediately before the write rather than trust a
+// library-wide map read earlier (the Repairs fixer dedup.series-prune reads
+// the map once per apply run and re-counts each series right before deleting
+// it). A separate one-method capability on purpose: adding the method to
+// SeriesBookRefStore would make every implementer of that interface stop
+// satisfying it, and SeriesRefCounts would then fail closed everywhere.
+type SeriesBookRefCounter interface {
+	// GetSeriesBookRefCount returns how many book rows reference seriesID,
+	// with no deletion or primary-version filter. Zero is the only answer
+	// on which deleting the series is safe.
+	GetSeriesBookRefCount(seriesID int) (int, error)
+}
+
+// GetSeriesBookRefCount counts the memdb books under seriesID through the
+// series_id index, unfiltered, and refuses on the same condition as
+// GetAllSeriesBookRefCounts: a books table known to be missing rows answers
+// short, and short is fail-OPEN for a delete.
+func (m *MemStore) GetSeriesBookRefCount(seriesID int) (int, error) {
+	if err := m.requireTablesComplete("series reference count", memTableBooks); err != nil {
+		return 0, err
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	iter, err := txn.Get(memTableBooks, memIdxSeriesID, seriesID)
+	if err != nil {
+		return 0, fmt.Errorf("memdb books by series: %w", err)
+	}
+	n := 0
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		if b := obj.(*Book); b.SeriesID != nil && *b.SeriesID == seriesID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// GetSeriesBookRefCount prefers the memdb's series_id index (one index read
+// for the one series) and, when the memdb is not serving or is known to be
+// missing rows, falls through to the authoritative Pebble scan, exactly as
+// GetAllSeriesBookRefCounts does. Pebble has no series index, so the
+// fall-through is a whole-library scan: correct, and paid only on a degraded
+// or still-warming store.
+func (p *PebbleStore) GetSeriesBookRefCount(seriesID int) (int, error) {
+	if m := p.memOrFallback("GetSeriesBookRefCount"); m != nil {
+		n, err := m.GetSeriesBookRefCount(seriesID)
+		if err == nil {
+			return n, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return 0, err
+		}
+		seriesRefCountLog.Error("series ref count (one series): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan: series_id=%d lost_rows=%v error=%v",
+			seriesID, m.LostRows(), err)
+	}
+	counts, err := p.getAllSeriesBookRefCountsPebble()
+	if err != nil {
+		return 0, err
+	}
+	return counts[seriesID], nil
+}
+
+// SeriesRefCount returns how many books reference seriesID in ANY state. It
+// fails CLOSED like SeriesRefCounts: a store that cannot answer the
+// unfiltered per-series question is an error, never a zero. Resolved through
+// AsCapability, so it looks through the decorator chain.
+func SeriesRefCount(store any, seriesID int) (int, error) {
+	c, ok := AsCapability[SeriesBookRefCounter](store)
+	if !ok {
+		return 0, fmt.Errorf("store cannot count unfiltered references to series %d (got %T); "+
+			"refusing to delete it on a guess", seriesID, store)
+	}
+	return c.GetSeriesBookRefCount(seriesID)
+}

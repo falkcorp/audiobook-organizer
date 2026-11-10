@@ -1,11 +1,11 @@
 // file: internal/merge/itunes_transfer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 888ac9c0-035e-4ee6-af7e-2584ce3269b9
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package merge
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // TransferITunesMetadataFirstWin copies the six iTunes-provenance Book fields
 // (persistent ID, play count, rating, date added, last played, bookmark) from a

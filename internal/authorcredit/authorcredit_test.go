@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package authorcredit
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 

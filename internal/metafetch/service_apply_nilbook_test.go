@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_nilbook_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e4b1c07-52d8-4a63-b8f1-3c70da95e26b
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestApplyMetadataCandidate_NilBookFromStoreIsAnError covers the SA5011 fix.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_sessions_view_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ab3c08b3-cc69-42b1-a17f-75c65d2d9430
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )

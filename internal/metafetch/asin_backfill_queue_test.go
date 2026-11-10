@@ -1,7 +1,7 @@
 // file: internal/metafetch/asin_backfill_queue_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2b6d14-0a93-4c57-9e18-b4c7d2e05a61
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // manualQueue builds a queue whose timer never fires on its own: fire() runs

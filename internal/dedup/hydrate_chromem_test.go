@@ -1,7 +1,7 @@
 // file: internal/dedup/hydrate_chromem_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeVectorANNStore is a minimal in-memory database.VectorANNStore double

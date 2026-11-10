@@ -1,7 +1,7 @@
 // file: internal/organizer/apply_failure_readonly_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1e9a47-3b82-4f5d-a0e6-8d27b4f19c35
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // prefStore is a MockStore backed by a map that counts writes.

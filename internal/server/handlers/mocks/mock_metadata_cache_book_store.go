@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockMetadataCacheBookStore) EXPECT() *MockMetadataCacheBookStore_Expec
 }
 
 // GetAllImportPaths provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetAllImportPaths() ([]database.ImportPath, error) {
+func (_mock *MockMetadataCacheBookStore) GetAllImportPaths() ([]store.ImportPath, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllImportPaths")
 	}
 
-	var r0 []database.ImportPath
+	var r0 []store.ImportPath
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.ImportPath, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.ImportPath, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.ImportPath); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.ImportPath); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ImportPath)
+			r0 = ret.Get(0).([]store.ImportPath)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -90,34 +90,34 @@ func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) Run(run func()) *Mo
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) Return(importPaths []database.ImportPath, err error) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) Return(importPaths []store.ImportPath, err error) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
 	_c.Call.Return(importPaths, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) RunAndReturn(run func() ([]database.ImportPath, error)) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) RunAndReturn(run func() ([]store.ImportPath, error)) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetAuthorByID provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetAuthorByID(id int) (*database.Author, error) {
+func (_mock *MockMetadataCacheBookStore) GetAuthorByID(id int) (*store.Author, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAuthorByID")
 	}
 
-	var r0 *database.Author
+	var r0 *store.Author
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (*database.Author, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) (*store.Author, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) *database.Author); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) *store.Author); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Author)
+			r0 = ret.Get(0).(*store.Author)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -152,34 +152,34 @@ func (_c *MockMetadataCacheBookStore_GetAuthorByID_Call) Run(run func(id int)) *
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetAuthorByID_Call) Return(author *database.Author, err error) *MockMetadataCacheBookStore_GetAuthorByID_Call {
+func (_c *MockMetadataCacheBookStore_GetAuthorByID_Call) Return(author *store.Author, err error) *MockMetadataCacheBookStore_GetAuthorByID_Call {
 	_c.Call.Return(author, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*database.Author, error)) *MockMetadataCacheBookStore_GetAuthorByID_Call {
+func (_c *MockMetadataCacheBookStore_GetAuthorByID_Call) RunAndReturn(run func(id int) (*store.Author, error)) *MockMetadataCacheBookStore_GetAuthorByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookAuthors provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+func (_mock *MockMetadataCacheBookStore) GetBookAuthors(bookID string) ([]store.BookAuthor, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookAuthors")
 	}
 
-	var r0 []database.BookAuthor
+	var r0 []store.BookAuthor
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookAuthor, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.BookAuthor, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookAuthor); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.BookAuthor); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookAuthor)
+			r0 = ret.Get(0).([]store.BookAuthor)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -214,34 +214,34 @@ func (_c *MockMetadataCacheBookStore_GetBookAuthors_Call) Run(run func(bookID st
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookAuthors_Call) Return(bookAuthors []database.BookAuthor, err error) *MockMetadataCacheBookStore_GetBookAuthors_Call {
+func (_c *MockMetadataCacheBookStore_GetBookAuthors_Call) Return(bookAuthors []store.BookAuthor, err error) *MockMetadataCacheBookStore_GetBookAuthors_Call {
 	_c.Call.Return(bookAuthors, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookAuthors_Call) RunAndReturn(run func(bookID string) ([]database.BookAuthor, error)) *MockMetadataCacheBookStore_GetBookAuthors_Call {
+func (_c *MockMetadataCacheBookStore_GetBookAuthors_Call) RunAndReturn(run func(bookID string) ([]store.BookAuthor, error)) *MockMetadataCacheBookStore_GetBookAuthors_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookByID provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetBookByID(id string) (*database.Book, error) {
+func (_mock *MockMetadataCacheBookStore) GetBookByID(id string) (*store.Book, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookByID")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Book, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Book); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -276,34 +276,34 @@ func (_c *MockMetadataCacheBookStore_GetBookByID_Call) Run(run func(id string)) 
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookByID_Call) Return(book *database.Book, err error) *MockMetadataCacheBookStore_GetBookByID_Call {
+func (_c *MockMetadataCacheBookStore_GetBookByID_Call) Return(book *store.Book, err error) *MockMetadataCacheBookStore_GetBookByID_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookByID_Call) RunAndReturn(run func(id string) (*database.Book, error)) *MockMetadataCacheBookStore_GetBookByID_Call {
+func (_c *MockMetadataCacheBookStore_GetBookByID_Call) RunAndReturn(run func(id string) (*store.Book, error)) *MockMetadataCacheBookStore_GetBookByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookFiles provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+func (_mock *MockMetadataCacheBookStore) GetBookFiles(bookID string) ([]store.BookFile, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookFiles")
 	}
 
-	var r0 []database.BookFile
+	var r0 []store.BookFile
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.BookFile, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.BookFile, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.BookFile); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.BookFile); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookFile)
+			r0 = ret.Get(0).([]store.BookFile)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -338,34 +338,34 @@ func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) Run(run func(bookID stri
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) Return(bookFiles []database.BookFile, err error) *MockMetadataCacheBookStore_GetBookFiles_Call {
+func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) Return(bookFiles []store.BookFile, err error) *MockMetadataCacheBookStore_GetBookFiles_Call {
 	_c.Call.Return(bookFiles, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]database.BookFile, error)) *MockMetadataCacheBookStore_GetBookFiles_Call {
+func (_c *MockMetadataCacheBookStore_GetBookFiles_Call) RunAndReturn(run func(bookID string) ([]store.BookFile, error)) *MockMetadataCacheBookStore_GetBookFiles_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBookFilesForIDsCore provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error) {
+func (_mock *MockMetadataCacheBookStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]store.BookFileCore, error) {
 	ret := _mock.Called(bookIDs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBookFilesForIDsCore")
 	}
 
-	var r0 map[string][]database.BookFileCore
+	var r0 map[string][]store.BookFileCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]database.BookFileCore, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) (map[string][]store.BookFileCore, error)); ok {
 		return returnFunc(bookIDs)
 	}
-	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]database.BookFileCore); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) map[string][]store.BookFileCore); ok {
 		r0 = returnFunc(bookIDs)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string][]database.BookFileCore)
+			r0 = ret.Get(0).(map[string][]store.BookFileCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
@@ -400,34 +400,34 @@ func (_c *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call) Run(run func(b
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call) Return(stringToBookFileCores map[string][]database.BookFileCore, err error) *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call {
+func (_c *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call) Return(stringToBookFileCores map[string][]store.BookFileCore, err error) *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call {
 	_c.Call.Return(stringToBookFileCores, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call) RunAndReturn(run func(bookIDs []string) (map[string][]database.BookFileCore, error)) *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call {
+func (_c *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call) RunAndReturn(run func(bookIDs []string) (map[string][]store.BookFileCore, error)) *MockMetadataCacheBookStore_GetBookFilesForIDsCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBooksByIDs provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) GetBooksByIDs(ids []string) ([]database.Book, error) {
+func (_mock *MockMetadataCacheBookStore) GetBooksByIDs(ids []string) ([]store.Book, error) {
 	ret := _mock.Called(ids)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBooksByIDs")
 	}
 
-	var r0 []database.Book
+	var r0 []store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) ([]store.Book, error)); ok {
 		return returnFunc(ids)
 	}
-	if returnFunc, ok := ret.Get(0).(func([]string) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func([]string) []store.Book); ok {
 		r0 = returnFunc(ids)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
@@ -462,12 +462,12 @@ func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) Run(run func(ids []stri
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) Return(books []database.Book, err error) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) Return(books []store.Book, err error) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(ids []string) ([]database.Book, error)) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
+func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(ids []string) ([]store.Book, error)) *MockMetadataCacheBookStore_GetBooksByIDs_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -597,26 +597,26 @@ func (_c *MockMetadataCacheBookStore_LiveBookPathsUnderDir_Call) RunAndReturn(ru
 }
 
 // ModifyBook provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+func (_mock *MockMetadataCacheBookStore) ModifyBook(id string, fn func(*store.Book) error) (*store.Book, error) {
 	ret := _mock.Called(id, fn)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ModifyBook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, func(*store.Book) error) (*store.Book, error)); ok {
 		return returnFunc(id, fn)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, func(*database.Book) error) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, func(*store.Book) error) *store.Book); ok {
 		r0 = returnFunc(id, fn)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, func(*database.Book) error) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(string, func(*store.Book) error) error); ok {
 		r1 = returnFunc(id, fn)
 	} else {
 		r1 = ret.Error(1)
@@ -631,20 +631,20 @@ type MockMetadataCacheBookStore_ModifyBook_Call struct {
 
 // ModifyBook is a helper method to define mock.On call
 //   - id string
-//   - fn func(*database.Book) error
+//   - fn func(*store.Book) error
 func (_e *MockMetadataCacheBookStore_Expecter) ModifyBook(id any, fn any) *MockMetadataCacheBookStore_ModifyBook_Call {
 	return &MockMetadataCacheBookStore_ModifyBook_Call{Call: _e.mock.On("ModifyBook", id, fn)}
 }
 
-func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Run(run func(id string, fn func(*database.Book) error)) *MockMetadataCacheBookStore_ModifyBook_Call {
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Run(run func(id string, fn func(*store.Book) error)) *MockMetadataCacheBookStore_ModifyBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 func(*database.Book) error
+		var arg1 func(*store.Book) error
 		if args[1] != nil {
-			arg1 = args[1].(func(*database.Book) error)
+			arg1 = args[1].(func(*store.Book) error)
 		}
 		run(
 			arg0,
@@ -654,34 +654,34 @@ func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Run(run func(id string, fn
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Return(book *database.Book, err error) *MockMetadataCacheBookStore_ModifyBook_Call {
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) Return(book *store.Book, err error) *MockMetadataCacheBookStore_ModifyBook_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_ModifyBook_Call) RunAndReturn(run func(id string, fn func(*database.Book) error) (*database.Book, error)) *MockMetadataCacheBookStore_ModifyBook_Call {
+func (_c *MockMetadataCacheBookStore_ModifyBook_Call) RunAndReturn(run func(id string, fn func(*store.Book) error) (*store.Book, error)) *MockMetadataCacheBookStore_ModifyBook_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ScanPrefix provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
+func (_mock *MockMetadataCacheBookStore) ScanPrefix(prefix string) ([]store.KVPair, error) {
 	ret := _mock.Called(prefix)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ScanPrefix")
 	}
 
-	var r0 []database.KVPair
+	var r0 []store.KVPair
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.KVPair, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.KVPair, error)); ok {
 		return returnFunc(prefix)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.KVPair); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.KVPair); ok {
 		r0 = returnFunc(prefix)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.KVPair)
+			r0 = ret.Get(0).([]store.KVPair)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -716,37 +716,37 @@ func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) Run(run func(prefix string
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) Return(kVPairs []database.KVPair, err error) *MockMetadataCacheBookStore_ScanPrefix_Call {
+func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) Return(kVPairs []store.KVPair, err error) *MockMetadataCacheBookStore_ScanPrefix_Call {
 	_c.Call.Return(kVPairs, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) RunAndReturn(run func(prefix string) ([]database.KVPair, error)) *MockMetadataCacheBookStore_ScanPrefix_Call {
+func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) RunAndReturn(run func(prefix string) ([]store.KVPair, error)) *MockMetadataCacheBookStore_ScanPrefix_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // UpdateBook provides a mock function for the type MockMetadataCacheBookStore
-func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
+func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *store.Book) (*store.Book, error) {
 	ret := _mock.Called(id, book)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateBook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Book) (*store.Book, error)); ok {
 		return returnFunc(id, book)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Book) *store.Book); ok {
 		r0 = returnFunc(id, book)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, *database.Book) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(string, *store.Book) error); ok {
 		r1 = returnFunc(id, book)
 	} else {
 		r1 = ret.Error(1)
@@ -761,20 +761,20 @@ type MockMetadataCacheBookStore_UpdateBook_Call struct {
 
 // UpdateBook is a helper method to define mock.On call
 //   - id string
-//   - book *database.Book
+//   - book *store.Book
 func (_e *MockMetadataCacheBookStore_Expecter) UpdateBook(id any, book any) *MockMetadataCacheBookStore_UpdateBook_Call {
 	return &MockMetadataCacheBookStore_UpdateBook_Call{Call: _e.mock.On("UpdateBook", id, book)}
 }
 
-func (_c *MockMetadataCacheBookStore_UpdateBook_Call) Run(run func(id string, book *database.Book)) *MockMetadataCacheBookStore_UpdateBook_Call {
+func (_c *MockMetadataCacheBookStore_UpdateBook_Call) Run(run func(id string, book *store.Book)) *MockMetadataCacheBookStore_UpdateBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 *database.Book
+		var arg1 *store.Book
 		if args[1] != nil {
-			arg1 = args[1].(*database.Book)
+			arg1 = args[1].(*store.Book)
 		}
 		run(
 			arg0,
@@ -784,12 +784,12 @@ func (_c *MockMetadataCacheBookStore_UpdateBook_Call) Run(run func(id string, bo
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_UpdateBook_Call) Return(book1 *database.Book, err error) *MockMetadataCacheBookStore_UpdateBook_Call {
+func (_c *MockMetadataCacheBookStore_UpdateBook_Call) Return(book1 *store.Book, err error) *MockMetadataCacheBookStore_UpdateBook_Call {
 	_c.Call.Return(book1, err)
 	return _c
 }
 
-func (_c *MockMetadataCacheBookStore_UpdateBook_Call) RunAndReturn(run func(id string, book *database.Book) (*database.Book, error)) *MockMetadataCacheBookStore_UpdateBook_Call {
+func (_c *MockMetadataCacheBookStore_UpdateBook_Call) RunAndReturn(run func(id string, book *store.Book) (*store.Book, error)) *MockMetadataCacheBookStore_UpdateBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

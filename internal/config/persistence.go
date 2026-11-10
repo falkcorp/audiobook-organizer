@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.62.2
+// version: 1.62.3
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package config
 
@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	logging "github.com/falkcorp/mediacore/log"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"

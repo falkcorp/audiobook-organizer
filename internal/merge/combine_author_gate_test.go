@@ -1,14 +1,14 @@
 // file: internal/merge/combine_author_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 01819a26-c9c8-4974-9930-65c74b8cce25
-// last-edited: 2026-09-03
+// last-edited: 2026-11-09
 
 package merge
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

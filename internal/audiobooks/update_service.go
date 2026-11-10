@@ -1,7 +1,7 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 

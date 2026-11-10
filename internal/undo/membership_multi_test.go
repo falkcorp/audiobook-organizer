@@ -1,7 +1,7 @@
 // file: internal/undo/membership_multi_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8d4f2a61-7c35-4b90-a1e8-5f3c9b0d7e42
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // multiSim: several survivors share ONE list. Each retire journals a marker on

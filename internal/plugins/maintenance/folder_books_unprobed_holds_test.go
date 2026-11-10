@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_unprobed_holds_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 406b9bc1-da96-44bc-b198-fc0b48344643
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

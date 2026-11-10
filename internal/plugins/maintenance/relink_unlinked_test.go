@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2f6a41d8-90b3-4c57-8e12-b5d70c3a9f46
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 )
 

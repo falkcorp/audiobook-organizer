@@ -1,14 +1,14 @@
 // file: internal/auth/user_active.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 5e2a9c14-7b30-4d68-a1f5-c80d3e96b247
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package auth
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // UserIsActive reports whether u may sign in, by the same rule the auth

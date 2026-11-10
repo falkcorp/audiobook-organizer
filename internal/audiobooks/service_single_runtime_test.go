@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single_runtime_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f6c07ea6-9ca9-424a-aaeb-bcc61e1a445f
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )
 

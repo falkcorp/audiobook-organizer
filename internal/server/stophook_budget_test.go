@@ -1,7 +1,7 @@
 // file: internal/server/stophook_budget_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 877b968e-c9c6-4cac-b2e9-06bc892394d0
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"

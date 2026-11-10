@@ -1,7 +1,7 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func gateTestService(created *[]string, written *[]database.Book) *AudiobookService {

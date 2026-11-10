@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.27.2
+// version: 1.27.3
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/conformance"
 )
@@ -946,7 +946,7 @@ func (f *fakeLibrary) SearchBooksFiltered(query string, limit, offset int, fl da
 
 // MintOrGetSyncFileIDs mirrors the real store's batch form. It delegates to the
 // singular method so the fake cannot drift into returning different ids from the
-// two paths — which is the property the conformance test in internal/database
+// two paths — which is the property the conformance test in internal/books/store
 // asserts against the real implementation.
 func (f *fakeLibrary) MintOrGetSyncFileIDs(bookID string, fileIDs []string) (map[string]string, error) {
 	out := make(map[string]string, len(fileIDs))

@@ -1,0 +1,42 @@
+// file: internal/books/store/metadata_field_state_guards.go
+// version: 1.0.5
+// guid: 34bc346c-8d4e-4097-89a5-810dc4e9807d
+// last-edited: 2026-11-09
+
+package store
+
+// The two provenance questions every "may I overwrite this field?" guard asks.
+//
+// Three call sites asked them inline and spelled them differently, which made a
+// deliberate difference look like a typo:
+//
+//   - plugins/maintenance/junk_title_fixer.go (was repair_junk_titles.go) tests
+//     locked || override (skipped_user_locked); since 2026-10-03 a fetched
+//     value no longer skips a title that fails the junk classifier, it is
+//     weighed as evidence for the replacement
+//   - plugins/maintenance/title_repair.go       tested locked || override, then
+//     fetched separately so it could report a different skip reason
+//   - server/handlers/metadata/handler.go       tested locked || override only
+//
+// Naming them separates the clause all three agree on from the clause they
+// legitimately differ on. handler.go's omission of the fetched check is NOT
+// recorded anywhere in its source -- the comments at handler.go:31 and :122
+// explain why loadMetadataState is injected with a concrete type, not why the
+// guard skips FetchedValue -- so it is preserved verbatim here rather than
+// "unified", and flagged in the conformance test as unexplained.
+
+// HasUserOverride reports whether a human has spoken for this field: either they
+// locked it, or they set an explicit value. Neither is ours to rewrite.
+func (s MetadataFieldState) HasUserOverride() bool {
+	return s.OverrideLocked || s.OverrideValue != nil
+}
+
+// HasProviderValue reports whether a metadata provider supplied a value for this
+// field. Weaker than HasUserOverride: a fetched value blocks title_repair,
+// which only ever wants to fix file-derived junk (the junk-title fixer reads
+// the fetched value as evidence instead, since 2026-10-03), but must NOT block
+// a metadata apply, whose entire job is to write a newly fetched value over an
+// older one.
+func (s MetadataFieldState) HasProviderValue() bool {
+	return s.FetchedValue != nil
+}

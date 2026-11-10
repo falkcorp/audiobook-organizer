@@ -1,7 +1,7 @@
 // file: internal/activity/service_deferred_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f6c9e3a-7d25-4b80-a4e1-3c8b5d0f2e69
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package activity
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

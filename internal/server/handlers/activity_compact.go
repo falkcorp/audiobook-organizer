@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_compact.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b5d2e8a4-7c19-4f6b-a3e0-1d8f4c7b9e26
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"

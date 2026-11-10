@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_method_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5e2b7c19-0d4a-4f86-b3e1-9a6c8d2f7041
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 

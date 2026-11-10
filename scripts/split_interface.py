@@ -1,13 +1,13 @@
 # file: scripts/split_interface.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 9c4d2e81-73af-4b06-8d59-1e2f6a80b7c3
-# last-edited: 2026-10-20
+# last-edited: 2026-11-09
 #
 # Splits one wide Go interface into several focused ones, retaining the original
 # name as their composition so the method set is byte-identical and no consumer
 # moves. Import `split` and call it with the groups you want:
 #
-#   split("internal/database/iface_book.go", "BookReader", [
+#   split("internal/books/store/iface_book.go", "BookReader", [
 #       ("BookLookup", "resolves books by identity.", ["GetBook", "GetBookByPath"]),
 #       ...
 #   ])

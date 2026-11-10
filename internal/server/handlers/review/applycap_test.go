@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/applycap_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d7a4c1e8-3b6f-4d29-a5e1-8c0f2b7d4a96
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reviewhandler_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )
 

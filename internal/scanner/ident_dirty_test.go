@@ -1,7 +1,7 @@
 // file: internal/scanner/ident_dirty_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5573453b-2e51-4af2-8502-ac8cec772b10
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func identDirty(t *testing.T, s *database.PebbleStore) []database.IdentDirtyEntry {

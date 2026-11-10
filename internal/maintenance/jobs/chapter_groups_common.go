@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

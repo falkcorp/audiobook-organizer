@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_writeback_rename_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4c6e8b-0d2f-4b1a-8e3c-5f7a9b1d3e25
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metadatahandler_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )

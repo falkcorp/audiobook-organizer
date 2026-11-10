@@ -1,7 +1,7 @@
 // file: internal/scanner/retired_shell_emptied_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bfb3aa29-e923-44bd-9e2a-7c709aa20de4
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // unretire puts rows back under the shell the way the retire revert does.

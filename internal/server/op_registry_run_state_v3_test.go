@@ -1,7 +1,7 @@
 // file: internal/server/op_registry_run_state_v3_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7be5d482-a71c-4572-86c3-af4eaa876d95
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

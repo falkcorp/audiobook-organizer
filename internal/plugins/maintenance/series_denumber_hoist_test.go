@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_hoist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b2e4f61-3c9a-4d07-a5b8-e16f0c9d2a47
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // denumberChainFixture is a stateful library for SERIES-MEMBERSHIP-RESIDUAL-LOOPS.

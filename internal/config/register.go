@@ -1,11 +1,11 @@
 // file: internal/config/register.go
-// version: 1.2.2
-// last-edited: 2026-11-08
+// version: 1.2.3
+// last-edited: 2026-11-09
 
 package config
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.12.0
+// version: 3.12.1
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -16,8 +16,8 @@ import (
 	"time"
 	"unicode"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_superseded_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b04e19d-83f7-4c52-a1e6-9d275f3b0c48
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestRankKeeper_PresentRowAlwaysWins is the data-loss-critical property of the

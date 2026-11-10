@@ -1,7 +1,7 @@
 // file: internal/activity/writer_feed_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0c7a41d9-83be-4e52-a6f1-5d92e8b3c07a
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package activity
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestWriter_FeedParsesWithoutTheStdoutTee: Feed turns a line into the same

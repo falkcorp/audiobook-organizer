@@ -1,7 +1,7 @@
 // file: internal/server/server_update_audiobook_more_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9c8b7a6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

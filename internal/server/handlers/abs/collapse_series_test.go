@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collapse_series_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c7e3a915-4b2d-4e08-9f61-2d85b0a7c4e3
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 

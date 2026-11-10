@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/userdata_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7ac71a7b-e1cb-4416-a393-1fa38af8871f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )

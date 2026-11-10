@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41e7a92-5d08-4b3f-a6e1-0f9b2d73c845
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 )
 

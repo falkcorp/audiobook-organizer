@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b2d9e14-0c63-4a58-8f71-6d3a92c4e150
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_mock_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

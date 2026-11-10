@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_match_stamp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dc28fc77-3a62-4866-bfd5-7fb3048d18a8
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/search/index_builder.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8a1c2f4d-5b3e-4f70-b7d6-2e8d0f1b9a57
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 //
 // Helpers that project a database.Book (with its author, series,
 // and tag relations resolved) into a BookDocument ready for
@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // indexBuilderStore is what this package actually calls, measured by emptying the

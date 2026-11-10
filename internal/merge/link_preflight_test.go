@@ -1,7 +1,7 @@
 // file: internal/merge/link_preflight_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b1c9e03-4a6d-4d58-8f2a-0e3b5c8d1f46
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

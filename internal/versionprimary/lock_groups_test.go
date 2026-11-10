@@ -1,7 +1,7 @@
 // file: internal/versionprimary/lock_groups_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9d4a2c71-5e8f-4b36-a1d0-7f3e6b2c9a48
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // LockGroups takes a stripe once even when several groups hash onto it (a

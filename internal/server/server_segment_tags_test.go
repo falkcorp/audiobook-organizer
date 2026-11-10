@@ -1,7 +1,7 @@
 // file: internal/server/server_segment_tags_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a7b8c9d0-e1f2-3456-7890-abcdef123456
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

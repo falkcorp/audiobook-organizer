@@ -1,7 +1,7 @@
 // file: internal/server/unreadable_books_count_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c3f1a92-5e04-4d8b-b6a1-2e9d0f47c815
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 //
 // The bulk-apply surfaces report how many books the sibling-part index could
 // not read: batch-apply-candidates answers it as unreadable_books, and the
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // An operation row the index cannot decode, for a book with nothing else

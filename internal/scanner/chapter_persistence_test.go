@@ -1,7 +1,7 @@
 // file: internal/scanner/chapter_persistence_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: cb2ed4a4-974b-4d88-8d46-0a0f365ba430
-// last-edited: 2026-09-22
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // odysseyM4B is the real, committed 115 MB fixture with 6 embedded chapters,

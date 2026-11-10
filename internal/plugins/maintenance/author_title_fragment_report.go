@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_title_fragment_report.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 13220b5a-7a38-4977-b0f3-257781a67fe3
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

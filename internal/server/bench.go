@@ -1,7 +1,7 @@
 // file: internal/server/bench.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5e6f7a8b-9c0d-1234-ef01-555555555555
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 //go:build bench
 
@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"

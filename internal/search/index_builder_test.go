@@ -1,5 +1,5 @@
 // file: internal/search/index_builder_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d8e2c1a-5b4f-4f70-a7c6-2d8e0f1b9a47
 
 package search
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestBookToDoc_ResolvesRelations(t *testing.T) {

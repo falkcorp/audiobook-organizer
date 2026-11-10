@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_rank_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3d9b7e1a-5c2f-4a8e-b6d1-9f0e2c4a7b3d
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func idsOf(s []database.Series) []int {

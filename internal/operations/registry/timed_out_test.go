@@ -1,7 +1,7 @@
 // file: internal/operations/registry/timed_out_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8e03d337-8646-492e-96f0-499394e74e8a
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -28,7 +28,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"

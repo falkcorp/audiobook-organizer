@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 98427cba-9b8a-4313-ace0-44b5115e8d6c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )

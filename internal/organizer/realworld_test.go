@@ -1,5 +1,5 @@
 // file: internal/organizer/realworld_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 
 package organizer
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestRealWorldFileParsing tests the organizer with 1000 random real-world file paths

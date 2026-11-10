@@ -1,5 +1,5 @@
 // file: internal/versions/fingerprint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e6f8a5d-0c5a-4a70-b8c5-3d7e0f1b9a99
 
 package versions
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestCheckFingerprint_TorrentHashMatch(t *testing.T) {

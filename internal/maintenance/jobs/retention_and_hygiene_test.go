@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/retention_and_hygiene_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: f8d0e5b9-c2a4-5b1d-9e7f-8c3d2a1b0f5e
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/deluge/mark_in_place.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8ee900f5-372f-426f-a797-2f6d18be3aa1
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )

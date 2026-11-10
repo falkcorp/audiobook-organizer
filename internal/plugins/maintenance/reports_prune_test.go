@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reports_prune_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d7a6a53-9b1e-4c2f-8f35-71c2e0b94a18
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type reportsPruneQueue struct {

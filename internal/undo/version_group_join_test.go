@@ -1,7 +1,7 @@
 // file: internal/undo/version_group_join_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2a64b7d-0c19-4f85-8d3b-71f5c9a0e342
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func joinChange(t *testing.T, old, now VersionGroupState) *database.OperationChange {

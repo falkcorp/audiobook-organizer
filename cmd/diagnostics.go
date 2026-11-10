@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/spf13/cobra"

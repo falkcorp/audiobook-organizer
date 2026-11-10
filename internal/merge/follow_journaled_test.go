@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9aa51106-7c96-4240-b74e-f49c0d7d7213
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

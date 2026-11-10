@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid_test.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: 7e2b98d5-4a13-4c07-b6f9-08d5137ac642
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package abs
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 

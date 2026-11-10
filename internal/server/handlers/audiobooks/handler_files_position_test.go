@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files_position_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3b0e6f5a-2c41-4d8e-9a7b-6f1c2d9e8a53
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func fileParams() gin.Params {

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_primary_gate_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2f7b4c19-6d83-4e50-9a12-7c5e0a8b3d46
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 // Regression guard for DEDUP-CANDIDATE-EXPLOSION-2026-06-18: the exact-family
 // emitters must never produce a candidate that involves a NON-primary version-group
@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // wireExactTitleOnly configures the mock so only the exact-title emitter can fire

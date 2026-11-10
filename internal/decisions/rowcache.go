@@ -1,7 +1,7 @@
 // file: internal/decisions/rowcache.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c27f4e90-3b58-4a1d-8e06-d4a91b73f625
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // logGenerations counts the writes to each engine's VETO rows (the active,

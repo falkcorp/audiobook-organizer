@@ -1,7 +1,7 @@
 // file: internal/server/collection_refresh_op_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4e1c27-5d83-4b60-8f12-0c7b3d6e9a58
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/server_coverage_phase2_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,9 +12,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

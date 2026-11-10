@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_classify_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c8e52-6b1d-4a97-9d24-7c5e1a8b4f60
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

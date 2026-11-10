@@ -1,7 +1,7 @@
 // file: internal/organizer/stamp_library_state_test.go
-// version: 1.2.0
+// version: 1.2.2
 // guid: 6d2b8f04-3a71-4e59-b8c2-1f7a09e4d35c
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/mock"
 )
@@ -48,7 +48,7 @@ func TestStampOrganizeMetadata_SetsLibraryStateOrganized(t *testing.T) {
 	var captured *database.Book
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-1").Return(book, nil)
-	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).
+	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*store.Book")).
 		Run(func(args mock.Arguments) {
 			// Capture the row as it is actually written. Asserting on the
 			// in-memory `book` pointer instead would be a blind spot: the
@@ -101,7 +101,7 @@ func TestStampOrganizeMetadata_KeepsAlreadyOrganizedState(t *testing.T) {
 	var captured *database.Book
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-2").Return(book, nil)
-	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*database.Book")).
+	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*store.Book")).
 		Run(func(args mock.Arguments) {
 			captured = args.Get(1).(*database.Book)
 		}).
@@ -144,7 +144,7 @@ func TestStampOrganizeMetadata_EmptyOperationIDStillStampsButKeepsAttribution(t 
 	var captured *database.Book
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookByID", "book-3").Return(book, nil)
-	mockStore.On("UpdateBook", "book-3", mock.AnythingOfType("*database.Book")).
+	mockStore.On("UpdateBook", "book-3", mock.AnythingOfType("*store.Book")).
 		Run(func(args mock.Arguments) { captured = args.Get(1).(*database.Book) }).
 		Return(book, nil)
 
@@ -202,7 +202,7 @@ func TestStampAlreadyCorrect_StampsWithNoOperationID(t *testing.T) {
 		row := &database.Book{ID: id, Title: id, FilePath: "/library/" + id, LibraryState: &imported}
 		books = append(books, *row)
 		mockStore.On("GetBookByID", id).Return(row, nil)
-		mockStore.On("UpdateBook", id, mock.AnythingOfType("*database.Book")).
+		mockStore.On("UpdateBook", id, mock.AnythingOfType("*store.Book")).
 			Run(func(args mock.Arguments) {
 				got := args.Get(1).(*database.Book)
 				mu.Lock()

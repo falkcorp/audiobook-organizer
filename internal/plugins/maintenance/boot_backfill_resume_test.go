@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/boot_backfill_resume_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 579d9a65-c4dd-4668-8bd0-c8fb6914b259
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"

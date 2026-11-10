@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai_parsed_payload_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5154d5a5-0191-49dc-95fa-0d8b4f784a05
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 

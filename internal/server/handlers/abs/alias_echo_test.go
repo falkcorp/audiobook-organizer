@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/alias_echo_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: de050482-2489-42a2-ad9d-bc151b672b20
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

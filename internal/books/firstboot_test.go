@@ -1,7 +1,7 @@
 // file: internal/books/firstboot_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f7c9e14-8b3a-4d61-a5e2-0c6d1b9f4a73
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
@@ -41,7 +41,7 @@ type headSeed struct {
 // library rows, a config_blob in a shape the settings load migrates, books'
 // schema at LegacyCap, and no core key, sidecar or checkpoint. It writes the
 // rows with this build's standalone opener and then removes what a core
-// build adds, as internal/database's rewindToR0 does for that package's
+// build adds, as internal/books/store's rewindToR0 does for that package's
 // tests (that helper is unexported and its package cannot be imported by a
 // test helper there without a cycle, so the R0 keys are named here: HEAD's
 // on-disk format is frozen). extra, when set, writes more rows before the

@@ -1,14 +1,14 @@
 // file: internal/server/abs_session_backfill.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 99f886ee-303a-4fce-8468-154f11f057ca
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatch_shutdown_race_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c67f935-8917-41f9-8b65-e03988c07b12
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // White-box regression tests for OPS-V2-DISPATCH-RACE: a run must never START
 // after Shutdown has begun.
@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

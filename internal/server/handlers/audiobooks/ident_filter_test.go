@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/ident_filter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a275abf-d4f2-4303-b515-c05d00c6d023
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobookshandler_test
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestIdentFilter_BuildingReturns503: an ident: query while the

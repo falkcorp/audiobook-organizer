@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_nothing_written_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0b7f3e52-9a14-4d68-b3c1-6e2a85d9f470
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"

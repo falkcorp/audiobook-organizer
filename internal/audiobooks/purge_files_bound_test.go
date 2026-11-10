@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_files_bound_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4e1a7d-3f26-4b95-a0d8-7e2b5c9f1a43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // writeFile makes a one-byte file (and its folder) at path.

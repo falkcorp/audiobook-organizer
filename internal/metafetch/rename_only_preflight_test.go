@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_only_preflight_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1e3a5c7d-9f0b-4d2e-8a6c-3b5d7f9a1c42
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

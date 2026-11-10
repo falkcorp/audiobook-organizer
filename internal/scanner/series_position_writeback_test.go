@@ -1,7 +1,7 @@
 // file: internal/scanner/series_position_writeback_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b3e0d19-5a42-4c88-b6f0-2e91c7d4a86f
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // scanOneBook runs the real scanner save path against a real PebbleStore and

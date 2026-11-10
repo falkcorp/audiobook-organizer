@@ -1,14 +1,14 @@
 // file: internal/fileops/book_file_hash_recorder.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8e2d4b17-3c95-4f60-a1d8-6b7e9c2f0a43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package fileops
 
 import (
 	"errors"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )

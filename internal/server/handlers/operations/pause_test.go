@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 94ae9a81-a763-45fb-b24a-f9ede23037aa
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

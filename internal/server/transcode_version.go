@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e2b7c41-3d58-4a16-8f0e-6c1d4a7b2e93
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

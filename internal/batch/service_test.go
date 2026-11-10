@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.12.0
-// last-edited: 2026-10-26
+// version: 1.12.1
+// last-edited: 2026-11-09
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/catalog_coverage_op.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5b8e2c61-0d7f-4a93-b1c4-e9a3f6d82b07
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 //
 // Registers catalog.coverage-report, the read-only measurement that precedes
 // the local-catalog matching stage (02-filter-identification-pipeline.md
@@ -27,7 +27,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

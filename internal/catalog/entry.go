@@ -1,7 +1,7 @@
 // file: internal/catalog/entry.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e7a2c91-6b5d-4f08-a3e1-9c2d8f6b1a74
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

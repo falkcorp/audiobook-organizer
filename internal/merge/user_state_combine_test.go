@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_combine_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c8e4a71-6b2d-4f93-a5e0-3d7b19f2c864
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestCombineUserStates(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package server
 
@@ -26,7 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )

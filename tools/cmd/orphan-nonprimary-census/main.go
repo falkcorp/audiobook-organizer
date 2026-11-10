@@ -1,7 +1,7 @@
 // file: tools/cmd/orphan-nonprimary-census/main.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e02ce63c-3475-470d-a2c4-a8766769d3c6
-// last-edited: 2026-08-23
+// last-edited: 2026-11-09
 //
 // orphan-nonprimary-census is a READ-ONLY diagnostic CLI that counts books in
 // an anomalous population: no version group (VersionGroupID nil/empty) AND
@@ -54,7 +54,7 @@ import (
 	"time"
 )
 
-// ----- API response types (mirrors internal/database.BookSummary) -----
+// ----- API response types (mirrors internal/books/store.BookSummary) -----
 
 type book struct {
 	ID               string     `json:"id"`

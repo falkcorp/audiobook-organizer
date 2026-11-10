@@ -1,7 +1,7 @@
 // file: internal/server/search_observer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1d9c3e-8f42-4b57-a0e6-3c7b5d2f9e18
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
 

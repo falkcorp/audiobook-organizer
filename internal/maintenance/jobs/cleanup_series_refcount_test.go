@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TASK-044. cleanup-series decides what to delete from GetAllSeriesBookCounts

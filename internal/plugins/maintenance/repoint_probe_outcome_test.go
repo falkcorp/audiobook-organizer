@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_probe_outcome_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d3a16d65-e084-4a0a-8b8d-3eba7a91104c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

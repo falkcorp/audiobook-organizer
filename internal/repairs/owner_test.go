@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.12.4
+// version: 1.12.5
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // RevertPlan is the order an operation revert (audiobooks.RevertService)

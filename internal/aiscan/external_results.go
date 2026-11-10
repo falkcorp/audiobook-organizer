@@ -1,7 +1,7 @@
 // file: internal/aiscan/external_results.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7aa87f93-e965-48b3-9872-35ac6c51a6ea
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // externalSourcePrefix marks a scan recorded from a batch submitted outside

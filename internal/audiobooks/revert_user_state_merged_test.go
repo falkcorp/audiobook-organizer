@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_user_state_merged_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e0b3f58-1c92-4a7d-b385-d7f4a9e21c06
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

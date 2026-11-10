@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"

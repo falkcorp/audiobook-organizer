@@ -1,7 +1,7 @@
 // file: internal/scheduler/metadata_standdown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5b40d97-3a1c-4f28-b6e0-9d7c2a18f453
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"testing"
 
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

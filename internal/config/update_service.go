@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.33.2
+// version: 3.33.3
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )

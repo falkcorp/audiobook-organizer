@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // The generic operations routes as the server wires them, driven through the
 // real router: a Repairs operation's data (repairs.plan, repairs.apply) is
@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

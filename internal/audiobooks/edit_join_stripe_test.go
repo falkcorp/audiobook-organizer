@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_join_stripe_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b9d2e60-7a31-4c85-9f1e-d3a6c0b58e27
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

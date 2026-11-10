@@ -1,7 +1,7 @@
 // file: internal/deluge/import_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a9d1c36-7e42-4b08-8f63-d2c0b4e91a57
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

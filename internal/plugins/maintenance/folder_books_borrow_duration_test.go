@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_borrow_duration_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d3f9a2e-4b18-4c65-8e07-1a5b6c9d2f48
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

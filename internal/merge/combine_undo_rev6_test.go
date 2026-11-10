@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_rev6_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5e0dd46d-1455-44fc-94b7-899dc9c35055
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Round-6 review of #4064: the survivor put-back decides under the

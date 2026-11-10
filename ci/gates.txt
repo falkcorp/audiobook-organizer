@@ -1,7 +1,7 @@
 # file: ci/gates.txt
-# version: 1.7.3
+# version: 1.7.4
 # guid: 6e1b4c7a-2d93-4f58-b0a6-3c8d5e9f1a24
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
 # The one list of CI gates (07-G4, owner decision D47). Read by scripts/ci/run_gates.py.
 # Columns are TAB-separated:
@@ -66,8 +66,8 @@
 errcheck	bash scripts/check-errcheck-ratchet.sh	.errcheck-baseline	ratchet	bash scripts/check-errcheck-ratchet.sh --measure	own-job
 interface-width	bash scripts/check-interface-width.sh	.interface-width-baseline	ratchet	bash scripts/check-interface-width.sh --measure	own-job
 deadcode-ratchet	python3 scripts/deadcode-ratchet.py	scripts/deadcode-baseline.txt	ratchet-set	python3 scripts/deadcode-ratchet.py --prune	own-job
-store-width	go test ./internal/database/ -run TestStoreFlattenedWidth -count=1	internal/database/store_width_test.go	ratchet-const	-	go-suite
-store-references	go test ./internal/database/ -run TestStoreReferenceCount -count=1	internal/database/store_consumers_test.go	ratchet-const	-	go-suite
+store-width	go test ./internal/books/store/ -run TestStoreFlattenedWidth -count=1	internal/books/store/store_width_test.go	ratchet-const	-	go-suite
+store-references	go test ./internal/books/store/ -run TestStoreReferenceCount -count=1	internal/books/store/store_consumers_test.go	ratchet-const	-	go-suite
 layering	go test ./internal/arch/ -count=1	-	check	-	go-suite
 appconfig-reads	go test ./internal/config/ -run TestAppConfigDirectReadRatchet -count=1	internal/config/appconfig_reads_test.go	ratchet-const	-	go-suite
 slog-guard	go test ./internal/logger/ -run TestGuard_NoDirectSlogCalls -count=1	-	check	-	go-suite

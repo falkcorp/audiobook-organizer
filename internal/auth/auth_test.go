@@ -1,5 +1,5 @@
 // file: internal/auth/auth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8c1a2d-5b9f-4a70-b6d3-8c2e1f0a9b57
 
 package auth
@@ -8,7 +8,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestIsKnown(t *testing.T) {

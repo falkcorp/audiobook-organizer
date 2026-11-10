@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e7b0a94-6c21-4d58-8f39-2a1c7e5b0d64
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package itunes
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newRepairTestStore returns a real PebbleStore backed by a temp dir — the plan

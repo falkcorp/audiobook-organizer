@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_keep_listed_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1dc7f095-72fa-4bc6-ae78-4d04a33e1aac
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

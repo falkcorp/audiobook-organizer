@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -283,7 +283,7 @@ func (g *servedGuard) serves(p string) (bool, error) {
 }
 
 // hasSlotPair reports whether p has the consecutive path parts
-// .versions/{verID} (pathutil.HasSlotPair, shared with internal/database).
+// .versions/{verID} (pathutil.HasSlotPair, shared with internal/books/store).
 func hasSlotPair(p, verID string) bool {
 	return pathutil.HasSlotPair(p, verID)
 }

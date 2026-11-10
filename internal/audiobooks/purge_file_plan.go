@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"io/fs"
 	"syscall"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // filePlan is what a purge with delete_files decided about one book's file

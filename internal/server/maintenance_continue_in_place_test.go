@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_continue_in_place_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c9e5b70-8d14-4a63-b1f7-3e6a0d9c4f58
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

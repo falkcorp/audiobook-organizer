@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: 1c9d0e8f-2a3b-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 //
 // Deluge integration — HTTP handlers and thin shims.
 //
@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"net/http"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"

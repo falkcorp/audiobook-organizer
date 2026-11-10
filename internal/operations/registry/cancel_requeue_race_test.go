@@ -1,7 +1,7 @@
 // file: internal/operations/registry/cancel_requeue_race_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f9e61b8-2c47-4d05-8a1b-e0d57c9a4b26
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

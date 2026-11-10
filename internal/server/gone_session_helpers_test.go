@@ -1,7 +1,7 @@
 // file: internal/server/gone_session_helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4f7a2c19-6d83-4e50-b1a7-9c0e5d3f8a62
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // viewerGoneSession returns a password-origin session for a synthetic user

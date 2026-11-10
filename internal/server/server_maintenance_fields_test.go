@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_fields_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c4e1b58-2a93-4f60-9d17-5b8e03c2a7f4
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

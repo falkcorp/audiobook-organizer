@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_census_exact.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7b09d3be-0012-432e-91e0-ea0f2491bea2
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,8 +13,8 @@ import (
 	"log/slog"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

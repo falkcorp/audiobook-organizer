@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus_failclosed_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e8b5d17-6a2c-4f91-8d40-c2a7e9f5b6d1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package readstatus
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // unreadableStateStore fails GetUserBookState the way an I/O or decode error

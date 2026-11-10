@@ -1,7 +1,7 @@
 // file: cmd/dedup_bench.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 //go:build bench
 
@@ -19,8 +19,8 @@ import (
 	"path/filepath"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"

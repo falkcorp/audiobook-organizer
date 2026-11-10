@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_disk_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e1c8b3a-72d4-4f09-9a6e-c3b81f0d2e47
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seedPennyworth builds the author folder "Alfred Pennyworth" under fbITunes:

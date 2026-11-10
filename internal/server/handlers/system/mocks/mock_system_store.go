@@ -7,7 +7,7 @@ package systemmocks
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -315,23 +315,23 @@ func (_c *MockSystemStore_DeleteUserPreference_Call) RunAndReturn(run func(key s
 }
 
 // GetAllAuthors provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetAllAuthors() ([]database.Author, error) {
+func (_mock *MockSystemStore) GetAllAuthors() ([]store.Author, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllAuthors")
 	}
 
-	var r0 []database.Author
+	var r0 []store.Author
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.Author, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.Author, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.Author); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.Author); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Author)
+			r0 = ret.Get(0).([]store.Author)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -359,34 +359,34 @@ func (_c *MockSystemStore_GetAllAuthors_Call) Run(run func()) *MockSystemStore_G
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllAuthors_Call) Return(authors []database.Author, err error) *MockSystemStore_GetAllAuthors_Call {
+func (_c *MockSystemStore_GetAllAuthors_Call) Return(authors []store.Author, err error) *MockSystemStore_GetAllAuthors_Call {
 	_c.Call.Return(authors, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllAuthors_Call) RunAndReturn(run func() ([]database.Author, error)) *MockSystemStore_GetAllAuthors_Call {
+func (_c *MockSystemStore_GetAllAuthors_Call) RunAndReturn(run func() ([]store.Author, error)) *MockSystemStore_GetAllAuthors_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetAllBlockedHashes provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetAllBlockedHashes() ([]database.DoNotImport, error) {
+func (_mock *MockSystemStore) GetAllBlockedHashes() ([]store.DoNotImport, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllBlockedHashes")
 	}
 
-	var r0 []database.DoNotImport
+	var r0 []store.DoNotImport
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.DoNotImport, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.DoNotImport, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.DoNotImport); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.DoNotImport); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.DoNotImport)
+			r0 = ret.Get(0).([]store.DoNotImport)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -414,34 +414,34 @@ func (_c *MockSystemStore_GetAllBlockedHashes_Call) Run(run func()) *MockSystemS
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBlockedHashes_Call) Return(doNotImports []database.DoNotImport, err error) *MockSystemStore_GetAllBlockedHashes_Call {
+func (_c *MockSystemStore_GetAllBlockedHashes_Call) Return(doNotImports []store.DoNotImport, err error) *MockSystemStore_GetAllBlockedHashes_Call {
 	_c.Call.Return(doNotImports, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBlockedHashes_Call) RunAndReturn(run func() ([]database.DoNotImport, error)) *MockSystemStore_GetAllBlockedHashes_Call {
+func (_c *MockSystemStore_GetAllBlockedHashes_Call) RunAndReturn(run func() ([]store.DoNotImport, error)) *MockSystemStore_GetAllBlockedHashes_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetAllBooksCore provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetAllBooksCore(limit int, offset int) ([]database.BookCore, error) {
+func (_mock *MockSystemStore) GetAllBooksCore(limit int, offset int) ([]store.BookCore, error) {
 	ret := _mock.Called(limit, offset)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllBooksCore")
 	}
 
-	var r0 []database.BookCore
+	var r0 []store.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int, int) ([]database.BookCore, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) ([]store.BookCore, error)); ok {
 		return returnFunc(limit, offset)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int, int) []database.BookCore); ok {
+	if returnFunc, ok := ret.Get(0).(func(int, int) []store.BookCore); ok {
 		r0 = returnFunc(limit, offset)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookCore)
+			r0 = ret.Get(0).([]store.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int, int) error); ok {
@@ -482,34 +482,34 @@ func (_c *MockSystemStore_GetAllBooksCore_Call) Run(run func(limit int, offset i
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBooksCore_Call) Return(bookCores []database.BookCore, err error) *MockSystemStore_GetAllBooksCore_Call {
+func (_c *MockSystemStore_GetAllBooksCore_Call) Return(bookCores []store.BookCore, err error) *MockSystemStore_GetAllBooksCore_Call {
 	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetAllBooksCore_Call) RunAndReturn(run func(limit int, offset int) ([]database.BookCore, error)) *MockSystemStore_GetAllBooksCore_Call {
+func (_c *MockSystemStore_GetAllBooksCore_Call) RunAndReturn(run func(limit int, offset int) ([]store.BookCore, error)) *MockSystemStore_GetAllBooksCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetBooksByAuthorIDWithRoleCore provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
+func (_mock *MockSystemStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]store.BookCore, error) {
 	ret := _mock.Called(authorID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBooksByAuthorIDWithRoleCore")
 	}
 
-	var r0 []database.BookCore
+	var r0 []store.BookCore
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) ([]database.BookCore, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) ([]store.BookCore, error)); ok {
 		return returnFunc(authorID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(int) []database.BookCore); ok {
+	if returnFunc, ok := ret.Get(0).(func(int) []store.BookCore); ok {
 		r0 = returnFunc(authorID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.BookCore)
+			r0 = ret.Get(0).([]store.BookCore)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
@@ -544,34 +544,34 @@ func (_c *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call) Run(run func(auth
 	return _c
 }
 
-func (_c *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call) Return(bookCores []database.BookCore, err error) *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call {
+func (_c *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call) Return(bookCores []store.BookCore, err error) *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call {
 	_c.Call.Return(bookCores, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call) RunAndReturn(run func(authorID int) ([]database.BookCore, error)) *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call {
+func (_c *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call) RunAndReturn(run func(authorID int) ([]store.BookCore, error)) *MockSystemStore_GetBooksByAuthorIDWithRoleCore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetDashboardStats provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetDashboardStats() (*database.DashboardStats, error) {
+func (_mock *MockSystemStore) GetDashboardStats() (*store.DashboardStats, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetDashboardStats")
 	}
 
-	var r0 *database.DashboardStats
+	var r0 *store.DashboardStats
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (*database.DashboardStats, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() (*store.DashboardStats, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() *database.DashboardStats); ok {
+	if returnFunc, ok := ret.Get(0).(func() *store.DashboardStats); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.DashboardStats)
+			r0 = ret.Get(0).(*store.DashboardStats)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -599,34 +599,34 @@ func (_c *MockSystemStore_GetDashboardStats_Call) Run(run func()) *MockSystemSto
 	return _c
 }
 
-func (_c *MockSystemStore_GetDashboardStats_Call) Return(dashboardStats *database.DashboardStats, err error) *MockSystemStore_GetDashboardStats_Call {
+func (_c *MockSystemStore_GetDashboardStats_Call) Return(dashboardStats *store.DashboardStats, err error) *MockSystemStore_GetDashboardStats_Call {
 	_c.Call.Return(dashboardStats, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetDashboardStats_Call) RunAndReturn(run func() (*database.DashboardStats, error)) *MockSystemStore_GetDashboardStats_Call {
+func (_c *MockSystemStore_GetDashboardStats_Call) RunAndReturn(run func() (*store.DashboardStats, error)) *MockSystemStore_GetDashboardStats_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetSystemActivityLogs provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetSystemActivityLogs(source string, limit int) ([]database.SystemActivityLog, error) {
+func (_mock *MockSystemStore) GetSystemActivityLogs(source string, limit int) ([]store.SystemActivityLog, error) {
 	ret := _mock.Called(source, limit)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSystemActivityLogs")
 	}
 
-	var r0 []database.SystemActivityLog
+	var r0 []store.SystemActivityLog
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int) ([]database.SystemActivityLog, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int) ([]store.SystemActivityLog, error)); ok {
 		return returnFunc(source, limit)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, int) []database.SystemActivityLog); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, int) []store.SystemActivityLog); ok {
 		r0 = returnFunc(source, limit)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.SystemActivityLog)
+			r0 = ret.Get(0).([]store.SystemActivityLog)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
@@ -667,34 +667,34 @@ func (_c *MockSystemStore_GetSystemActivityLogs_Call) Run(run func(source string
 	return _c
 }
 
-func (_c *MockSystemStore_GetSystemActivityLogs_Call) Return(systemActivityLogs []database.SystemActivityLog, err error) *MockSystemStore_GetSystemActivityLogs_Call {
+func (_c *MockSystemStore_GetSystemActivityLogs_Call) Return(systemActivityLogs []store.SystemActivityLog, err error) *MockSystemStore_GetSystemActivityLogs_Call {
 	_c.Call.Return(systemActivityLogs, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetSystemActivityLogs_Call) RunAndReturn(run func(source string, limit int) ([]database.SystemActivityLog, error)) *MockSystemStore_GetSystemActivityLogs_Call {
+func (_c *MockSystemStore_GetSystemActivityLogs_Call) RunAndReturn(run func(source string, limit int) ([]store.SystemActivityLog, error)) *MockSystemStore_GetSystemActivityLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserPreference provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) GetUserPreference(key string) (*database.UserPreference, error) {
+func (_mock *MockSystemStore) GetUserPreference(key string) (*store.UserPreference, error) {
 	ret := _mock.Called(key)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserPreference")
 	}
 
-	var r0 *database.UserPreference
+	var r0 *store.UserPreference
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.UserPreference, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.UserPreference, error)); ok {
 		return returnFunc(key)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.UserPreference); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.UserPreference); ok {
 		r0 = returnFunc(key)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.UserPreference)
+			r0 = ret.Get(0).(*store.UserPreference)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -729,12 +729,12 @@ func (_c *MockSystemStore_GetUserPreference_Call) Run(run func(key string)) *Moc
 	return _c
 }
 
-func (_c *MockSystemStore_GetUserPreference_Call) Return(userPreference *database.UserPreference, err error) *MockSystemStore_GetUserPreference_Call {
+func (_c *MockSystemStore_GetUserPreference_Call) Return(userPreference *store.UserPreference, err error) *MockSystemStore_GetUserPreference_Call {
 	_c.Call.Return(userPreference, err)
 	return _c
 }
 
-func (_c *MockSystemStore_GetUserPreference_Call) RunAndReturn(run func(key string) (*database.UserPreference, error)) *MockSystemStore_GetUserPreference_Call {
+func (_c *MockSystemStore_GetUserPreference_Call) RunAndReturn(run func(key string) (*store.UserPreference, error)) *MockSystemStore_GetUserPreference_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -773,23 +773,23 @@ func (_c *MockSystemStore_InvalidateLibraryStats_Call) RunAndReturn(run func()) 
 }
 
 // ListOperationsV2Since provides a mock function for the type MockSystemStore
-func (_mock *MockSystemStore) ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) {
+func (_mock *MockSystemStore) ListOperationsV2Since(since time.Time, limit int) ([]store.OperationV2Row, error) {
 	ret := _mock.Called(since, limit)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListOperationsV2Since")
 	}
 
-	var r0 []database.OperationV2Row
+	var r0 []store.OperationV2Row
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(time.Time, int) ([]database.OperationV2Row, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) ([]store.OperationV2Row, error)); ok {
 		return returnFunc(since, limit)
 	}
-	if returnFunc, ok := ret.Get(0).(func(time.Time, int) []database.OperationV2Row); ok {
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) []store.OperationV2Row); ok {
 		r0 = returnFunc(since, limit)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.OperationV2Row)
+			r0 = ret.Get(0).([]store.OperationV2Row)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(time.Time, int) error); ok {
@@ -830,12 +830,12 @@ func (_c *MockSystemStore_ListOperationsV2Since_Call) Run(run func(since time.Ti
 	return _c
 }
 
-func (_c *MockSystemStore_ListOperationsV2Since_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockSystemStore_ListOperationsV2Since_Call {
+func (_c *MockSystemStore_ListOperationsV2Since_Call) Return(operationV2Rows []store.OperationV2Row, err error) *MockSystemStore_ListOperationsV2Since_Call {
 	_c.Call.Return(operationV2Rows, err)
 	return _c
 }
 
-func (_c *MockSystemStore_ListOperationsV2Since_Call) RunAndReturn(run func(since time.Time, limit int) ([]database.OperationV2Row, error)) *MockSystemStore_ListOperationsV2Since_Call {
+func (_c *MockSystemStore_ListOperationsV2Since_Call) RunAndReturn(run func(since time.Time, limit int) ([]store.OperationV2Row, error)) *MockSystemStore_ListOperationsV2Since_Call {
 	_c.Call.Return(run)
 	return _c
 }

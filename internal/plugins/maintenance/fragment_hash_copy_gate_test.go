@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_hash_copy_gate_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3e8b1c47-9a52-4d06-8f73-c5d2a9e04b16
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

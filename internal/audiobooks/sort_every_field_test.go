@@ -1,7 +1,7 @@
 // file: internal/audiobooks/sort_every_field_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f81c07a-6b24-4de9-9c5b-8a2f14d7e603
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

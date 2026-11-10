@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1817dbb3-1b63-474d-af55-ff93d468ae1b
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -42,7 +42,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

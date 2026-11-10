@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_master_list_elsewhere_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d19b7e2-a603-4c58-9f72-e8b0d1c35a96
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package audiobooks_test
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

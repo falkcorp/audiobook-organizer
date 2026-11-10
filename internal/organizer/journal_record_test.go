@@ -1,7 +1,7 @@
 // file: internal/organizer/journal_record_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d58b3e07-1a94-4c62-9f7e-b0c4a8216d93
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 

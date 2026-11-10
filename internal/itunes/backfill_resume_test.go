@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_resume_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 46b22d21-5e8d-4eee-b965-7dd3679ed5f5
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package itunes
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 

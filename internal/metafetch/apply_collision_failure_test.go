@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_collision_failure_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8c05a4-6b17-49de-83b0-5a1e7c94d20f
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

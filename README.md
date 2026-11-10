@@ -1,3 +1,8 @@
+<!-- file: README.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: e44084d2-8ca1-4e6a-9833-45d386939ff8 -->
+<!-- last-edited: 2026-11-09 -->
+
 # Audiobook Organizer
 
 A full-stack audiobook management application — Go backend with an embedded
@@ -18,6 +23,39 @@ docker compose up -d --build
 ```
 
 The app is available at `http://localhost:8484`.
+
+#### Compose and `docker run` notes
+
+- **Keep the database on a volume, and give the app user that volume.** The
+  database's directory also holds the files that must survive with it: the
+  settings key file `.encryption_key` (when no separate state directory is
+  set), the first-start checkpoint copy under `.mediacore-checkpoints/`, and
+  the sidecar files beside the store. The image runs as user `audiobook`
+  (uid 1000), and a fresh named volume mounted at a path the image does not
+  create (for example `--db /config/audiobooks.pebble` on a volume `cfg`) is
+  owned by root, so prepare it once:
+
+  ```bash
+  docker run --rm --user 0 --entrypoint chown -v cfg:/config audiobook-organizer:latest 1000:1000 /config
+  ```
+
+  The compose file's `ao-data:/data` volume needs nothing: the image creates
+  `/data` owned by `audiobook`.
+- **Give the container time to stop.** The server finishes its own shutdown
+  within 25 s and then closes the database. Docker's default is 10 s before
+  SIGKILL, which can cut that short; the compose file sets
+  `stop_grace_period: 60s`. With plain `docker run`, pass the same:
+
+  ```bash
+  docker run -d --name audiobook-organizer --stop-timeout 60 -p 8484:8484 \
+    -v ao-data:/data -v /path/to/audiobooks:/audiobooks:ro audiobook-organizer:latest
+  ```
+
+- **Waiting for readiness from a script:** `scripts/deploy-wait-ready.sh
+  http://localhost:8484 1800` polls `/health` until it reports `"ready":true`.
+  Without an ssh host and unit to read it cannot tell a long first start (a
+  migration) from a hang, so it waits at least `DEPLOY_READY_URL_TIMEOUT`
+  (default 1800 s).
 
 ### From Source
 

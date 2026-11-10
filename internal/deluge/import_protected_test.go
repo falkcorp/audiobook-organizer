@@ -1,7 +1,7 @@
 // file: internal/deluge/import_protected_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4e2c71-5b3d-4f08-b6e2-17d0c8a9f354
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 //
 // ImportToLibrary with a protected-path predicate: the already-imported
 // branch and the source-is-destination branch must never hand a protected
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 

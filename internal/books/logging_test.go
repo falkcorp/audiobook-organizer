@@ -1,7 +1,7 @@
 // file: internal/books/logging_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5d21b7e8-3f64-4a09-9c1e-7b02e4a86d35
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package books
 
@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	corelog "github.com/falkcorp/mediacore/log"

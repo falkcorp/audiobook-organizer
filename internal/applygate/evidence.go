@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -13,7 +13,7 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"golang.org/x/text/unicode/norm"

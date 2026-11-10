@@ -1,7 +1,7 @@
 // file: internal/dedup/ann_reconcile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c209429-4bf6-4dfd-80cf-3f71a93939fa
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Bringing a stale vector ANN snapshot up to date at boot (review B2).
 //
@@ -27,7 +27,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // annReconcileKeySample is how many of the keys that forced a rebuild the log

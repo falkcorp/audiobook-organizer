@@ -1,7 +1,7 @@
 // file: internal/importer/combined_author_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3f25295a-33d6-4702-bedb-e8807a41713a
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package importer
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // An artist naming two existing authors links each of them, the first as the

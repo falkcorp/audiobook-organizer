@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.5
+// version: 2.1.6
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 //
 // The batch candidate fetch's provider fallback: Open Library, then Google
 // Books, asked only for books the rest of the chain left without a usable
@@ -26,8 +26,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

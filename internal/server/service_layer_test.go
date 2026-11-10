@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.13.2
+// version: 1.13.4
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -773,7 +773,7 @@ func TestMetadataStateService_UpdateFetchedMetadata(t *testing.T) {
 				// Mock GetUserPreference for legacy state check (returns nil to indicate no legacy state)
 				mockStore.On("GetUserPreference", "metadata_state_"+bookID).Return(nil, nil).Once()
 				// RecordMetadataChange calls from recordChange helper
-				mockStore.On("RecordMetadataChange", mock.AnythingOfType("*database.MetadataChangeRecord")).Return(nil)
+				mockStore.On("RecordMetadataChange", mock.AnythingOfType("*store.MetadataChangeRecord")).Return(nil)
 				// Second call in SaveMetadataState (in UpdateFetchedMetadata)
 				mockStore.On("GetMetadataFieldStates", bookID).Return([]database.MetadataFieldState{}, nil).Once()
 				mockStore.On("UpsertMetadataFieldState", matchMetadataFieldState(bookID, "title")).Return(nil).Once()
@@ -799,7 +799,7 @@ func TestMetadataStateService_UpdateFetchedMetadata(t *testing.T) {
 				// First call in LoadMetadataState
 				mockStore.On("GetMetadataFieldStates", bookID).Return(existingState, nil).Once()
 				// RecordMetadataChange calls from recordChange helper
-				mockStore.On("RecordMetadataChange", mock.AnythingOfType("*database.MetadataChangeRecord")).Return(nil)
+				mockStore.On("RecordMetadataChange", mock.AnythingOfType("*store.MetadataChangeRecord")).Return(nil)
 				// Second call in SaveMetadataState
 				mockStore.On("GetMetadataFieldStates", bookID).Return(existingState, nil).Once()
 				mockStore.On("UpsertMetadataFieldState", matchMetadataFieldState(bookID, "narrator")).Return(nil).Once()

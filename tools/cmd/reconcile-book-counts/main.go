@@ -1,7 +1,7 @@
 // file: tools/cmd/reconcile-book-counts/main.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 065791f4-9161-4528-8528-4c3f11c765b2
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 // Command reconcile-book-counts is a READ-ONLY diagnostic for TODO.md's
 // "3,954-book gap" item: the store's ListBookIDs() (the true live-book-ID
@@ -59,7 +59,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func main() {
@@ -86,7 +86,7 @@ func main() {
 	defer func() { _ = store.Close() }()
 
 	// Step 1: the true live-book-ID-set. ListBookIDs already excludes
-	// MarkedForDeletion (internal/database/pebble_store.go: "the memdb fast
+	// MarkedForDeletion (internal/books/store/pebble_store.go: "the memdb fast
 	// path...also filters MarkedForDeletion").
 	liveIDs, err := store.ListBookIDs()
 	if err != nil {
@@ -147,7 +147,7 @@ func main() {
 			continue
 		}
 		// quarantined_at is what ExcludeQuarantined actually tests
-		// (internal/database/pebble_store.go, memdb_summaries.go: "f.ExcludeQuarantined
+		// (internal/books/store/pebble_store.go, memdb_summaries.go: "f.ExcludeQuarantined
 		// && book.QuarantinedAt != nil") -- QuarantineReason is printed alongside it for
 		// human context, but QuarantinedAt is the field that explains inclusion/exclusion.
 		fmt.Printf("  %-26s library_state=%-12s marked_for_deletion=%-6s is_primary_version=%-6s quarantined_at=%-6s quarantine_reason=%s\n",

@@ -1,7 +1,7 @@
 // file: internal/server/series_ops_partial_failure_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5d8a2f37-c1e9-4b64-a0f3-7e29b6d41c85
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

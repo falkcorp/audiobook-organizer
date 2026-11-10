@@ -1,6 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.4.1
-// last-edited: 2026-11-04
+// version: 1.4.2
+// last-edited: 2026-11-09
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 )
 

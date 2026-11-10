@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	taglib "go.senan.xyz/taglib"

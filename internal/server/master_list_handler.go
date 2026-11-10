@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d1e8a40-2b63-4c59-9f0a-5e3c6b7d8a12
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package server
 
@@ -19,8 +19,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"

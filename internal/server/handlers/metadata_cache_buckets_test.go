@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_buckets_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9e04b3d7-6c81-4a25-b3f0-72d9a1c86e53
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // The review rail's chips were reporting a different library than the one the
 // reviewer was looking at. Four separate defects, all visible in one screenshot
@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

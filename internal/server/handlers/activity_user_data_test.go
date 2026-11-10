@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_user_data_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2e8a4c71-9d35-4b60-a1f4-6c0b7d9e2a58
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -20,7 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

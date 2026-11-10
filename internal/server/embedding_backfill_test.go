@@ -1,7 +1,7 @@
 // file: internal/server/embedding_backfill_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4f81c2ae-6b39-47d5-9ae1-3c5d8b12f7a4
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

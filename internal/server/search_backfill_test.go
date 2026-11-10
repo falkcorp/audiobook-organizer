@@ -1,7 +1,7 @@
 // file: internal/server/search_backfill_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 867fced7-71af-4a7e-80b6-6c40617df44e
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 //
 // Regression tests for the search-index bulk backfill (SQ-01 / TASK-321).
 //
@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // backfillFakeStore is a database.MockStore wired to serve n books with

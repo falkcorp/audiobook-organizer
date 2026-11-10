@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.9.3
+# version: 1.12.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -57,12 +57,26 @@ DEPLOY_HOST := 192.168.0.10
 DEPLOY_BIN := /usr/local/bin/audiobook-organizer
 
 # Path of the main Pebble store on DEPLOY_HOST (the --db / DATABASE_PATH
-# value); required by rollback. `make rollback` reads <DEPLOY_DB>.storage-format
-# and refuses to swap in .prev past a storage format change. Replace the
+# value); required by rollback. `make rollback` reads <DEPLOY_DB>.storage-levels
+# and refuses to swap in .prev past a level step; it must equal db in the
+# rollback helpers' config on the host. Replace the
 # placeholder with your own store path. Use `:=`, not `?=`: the committed
 # Makefile already defines DEPLOY_DB (empty) before it includes this file, so
 # a `?=` here would silently leave it empty.
 DEPLOY_DB := /path/to/audiobooks.pebble
+
+# Where the root-owned rollback helpers are installed on DEPLOY_HOST
+# (docs/system/deploy-and-gpu-ops.md, "Rollback helpers"). deploy installs the
+# binary, the unit and local.conf through `install-staged`, and deploy-debug /
+# pprof-off switch the pprof drop-in through `pprof`: the sudoers drop-in
+# grants those helpers, never a free `cp`/`tee` into /etc/systemd/system (a
+# file systemd reads as root, so writing it freely is being root). Nothing
+# uploaded becomes a unit file as written: the unit is the root-owned copy in
+# the helper bundle (reinstall the bundle to change it), and local.conf is
+# re-rendered from its [Service] and Environment= lines only. The staging
+# paths below must equal stage_bin and stage_local_conf in the helpers'
+# config. Do not change DEPLOY_HELPERS: the stubs exec a fixed path.
+DEPLOY_HELPERS := /usr/local/libexec/audiobook-organizer/rollback
 
 # Base URL of the deployed server, used by the post-deploy readiness wait
 # (scripts/deploy-wait-ready.sh polls $(DEPLOY_URL)/health). The version check
@@ -73,8 +87,18 @@ DEPLOY_DB := /path/to/audiobooks.pebble
 # host name or address here in that case.
 DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 
-## deploy: Build via the committed `build-linux` target, ship it, preserve a
-## .prev copy, restart, and verify the deployed version.
+# Seconds the readiness wait allows after a restart, counted from when the
+# unit leaves `activating` (scripts/deploy-wait-ready.sh reads the unit over
+# ssh, so a first boot that migrates for minutes is not cut short). The
+# committed Makefile defaults it to 300; raise it for a release whose
+# warmup after the start is slower (R2's runbook: the measured first-boot
+# time). Uncomment to override:
+# DEPLOY_READY_TIMEOUT := 900
+
+## deploy: Build via the committed `build-linux` target, ship the binary and
+## deploy/local.conf (if present), install them and the helper bundle's unit
+## through the helpers (the binary atomically, keeping a .prev copy), restart,
+## and verify the deployed version.
 #
 # The build itself lives in the committed Makefile (`make build-linux`): it owns
 # the tags (including `pprof`, listener off unless ABK_PPROF_ADDR is set), the
@@ -89,16 +113,28 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 deploy:
 	@bash scripts/deploy-preflight.sh origin/main
 	@$(MAKE) build-linux VERSION=$(VERSION)
-	@echo "→ Copying binary to $(DEPLOY_HOST)..."
+	@echo "→ Copying the binary to $(DEPLOY_HOST)'s staging path..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
+	@echo "→ Installing the unit from the root-owned helper bundle (nothing uploaded)..."
+	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged unit'
+	@if [ -f deploy/local.conf ]; then \
+	  echo "→ Rendering deploy/local.conf's Environment= lines as the local.conf drop-in..."; \
+	  scp deploy/local.conf $(DEPLOY_HOST):/home/USER/audiobook-organizer-local.conf && \
+	  ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged local-conf'; \
+	fi
 	@echo "→ Matching the service type to the new binary (removes a rollback's Type=simple drop-in)..."
 	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
-	@echo "→ Preserving previous binary as .prev, installing new binary, restarting service..."
-	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev 2>/dev/null; \
-	  sudo mv /home/USER/audiobook-organizer $(DEPLOY_BIN) && \
-	  sudo systemctl restart audiobook-organizer.service'
-	@echo "→ Waiting for /health to report ready (up to 300s; the in-memory warmup takes minutes)..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+	@echo "→ Installing the new binary (the previous one is kept as .prev)..."
+	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary'
+	@# The InvocationID read before the restart: the wait refuses "ready" until
+	@# the unit has a new one, so a restart that never ran (sudo refused it, ssh
+	@# dropped) cannot pass on the old process. A sudo refusal fails at once.
+	@inv=$$(ssh $(DEPLOY_HOST) 'systemctl show -p InvocationID --value $(DEPLOY_UNIT)') || { echo "ERROR: cannot read $(DEPLOY_UNIT)'s InvocationID on $(DEPLOY_HOST); the new binary is installed but not restarted."; exit 1; }; \
+	  err=$$(ssh $(DEPLOY_HOST) 'sudo -n /usr/bin/systemctl restart $(DEPLOY_UNIT)' 2>&1) || { \
+	    case "$$err" in sudo:*) echo "ERROR: sudo refused the restart ($$err): the new binary is installed but the OLD process still serves. Restart it by hand."; exit 1 ;; esac; \
+	    echo "   systemctl restart reported a failure ($$err); the wait below reads the unit and names the cause."; }; \
+	  echo "→ Waiting for /health to report ready ($(DEPLOY_READY_TIMEOUT)s after the unit leaves activating; the in-memory warmup takes minutes)..."; \
+	  bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT) "$$inv"
 	@echo "→ Post-deploy: verifying the deployed binary's version (--version-json over ssh)..."
 	@expected="$(VERSION)"; \
 	  deployed=$$(ssh $(DEPLOY_HOST) $(DEPLOY_BIN) --version-json 2>/dev/null | \
@@ -121,21 +157,18 @@ deploy:
 .PHONY: deploy-debug pprof-dropin
 pprof-dropin:
 	@echo "→ Installing pprof drop-in (ABK_PPROF_ADDR=localhost:6060); takes effect on the next restart..."
-	ssh $(DEPLOY_HOST) 'sudo mkdir -p /etc/systemd/system/audiobook-organizer.service.d && \
-	  printf "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n" | sudo tee /etc/systemd/system/audiobook-organizer.service.d/pprof.conf >/dev/null && \
-	  sudo systemctl daemon-reload'
+	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/pprof on'
 
 deploy-debug: pprof-dropin deploy
 	@echo "→ Checking the pprof listener answers..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300
+	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
 	ssh $(DEPLOY_HOST) 'out=$$(curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1") && [ -n "$$out" ] && printf "%s\n" "$$out" | head -1'
 	@echo "✅ pprof listening on $(DEPLOY_HOST) localhost:6060. Turn off with: make pprof-off"
 
 ## pprof-off: remove the pprof drop-in and restart (listener goes back to off)
 .PHONY: pprof-off
 pprof-off:
-	ssh $(DEPLOY_HOST) 'sudo rm -f /etc/systemd/system/audiobook-organizer.service.d/pprof.conf && \
-	  sudo systemctl daemon-reload && sudo systemctl restart audiobook-organizer.service'
+	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/pprof off && sudo -n /usr/bin/systemctl restart $(DEPLOY_UNIT)'
 	@echo "✅ pprof listener disabled on $(DEPLOY_HOST)."
 
 # ============================================================================

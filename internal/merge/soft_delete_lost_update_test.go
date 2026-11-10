@@ -1,7 +1,7 @@
 // file: internal/merge/soft_delete_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3527a833-ba3d-4ac0-afc8-8813e62cbce0
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // lostUpdateBookStore is a stateful book store for the lost-update race:

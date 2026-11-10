@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_userstate_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 02326bb6-8739-47c5-92ed-341f000b2900
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

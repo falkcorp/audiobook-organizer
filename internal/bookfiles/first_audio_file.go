@@ -1,17 +1,17 @@
 // file: internal/bookfiles/first_audio_file.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 5b0f8c3e-7a41-4d92-9e16-c2d7a8b34f05
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // Package bookfiles holds read helpers over book_file rows. It sits outside
 // package database on purpose: the helper needs internal/audioext, and
-// importing that from internal/database would grow the SDK's internal
+// importing that from internal/books/store would grow the SDK's internal
 // dependency closure (tools/cmd/sdkguard ratchet).
 package bookfiles
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // FileLister is the one read FirstAudioFile needs. database.Store satisfies it.

@@ -1,7 +1,7 @@
 // file: internal/dedup/author.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 

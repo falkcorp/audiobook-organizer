@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_retired_shell_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2a71d58-3c94-4f06-8b1d-5a07c9f4d132
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retireShellInto retires shell's one live book_file row onto holder, the way

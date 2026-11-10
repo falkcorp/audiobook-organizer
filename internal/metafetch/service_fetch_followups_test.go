@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch_followups_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d9a2f6b-1c83-4e57-9b0a-7f2e6c1d8a34
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_bulk_keep_side_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f6b3a8e-92c4-4d07-b5e1-7a0c9d2e4f63
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // The filter-scoped bulk endpoints as the cross-page selection uses them:
 // keep_side (the Acoustic tab's Keep A / Keep B over every matching pair) goes
@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

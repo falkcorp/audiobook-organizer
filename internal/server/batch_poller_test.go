@@ -1,7 +1,7 @@
 // file: internal/server/batch_poller_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: c9d0e1f2-a3b4-5678-cdef-9876543210ab
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

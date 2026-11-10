@@ -5,7 +5,7 @@
 package entitiesmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/work"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -47,26 +47,26 @@ func (_m *MockWorkService) EXPECT() *MockWorkService_Expecter {
 }
 
 // CreateWork provides a mock function for the type MockWorkService
-func (_mock *MockWorkService) CreateWork(w *database.Work) (*database.Work, error) {
+func (_mock *MockWorkService) CreateWork(w *store.Work) (*store.Work, error) {
 	ret := _mock.Called(w)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateWork")
 	}
 
-	var r0 *database.Work
+	var r0 *store.Work
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*database.Work) (*database.Work, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Work) (*store.Work, error)); ok {
 		return returnFunc(w)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*database.Work) *database.Work); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Work) *store.Work); ok {
 		r0 = returnFunc(w)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Work)
+			r0 = ret.Get(0).(*store.Work)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*database.Work) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*store.Work) error); ok {
 		r1 = returnFunc(w)
 	} else {
 		r1 = ret.Error(1)
@@ -80,16 +80,16 @@ type MockWorkService_CreateWork_Call struct {
 }
 
 // CreateWork is a helper method to define mock.On call
-//   - w *database.Work
+//   - w *store.Work
 func (_e *MockWorkService_Expecter) CreateWork(w any) *MockWorkService_CreateWork_Call {
 	return &MockWorkService_CreateWork_Call{Call: _e.mock.On("CreateWork", w)}
 }
 
-func (_c *MockWorkService_CreateWork_Call) Run(run func(w *database.Work)) *MockWorkService_CreateWork_Call {
+func (_c *MockWorkService_CreateWork_Call) Run(run func(w *store.Work)) *MockWorkService_CreateWork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.Work
+		var arg0 *store.Work
 		if args[0] != nil {
-			arg0 = args[0].(*database.Work)
+			arg0 = args[0].(*store.Work)
 		}
 		run(
 			arg0,
@@ -98,12 +98,12 @@ func (_c *MockWorkService_CreateWork_Call) Run(run func(w *database.Work)) *Mock
 	return _c
 }
 
-func (_c *MockWorkService_CreateWork_Call) Return(work *database.Work, err error) *MockWorkService_CreateWork_Call {
+func (_c *MockWorkService_CreateWork_Call) Return(work *store.Work, err error) *MockWorkService_CreateWork_Call {
 	_c.Call.Return(work, err)
 	return _c
 }
 
-func (_c *MockWorkService_CreateWork_Call) RunAndReturn(run func(w *database.Work) (*database.Work, error)) *MockWorkService_CreateWork_Call {
+func (_c *MockWorkService_CreateWork_Call) RunAndReturn(run func(w *store.Work) (*store.Work, error)) *MockWorkService_CreateWork_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -160,23 +160,23 @@ func (_c *MockWorkService_DeleteWork_Call) RunAndReturn(run func(id string) erro
 }
 
 // GetWork provides a mock function for the type MockWorkService
-func (_mock *MockWorkService) GetWork(id string) (*database.Work, error) {
+func (_mock *MockWorkService) GetWork(id string) (*store.Work, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetWork")
 	}
 
-	var r0 *database.Work
+	var r0 *store.Work
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Work, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Work, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Work); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Work); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Work)
+			r0 = ret.Get(0).(*store.Work)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -211,12 +211,12 @@ func (_c *MockWorkService_GetWork_Call) Run(run func(id string)) *MockWorkServic
 	return _c
 }
 
-func (_c *MockWorkService_GetWork_Call) Return(work *database.Work, err error) *MockWorkService_GetWork_Call {
+func (_c *MockWorkService_GetWork_Call) Return(work *store.Work, err error) *MockWorkService_GetWork_Call {
 	_c.Call.Return(work, err)
 	return _c
 }
 
-func (_c *MockWorkService_GetWork_Call) RunAndReturn(run func(id string) (*database.Work, error)) *MockWorkService_GetWork_Call {
+func (_c *MockWorkService_GetWork_Call) RunAndReturn(run func(id string) (*store.Work, error)) *MockWorkService_GetWork_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -277,26 +277,26 @@ func (_c *MockWorkService_ListWorks_Call) RunAndReturn(run func() (*work.WorkLis
 }
 
 // UpdateWork provides a mock function for the type MockWorkService
-func (_mock *MockWorkService) UpdateWork(id string, w *database.Work) (*database.Work, error) {
+func (_mock *MockWorkService) UpdateWork(id string, w *store.Work) (*store.Work, error) {
 	ret := _mock.Called(id, w)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateWork")
 	}
 
-	var r0 *database.Work
+	var r0 *store.Work
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Work) (*database.Work, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Work) (*store.Work, error)); ok {
 		return returnFunc(id, w)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Work) *database.Work); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, *store.Work) *store.Work); ok {
 		r0 = returnFunc(id, w)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Work)
+			r0 = ret.Get(0).(*store.Work)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, *database.Work) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(string, *store.Work) error); ok {
 		r1 = returnFunc(id, w)
 	} else {
 		r1 = ret.Error(1)
@@ -311,20 +311,20 @@ type MockWorkService_UpdateWork_Call struct {
 
 // UpdateWork is a helper method to define mock.On call
 //   - id string
-//   - w *database.Work
+//   - w *store.Work
 func (_e *MockWorkService_Expecter) UpdateWork(id any, w any) *MockWorkService_UpdateWork_Call {
 	return &MockWorkService_UpdateWork_Call{Call: _e.mock.On("UpdateWork", id, w)}
 }
 
-func (_c *MockWorkService_UpdateWork_Call) Run(run func(id string, w *database.Work)) *MockWorkService_UpdateWork_Call {
+func (_c *MockWorkService_UpdateWork_Call) Run(run func(id string, w *store.Work)) *MockWorkService_UpdateWork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 *database.Work
+		var arg1 *store.Work
 		if args[1] != nil {
-			arg1 = args[1].(*database.Work)
+			arg1 = args[1].(*store.Work)
 		}
 		run(
 			arg0,
@@ -334,12 +334,12 @@ func (_c *MockWorkService_UpdateWork_Call) Run(run func(id string, w *database.W
 	return _c
 }
 
-func (_c *MockWorkService_UpdateWork_Call) Return(work1 *database.Work, err error) *MockWorkService_UpdateWork_Call {
+func (_c *MockWorkService_UpdateWork_Call) Return(work1 *store.Work, err error) *MockWorkService_UpdateWork_Call {
 	_c.Call.Return(work1, err)
 	return _c
 }
 
-func (_c *MockWorkService_UpdateWork_Call) RunAndReturn(run func(id string, w *database.Work) (*database.Work, error)) *MockWorkService_UpdateWork_Call {
+func (_c *MockWorkService_UpdateWork_Call) RunAndReturn(run func(id string, w *store.Work) (*store.Work, error)) *MockWorkService_UpdateWork_Call {
 	_c.Call.Return(run)
 	return _c
 }

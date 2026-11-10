@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_parse_existing_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: dc6ba60e-80dc-4e3a-97c9-2b0fcadcf86c
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Owner, 2026-10-05: the new folder parse is for searches and NEW imports

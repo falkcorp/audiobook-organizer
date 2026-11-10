@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 162c063a-7da8-4b81-a598-3e457d048c20
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"

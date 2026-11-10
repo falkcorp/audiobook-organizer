@@ -1,7 +1,7 @@
 // file: internal/undo/current.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 2e7b4c19-8d3a-4f60-9b15-c6a0e8d2f473
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The compare-and-set checks the revert (audiobooks.RevertService) and the

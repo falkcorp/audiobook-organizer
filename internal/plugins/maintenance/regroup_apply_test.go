@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"

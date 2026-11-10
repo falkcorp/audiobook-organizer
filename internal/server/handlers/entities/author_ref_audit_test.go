@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/author_ref_audit_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b6f2e91-4a7c-4d18-9f52-6c8a3d0e7b41
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package entities_test
 
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

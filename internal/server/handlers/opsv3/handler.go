@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 // Package opsv3 serves /api/v3/ops/*: the operations v3 run model over HTTP.
 //
@@ -35,7 +35,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"

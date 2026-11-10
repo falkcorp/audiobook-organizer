@@ -1,7 +1,7 @@
 // file: internal/scanner/sync_identity_move_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5867d69f-d4f1-4d1e-9850-300c607a271b
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

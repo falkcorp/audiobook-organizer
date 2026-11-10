@@ -1,7 +1,7 @@
 // file: internal/scheduler/collections_refresh_task_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f7a1d58-92c4-4e06-b8a3-6d0e5c1f9b27
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

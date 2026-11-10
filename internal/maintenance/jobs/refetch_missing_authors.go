@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.13.1
+// version: 2.13.2
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"

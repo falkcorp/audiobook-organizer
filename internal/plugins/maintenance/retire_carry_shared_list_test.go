@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_shared_list_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8d2f6b19-4c07-4e53-a1d8-7b95e03c6f42
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

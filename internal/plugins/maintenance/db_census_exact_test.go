@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/db_census_exact_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2e7cd14b-bfab-4670-8ca5-b918e74112e6
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 

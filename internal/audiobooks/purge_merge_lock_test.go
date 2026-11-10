@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

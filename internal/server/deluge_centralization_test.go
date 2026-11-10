@@ -1,7 +1,7 @@
 // file: internal/server/deluge_centralization_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3b7c4d2a-1e5f-4870-b8c5-9f0e1d2c3a4b
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 //
 // Tests for NotifyDelugeAfterOrganize: the integration between the
 // library centralization (organize) pipeline and Deluge's move_storage.
@@ -22,8 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

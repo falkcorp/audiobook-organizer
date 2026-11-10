@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/user_merge_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d9e3a5f0-7b14-4c82-8a6d-2f1c0b9e4573
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
 

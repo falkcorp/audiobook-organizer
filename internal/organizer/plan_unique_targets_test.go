@@ -1,7 +1,7 @@
 // file: internal/organizer/plan_unique_targets_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f0b8e52-7c1d-4a9e-b6f4-2d85c9e1a703
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 // Tests for the unique-target invariant of planTargetPaths and the matching
 // guard in RenameFiles.
@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func writeBody(t *testing.T, path, body string) {

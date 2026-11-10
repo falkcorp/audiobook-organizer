@@ -1,13 +1,13 @@
 // file: tools/cmd/oplint/testdata/src/github.com/falkcorp/audiobook-organizer/internal/oplintcases/writer_bypass/writer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bef81223-dafb-4c63-9f6b-b3e836ae234b
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 // Package writer_bypass writes the store from inside definitions.
 package writer_bypass
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/undo/book_create_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e1b7c93-2d58-4a06-9f3e-8c5a1d7b2e60
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // noProgressStore exposes only RepairBookCreateStore's own methods, so it

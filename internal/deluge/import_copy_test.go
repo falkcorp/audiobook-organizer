@@ -1,7 +1,7 @@
 // file: internal/deluge/import_copy_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f4a7c19-6d82-4b35-9e61-a3c58d07b2f4
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // CopyIntoLibrary is the importers' one copy step and never overwrites.

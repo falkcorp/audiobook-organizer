@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 84155b4f-53cc-4c81-be5e-7575dd040725
-// last-edited: 2026-09-28
+// last-edited: 2026-11-09
 
 // Tests for the dedup.drain-stale op wrapper (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

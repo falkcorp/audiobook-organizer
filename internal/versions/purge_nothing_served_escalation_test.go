@@ -1,7 +1,7 @@
 // file: internal/versions/purge_nothing_served_escalation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8a34f7fd-614f-42d4-a946-7e16987a4312
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package versions
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A purging version cannot be restored and cannot be hard-deleted, so a book that

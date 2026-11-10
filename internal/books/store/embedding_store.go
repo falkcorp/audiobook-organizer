@@ -1,0 +1,2629 @@
+// file: internal/books/store/embedding_store.go
+// version: 2.30.2
+// last-edited: 2026-11-09
+// guid: 7c4a9b2e-d831-4f5c-a07e-3b8d6e1f9c42
+
+package store
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/models"
+	"github.com/klauspost/compress/zstd"
+)
+
+// ─── Vector encoding version constants ───────────────────────────────────────
+//
+// The vector blob stored in embRec.Vector carries a 1-byte version header so
+// old and new code can coexist during a rolling upgrade and after rollback.
+//
+//	v0 (absent/legacy): raw little-endian float32 — no header byte.
+//	  Encoded as:  [f32_0 LE][f32_1 LE]…  (4N bytes for N-dim vector)
+//
+//	v1 (T021, SPEC 3 §3): float16 + zstd block compression.
+//	  Encoded as:  [0x01][zstd_compressed( [f16_0 LE][f16_1 LE]… )]
+//	  (1 + zstd_len bytes — typically ~3.5–4× smaller than v0 for 3072-dim)
+//
+// Why float16 is safe at our threshold regime (0.85/0.95):
+//
+//	For OpenAI text-embedding-3-large (3072 dims) the vectors are L2-normalised
+//	before storage.  Float16 has 10 bits of mantissa → ~0.1% relative error per
+//	element.  Over 3072 dims these errors average out (central-limit tendency),
+//	and the resulting cosine-drift is empirically |Δcos| < 1e-3 across random
+//	unit-vector pairs (see TestEncodeDecodeV1_CosineDrift).  Our accept threshold
+//	is 0.85 and our high-confidence threshold is 0.95; a drift of <0.001 is
+//	well inside the guard band on either side and cannot flip a genuine
+//	accept/reject decision.
+const (
+	embVecVersion0 = byte(0x00) // sentinel (not written; any blob without header is v0)
+	embVecVersion1 = byte(0x01) // float16 + zstd (T021)
+)
+
+// zstdEncoder / zstdDecoder are package-level singletons; creating them is
+// expensive (~1ms+) but re-using them is cheap and concurrency-safe.
+var (
+	zstdEnc *zstd.Encoder
+	zstdDec *zstd.Decoder
+)
+
+func init() {
+	var err error
+	// zstd.SpeedDefault gives a good compression-ratio/speed tradeoff.
+	// For embedding blobs (mostly floating-point), higher levels rarely help.
+	zstdEnc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		panic("embedding_store: failed to initialise zstd encoder: " + err.Error())
+	}
+	zstdDec, err = zstd.NewReader(nil)
+	if err != nil {
+		panic("embedding_store: failed to initialise zstd decoder: " + err.Error())
+	}
+}
+
+// Key-space layout (PebbleDB):
+//
+//	emb:v:<entityType>:<entityID>   → embRec JSON      (vector + metadata)
+//	emb:c:<model>:<textHash>        → raw float32 blob  (content-hash cache)
+//	dedup:r:<id16hex>               → candRec JSON      (dedup candidate)
+//	dedup:p:<type>:<aID>:<bID>      → id16hex           (pair uniqueness index)
+//	dedup:e:<type>:<entityID>:<id16hex> → empty         (entity secondary index — both sides)
+//	dedup:s:<status>:<id16hex>      → empty             (status secondary index, INIT-2 T4)
+//	dedup:seq                       → [8]byte LE int64  (auto-increment counter)
+//	dedup:label:<id16hex>           → LabeledExample JSON   (dataset labels)
+//	dedup:lbe:<entityID>:<id16hex>  → empty                 (label entity index — both sides)
+const (
+	embVecPfx         = "emb:v:"
+	embCachePfx       = "emb:c:"
+	dedupRecPfx       = "dedup:r:"
+	dedupPairPfx      = "dedup:p:"
+	dedupEntityPfx    = "dedup:e:"
+	dedupStatusIdxPfx = "dedup:s:"
+	dedupSeqKey       = "dedup:seq"
+)
+
+// embRec is the stored value for a vector embedding.
+type embRec struct {
+	TextHash  string `json:"h"`
+	Vector    []byte `json:"v"` // encodeVector output (little-endian float32)
+	Model     string `json:"m"`
+	CreatedAt int64  `json:"c"` // Unix nanoseconds
+	UpdatedAt int64  `json:"u"` // Unix nanoseconds
+}
+
+// candRec is the stored value for a dedup candidate.
+//
+// New fields (T015): ScoreBreakdown, Band, FormulaVersion are additive — rows
+// written before T015 will decode with nil/empty values, which is correct
+// (they pre-date the unified scoring pipeline). Old readers silently ignore
+// the extra JSON keys, so the keyspace stays fully backward-compatible.
+type candRec struct {
+	EntityType string   `json:"et"`
+	EntityAID  string   `json:"a"`
+	EntityBID  string   `json:"b"`
+	Layer      string   `json:"l"`
+	Similarity *float64 `json:"sim,omitempty"`
+	LLMVerdict string   `json:"lv,omitempty"`
+	LLMReason  string   `json:"lr,omitempty"`
+	Status     string   `json:"s"`
+	CreatedAt  int64    `json:"c"` // Unix nanoseconds
+	UpdatedAt  int64    `json:"u"` // Unix nanoseconds
+
+	// Unified scoring fields (T015, SPEC 1 §3). All omitempty so pre-T015
+	// rows round-trip without growing their stored size.
+	ScoreBreakdown *models.UnifiedDedupScore `json:"sb,omitempty"`
+	Band           string                    `json:"band,omitempty"`
+	FormulaVersion string                    `json:"fv,omitempty"`
+
+	// Source / SourceNote mark a candidate a human put in the review queue by
+	// hand (POST /api/v1/dedup/candidates). omitempty so scanner rows keep
+	// their stored size. See CandidateSourceManual for what the mark protects.
+	Source     string `json:"src,omitempty"`
+	SourceNote string `json:"srcn,omitempty"`
+
+	// AI advice on a manual (pinned) row: the LLM verdict and reason that
+	// UpdateCandidateLLM refuses to write onto it. Advisory only; see
+	// RecordCandidateLLMAdvice. omitempty so every other row keeps its size.
+	AdviceVerdict string `json:"av,omitempty"`
+	AdviceReason  string `json:"ar,omitempty"`
+	AdviceAt      int64  `json:"aa,omitempty"` // Unix nanoseconds
+}
+
+// Embedding holds a vector embedding for a single entity.
+type Embedding struct {
+	EntityType string
+	EntityID   string
+	TextHash   string
+	Vector     []float32
+	Model      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// SimilarityResult pairs an entity ID with its cosine similarity score.
+type SimilarityResult struct {
+	EntityID   string
+	Similarity float32
+}
+
+// DedupCandidate represents a potential duplicate pair.
+//
+// ScoreBreakdown, Band, and FormulaVersion are additive fields added in T015
+// (SPEC 1 §3). Pre-T015 rows will have nil/empty values here; consumers
+// should treat empty FormulaVersion as "legacy" (pre-unified-pipeline).
+type DedupCandidate struct {
+	ID         int64     `json:"id"`
+	EntityType string    `json:"entity_type"`
+	EntityAID  string    `json:"entity_a_id"`
+	EntityBID  string    `json:"entity_b_id"`
+	Layer      string    `json:"layer"`
+	Similarity *float64  `json:"similarity,omitempty"`
+	LLMVerdict string    `json:"llm_verdict,omitempty"`
+	LLMReason  string    `json:"llm_reason,omitempty"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+
+	// Unified scoring fields (T015, SPEC 1 §3). Nil/empty on pre-T015 rows.
+	ScoreBreakdown *models.UnifiedDedupScore `json:"score_breakdown,omitempty"`
+	Band           string                    `json:"band,omitempty"`
+	FormulaVersion string                    `json:"formula_version,omitempty"`
+
+	// Source is CandidateSourceManual for a pair a human enqueued by hand, and
+	// empty for every scanner-produced row. SourceNote is the reason the
+	// human gave. See IsManualCandidate.
+	Source     string `json:"source,omitempty"`
+	SourceNote string `json:"source_note,omitempty"`
+
+	// AIAdviceVerdict / AIAdviceReason / AIAdviceAt hold the LLM's verdict on
+	// a manual (pinned) candidate. The LLM review may not act on a pinned row
+	// (no status, band, score or layer change, no merge), so its opinion is
+	// kept here for the human reviewer to read. Empty on every other row.
+	AIAdviceVerdict string     `json:"ai_advice_verdict,omitempty"`
+	AIAdviceReason  string     `json:"ai_advice_reason,omitempty"`
+	AIAdviceAt      *time.Time `json:"ai_advice_at,omitempty"`
+}
+
+// CandidateFilter controls ListCandidates queries.
+type CandidateFilter struct {
+	EntityType    string
+	Status        string
+	Layer         string
+	MinSimilarity *float64
+	MaxSimilarity *float64
+	// Band filters by the unified scoring band (CERTAIN/HIGH/MEDIUM/REVIEW).
+	// Empty means no band filter. The filter is evaluated on the stored Band
+	// field (set by the T015/T016 unified pipeline); pre-T015 rows with an
+	// empty band will not match any non-empty Band filter.
+	Band string
+	// EntityID restricts results to candidates where EITHER side of the pair
+	// is this entity — the "show me this book's duplicates" view behind the
+	// ?book= deep link. Filtered at scan level (like Band) rather than
+	// in-handler (like both_unmatched), because the id lives on the candidate
+	// itself, so pagination totals stay accurate.
+	EntityID string
+
+	// Source restricts results to candidates with this Source ("manual" lists
+	// the hand-enqueued ones, including scanner rows a human pinned). Empty
+	// means no source filter.
+	Source string
+
+	// Search is a case-insensitive substring matched against the fields that
+	// live ON the candidate row itself: Layer, Band, Source, and either entity ID.
+	// Empty means no text search.
+	//
+	// The book-derived fields the UI also searches (title, author, file path)
+	// are NOT on this row -- they are joined in by the handler via
+	// GetBookByID. Those are matched by pre-resolving the needle to a set of
+	// book IDs and passing it as SearchEntityIDs; see the union rule below.
+	Search string
+
+	// SearchEntityIDs is the set of entity IDs whose JOINED book data matched
+	// Search, resolved by the caller before the scan starts. A candidate
+	// matches when EITHER side of the pair is in this set.
+	//
+	// Search and SearchEntityIDs are OR'd, not AND'd: a candidate is kept when
+	// the needle hits the candidate row OR the joined book. Both halves are
+	// applied at scan level -- BEFORE paginateCandidates -- so `total` counts
+	// every match in the library rather than the ones that survived on the
+	// current page.
+	//
+	// Contrast both_unmatched, which cannot be pushed down at all: its signal
+	// lives on the Book, not the candidate row, so the handler asks for the
+	// whole set, filters it, recomputes `total` from the filtered slice and
+	// paginates itself. That is correct but costs a full scan plus a book
+	// lookup per candidate. Search reaches scan level instead, which is why it
+	// can page normally.
+	SearchEntityIDs map[string]struct{}
+
+	// SeriesScoped restricts results to pairs whose BOTH sides are in
+	// SeriesBookIDs -- the book set of one series, resolved by the caller. The
+	// same rule the series summary counts by (cross-series pairs belong to no
+	// series). A bool rather than len()>0 because a series with no books must
+	// match NOTHING, not everything. Applied at scan level, before pagination,
+	// so `total` counts the whole series.
+	SeriesScoped  bool
+	SeriesBookIDs map[string]struct{}
+
+	Limit  int
+	Offset int
+}
+
+// CandidateStat holds a count for one grouping.
+type CandidateStat struct {
+	EntityType string `json:"entity_type"`
+	Layer      string `json:"layer"`
+	Status     string `json:"status"`
+	Count      int    `json:"count"`
+}
+
+// EmbeddingHealthStats contains diagnostic counts for the embedding store.
+type EmbeddingHealthStats struct {
+	VectorCount int64 `json:"vector_count"`
+	SizeBytes   int64 `json:"size_bytes"`
+}
+
+// EmbeddingStore is a PebbleDB-backed store for vector embeddings, text-hash
+// cache, and dedup candidates. It replaces the former SQLite sidecar (embeddings.db).
+type EmbeddingStore struct {
+	db *GatedDB
+	// closeDB, non-nil only for a store that owns its engine (tests), closes
+	// it: drain, sync, close (NewOwnedGatedDB). A shared store's Close is a
+	// no-op.
+	closeDB func(timeout time.Duration) error
+	// closeMu serialises every DB-touching operation against Close. Operations
+	// hold RLock for their whole duration; Close takes the write lock, so it
+	// cannot begin until the last in-flight operation has returned.
+	//
+	// This exists because Pebble documents that calling Close concurrently with
+	// any other DB method is unsafe, and doing so deadlocks for real: three
+	// writers inside db.Set blocked forever on commitPipeline.prepare and hung
+	// TestChaos_MixedReadWriteDuringClose for 29 minutes (CI run 31603570061).
+	// The pre-existing `closed` flag below cannot prevent that — it is a
+	// check-then-act, and a writer already inside db.Set is past the check.
+	// Only a lock held for the operation's DURATION closes that window.
+	closeMu   sync.RWMutex
+	mu        sync.Mutex  // serialises counter + pair-uniqueness operations
+	closeOnce sync.Once   // guards owned Close against double-call
+	closed    atomic.Bool // set on Close; makes post-close ops return errors, not panic
+}
+
+// NewEmbeddingStore creates an EmbeddingStore backed by the given PebbleDB.
+// The DB is shared with the main store; Close() is a no-op.
+func NewEmbeddingStore(db *GatedDB) *EmbeddingStore {
+	return &EmbeddingStore{db: db}
+}
+
+// Close releases resources. A no-op when the DB is shared (closeDB nil).
+// Safe to call more than once when owned — subsequent calls are no-ops.
+func (s *EmbeddingStore) Close() error {
+	if s.closeDB == nil {
+		return nil
+	}
+	var closeErr error
+	s.closeOnce.Do(func() {
+		// The write lock is the whole fix. It cannot be acquired until every
+		// in-flight operation has released its RLock, so db.Close() never runs
+		// concurrently with another Pebble method — which Pebble documents as
+		// unsafe and which deadlocks in practice (commitPipeline.prepare).
+		//
+		// closed is still set, and set BEFORE the DB goes away, so the cheap
+		// checkClosed fast path keeps working for callers that arrive later.
+		s.closeMu.Lock()
+		defer s.closeMu.Unlock()
+		s.closed.Store(true)
+		closeErr = s.closeDB(DefaultCloseDrainTimeout)
+	})
+	return closeErr
+}
+
+// PebbleDB returns the underlying Pebble handle. This is provided so
+// adjacent stores (e.g. the split-book candidate keyspace) can share
+// the same shared-database connection without re-opening it. Returns
+// nil if the receiver is nil or already closed.
+func (s *EmbeddingStore) PebbleDB() *GatedDB {
+	if s == nil || s.closed.Load() {
+		return nil
+	}
+	return s.db
+}
+
+// errClosed is returned by all operations when the store has been closed.
+var errClosed = fmt.Errorf("embedding store closed")
+
+func (s *EmbeddingStore) checkClosed() error {
+	if s.closed.Load() {
+		return errClosed
+	}
+	return nil
+}
+
+// ─── Vector methods ───────────────────────────────────────────────────────────
+
+func embVecKey(entityType, entityID string) []byte {
+	return []byte(embVecPfx + entityType + ":" + entityID)
+}
+
+// Upsert inserts or replaces a vector embedding. Created-at is preserved on updates.
+func (s *EmbeddingStore) Upsert(e Embedding) error {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	key := embVecKey(e.EntityType, e.EntityID)
+	now := time.Now().UnixNano()
+	createdAt := now
+
+	existing, err := s.getEmbRec(key)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		createdAt = existing.CreatedAt
+	}
+
+	return s.setJSON(key, embRec{
+		TextHash:  e.TextHash,
+		Vector:    encodeVector(e.Vector),
+		Model:     e.Model,
+		CreatedAt: createdAt,
+		UpdatedAt: now,
+	})
+}
+
+// Get retrieves an embedding by entity type and ID. Returns nil, nil when not found.
+func (s *EmbeddingStore) Get(entityType, entityID string) (*Embedding, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	key := embVecKey(entityType, entityID)
+	rec, err := s.getEmbRec(key)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	return &Embedding{
+		EntityType: entityType,
+		EntityID:   entityID,
+		TextHash:   rec.TextHash,
+		Vector:     decodeVector(rec.Vector),
+		Model:      rec.Model,
+		CreatedAt:  time.Unix(0, rec.CreatedAt),
+		UpdatedAt:  time.Unix(0, rec.UpdatedAt),
+	}, nil
+}
+
+// Delete removes an embedding. It is a no-op if the entity does not exist.
+func (s *EmbeddingStore) Delete(entityType, entityID string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	return s.db.Delete(embVecKey(entityType, entityID), pebble.Sync)
+}
+
+// ListByType returns all embeddings for the given entity type. Rows whose
+// stored record fails to decode are silently dropped; call ListByTypeCounted
+// if you need to know how many.
+func (s *EmbeddingStore) ListByType(entityType string) ([]Embedding, error) {
+	rows, _, err := s.ListByTypeCounted(entityType)
+	return rows, err
+}
+
+// ListByTypeCounted is ListByType but also reports how many rows were skipped
+// because their stored record would not unmarshal.
+//
+// WHY this exists: the returned slice length is NOT the number of rows the
+// prefix holds, because a corrupt record is dropped mid-iteration. CountByType
+// counts raw keys and never unmarshals, so the two disagree by exactly this
+// number — silently, and permanently. That matters because the vector index's
+// startup log reports CountByType as its "truth_count" while dedup's hydrate
+// reports len(ListByType(...)) as its row count, and operators are told to
+// diff the two. Without this count, a corrupt record makes those operands
+// incomparable with nothing anywhere reporting the delta. Callers that publish
+// a row count to a human should use this form and surface the number.
+func (s *EmbeddingStore) ListByTypeCounted(entityType string) ([]Embedding, int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, 0, err
+	}
+	prefix := []byte(embVecPfx + entityType + ":")
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list by type %s: %w", entityType, err)
+	}
+	defer iter.Close()
+
+	typePrefix := embVecPfx + entityType + ":"
+	var results []Embedding
+	undecodable := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		var rec embRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			undecodable++
+			continue
+		}
+		entityID := string(iter.Key())[len(typePrefix):]
+		results = append(results, Embedding{
+			EntityType: entityType,
+			EntityID:   entityID,
+			TextHash:   rec.TextHash,
+			Vector:     decodeVector(rec.Vector),
+			Model:      rec.Model,
+			CreatedAt:  time.Unix(0, rec.CreatedAt),
+			UpdatedAt:  time.Unix(0, rec.UpdatedAt),
+		})
+	}
+	return results, undecodable, iter.Error()
+}
+
+// FindSimilar loads all embeddings of entityType, computes cosine similarity
+// against query, filters by minSimilarity, and returns up to maxResults sorted
+// by similarity descending.
+func (s *EmbeddingStore) FindSimilar(entityType string, query []float32, minSimilarity float32, maxResults int) ([]SimilarityResult, error) {
+	all, err := s.ListByType(entityType)
+	if err != nil {
+		return nil, err
+	}
+
+	var candidates []SimilarityResult
+	for _, e := range all {
+		if sim := CosineSimilarity(query, e.Vector); sim >= minSimilarity {
+			candidates = append(candidates, SimilarityResult{EntityID: e.EntityID, Similarity: sim})
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Similarity > candidates[j].Similarity
+	})
+	if maxResults > 0 && len(candidates) > maxResults {
+		candidates = candidates[:maxResults]
+	}
+	return candidates, nil
+}
+
+// CountByType returns the number of embeddings stored for the given entity type.
+func (s *EmbeddingStore) CountByType(entityType string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return 0, err
+	}
+	prefix := []byte(embVecPfx + entityType + ":")
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("count by type %s: %w", entityType, err)
+	}
+	defer iter.Close()
+
+	n := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		n++
+	}
+	return n, iter.Error()
+}
+
+// ─── Cache methods ────────────────────────────────────────────────────────────
+
+// GetCachedEmbedding looks up a cached embedding by text hash and model.
+// Returns nil, nil on a cache miss.
+func (s *EmbeddingStore) GetCachedEmbedding(textHash, model string) ([]float32, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if textHash == "" || model == "" {
+		return nil, nil
+	}
+	start := time.Now()
+	val, closer, err := s.db.Get([]byte(embCachePfx + model + ":" + textHash))
+	metrics.ObserveCacheGetDuration("embedding", time.Since(start))
+	if err == pebble.ErrNotFound {
+		metrics.RecordCacheMiss("embedding", "not_found")
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get cached embedding: %w", err)
+	}
+	vec := decodeVector(val)
+	closer.Close()
+	metrics.RecordCacheHit("embedding")
+	return vec, nil
+}
+
+// PutCachedEmbedding stores a vector keyed by text hash and model.
+// A write failure is never fatal — callers log and continue.
+func (s *EmbeddingStore) PutCachedEmbedding(textHash, model string, vector []float32) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if textHash == "" || model == "" || len(vector) == 0 {
+		return nil
+	}
+	if err := s.db.Set([]byte(embCachePfx+model+":"+textHash), encodeVector(vector), pebble.Sync); err != nil {
+		return err
+	}
+	metrics.RecordCacheSet("embedding")
+	return nil
+}
+
+// ─── Dedup candidate methods ──────────────────────────────────────────────────
+
+// IsTerminalCandidateStatus reports whether a dedup candidate status records a
+// VERDICT rather than a machine-derived classification.
+//
+// "dismissed" and "merged" are decisions — a human reviewed the pair, or
+// auto-resolve acted on it. They must survive a rescan: every scan re-upserts
+// the same pairs with status "pending", so a resurrected dismissal puts a known
+// false positive back in the review queue after every run.
+//
+// "pending", "stale-drain" and "stale-fp" are deliberately NOT terminal: they
+// are reclassifications a rescan should be free to revise.
+//
+// Exported because this is the ONLY definition of the candidate-status
+// vocabulary. The regroup applier (internal/plugins/maintenance/regroup_apply.go)
+// vetoes terminal statuses before it will name a merge target; until 2026-09-02
+// it carried its own copy of this set, and that copy named two statuses
+// ("rejected", "separate") that no writer has ever produced. Consumers call
+// this instead of spelling the strings.
+func IsTerminalCandidateStatus(status string) bool {
+	return status == "dismissed" || status == "merged"
+}
+
+// TerminalCandidatesStrict returns every candidate of entityType whose status
+// is terminal (IsTerminalCandidateStatus): the pairs a human dismissed or
+// auto-resolve acted on. It scans the whole dedup:r: record range, whether or
+// not the status index is built, and fails on a key or record it cannot
+// read: a reader that vetoes a write on a dismissal cannot tell a skipped
+// row from no dismissal.
+func (s *EmbeddingStore) TerminalCandidatesStrict(entityType string) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	prefix := []byte(dedupRecPfx)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
+	if err != nil {
+		return nil, fmt.Errorf("terminal candidates: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	var out []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		id, err := strconv.ParseInt(string(iter.Key())[len(dedupRecPfx):], 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("candidate key %q is unreadable: %w", iter.Key(), err)
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			return nil, fmt.Errorf("candidate %d is unreadable: %w", id, err)
+		}
+		c := candRecToCandidate(id, rec)
+		if c.EntityType == entityType && IsTerminalCandidateStatus(c.Status) {
+			out = append(out, c)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("terminal candidates scan: %w", err)
+	}
+	return out, nil
+}
+
+func dedupRecKey(id int64) []byte {
+	return []byte(fmt.Sprintf("%s%016x", dedupRecPfx, id))
+}
+
+func dedupPairKey(entityType, aID, bID string) []byte {
+	return []byte(dedupPairPfx + entityType + ":" + aID + ":" + bID)
+}
+
+// dedupEntityKey builds a secondary-index key for one side of a candidate pair.
+// Both entity_a and entity_b get their own entry so prefix-scanning
+// "dedup:e:<type>:<entityID>:" yields all candidates for that entity in O(k).
+func dedupEntityKey(entityType, entityID string, id int64) []byte {
+	return []byte(fmt.Sprintf("%s%s:%s:%016x", dedupEntityPfx, entityType, entityID, id))
+}
+
+// setCandidateEntityIndex stages both "dedup:e:" entity-index rows of
+// candidate id into b. Idempotent (presence-only keys). Every write that
+// changes a candidate's status stages them too, not only the create:
+// candidates stored before the entity index existed (2026-06-22) have no
+// rows, and a verdict landing on one must still be found by entity — the
+// duplicate-copies and fragment fixers' Replan reads verdicts only through
+// this index (ListCandidatesForEntityStrict). Migration 64 backfills the rest.
+func setCandidateEntityIndex(b *GatedBatch, rec candRec, id int64) error {
+	if rec.EntityAID != "" {
+		if err := b.Set(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil, nil); err != nil {
+			return err
+		}
+	}
+	if rec.EntityBID != "" {
+		if err := b.Set(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dedupStatusIdxKey builds a presence-only secondary-index key for a
+// candidate's status (INIT-2 T4), mirroring dedupEntityKey's %016x id
+// encoding. Prefix-scanning "dedup:s:<status>:" yields every candidate ID
+// with that status in O(k), instead of ListCandidates' full dedup:r: scan.
+func dedupStatusIdxKey(status string, id int64) []byte {
+	return []byte(fmt.Sprintf("%s%s:%016x", dedupStatusIdxPfx, status, id))
+}
+
+// nextID reads and increments the sequential counter. Must be called with s.mu held.
+// The new counter value is written into the supplied batch so counter + record land atomically.
+func (s *EmbeddingStore) nextID(b *GatedBatch) (int64, error) {
+	val, closer, err := s.db.Get([]byte(dedupSeqKey))
+	var id int64
+	if err == pebble.ErrNotFound {
+		id = 1
+	} else if err != nil {
+		return 0, fmt.Errorf("read dedup seq: %w", err)
+	} else {
+		id = int64(binary.LittleEndian.Uint64(val)) + 1
+		closer.Close()
+	}
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(id))
+	return id, b.Set([]byte(dedupSeqKey), buf[:], nil)
+}
+
+// candidateWriteOpts is the Pebble write option for per-row dedup-candidate
+// writes (UpsertCandidateNew, DeleteCandidate). It is deliberately pebble.NoSync.
+//
+// WHY (issue #19): those calls run once per candidate from FullScan's unified
+// scoring pass — a registry.RunItems worker pool at runtime.NumCPU(). With
+// pebble.Sync every call forced an fdatasync, and holding EmbeddingStore.mu
+// across that fsync serialized the whole "parallel" pass behind one lock whose
+// critical section blocked on disk. Worse, the per-write fsync flooded Pebble's
+// L0; once compaction fell behind (amplified by host swap pressure) Pebble's
+// write-stall froze every read and write DB-wide, so all workers parked inside a
+// Pebble call that never returned — the op became uncancellable (a mutex/fsync
+// wait is not ctx-aware) and only `systemctl restart` recovered it. Observed on
+// prod 2026-07-06: 9+ hours at 44%, zero progress.
+//
+// The durability tradeoff is bounded and acceptable: NoSync changes only fsync
+// timing, not atomicity or visibility (the s.mu-guarded pair-uniqueness + ID
+// counter invariants are untouched). Pebble still flushes memtables to durable
+// SSTs as they fill, and a graceful Close — the systemctl-restart / SIGTERM
+// path — flushes the WAL, so a graceful restart loses nothing (see
+// TestUpsertCandidate_SurvivesGracefulClose). Only a hard crash (kill -9 / power
+// loss) can drop the last few seconds of writes, and dedup-candidate scores are
+// recomputable derived data — a re-scan regenerates them.
+var candidateWriteOpts = pebble.NoSync
+
+// UpsertCandidate inserts or updates a dedup candidate pair.
+//
+// Layer precedence (exact > llm > embedding): a more-specific layer never gets
+// downgraded by a less-specific one. LLM fields are always updated when non-empty.
+// Pairs are canonicalised before insert (lexicographically smaller ID is always A).
+func (s *EmbeddingStore) UpsertCandidate(c DedupCandidate) error {
+	_, _, err := s.UpsertCandidateNew(c)
+	return err
+}
+
+// UpsertCandidateNew is UpsertCandidate but also reports the assigned
+// candidate ID and whether this call created a brand-new pair (true) or
+// updated an existing one (false). Callers that must react only when a
+// genuinely new candidate is created — e.g. C5 live dataset capture, which
+// must never re-label an existing pair on a score update — should call this
+// instead of UpsertCandidate.
+func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew bool, err error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return 0, false, err
+	}
+	if c.EntityAID > c.EntityBID {
+		c.EntityAID, c.EntityBID = c.EntityBID, c.EntityAID
+	}
+	if c.Status == "" {
+		c.Status = "pending"
+	}
+	now := time.Now().UnixNano()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pairKey := dedupPairKey(c.EntityType, c.EntityAID, c.EntityBID)
+	existingIDBytes, closer, err := s.db.Get(pairKey)
+	if err != nil && err != pebble.ErrNotFound {
+		return 0, false, fmt.Errorf("upsert candidate pair lookup: %w", err)
+	}
+
+	b := s.db.NewBatch()
+	defer b.Close()
+
+	if err == pebble.ErrNotFound {
+		// New pair — assign sequential ID.
+		id, err := s.nextID(b)
+		if err != nil {
+			return 0, false, err
+		}
+		rec := candRec{
+			EntityType:     c.EntityType,
+			EntityAID:      c.EntityAID,
+			EntityBID:      c.EntityBID,
+			Layer:          c.Layer,
+			Similarity:     c.Similarity,
+			LLMVerdict:     c.LLMVerdict,
+			LLMReason:      c.LLMReason,
+			Status:         c.Status,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+			ScoreBreakdown: c.ScoreBreakdown,
+			Band:           c.Band,
+			FormulaVersion: c.FormulaVersion,
+		}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			return 0, false, fmt.Errorf("marshal candidate: %w", err)
+		}
+		if err := b.Set(dedupRecKey(id), data, nil); err != nil {
+			return 0, false, err
+		}
+		if err := b.Set(pairKey, []byte(fmt.Sprintf("%016x", id)), nil); err != nil {
+			return 0, false, err
+		}
+		// Entity secondary index — both sides, so prefix-scan by entity is O(k).
+		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityAID, id), nil, nil); err != nil {
+			return 0, false, err
+		}
+		if err := b.Set(dedupEntityKey(c.EntityType, c.EntityBID, id), nil, nil); err != nil {
+			return 0, false, err
+		}
+		// Status secondary index (INIT-2 T4) — same batch, no new commit.
+		if err := b.Set(dedupStatusIdxKey(rec.Status, id), nil, nil); err != nil {
+			return 0, false, err
+		}
+		if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
+			return 0, false, err
+		}
+		return id, true, nil
+	}
+
+	// Existing pair — update in-place.
+	idHex := string(existingIDBytes)
+	closer.Close()
+	id, err = strconv.ParseInt(idHex, 16, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse candidate id %q: %w", idHex, err)
+	}
+
+	val, existingCloser, err := s.db.Get(dedupRecKey(id))
+	if err != nil {
+		return 0, false, fmt.Errorf("read existing candidate %d: %w", id, err)
+	}
+	var existing candRec
+	if err := json.Unmarshal(val, &existing); err != nil {
+		existingCloser.Close()
+		return 0, false, fmt.Errorf("unmarshal existing candidate %d: %w", id, err)
+	}
+	existingCloser.Close()
+
+	// Layer precedence mirrors the SQL ON CONFLICT logic:
+	//   exact  → never overwritten (regardless of incoming layer)
+	//   llm    → protected against embedding, but exact still upgrades it
+	//   others → always overwritten with incoming layer + similarity
+	//
+	// T015 addition: a row that already has a non-empty FormulaVersion (i.e.
+	// it was scored by the unified pipeline) is never downgraded by a legacy
+	// writer that lacks a FormulaVersion — formula-versioned data is always
+	// more trustworthy than pre-unified segment-era scores.
+	//
+	// A "manual" layer (a pair a human enqueued, CandidateLayerManual) is
+	// protected like "exact": the tag is how the review UI tells the row apart,
+	// and losing it to the first scanner re-upsert would also drop the row back
+	// into every purge that manual candidates are exempt from. The Source mark
+	// itself needs no clause here — this branch updates `existing` in place, so
+	// fields the incoming scanner write does not carry are preserved.
+	protected := existing.Layer == "exact" || existing.Layer == CandidateLayerManual ||
+		(existing.Layer == "llm" && c.Layer != "exact") ||
+		(existing.FormulaVersion != "" && c.FormulaVersion == "")
+	// A pin freezes the score (owner decision 2026-09-26). A manual row,
+	// including a scanner row a human pinned (Source manual, scanner layer),
+	// keeps the ScoreBreakdown, Band and FormulaVersion it had when it was
+	// pinned; the rescan may still refresh the evidence fields (Layer and
+	// Similarity, subject to the precedence rules above). The whole breakdown
+	// is frozen, not only its Score and Band: the breakdown embeds Score,
+	// Band and Formula, and fresh Signals under a frozen Score would show the
+	// reviewer signals that do not add up to the score beside them. A pinned
+	// row with no band never gains one here either. UpdateCandidateScore and
+	// UpdateCandidateScores apply the same rule to the rescore paths.
+	scoreFrozen := existing.Source == CandidateSourceManual
+	if !protected {
+		existing.Layer = c.Layer
+		existing.Similarity = c.Similarity
+	}
+	// A provenance-only breakdown (the exact-layer rules' record of WHY a pair
+	// exists, models.UnifiedDedupScore.IsProvenanceOnly) is MERGED rather than
+	// written over the row, and even into a protected row: it carries no score,
+	// so folding it in cannot change what the row scores, and "exact" rows are
+	// protected, so replacing-only would leave every pre-existing exact row
+	// unexplained forever. A pinned row's breakdown stays frozen, as for every
+	// other writer.
+	incomingProvenance := c.ScoreBreakdown.IsProvenanceOnly()
+	if incomingProvenance && !scoreFrozen {
+		existing.ScoreBreakdown = models.MergeProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
+	}
+	if !protected && !scoreFrozen {
+		// Carry forward unified-scoring fields when the incoming write has them.
+		// A replacement keeps the provenance signals the old breakdown had.
+		if c.ScoreBreakdown != nil && !incomingProvenance {
+			existing.ScoreBreakdown = models.CarryProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
+		}
+		if c.Band != "" {
+			existing.Band = c.Band
+		}
+		if c.FormulaVersion != "" {
+			existing.FormulaVersion = c.FormulaVersion
+		}
+	}
+	switch {
+	case scoreFrozen && c.LLMVerdict != "":
+		// An LLM verdict on a pinned row is advice, never the row's verdict
+		// (see RecordCandidateLLMAdvice).
+		existing.AdviceVerdict = c.LLMVerdict
+		existing.AdviceReason = c.LLMReason
+		existing.AdviceAt = now
+	case !scoreFrozen:
+		if c.LLMVerdict != "" {
+			existing.LLMVerdict = c.LLMVerdict
+		}
+		if c.LLMReason != "" {
+			existing.LLMReason = c.LLMReason
+		}
+	}
+	oldStatus := existing.Status
+	// Status is a VERDICT, not derived data: "dismissed" and "merged" record a
+	// decision (human review or auto-resolve), while every rescan re-upserts the
+	// same pair with Status "pending". Overwriting unconditionally therefore
+	// resurrected dismissals on every dedup.full-scan — measured on a
+	// full-fidelity replica of production: 43 candidates flipped
+	// dismissed -> pending in a single scan, so the same false positives return
+	// to the review queue after each run and the queue can never converge.
+	//
+	// The purge path already treats these as sticky ("CRITICAL: Only purge
+	// PENDING candidates. Merged and dismissed rows..." — dedup/engine.go), so
+	// this restores the intent the rest of the engine already assumes.
+	//
+	// Machine-derived statuses (stale-drain, stale-fp) stay refreshable: they are
+	// reclassifications a rescan SHOULD be able to revise. Only another terminal
+	// verdict may replace a terminal verdict (e.g. dismissed -> merged).
+	if !IsTerminalCandidateStatus(existing.Status) || IsTerminalCandidateStatus(c.Status) {
+		existing.Status = c.Status
+	}
+	existing.UpdatedAt = now
+
+	data, err := json.Marshal(existing)
+	if err != nil {
+		return 0, false, fmt.Errorf("marshal updated candidate: %w", err)
+	}
+	if err := b.Set(dedupRecKey(id), data, nil); err != nil {
+		return 0, false, err
+	}
+	// Idempotent: ensure entity index entries exist (backfills pre-index records).
+	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityAID, id), nil, nil); err != nil {
+		return 0, false, err
+	}
+	if err := b.Set(dedupEntityKey(existing.EntityType, existing.EntityBID, id), nil, nil); err != nil {
+		return 0, false, err
+	}
+	// Status secondary index (INIT-2 T4) — this update branch can change
+	// Status, so drop the old-status row (when it actually changed) and
+	// ensure the current-status row exists. Same batch, no new commit.
+	if oldStatus != "" && oldStatus != existing.Status {
+		if err := b.Delete(dedupStatusIdxKey(oldStatus, id), nil); err != nil {
+			return 0, false, err
+		}
+	}
+	if err := b.Set(dedupStatusIdxKey(existing.Status, id), nil, nil); err != nil {
+		return 0, false, err
+	}
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
+		return 0, false, err
+	}
+	return id, false, nil
+}
+
+// dedupCandidateStatusIndexBuiltFlagKey is stored in Settings when the
+// dedup.build-candidate-status-index backfill op completes (INIT-2 T4). The
+// v1 suffix lets us force a re-run by bumping to v2. Mirrors
+// isbnIndexBuiltFlagKey's naming convention (pebble_store_isbn_index.go).
+//
+// EmbeddingStore reads/writes this directly via the same "setting:" key
+// namespace + JSON Setting{} schema that PebbleStore.GetSetting/SetSetting
+// use (settings.go) — both structs wrap the SAME underlying *GatedDB
+// (see NewEmbeddingStore), so this is not a second settings mechanism, just
+// a second Go-level accessor for the identical physical rows.
+const dedupCandidateStatusIndexBuiltFlagKey = "dedup_candidate_status_index_v1_done"
+
+// IsCandidateStatusIndexBuilt reports whether the
+// dedup.build-candidate-status-index backfill op has completed. ListCandidates
+// gates its indexed read path on this flag; an unbuilt index falls back to
+// today's full dedup:r: scan (fail-open — no candidate can ever be silently
+// dropped by an incomplete index).
+func (s *EmbeddingStore) IsCandidateStatusIndexBuilt() bool {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	return s.isCandidateStatusIndexBuiltLocked()
+}
+
+// isCandidateStatusIndexBuiltLocked is the body of IsCandidateStatusIndexBuilt
+// with NO lock of its own. It exists because ListCandidates — which already
+// holds closeMu.RLock — needs to consult the flag. Calling the exported method
+// from there would take RLock recursively, and sync.RWMutex does not permit
+// that: a writer (Close) blocking between the two acquisitions leaves the
+// second RLock waiting on a writer that is itself waiting on the first, which
+// is a guaranteed deadlock rather than the rare one this file is fixing.
+//
+// Callers MUST hold s.closeMu (read or write) for the duration of this call.
+func (s *EmbeddingStore) isCandidateStatusIndexBuiltLocked() bool {
+	if err := s.checkClosed(); err != nil {
+		return false
+	}
+	data, closer, err := s.db.Get([]byte("setting:" + dedupCandidateStatusIndexBuiltFlagKey))
+	if err != nil {
+		return false // ErrNotFound or any other error — fail open to the full scan.
+	}
+	defer closer.Close()
+	var setting Setting
+	if err := json.Unmarshal(data, &setting); err != nil {
+		return false
+	}
+	return setting.Value == "true"
+}
+
+// SetCandidateStatusIndexBuilt marks the status-index backfill complete.
+// Called by the dedup.build-candidate-status-index op when its full scan
+// finishes.
+func (s *EmbeddingStore) SetCandidateStatusIndexBuilt() error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	setting := Setting{Key: dedupCandidateStatusIndexBuiltFlagKey, Value: "true", Type: "bool"}
+	data, err := json.Marshal(setting)
+	if err != nil {
+		return fmt.Errorf("marshal candidate status index flag: %w", err)
+	}
+	return s.db.Set([]byte("setting:"+dedupCandidateStatusIndexBuiltFlagKey), data, pebble.Sync)
+}
+
+// WriteCandidateStatusIndexRow writes a single "dedup:s:" presence-only
+// index row for a candidate (INIT-2 T4). Used only by the
+// dedup.build-candidate-status-index backfill op to populate the index for
+// rows that predate the write-path maintenance added to
+// UpsertCandidateNew/UpdateCandidateStatus/DeleteCandidate. Idempotent —
+// re-writing the same (status, id) pair is a harmless no-op set.
+//
+// Uses candidateWriteOpts (NoSync) rather than a shared batch — see its doc
+// comment (PR #1855 / issue #19): the backfill op fans this out over a
+// bounded worker pool (registry.RunItems), and each call here is an
+// independent single-key Pebble write, so there is no shared batch/lock to
+// serialize workers behind a per-row fsync. A blank status is a no-op
+// (a candidate can never legitimately have an empty status — UpsertCandidateNew
+// defaults it to "pending" — so this only guards against corrupt/legacy rows).
+func (s *EmbeddingStore) WriteCandidateStatusIndexRow(id int64, status string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	if status == "" {
+		return nil
+	}
+	return s.db.Set(dedupStatusIdxKey(status, id), nil, candidateWriteOpts)
+}
+
+// GetCandidateByID retrieves a single candidate by its ID.
+// Returns nil, nil when not found.
+func (s *EmbeddingStore) GetCandidateByID(id int64) (*DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	val, closer, err := s.db.Get(dedupRecKey(id))
+	if err == pebble.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get candidate %d: %w", id, err)
+	}
+	var rec candRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return nil, fmt.Errorf("unmarshal candidate %d: %w", id, err)
+	}
+	closer.Close()
+	c := candRecToCandidate(id, rec)
+	return &c, nil
+}
+
+// ListCandidates returns a paginated list of dedup candidates matching the filter
+// along with the total count of matching rows.
+//
+// Fallback semantics (INIT-2 T4): when the "dedup:s:" status index has not
+// finished building (IsCandidateStatusIndexBuilt() == false) OR the caller
+// did not set a status filter, this is BYTE-FOR-BYTE today's full dedup:r:
+// scan — the flag/filter combination fails open, never closed, so no
+// candidate can ever be silently dropped by an incomplete index. Only when
+// the flag is set AND f.Status != "" does it switch to the indexed path:
+// prefix-scan "dedup:s:<status>:", point-read each dedup:r: record, apply
+// the REMAINING filters in Go, then the same sort + pagination tail. A
+// dangling index row (record missing) is skipped silently, never an error.
+func (s *EmbeddingStore) ListCandidates(f CandidateFilter) ([]DedupCandidate, int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, 0, err
+	}
+
+	// Normalize the needle ONCE, here, rather than per-candidate inside the
+	// scan (40k+ ToLower calls) or at each call site (where forgetting it
+	// returns zero rows with no error to explain them). f is a value copy, so
+	// this reaches both read paths below and nothing outside this call.
+	f.Search = strings.ToLower(strings.TrimSpace(f.Search))
+
+	// isCandidateStatusIndexBuiltLocked, not the exported method: we already
+	// hold closeMu.RLock, and recursive RLock deadlocks (see that method's doc).
+	if f.Status != "" && s.isCandidateStatusIndexBuiltLocked() {
+		all, err := s.listCandidatesByStatusIndex(f)
+		if err != nil {
+			return nil, 0, err
+		}
+		page, total := paginateCandidates(all, f)
+		return page, total, nil
+	}
+
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list candidates: %w", err)
+	}
+	defer iter.Close()
+
+	var all []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		c := candRecToCandidate(id, rec)
+		if !matchesCandidateFilter(c, f, true) {
+			continue
+		}
+		all = append(all, c)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, 0, fmt.Errorf("list candidates scan: %w", err)
+	}
+
+	page, total := paginateCandidates(all, f)
+	return page, total, nil
+}
+
+// listCandidatesByStatusIndex is the indexed read path: prefix-scan
+// "dedup:s:<f.Status>:" for candidate IDs, point-read each dedup:r: record,
+// and apply every filter EXCEPT Status (already satisfied by the index scan)
+// in Go. A dangling index row (dedup:r: record missing — e.g. a delete that
+// raced the read) is skipped silently rather than treated as an error.
+func (s *EmbeddingStore) listCandidatesByStatusIndex(f CandidateFilter) ([]DedupCandidate, error) {
+	prefix := dedupStatusIdxKey(f.Status, 0)
+	prefix = prefix[:len(prefix)-16] // strip the %016x id suffix, keep "dedup:s:<status>:"
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates by status index: %w", err)
+	}
+	defer iter.Close()
+
+	var all []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key()[len(prefix):])
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue // dangling index row — tolerated, never an error.
+		}
+		if err != nil {
+			return nil, fmt.Errorf("list candidates by status index fetch %d: %w", id, err)
+		}
+		var rec candRec
+		unmarshalErr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if unmarshalErr != nil {
+			continue
+		}
+		c := candRecToCandidate(id, rec)
+		// Status is already guaranteed by the index scan; still re-check so a
+		// stale/dangling row pointing at a record whose status has since
+		// changed (write raced the read) cannot leak into the result.
+		if c.Status != f.Status {
+			continue
+		}
+		if !matchesCandidateFilter(c, f, false) {
+			continue
+		}
+		all = append(all, c)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("list candidates by status index scan: %w", err)
+	}
+	return all, nil
+}
+
+// ListCandidatesAfterID is the keyset-paged sibling of ListCandidates, for
+// callers that must stream a whole filtered backlog (dedup.drain-stale). It
+// returns up to limit candidates matching f whose ID is strictly greater than
+// afterID, in ASCENDING ID order. The caller passes the last returned row's ID
+// as the next afterID; an empty or short result means the scan is exhausted.
+// f.Limit and f.Offset are ignored.
+//
+// Why not ListCandidates + Offset: ListCandidates materialises, filters and
+// similarity-sorts the WHOLE matching set on every call and then slices out
+// [Offset, Offset+Limit), so paging an N-row backlog in pages of P costs
+// O(N) per page and O(N²/P) for the run — for ~384K pending exact rows in
+// 500-row pages that is ~768 full scans and ~295M record decodes. Offset
+// paging is also unstable against concurrent writers: a scanner inserting or
+// resolving rows mid-run shifts every later offset, and sort.Slice is not a
+// stable sort for the many rows that tie on similarity, so rows could be
+// skipped or seen twice. Seeking the Pebble iterator to the cursor key costs
+// O(P + non-matching rows skipped) per page instead, and a row inserted
+// mid-run gets a higher ID, so it is picked up at the end, never
+// double-counted.
+//
+// Read paths mirror ListCandidates exactly: the "dedup:s:<status>:" index
+// when f.Status is set and the index is built, otherwise the full "dedup:r:"
+// record range (fail-open, never dropping a row to an incomplete index).
+// Both key families encode the ID as %016x, so key order is ID order.
+func (s *EmbeddingStore) ListCandidatesAfterID(f CandidateFilter, afterID int64, limit int) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list candidates after id: limit must be positive, got %d", limit)
+	}
+	if afterID < 0 {
+		afterID = 0
+	}
+	f.Search = strings.ToLower(strings.TrimSpace(f.Search))
+
+	// The Locked variant: closeMu.RLock is already held (see its doc for why a
+	// recursive RLock deadlocks).
+	if f.Status != "" && s.isCandidateStatusIndexBuiltLocked() {
+		prefix := dedupStatusIdxKey(f.Status, 0)
+		prefix = prefix[:len(prefix)-16] // "dedup:s:<status>:"
+		iter, err := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: dedupStatusIdxKey(f.Status, afterID+1),
+			UpperBound: prefixUpperBound(prefix),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list candidates after id (status index): %w", err)
+		}
+		defer iter.Close()
+
+		out := make([]DedupCandidate, 0, limit)
+		for iter.First(); iter.Valid() && len(out) < limit; iter.Next() {
+			id, err := strconv.ParseInt(string(iter.Key()[len(prefix):]), 16, 64)
+			if err != nil {
+				continue
+			}
+			val, closer, err := s.db.Get(dedupRecKey(id))
+			if err == pebble.ErrNotFound {
+				continue // dangling index row — tolerated, as in listCandidatesByStatusIndex.
+			}
+			if err != nil {
+				return nil, fmt.Errorf("list candidates after id fetch %d: %w", id, err)
+			}
+			var rec candRec
+			unmarshalErr := json.Unmarshal(val, &rec)
+			closer.Close()
+			if unmarshalErr != nil {
+				continue
+			}
+			c := candRecToCandidate(id, rec)
+			// A stale index row whose record has since changed status must not leak.
+			if c.Status != f.Status || !matchesCandidateFilter(c, f, false) {
+				continue
+			}
+			out = append(out, c)
+		}
+		if err := iter.Error(); err != nil {
+			return nil, fmt.Errorf("list candidates after id (status index) scan: %w", err)
+		}
+		return out, nil
+	}
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: dedupRecKey(afterID + 1),
+		UpperBound: prefixUpperBound([]byte(dedupRecPfx)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list candidates after id: %w", err)
+	}
+	defer iter.Close()
+
+	out := make([]DedupCandidate, 0, limit)
+	for iter.First(); iter.Valid() && len(out) < limit; iter.Next() {
+		id, err := strconv.ParseInt(string(iter.Key())[len(dedupRecPfx):], 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		c := candRecToCandidate(id, rec)
+		if !matchesCandidateFilter(c, f, true) {
+			continue
+		}
+		out = append(out, c)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("list candidates after id scan: %w", err)
+	}
+	return out, nil
+}
+
+// matchesCandidateFilter applies CandidateFilter's fields to c. When
+// checkStatus is false, the Status field is assumed already satisfied (the
+// indexed read path pre-filtered by status via the prefix scan) and is
+// skipped here.
+func matchesCandidateFilter(c DedupCandidate, f CandidateFilter, checkStatus bool) bool {
+	if f.EntityType != "" && c.EntityType != f.EntityType {
+		return false
+	}
+	if checkStatus && f.Status != "" && c.Status != f.Status {
+		return false
+	}
+	if f.Layer != "" && c.Layer != f.Layer {
+		return false
+	}
+	if f.MinSimilarity != nil && (c.Similarity == nil || *c.Similarity < *f.MinSimilarity) {
+		return false
+	}
+	if f.MaxSimilarity != nil && (c.Similarity == nil || *c.Similarity > *f.MaxSimilarity) {
+		return false
+	}
+	if f.Band != "" && c.Band != f.Band {
+		return false
+	}
+	if f.Source != "" && c.Source != f.Source {
+		return false
+	}
+	// Either side matches: a candidate is a duplicate OF this entity whichever
+	// position the pair-ordering happened to put it in.
+	if f.EntityID != "" && c.EntityAID != f.EntityID && c.EntityBID != f.EntityID {
+		return false
+	}
+	if f.SeriesScoped {
+		if _, ok := f.SeriesBookIDs[c.EntityAID]; !ok {
+			return false
+		}
+		if _, ok := f.SeriesBookIDs[c.EntityBID]; !ok {
+			return false
+		}
+	}
+	// Search unions across two SOURCES -- the candidate row and the book joined
+	// to it -- which is what makes it different from the EntityID clause above.
+	// That one also accepts either side, but of a single row. Everything here
+	// still AND's with the clauses above, so search narrows within the other
+	// filters rather than escaping them.
+	if (f.Search != "" || len(f.SearchEntityIDs) > 0) && !candidateMatchesSearch(c, f) {
+		return false
+	}
+	return true
+}
+
+// candidateMatchesSearch reports whether c matches f.Search, on either the
+// candidate row's own fields or -- via the pre-resolved f.SearchEntityIDs set
+// -- the book joined to either side of the pair.
+//
+// f.Search is already lower-cased and trimmed by ListCandidates, which does it
+// once per request rather than once per candidate.
+func candidateMatchesSearch(c DedupCandidate, f CandidateFilter) bool {
+	if _, ok := f.SearchEntityIDs[c.EntityAID]; ok {
+		return true
+	}
+	if _, ok := f.SearchEntityIDs[c.EntityBID]; ok {
+		return true
+	}
+	// Everything below needs a needle. Without this guard the loops below run
+	// with an empty f.Search, and strings.Contains(x, "") is TRUE for every x
+	// -- so a caller passing only SearchEntityIDs would match every row on
+	// Layer and get the whole library back while looking filtered.
+	if f.Search == "" {
+		return false
+	}
+	// Layer and Band are the two the UI exposes as its own dropdowns, but they
+	// are searchable as free text too -- dropping them would silently stop
+	// matching what the old client-side filter matched, with no error surface.
+	// Source rides along so "manual" also finds scanner rows a human pinned,
+	// which keep their scanner Layer.
+	for _, field := range []string{c.Layer, c.Band, c.Source} {
+		if field != "" && strings.Contains(strings.ToLower(field), f.Search) {
+			return true
+		}
+	}
+	// Entity IDs match by PREFIX, not substring. They are ULIDs (Crockford
+	// base32), so a substring test makes every short needle match most of the
+	// library on ID alone -- a one-character search would return essentially
+	// the whole queue and call it a result. Nobody searches for the middle of
+	// an ID; pasting one, or its leading characters, is the real use case.
+	for _, id := range []string{c.EntityAID, c.EntityBID} {
+		if id != "" && strings.HasPrefix(strings.ToLower(id), f.Search) {
+			return true
+		}
+	}
+	return false
+}
+
+// paginateCandidates sorts by similarity descending (mirrors SQL ORDER BY
+// COALESCE(similarity,0) DESC) and applies f.Limit/f.Offset, returning the
+// page plus the total matching count. Shared by both the full-scan and
+// indexed ListCandidates read paths so pagination stays byte-for-byte
+// identical between them.
+func paginateCandidates(all []DedupCandidate, f CandidateFilter) ([]DedupCandidate, int) {
+	sort.Slice(all, func(i, j int) bool {
+		si, sj := 0.0, 0.0
+		if all[i].Similarity != nil {
+			si = *all[i].Similarity
+		}
+		if all[j].Similarity != nil {
+			sj = *all[j].Similarity
+		}
+		return si > sj
+	})
+
+	total := len(all)
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	start := min(f.Offset, total)
+	end := min(start+limit, total)
+	return all[start:end], total
+}
+
+// ListCandidatesForEntity returns all dedup candidates that involve the given
+// entity on either side, using the "dedup:e:" secondary index for O(k) lookup
+// instead of a full-table scan. status="" returns all statuses.
+func (s *EmbeddingStore) ListCandidatesForEntity(entityType, entityID, status string) ([]DedupCandidate, error) {
+	return s.listCandidatesForEntity(entityType, entityID, status, false)
+}
+
+// ListCandidatesForEntityStrict is ListCandidatesForEntity failing on an
+// index key or a candidate record it cannot read, where the lenient read
+// skips it: a reader that vetoes a write on a dismissal (the duplicate-copies
+// and fragment fixers' Replan) cannot tell a skipped row from no dismissal.
+// An index entry whose record is gone is still skipped: it names no decision.
+func (s *EmbeddingStore) ListCandidatesForEntityStrict(entityType, entityID, status string) ([]DedupCandidate, error) {
+	return s.listCandidatesForEntity(entityType, entityID, status, true)
+}
+
+func (s *EmbeddingStore) listCandidatesForEntity(entityType, entityID, status string, strict bool) ([]DedupCandidate, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	prefix := []byte(dedupEntityPfx + entityType + ":" + entityID + ":")
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("entity index scan: %w", err)
+	}
+	defer iter.Close()
+
+	pfxLen := len(dedupEntityPfx) + len(entityType) + 1 + len(entityID) + 1
+	var results []DedupCandidate
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key()[pfxLen:])
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("entity index key %q is unreadable: %w", iter.Key(), err)
+			}
+			continue
+		}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue // stale index entry — tolerated, cleaned up on next UpsertCandidate
+		}
+		if err != nil {
+			return nil, fmt.Errorf("entity candidate fetch %d: %w", id, err)
+		}
+		var rec candRec
+		unmarshalErr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if unmarshalErr != nil {
+			if strict {
+				return nil, fmt.Errorf("candidate %d is unreadable: %w", id, unmarshalErr)
+			}
+			continue
+		}
+		if status != "" && rec.Status != status {
+			continue
+		}
+		results = append(results, candRecToCandidate(id, rec))
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("entity candidate scan: %w", err)
+	}
+	return results, nil
+}
+
+// BackfillEntityIndex writes "dedup:e:" index entries for any candidate that
+// was stored before the entity index was introduced. Safe to call repeatedly —
+// writes are idempotent. Returns the number of candidates processed.
+func (s *EmbeddingStore) BackfillEntityIndex() (int, error) {
+	res, err := s.BackfillCandidateEntityIndex()
+	return res.Indexed, err
+}
+
+// CandidateIndexBackfill reports BackfillCandidateEntityIndex's pass.
+type CandidateIndexBackfill struct {
+	Indexed, Unreadable int
+}
+
+// BackfillCandidateEntityIndex is BackfillEntityIndex with the count of
+// records it could not decode (and so could not index). It is migration 64's
+// body: until it ran, every candidate written before 2026-06-22 that no
+// status change had touched since was invisible to ListCandidatesForEntity,
+// so a fixer's Replan missed its verdict.
+//
+// Rows go out in NoSync batches of labelBackfillBatch with a final Sync: one
+// fsync per candidate made a boot-time pass over ~400k rows take minutes.
+// s.mu is not held; a concurrent DeleteCandidate can at worst leave an index
+// row whose record is gone, which every entity reader already skips.
+func (s *EmbeddingStore) BackfillCandidateEntityIndex() (CandidateIndexBackfill, error) {
+	var res CandidateIndexBackfill
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return res, err
+	}
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return res, fmt.Errorf("backfill entity index scan: %w", err)
+	}
+	defer iter.Close()
+
+	b := s.db.NewBatch()
+	pending, batches := 0, 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			res.Unreadable++
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			res.Unreadable++
+			continue
+		}
+		if err := setCandidateEntityIndex(b, rec, id); err != nil {
+			b.Close()
+			return res, fmt.Errorf("backfill entity index stage %d: %w", id, err)
+		}
+		res.Indexed++
+		if pending++; pending >= labelBackfillBatch {
+			if err := b.Commit(pebble.NoSync); err != nil {
+				b.Close()
+				return res, fmt.Errorf("backfill entity index write: %w", err)
+			}
+			b.Close()
+			b, pending = s.db.NewBatch(), 0
+			batches++
+			logDedupBackfillProgress("candidates", batches, res.Indexed, res.Unreadable)
+		}
+	}
+	if err := iter.Error(); err != nil {
+		b.Close()
+		return res, fmt.Errorf("backfill entity index: %w", err)
+	}
+	err = b.Commit(pebble.Sync)
+	b.Close()
+	if err != nil {
+		return res, fmt.Errorf("backfill entity index write: %w", err)
+	}
+	return res, nil
+}
+
+// UpdateCandidateStatus updates the status of a single candidate by ID.
+//
+// Unlike updateCandidateIf (used by UpdateCandidateScore/UpdateCandidateLLM,
+// neither of which touches Status), this maintains the "dedup:s:" status
+// secondary index (INIT-2 T4): the old-status row is deleted and the
+// new-status row is set in the SAME pebble.Batch as the record write, using
+// candidateWriteOpts (NoSync — see PR #1855 / candidateWriteOpts doc). No new
+// lock, no new commit beyond the single write this function already made.
+func (s *EmbeddingStore) UpdateCandidateStatus(id int64, status string) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	// s.mu is the lock UpsertCandidateNew and EnqueueManualCandidate hold.
+	// Without it a pin landing between this read and this write is a lost
+	// update: the write puts back a record read before the pin, erasing the
+	// manual Source mark.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found, err := s.readCandRecForUpdate(id)
+	if err != nil || !found {
+		return err
+	}
+	return s.writeCandidateStatusLocked(id, rec, status)
+}
+
+// readCandRecForUpdate reads candidate id for a read-modify-write. found is
+// false (with a nil error) when the row does not exist.
+func (s *EmbeddingStore) readCandRecForUpdate(id int64) (candRec, bool, error) {
+	val, closer, err := s.db.Get(dedupRecKey(id))
+	if err == pebble.ErrNotFound {
+		return candRec{}, false, nil
+	}
+	if err != nil {
+		return candRec{}, false, fmt.Errorf("update candidate status read %d: %w", id, err)
+	}
+	var rec candRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return candRec{}, false, fmt.Errorf("update candidate status unmarshal %d: %w", id, err)
+	}
+	closer.Close()
+	return rec, true, nil
+}
+
+// writeCandidateStatusLocked writes rec with its status set to status and
+// moves the status index row. s.mu must be held.
+func (s *EmbeddingStore) writeCandidateStatusLocked(id int64, rec candRec, status string) error {
+	oldStatus := rec.Status
+	rec.Status = status
+	rec.UpdatedAt = time.Now().UnixNano()
+
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("update candidate status marshal %d: %w", id, err)
+	}
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	if err := b.Set(dedupRecKey(id), data, nil); err != nil {
+		return err
+	}
+	if oldStatus != "" && oldStatus != status {
+		if err := b.Delete(dedupStatusIdxKey(oldStatus, id), nil); err != nil {
+			return err
+		}
+	}
+	if err := b.Set(dedupStatusIdxKey(status, id), nil, nil); err != nil {
+		return err
+	}
+	if err := setCandidateEntityIndex(b, rec, id); err != nil {
+		return err
+	}
+	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
+}
+
+// UpdateCandidateScore persists a new ScoreBreakdown, Band, and
+// FormulaVersion onto an existing candidate.
+//
+// A manual (pinned) row is refused with ErrManualCandidateProtected and left
+// untouched: a pin freezes the score, as in UpdateCandidateScores and
+// UpsertCandidateNew. The check runs under s.mu, the lock
+// EnqueueManualCandidate holds, so a pin landing after the caller listed the
+// row is still honoured. A missing row is a no-op, as before. Bulk callers
+// should use UpdateCandidateScores + SyncCandidateWrites instead.
+func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error {
+	var guardErr error
+	err := s.updateCandidateIf(id, func(rec *candRec) bool {
+		if rec.Source == CandidateSourceManual {
+			guardErr = fmt.Errorf("update score on candidate %d: %w", id, ErrManualCandidateProtected)
+			return false
+		}
+		// A new score replaces the old one, but never the record of which
+		// exact rule created the row (models.CarryProvenance).
+		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, score)
+		rec.Band = band
+		rec.FormulaVersion = formulaVersion
+		rec.UpdatedAt = time.Now().UnixNano()
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return guardErr
+}
+
+// UpdateCandidateLLM stores the LLM verdict and reason for a candidate and
+// sets the layer to 'llm'.
+//
+// An LLM verdict is an automated write, so it is guarded like
+// ReclassifyCandidate, under the same lock EnqueueManualCandidate holds: a
+// manual (human-pinned) row returns ErrManualCandidateProtected and a row that
+// is no longer pending returns ErrCandidateStatusChanged, and neither is
+// touched. An OpenAI batch can run for hours, so a pair a human pinned or
+// decided after the batch was submitted must be re-checked here, at write
+// time, not at submit time. A missing row is a no-op, as before.
+func (s *EmbeddingStore) UpdateCandidateLLM(id int64, verdict, reason string) error {
+	var guardErr error
+	err := s.updateCandidateIf(id, func(rec *candRec) bool {
+		if rec.Source == CandidateSourceManual {
+			guardErr = fmt.Errorf("record LLM verdict on candidate %d: %w", id, ErrManualCandidateProtected)
+			return false
+		}
+		if rec.Status != "pending" {
+			guardErr = fmt.Errorf("record LLM verdict on candidate %d (status %q): %w", id, rec.Status, ErrCandidateStatusChanged)
+			return false
+		}
+		rec.LLMVerdict = verdict
+		rec.LLMReason = reason
+		rec.Layer = "llm"
+		rec.UpdatedAt = time.Now().UnixNano()
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return guardErr
+}
+
+// CandidateScoreUpdate is one row's re-computed score for UpdateCandidateScores.
+type CandidateScoreUpdate struct {
+	ID             int64
+	Score          *models.UnifiedDedupScore
+	Band           string
+	FormulaVersion string
+}
+
+// UpdateCandidateScores is the bulk form of UpdateCandidateScore, built for
+// Engine.Rescore's whole-backlog pass (27k+ pending rows in prod).
+//
+// Every row's read-modify-write happens under s.mu — the SAME lock
+// UpsertCandidateNew holds — so a concurrent dedup.full-scan re-upserting a
+// pair can no longer interleave with the re-band on dedupRecKey(id) and lose
+// one side's fields (last writer wins was the failure mode; the per-row
+// updateCandidate path skipped s.mu entirely). All rows in the call go into
+// ONE Pebble batch committed with candidateWriteOpts (NoSync): the per-row
+// pebble.Sync that updateCandidate uses is exactly the fsync-per-row pattern
+// candidateWriteOpts documents as the 2026-07-06 nine-hour stall, and the
+// old Rescore did it once per changed row. Durability is restored by the
+// caller with ONE SyncCandidateWrites() after its last batch.
+//
+// Returns the number of rows written, the ids of rows that could not be
+// updated individually (record missing — deleted since it was listed — or
+// undecodable; the rest of the batch still commits), and a non-nil error only
+// when the batch as a whole failed, in which case NONE of the rows were
+// written and applied is 0.
+func (s *EmbeddingStore) UpdateCandidateScores(updates []CandidateScoreUpdate) (applied int, failed []int64, err error) {
+	if len(updates) == 0 {
+		return 0, nil, nil
+	}
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return 0, nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	now := time.Now().UnixNano()
+	for _, u := range updates {
+		val, closer, err := s.db.Get(dedupRecKey(u.ID))
+		if err == pebble.ErrNotFound {
+			failed = append(failed, u.ID)
+			continue
+		}
+		if err != nil {
+			return 0, nil, fmt.Errorf("update candidate scores read %d: %w", u.ID, err)
+		}
+		var rec candRec
+		if err := json.Unmarshal(val, &rec); err != nil {
+			closer.Close()
+			failed = append(failed, u.ID)
+			continue
+		}
+		closer.Close()
+		// A manual (human-pinned) row is never re-banded by an automated
+		// pass. Engine.Rescore skips them when it lists; this catches a pin
+		// that landed after the list, since s.mu is the lock
+		// EnqueueManualCandidate holds. The row is counted neither applied
+		// nor failed.
+		if rec.Source == CandidateSourceManual {
+			continue
+		}
+		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, u.Score)
+		rec.Band = u.Band
+		rec.FormulaVersion = u.FormulaVersion
+		rec.UpdatedAt = now
+		data, err := json.Marshal(rec)
+		if err != nil {
+			failed = append(failed, u.ID)
+			continue
+		}
+		if err := b.Set(dedupRecKey(u.ID), data, nil); err != nil {
+			return 0, nil, fmt.Errorf("update candidate scores set %d: %w", u.ID, err)
+		}
+		applied++
+	}
+	if applied == 0 {
+		return 0, failed, nil
+	}
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync — see candidateWriteOpts (#19)
+		return 0, nil, fmt.Errorf("update candidate scores commit: %w", err)
+	}
+	return applied, failed, nil
+}
+
+// SyncCandidateWrites makes every candidate write committed so far durable
+// with a single WAL fsync. Pebble's WAL is sequential, so one Sync write
+// after a run of NoSync batches (UpdateCandidateScores, UpsertCandidateNew)
+// covers all of them — the one-fsync-per-run pattern candidateWriteOpts asks
+// for instead of one per row.
+func (s *EmbeddingStore) SyncCandidateWrites() error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	return s.db.SyncWAL()
+}
+
+// updateCandidateIf is the single-row read-modify-write behind
+// UpdateCandidateScore, UpdateCandidateLLM and RecordCandidateLLMAdvice.
+// mutFn returns false to leave the row unwritten. The check and the write
+// happen under s.mu, so a guard in mutFn sees the row as it is at write time,
+// and a concurrent UpsertCandidateNew on the same row cannot be a lost update.
+// The per-row pebble.Sync stays — these are one-off writes, not the
+// whole-backlog loop; bulk callers use UpdateCandidateScores +
+// SyncCandidateWrites.
+func (s *EmbeddingStore) updateCandidateIf(id int64, mutFn func(*candRec) bool) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	val, closer, err := s.db.Get(dedupRecKey(id))
+	if err == pebble.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("update candidate read %d: %w", id, err)
+	}
+	var rec candRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return fmt.Errorf("update candidate unmarshal %d: %w", id, err)
+	}
+	closer.Close()
+
+	if !mutFn(&rec) {
+		return nil
+	}
+
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("update candidate marshal %d: %w", id, err)
+	}
+	return s.db.Set(dedupRecKey(id), data, pebble.Sync)
+}
+
+// DeleteCandidate removes a single candidate row by ID.
+func (s *EmbeddingStore) DeleteCandidate(id int64) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	// Under s.mu (the lock EnqueueManualCandidate holds) so the manual
+	// backstop below checks the row as it is at delete time: without it a pin
+	// landing between this read and the delete is lost with the row.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	val, closer, err := s.db.Get(dedupRecKey(id))
+	if err == pebble.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete candidate read %d: %w", id, err)
+	}
+	var rec candRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return fmt.Errorf("delete candidate unmarshal %d: %w", id, err)
+	}
+	closer.Close()
+	// Backstop: every DeleteCandidate caller is an automated pass (unified
+	// scoring's suppression, purge-stale, the acoustid veto, acoustid reset).
+	// Each one skips manual candidates itself; this refuses the ones that
+	// slip past so a human's review request cannot vanish silently. A human
+	// ends a manual candidate by dismissing or merging it (a status change),
+	// and a deleted book's candidates go through the cascade in
+	// deleteDedupCandidatesForBook, which does not come through here.
+	if rec.Source == CandidateSourceManual {
+		return fmt.Errorf("delete candidate %d: %w", id, ErrManualCandidateProtected)
+	}
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	deleteCandidateKeys(b, id, rec)
+	return b.Commit(candidateWriteOpts) // NoSync — see candidateWriteOpts (#19)
+}
+
+// deleteCandidatesBeforeCommit is a TEST seam: when set, DeleteCandidates calls
+// it with the store lock held, after the batch is staged and before it
+// commits. A test uses it to land a concurrent writer in exactly the window the
+// lock exists to close. Nil in production.
+var deleteCandidatesBeforeCommit atomic.Pointer[func()]
+
+// DeleteCandidates removes the candidates named by ids in ONE lock acquisition
+// and ONE Pebble batch, and returns how many it deleted.
+//
+// WHY it exists: DeleteCandidate holds s.mu for the whole call, so a worker
+// pool calling it per row is serialized end to end and buys nothing. A
+// whole-library sweep (acoustid.reset-all drops every acoustid-layer row)
+// pays the lock and the commit once per chunk instead of once per row.
+//
+// Unlike DeleteCandidate, a manual candidate or an ID that no longer exists is
+// skipped rather than reported: a sweep that names a thousand rows should not
+// abort on, or lose track of, the one a human pinned meanwhile. The manual
+// check is the same backstop DeleteCandidate applies, read under the lock, so
+// a pin landing after the caller listed the rows is still honoured. Callers
+// that need the per-row error use DeleteCandidate.
+func (s *EmbeddingStore) DeleteCandidates(ids []int64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	deleted := 0
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		val, closer, err := s.db.Get(dedupRecKey(id))
+		if err == pebble.ErrNotFound {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("delete candidates read %d: %w", id, err)
+		}
+		var rec candRec
+		uerr := json.Unmarshal(val, &rec)
+		closer.Close()
+		if uerr != nil {
+			return 0, fmt.Errorf("delete candidates unmarshal %d: %w", id, uerr)
+		}
+		if rec.Source == CandidateSourceManual {
+			continue
+		}
+		deleteCandidateKeys(b, id, rec)
+		deleted++
+	}
+	if deleted == 0 {
+		return 0, nil
+	}
+	if hook := deleteCandidatesBeforeCommit.Load(); hook != nil {
+		(*hook)()
+	}
+	if err := b.Commit(candidateWriteOpts); err != nil { // NoSync, as DeleteCandidate (#19)
+		return 0, fmt.Errorf("delete candidates commit: %w", err)
+	}
+	return deleted, nil
+}
+
+// deleteCandidateKeys stages the removal of every key that represents candidate
+// `id` into `b`: the record, the pair key, BOTH entity-index sides, and the
+// status index. The caller owns the batch and chooses its write options —
+// DeleteCandidate commits NoSync, while PebbleStore.DeleteBook folds these into
+// its own pebble.Sync batch.
+//
+// Factored out so the two callers cannot drift apart: a secondary index added
+// to the candidate keyspace is torn down by both, or by neither. Every dangling
+// -row bug recorded in DeleteBook's comments (work index, hash indexes,
+// signature sidecar) came from exactly that kind of drift — one writer gained an
+// index and the deleter never learned about it.
+func deleteCandidateKeys(b *GatedBatch, id int64, rec candRec) {
+	_ = b.Delete(dedupRecKey(id), nil)
+	_ = b.Delete(dedupPairKey(rec.EntityType, rec.EntityAID, rec.EntityBID), nil)
+	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityAID, id), nil)
+	_ = b.Delete(dedupEntityKey(rec.EntityType, rec.EntityBID, id), nil)
+	_ = b.Delete(dedupStatusIdxKey(rec.Status, id), nil) // INIT-2 T4
+}
+
+// readCandRec loads and decodes one candidate record. Returns ok=false for both
+// "absent" and "corrupt", which teardown treats identically.
+func readCandRec(db *GatedDB, id int64) (candRec, bool) {
+	val, closer, err := db.Get(dedupRecKey(id))
+	if err != nil {
+		return candRec{}, false
+	}
+	var rec candRec
+	unmarshalErr := json.Unmarshal(val, &rec)
+	closer.Close()
+	if unmarshalErr != nil {
+		return candRec{}, false
+	}
+	return rec, true
+}
+
+// deleteDedupCandidatesForBook stages the teardown of every PENDING dedup
+// candidate that references book `bookID` on either side into `b`, via the
+// "dedup:e:book:<id>:" entity index — an O(k) prefix scan over that book's own
+// candidates, not a scan of the whole candidate keyspace.
+//
+// Deliberately NOT built on ListCandidatesForEntity: that reader tolerates a
+// missing or corrupt record by skipping the row, which is right for a read but
+// wrong for teardown. Skipping here would leave the entity-index entry we are
+// standing on in place, converting a candidate orphan into a stale *index*
+// orphan that no later pass revisits. Every branch below deletes the index entry
+// it found.
+func deleteDedupCandidatesForBook(db *GatedDB, b *GatedBatch, bookID string) error {
+	if bookID == "" {
+		return nil
+	}
+	prefix := []byte(dedupEntityPfx + "book:" + bookID + ":")
+	upper := prefixUpperBound(prefix)
+	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return fmt.Errorf("dedup candidate cascade scan %s: %w", bookID, err)
+	}
+	defer iter.Close()
+
+	pfxLen := len(prefix)
+	for iter.First(); iter.Valid(); iter.Next() {
+		// iter.Key() is only valid until the next Next(); copy before staging.
+		key := append([]byte(nil), iter.Key()...)
+		id, parseErr := strconv.ParseInt(string(key[pfxLen:]), 16, 64)
+		if parseErr != nil {
+			// Unparseable index entry: it names no candidate we can reach, and
+			// it can never resolve. Drop it rather than leaving it behind.
+			_ = b.Delete(key, nil)
+			continue
+		}
+		rec, ok := readCandRec(db, id)
+		if !ok {
+			// Record absent or corrupt. Delete what we can still name: this
+			// index entry and the record key. The pair key, the far side's
+			// entity entry and the status entry name values that only the
+			// record carried, so they cannot be derived here.
+			//
+			// The far side's entry is left behind, and that is inert rather
+			// than merely tolerable: the entity index has exactly two
+			// consumers — ListCandidatesForEntity and this function — and both
+			// re-resolve every hit through dedupRecKey and skip an entry that
+			// does not resolve. Nothing reads the index and trusts it. Do not
+			// add a consumer that does without also making this branch
+			// resolve the far side first.
+			_ = b.Delete(key, nil)
+			_ = b.Delete(dedupRecKey(id), nil)
+			continue
+		}
+		// Only PENDING candidates are torn down. "merged" and "dismissed" rows are
+		// historical records — they are what populates the Merged / Dismissed tabs
+		// in the dedup UI, and a merge legitimately HARD-DELETES the merged-away
+		// book (see internal/dedup/book_dedup.go), so those rows reference a
+		// deleted book BY DESIGN and must outlive it. Cascading over them would
+		// empty the Merged tab on every merge.
+		//
+		// This is deliberately the same rule PurgeStaleCandidates enforces, and
+		// for the same reason its own comment gives. A non-pending row referencing
+		// a deleted book is not a stuck work item: it never appears in the pending
+		// queue and is never re-scored, so leaving it costs nothing.
+		if rec.Status != "pending" {
+			continue
+		}
+		deleteCandidateKeys(b, id, rec)
+	}
+	return iter.Error()
+}
+
+// MarkCandidatesAsMergedForEntity sets status="merged" on every candidate row
+// that references the given entity on either side (entity_a_id OR entity_b_id),
+// regardless of current layer or status — *except* rows whose status is already
+// "merged", which are left untouched so the returned count reflects only newly
+// transitioned rows.
+//
+// Use case (MAYDEPLOY-B3): when a Merge operation collapses book B into book A,
+// any other dedup candidate that still references book B (e.g. a separate row
+// comparing book B vs book C) becomes a stale "orphan" — clicking Merge on it
+// would fail because book B is gone. Marking those rows as merged here causes
+// the candidates UI to drop them on its next refresh, instead of the user
+// having to dismiss each one manually.
+//
+// Returns the number of rows whose status was newly changed.
+func (s *EmbeddingStore) MarkCandidatesAsMergedForEntity(entityType, entityID string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	if entityType == "" || entityID == "" {
+		return 0, nil
+	}
+
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("mark candidates merged for entity: %w", err)
+	}
+
+	type target struct {
+		id  int64
+		rec candRec
+	}
+	var targets []target
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		if rec.EntityType != entityType {
+			continue
+		}
+		if rec.EntityAID != entityID && rec.EntityBID != entityID {
+			continue
+		}
+		if rec.Status == "merged" {
+			continue
+		}
+		targets = append(targets, target{id: id, rec: rec})
+	}
+	iter.Close()
+	if err := iter.Error(); err != nil {
+		return 0, err
+	}
+
+	now := time.Now().UnixNano()
+	b := s.db.NewBatch()
+	defer b.Close()
+	for _, t := range targets {
+		oldStatus := t.rec.Status
+		t.rec.Status = "merged"
+		t.rec.UpdatedAt = now
+		data, err := json.Marshal(t.rec)
+		if err != nil {
+			return 0, fmt.Errorf("mark candidates merged marshal %d: %w", t.id, err)
+		}
+		if err := b.Set(dedupRecKey(t.id), data, nil); err != nil {
+			return 0, fmt.Errorf("mark candidates merged set %d: %w", t.id, err)
+		}
+		// Maintain the "dedup:s:" status secondary index in the SAME batch,
+		// mirroring UpdateCandidateStatus: delete the old-status row, set the
+		// new one. Without this, bulk merges left stale dedup:s:pending: rows
+		// behind (and never wrote dedup:s:merged:), so the indexed read path
+		// kept surfacing merged candidates as pending. The "dedup:e:" entity
+		// rows keep naming the same entities; they are re-set below only so
+		// a row stored before the entity index existed gains them.
+		if oldStatus != "" && oldStatus != "merged" {
+			if err := b.Delete(dedupStatusIdxKey(oldStatus, t.id), nil); err != nil {
+				return 0, fmt.Errorf("mark candidates merged status-index delete %d: %w", t.id, err)
+			}
+		}
+		if err := b.Set(dedupStatusIdxKey("merged", t.id), nil, nil); err != nil {
+			return 0, fmt.Errorf("mark candidates merged status-index set %d: %w", t.id, err)
+		}
+		// A legacy row may have no "dedup:e:" rows at all; a merged verdict
+		// must be findable by entity (setCandidateEntityIndex).
+		if err := setCandidateEntityIndex(b, t.rec, t.id); err != nil {
+			return 0, fmt.Errorf("mark candidates merged entity-index set %d: %w", t.id, err)
+		}
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return 0, fmt.Errorf("mark candidates merged commit: %w", err)
+	}
+	return len(targets), nil
+}
+
+// RemoveCandidatesForEntity deletes all candidate rows that involve the given
+// entity (as either entity_a or entity_b). Returns the number of rows deleted.
+func (s *EmbeddingStore) RemoveCandidatesForEntity(entityType, entityID string) (int, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return 0, fmt.Errorf("remove candidates for entity: %w", err)
+	}
+
+	type target struct {
+		id  int64
+		rec candRec
+	}
+	var targets []target
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		if rec.EntityType == entityType && (rec.EntityAID == entityID || rec.EntityBID == entityID) {
+			targets = append(targets, target{id: id, rec: rec})
+		}
+	}
+	iter.Close()
+	if err := iter.Error(); err != nil {
+		return 0, err
+	}
+
+	b := s.db.NewBatch()
+	defer b.Close()
+	for _, t := range targets {
+		// Mirror DeleteCandidate: clean ALL four key classes, not just the
+		// record + pair keys — otherwise every removal leaked two "dedup:e:"
+		// entity rows and one "dedup:s:" status row forever.
+		_ = b.Delete(dedupRecKey(t.id), nil)
+		_ = b.Delete(dedupPairKey(t.rec.EntityType, t.rec.EntityAID, t.rec.EntityBID), nil)
+		_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityAID, t.id), nil)
+		_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityBID, t.id), nil)
+		_ = b.Delete(dedupStatusIdxKey(t.rec.Status, t.id), nil)
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		return 0, err
+	}
+	return len(targets), nil
+}
+
+// CanonicalizeCandidates rewrites existing rows so each logical pair has
+// exactly one entry with entity_a_id < entity_b_id lexicographically.
+// Returns (rewritten, deleted) counts for logging.
+func (s *EmbeddingStore) CanonicalizeCandidates() (rewritten, deleted int, err error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, iterErr := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if iterErr != nil {
+		return 0, 0, fmt.Errorf("canonicalize scan: %w", iterErr)
+	}
+
+	type nonCanon struct {
+		id  int64
+		rec candRec
+	}
+	var targets []nonCanon
+	for iter.First(); iter.Valid(); iter.Next() {
+		idHex := string(iter.Key())[len(dedupRecPfx):]
+		id, err := strconv.ParseInt(idHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		if rec.EntityAID > rec.EntityBID {
+			targets = append(targets, nonCanon{id: id, rec: rec})
+		}
+	}
+	iter.Close()
+	if err := iter.Error(); err != nil {
+		return 0, 0, err
+	}
+
+	for _, t := range targets {
+		canonA, canonB := t.rec.EntityBID, t.rec.EntityAID // swapped = canonical order
+		canonPairKey := dedupPairKey(t.rec.EntityType, canonA, canonB)
+		oldPairKey := dedupPairKey(t.rec.EntityType, t.rec.EntityAID, t.rec.EntityBID)
+
+		_, existingCloser, existingErr := s.db.Get(canonPairKey)
+		if existingErr == pebble.ErrNotFound {
+			// No canonical row — swap in place.
+			t.rec.EntityAID = canonA
+			t.rec.EntityBID = canonB
+			t.rec.UpdatedAt = time.Now().UnixNano()
+			data, err := json.Marshal(t.rec)
+			if err != nil {
+				return rewritten, deleted, fmt.Errorf("canonicalize marshal: %w", err)
+			}
+			b := s.db.NewBatch()
+			_ = b.Delete(oldPairKey, nil)
+			_ = b.Set(canonPairKey, []byte(fmt.Sprintf("%016x", t.id)), nil)
+			_ = b.Set(dedupRecKey(t.id), data, nil)
+			if err := b.Commit(pebble.Sync); err != nil {
+				b.Close()
+				return rewritten, deleted, fmt.Errorf("canonicalize swap: %w", err)
+			}
+			b.Close()
+			rewritten++
+		} else if existingErr == nil {
+			// Canonical row already exists — delete the non-canonical duplicate.
+			// Mirror DeleteCandidate: clean ALL four key classes (record, pair,
+			// entity both sides, status), not just record + pair — otherwise
+			// each canonicalized duplicate leaked its "dedup:e:" and "dedup:s:"
+			// secondary-index rows forever. The entity keys are symmetric in
+			// (A,B), so the swapped duplicate's rows are addressable directly.
+			existingCloser.Close()
+			b := s.db.NewBatch()
+			_ = b.Delete(dedupRecKey(t.id), nil)
+			_ = b.Delete(oldPairKey, nil)
+			_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityAID, t.id), nil)
+			_ = b.Delete(dedupEntityKey(t.rec.EntityType, t.rec.EntityBID, t.id), nil)
+			_ = b.Delete(dedupStatusIdxKey(t.rec.Status, t.id), nil)
+			if err := b.Commit(pebble.Sync); err != nil {
+				b.Close()
+				return rewritten, deleted, fmt.Errorf("canonicalize delete: %w", err)
+			}
+			b.Close()
+			deleted++
+		} else {
+			return rewritten, deleted, fmt.Errorf("canonicalize check canonical: %w", existingErr)
+		}
+	}
+	return rewritten, deleted, nil
+}
+
+// GetCandidateStats returns row counts grouped by entity_type, layer, and status.
+func (s *EmbeddingStore) GetCandidateStats() ([]CandidateStat, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	prefix := []byte(dedupRecPfx)
+	upper := prefixUpperBound(prefix)
+
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("get candidate stats: %w", err)
+	}
+	defer iter.Close()
+
+	type statKey struct{ entityType, layer, status string }
+	counts := map[statKey]int{}
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		var rec candRec
+		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
+			continue
+		}
+		counts[statKey{rec.EntityType, rec.Layer, rec.Status}]++
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+
+	stats := make([]CandidateStat, 0, len(counts))
+	for k, cnt := range counts {
+		stats = append(stats, CandidateStat{EntityType: k.entityType, Layer: k.layer, Status: k.status, Count: cnt})
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].EntityType != stats[j].EntityType {
+			return stats[i].EntityType < stats[j].EntityType
+		}
+		if stats[i].Layer != stats[j].Layer {
+			return stats[i].Layer < stats[j].Layer
+		}
+		return stats[i].Status < stats[j].Status
+	})
+	return stats, nil
+}
+
+// HealthStats returns diagnostic counters for the embedding store.
+func (s *EmbeddingStore) HealthStats() (EmbeddingHealthStats, error) {
+	books, err := s.CountByType("book")
+	if err != nil {
+		return EmbeddingHealthStats{}, err
+	}
+	authors, err := s.CountByType("author")
+	if err != nil {
+		return EmbeddingHealthStats{}, err
+	}
+	return EmbeddingHealthStats{VectorCount: int64(books + authors)}, nil
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+func (s *EmbeddingStore) getEmbRec(key []byte) (*embRec, error) {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	val, closer, err := s.db.Get(key)
+	if err == pebble.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read embedding record: %w", err)
+	}
+	var rec embRec
+	if err := json.Unmarshal(val, &rec); err != nil {
+		closer.Close()
+		return nil, fmt.Errorf("unmarshal embedding record: %w", err)
+	}
+	closer.Close()
+	return &rec, nil
+}
+
+func (s *EmbeddingStore) setJSON(key []byte, v any) error {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return s.db.Set(key, data, pebble.Sync)
+}
+
+func candRecToCandidate(id int64, rec candRec) DedupCandidate {
+	return DedupCandidate{
+		ID:              id,
+		EntityType:      rec.EntityType,
+		EntityAID:       rec.EntityAID,
+		EntityBID:       rec.EntityBID,
+		Layer:           rec.Layer,
+		Similarity:      rec.Similarity,
+		LLMVerdict:      rec.LLMVerdict,
+		LLMReason:       rec.LLMReason,
+		Status:          rec.Status,
+		CreatedAt:       time.Unix(0, rec.CreatedAt),
+		UpdatedAt:       time.Unix(0, rec.UpdatedAt),
+		ScoreBreakdown:  rec.ScoreBreakdown,
+		Band:            rec.Band,
+		FormulaVersion:  rec.FormulaVersion,
+		Source:          rec.Source,
+		SourceNote:      rec.SourceNote,
+		AIAdviceVerdict: rec.AdviceVerdict,
+		AIAdviceReason:  rec.AdviceReason,
+		AIAdviceAt:      adviceTime(rec.AdviceAt),
+	}
+}
+
+// adviceTime converts a stored AdviceAt to the API's optional timestamp.
+func adviceTime(ns int64) *time.Time {
+	if ns == 0 {
+		return nil
+	}
+	t := time.Unix(0, ns)
+	return &t
+}
+
+// prefixUpperBound returns the smallest key strictly greater than all keys with
+// the given prefix, suitable as PebbleDB UpperBound.
+func prefixUpperBound(prefix []byte) []byte {
+	upper := make([]byte, len(prefix))
+	copy(upper, prefix)
+	for i := len(upper) - 1; i >= 0; i-- {
+		upper[i]++
+		if upper[i] != 0 {
+			return upper[:i+1]
+		}
+	}
+	return nil // all bytes were 0xFF; no upper bound
+}
+
+// ─── Math helpers (package-level, shared with dedup engine) ──────────────────
+
+// CosineSimilarity computes the cosine similarity between two vectors using
+// float64 internally for precision. Returns 0 when either vector has zero norm.
+func CosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		ai := float64(a[i])
+		bi := float64(b[i])
+		dot += ai * bi
+		normA += ai * ai
+		normB += bi * bi
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return float32(dot / denom)
+}
+
+// encodeVector serialises a float32 slice to the v1 wire format:
+//
+//	[0x01][zstd_compressed( [f16_0 LE][f16_1 LE]… )]
+//
+// All new writes use v1.  See the version-constant block at the top of this
+// file for the rationale behind float16 being safe at our scoring thresholds.
+func encodeVector(v []float32) []byte {
+	// Encode each float32 as a little-endian float16 (IEEE 754 half-precision).
+	f16buf := make([]byte, len(v)*2)
+	for i, f := range v {
+		binary.LittleEndian.PutUint16(f16buf[i*2:], float32ToFloat16(f))
+	}
+
+	// Compress the float16 block with zstd.
+	compressed := zstdEnc.EncodeAll(f16buf, nil)
+
+	// Prepend the version byte.
+	out := make([]byte, 1+len(compressed))
+	out[0] = embVecVersion1
+	copy(out[1:], compressed)
+	return out
+}
+
+// decodeVector deserialises a vector blob produced by encodeVector (v0 or v1).
+//
+// v0 (no header byte / header byte != 0x01): raw little-endian float32 — kept
+//
+//	forever for backward compatibility with blobs written before T021.
+//
+// v1 (header byte 0x01): float16 + zstd.  Decompresses then dequantises back
+//
+//	to float32 for use in the in-memory cosine engine (chromem hydration path).
+func decodeVector(b []byte) []float32 {
+	if len(b) == 0 {
+		return nil
+	}
+
+	// Detect v1: first byte is exactly 0x01 AND the remainder is a valid zstd frame.
+	// We use a length guard: a valid 1-dim float16 vector would be at least
+	// 1 (header) + zstd_min_frame (4 bytes) = 5 bytes; anything shorter is v0.
+	if len(b) >= 5 && b[0] == embVecVersion1 {
+		decompressed, err := zstdDec.DecodeAll(b[1:], nil)
+		if err == nil && len(decompressed)%2 == 0 {
+			// Valid v1 blob — dequantise float16 → float32.
+			n := len(decompressed) / 2
+			v := make([]float32, n)
+			for i := range v {
+				v[i] = float16ToFloat32(binary.LittleEndian.Uint16(decompressed[i*2:]))
+			}
+			return v
+		}
+		// Fall through to v0 path if the zstd decode fails (shouldn't happen in
+		// normal operation, but keeps the decoder resilient against corruption).
+	}
+
+	// v0 path: raw little-endian float32.
+	n := len(b) / 4
+	v := make([]float32, n)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return v
+}
+
+// isVectorV1 returns true when the blob was encoded with the v1 scheme.
+// Used by the re-encode op to skip already-upgraded rows.
+func isVectorV1(b []byte) bool {
+	return len(b) >= 5 && b[0] == embVecVersion1
+}
+
+// EncodeVectorExported is the exported wrapper for encodeVector.
+// Used by the dedup.emb-reencode op in internal/plugins/dedup.
+func EncodeVectorExported(v []float32) []byte { return encodeVector(v) }
+
+// DecodeVectorExported is the exported wrapper for decodeVector.
+// Used by the dedup.emb-reencode op in internal/plugins/dedup.
+func DecodeVectorExported(b []byte) []float32 { return decodeVector(b) }
+
+// IsVectorV1Exported is the exported wrapper for isVectorV1.
+// Used by the dedup.emb-reencode op to skip already-upgraded rows.
+func IsVectorV1Exported(b []byte) bool { return isVectorV1(b) }
+
+// ─── IEEE 754 half-precision (float16) conversion ────────────────────────────
+//
+// We implement f32↔f16 locally so we can keep the dep graph lean.  The
+// algorithm is the standard bit-manipulation approach (Jeroen van der Zijp,
+// 2010) adapted from several public-domain Go implementations.
+//
+// Precision: 10-bit mantissa + 5-bit exponent.  The maximum representable
+// value is 65504.  Normalised OpenAI embeddings are all in [-1, 1], safely
+// within f16 range.  Subnormals are preserved correctly; ±Inf and NaN
+// round-trip correctly.
+
+// float32ToFloat16 converts an IEEE 754 single-precision float to half-precision.
+func float32ToFloat16(f float32) uint16 {
+	bits := math.Float32bits(f)
+	sign := (bits >> 16) & 0x8000
+	exp := int32((bits>>23)&0xFF) - 127 + 15
+	mant := bits & 0x007FFFFF
+
+	switch {
+	case exp <= 0:
+		// Subnormal or underflow — flush to signed zero.
+		if exp < -10 {
+			return uint16(sign)
+		}
+		// Subnormal: shift mantissa right, include the implicit leading 1.
+		mant = (mant | 0x00800000) >> uint(1-exp)
+		// Round (tie-to-even).
+		if mant&0x00001000 != 0 {
+			mant += 0x00002000
+		}
+		return uint16(sign | (mant >> 13))
+	case exp >= 31:
+		// Overflow → ±Inf.
+		if exp == 255-127+15 && mant != 0 {
+			// NaN — preserve a NaN bit pattern.
+			return uint16(sign | 0x7C00 | (mant >> 13))
+		}
+		return uint16(sign | 0x7C00)
+	}
+	// Round mantissa from 23-bit to 10-bit (round-half-to-even).
+	if mant&0x00001000 != 0 {
+		mant += 0x00002000
+		if mant&0x00800000 != 0 {
+			// Mantissa overflow: increment exponent.
+			mant = 0
+			exp++
+			if exp >= 31 {
+				return uint16(sign | 0x7C00)
+			}
+		}
+	}
+	return uint16(sign | uint32(exp)<<10 | (mant >> 13))
+}
+
+// float16ToFloat32 converts an IEEE 754 half-precision value to single-precision.
+func float16ToFloat32(h uint16) float32 {
+	sign := uint32(h&0x8000) << 16
+	exp := uint32((h >> 10) & 0x1F)
+	mant := uint32(h & 0x03FF)
+
+	switch exp {
+	case 0:
+		if mant == 0 {
+			// ±Zero.
+			return math.Float32frombits(sign)
+		}
+		// Subnormal f16 → normalised f32.
+		for mant&0x0400 == 0 {
+			mant <<= 1
+			exp--
+		}
+		exp++ // bias adjustment
+		mant &^= 0x0400
+		fallthrough
+	default:
+		// Normal number: re-bias exponent (f16 bias=15, f32 bias=127).
+		return math.Float32frombits(sign | (exp+112)<<23 | mant<<13)
+	case 31:
+		// ±Inf or NaN.
+		return math.Float32frombits(sign | 0x7F800000 | mant<<13)
+	}
+}

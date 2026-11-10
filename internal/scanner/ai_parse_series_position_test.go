@@ -1,14 +1,14 @@
 // file: internal/scanner/ai_parse_series_position_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8b2c07-6d15-4e93-a204-9c7e1b5da648
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integration_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8f2e4a1b-7c3d-4f9b-a0e5-3d6c2f8b5a7e
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/rows_user_text_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d1e8a37-2c94-4b60-8f13-a7e0c6d29b48
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

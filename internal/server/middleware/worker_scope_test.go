@@ -1,7 +1,7 @@
 // file: internal/server/middleware/worker_scope_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3491bedd-1c6e-45b4-afe0-973ac28648ba
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestWorkerOnlyCredentials_ConfinedToWorkerAPI: a credential whose effective

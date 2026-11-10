@@ -1,7 +1,7 @@
 // file: internal/versions/live_torrent_holder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98d6eb3e-9cc5-4ca2-8c9e-b947eb184761
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package versions
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const holderTestHash = "aabbccddeeff00112233445566778899aabbccdd"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/rows.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 39018ebb-a7f9-40a8-8aef-6a3cd4889ce6
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 

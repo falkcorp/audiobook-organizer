@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -16,14 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 var applyHistoryLog = logger.New("metafetch-apply-history")
 
 // History field names that differ from the Book JSON name: the shared
-// vocabulary in internal/database (book_edit_history.go), which the user-edit
+// vocabulary in internal/books/store (book_edit_history.go), which the user-edit
 // paths record with too.
 const (
 	historyFieldAuthor   = database.HistoryFieldAuthor

@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/probe_outcome_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ed5ca626-a270-4fc6-a767-04807741441d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package bookfileaudio
 
@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/falkcorp/mediacore/library"

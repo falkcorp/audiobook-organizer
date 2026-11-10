@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e424f3c3-3b6c-4345-b703-20ca6809ec0f
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

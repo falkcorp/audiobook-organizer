@@ -1,7 +1,7 @@
 // file: internal/server/cache_snapshotter.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Rescued from cache_handlers.go during Phase 2 handler extraction.
 // These helpers support the background cache-stats snapshotter goroutine
@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/prometheus/client_golang/prometheus"
 )

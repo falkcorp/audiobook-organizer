@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/item_filter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1e63a04f-8c27-4d1b-95a0-2f78c6b3e419
-// last-edited: 2026-08-03
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The app showed 44,888 items where the owner has ~16,000, because

@@ -1,7 +1,7 @@
 // file: internal/scanner/override_guard_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 70a71534-36fa-4d6c-9c4a-acf8dc2de6e8
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

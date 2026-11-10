@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7e5a1c3b-9d2f-4a08-8b61-3c4d5e6f7a89
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/models"

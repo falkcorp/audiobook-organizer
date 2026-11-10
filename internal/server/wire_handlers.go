@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.8
+// version: 2.64.9
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-11-09
 
@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"

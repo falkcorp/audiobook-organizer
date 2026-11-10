@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery_test.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-08-21
+// last-edited: 2026-11-09
 //
 // Tests for the discovery helpers — now delegates to internal/deluge/discovery.go.
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

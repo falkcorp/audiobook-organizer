@@ -1,7 +1,7 @@
 // file: internal/audiobooks/protected_path_symlink_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0d6b9f41-8a27-4c53-b1e8-73f5a2c90d14
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/merge/finish_carry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c6e2f4a-9b1d-4e73-a5c8-7d3f1b2e9a60
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 //
 // The real mergeUserProgressFor and writeProgress against a real PebbleStore:
 // a carried or restored finish keeps its FinishedAt, and a carried finish
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

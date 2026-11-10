@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_prop_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: bcc094f5-1645-44d3-be21-3087888fdaea
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Property-based tests for the smart-playlist evaluator.
 //
@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/rapidgen"
 	"pgregory.net/rapid"

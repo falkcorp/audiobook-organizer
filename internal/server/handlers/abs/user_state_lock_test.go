@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/user_state_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8c7567d-47ae-49e1-a1f5-b1089ec27e34
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // waitsForUserStateLock sends one request while the test holds the

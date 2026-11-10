@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_digest_aggregates.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e1b8a43-9d27-4c05-b3f8-a05c7e2d94b1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A daily digest states counts (per entry type), original_count and tag_counts

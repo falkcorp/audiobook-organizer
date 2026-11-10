@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package metadatahandler_test
 
@@ -18,7 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"

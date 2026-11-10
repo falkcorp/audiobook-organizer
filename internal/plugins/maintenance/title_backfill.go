@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

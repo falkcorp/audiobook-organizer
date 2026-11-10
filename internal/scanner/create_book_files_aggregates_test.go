@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_aggregates_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a7c9e14-5d82-4b06-9f31-c2e8a5407db6
-// last-edited: 2026-08-25
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

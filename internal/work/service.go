@@ -1,7 +1,7 @@
 // file: internal/work/service.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e9f0g1h2-i3j4-5k6l-7m8n-9o0p1q2r3s4t
-// last-edited: 2026-06-10
+// last-edited: 2026-11-09
 
 package work
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type WorkService struct {

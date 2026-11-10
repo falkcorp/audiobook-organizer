@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_freshness_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d7a2c81-6e39-4b05-9f28-1a3c7e0d5b62
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Tests for the label-write freshness refresh: dismissing / relabeling a pair
 // (re)snapshots its ScoreBreakdown onto the LabeledExample via the engine's
@@ -18,7 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	unifiedpkg "github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )

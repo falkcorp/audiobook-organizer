@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9f3a6c28-1e74-4b5d-8c02-7a6e4d9b1f35
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

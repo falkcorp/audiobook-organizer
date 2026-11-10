@@ -1,7 +1,7 @@
 // file: internal/search/date_interval_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3e9a52-4d18-4b6f-9e21-5a0d8f3b1c74
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package search
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The instant every interval test uses: mid-afternoon on the last day of March.

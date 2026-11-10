@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: f2a3b4c5-d6e7-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // deps.go implements the UOS M1/M2 requirement evaluator, AllSatisfied aggregator,
 // and cycle-detection guard for OperationDef.Requires graphs.
@@ -22,7 +22,7 @@ package registry
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // DepStore is the narrow persistence interface the evaluator needs.

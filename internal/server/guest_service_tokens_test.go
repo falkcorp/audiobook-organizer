@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -23,10 +23,10 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

@@ -1,7 +1,7 @@
 // file: internal/operations/state/state.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 713db576-1d8b-4ede-a52b-63e91ee2ed85
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // Package state is the single definition of operation run statuses and what
 // each one means. Go helpers and the generated web/src/generated/ops.ts both
@@ -18,7 +18,7 @@
 // side every predicate in web/src/generated/ops.ts (regenerate with
 // `make generate-ops`; `make ci` fails when that file is stale).
 //
-// This package imports only the standard library on purpose: internal/database
+// This package imports only the standard library on purpose: internal/books/store
 // and internal/operations/registry both import it, and both sit in the
 // pkg/plugin/sdk closure that tools/cmd/sdkguard ratchets.
 package state

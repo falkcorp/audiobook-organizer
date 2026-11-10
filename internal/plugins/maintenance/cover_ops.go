@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package maintenance — ops maintenance.folder-cover-backfill and
 // maintenance.cover-text-read.
@@ -33,9 +33,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/covers"
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/foldercover"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

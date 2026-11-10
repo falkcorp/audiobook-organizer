@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled_siblings_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 92334d16-d043-4457-bdc3-273468cb5afc
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // seedGrouped creates a plausible book in group gid with the given flag

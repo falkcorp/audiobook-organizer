@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/repairs_lists_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c7d1a4e8-39f2-4b65-8e0a-5f6b2d9c1a73
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -17,7 +17,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"

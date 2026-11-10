@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_bare_id_paging_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 203a19b0-9aea-4fe9-95ee-c0da0cfaff0c
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 // Regression tests for BARE author_id / series_id listings paging.
 //
@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

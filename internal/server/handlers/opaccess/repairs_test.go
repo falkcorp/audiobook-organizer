@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package opaccess
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

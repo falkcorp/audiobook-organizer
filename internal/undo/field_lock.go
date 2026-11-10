@@ -1,7 +1,7 @@
 // file: internal/undo/field_lock.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4ea3ea92-44d9-4af5-ae13-c7c0ccc3e1c7
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeFieldLock: a repair set the lock on one of a book's metadata

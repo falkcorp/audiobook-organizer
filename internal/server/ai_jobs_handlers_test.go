@@ -1,7 +1,7 @@
 // file: internal/server/ai_jobs_handlers_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 136d5ad0-d226-471a-8c2c-64992ba3882d
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

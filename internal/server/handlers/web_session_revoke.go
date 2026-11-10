@@ -1,12 +1,12 @@
 // file: internal/server/handlers/web_session_revoke.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b8480eb9-b418-4455-afde-6d50f7911f04
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

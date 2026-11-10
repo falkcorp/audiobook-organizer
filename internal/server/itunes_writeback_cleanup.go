@@ -1,7 +1,7 @@
 // file: internal/server/itunes_writeback_cleanup.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6431384b-3b6a-4482-873b-5d295bf639e7
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 //
 // One-shot startup cleanup of the state the removed iTunes write-back left in
 // the store (owner decision 2026-10-07: iTunes is import-only).
@@ -9,7 +9,7 @@
 package server
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

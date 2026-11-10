@@ -1,7 +1,7 @@
 // file: internal/dedup/author_determinism_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8b1e47c6-2a95-4d03-be71-5c9f28a4d016
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // determinismCorpus builds an author set that exercises phase 3 specifically:

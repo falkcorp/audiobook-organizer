@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/check_book_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a8b7c6d-5e4f-3210-fedc-ba9876543210
-// last-edited: 2026-06-14
+// last-edited: 2026-11-09
 
 // Tests for the dedup.check-book op (M4).
 //
@@ -22,7 +22,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

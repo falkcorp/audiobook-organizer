@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/runitems_concurrency_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0e8c4a72-5b1d-4f39-9a6e-c2d7b3f81a45
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // overlapProbe proves that a pool really ran items side by side. Each caller

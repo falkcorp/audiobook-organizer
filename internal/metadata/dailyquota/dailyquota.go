@@ -1,7 +1,7 @@
 // file: internal/metadata/dailyquota/dailyquota.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 00535d2d-567d-4418-abc2-bf8b732856d9
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // Package dailyquota counts a metadata provider's lookups per quota day and
 // refuses one past the day's limit, with two tiers on ONE counter:
@@ -81,7 +81,7 @@ type RawKV interface {
 
 // KeyPrefix is the Pebble keyspace of the daily budgets:
 // provider_daily_budget:<provider id> -> state JSON. Registered in
-// internal/database/keyfamilies.go.
+// internal/books/store/keyfamilies.go.
 const KeyPrefix = "provider_daily_budget:"
 
 // state is one provider's persisted count for one quota day.

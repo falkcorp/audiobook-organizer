@@ -1,7 +1,7 @@
 // file: internal/audiobooks/tombstone_sweep_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a3c9e15-d604-4b82-a1f7-5e08c2b9d371
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/foldernames/evidence.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b940fbc0-ee6b-4be2-a4a8-26683848e423
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 // Package foldernames builds the person and series evidence the folder parse
 // (metadata.ExtractMetadataFromFolderWith) decides an author-or-series folder
@@ -17,7 +17,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )

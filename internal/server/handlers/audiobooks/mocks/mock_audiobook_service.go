@@ -8,7 +8,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -395,7 +395,7 @@ func (_c *MockAudiobookService_DiscardProgressAndPurge_Call) RunAndReturn(run fu
 }
 
 // EnrichAudiobooksWithNames provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) EnrichAudiobooksWithNames(books []database.Book) []audiobooks.AudiobookDetail {
+func (_mock *MockAudiobookService) EnrichAudiobooksWithNames(books []store.Book) []audiobooks.AudiobookDetail {
 	ret := _mock.Called(books)
 
 	if len(ret) == 0 {
@@ -403,7 +403,7 @@ func (_mock *MockAudiobookService) EnrichAudiobooksWithNames(books []database.Bo
 	}
 
 	var r0 []audiobooks.AudiobookDetail
-	if returnFunc, ok := ret.Get(0).(func([]database.Book) []audiobooks.AudiobookDetail); ok {
+	if returnFunc, ok := ret.Get(0).(func([]store.Book) []audiobooks.AudiobookDetail); ok {
 		r0 = returnFunc(books)
 	} else {
 		if ret.Get(0) != nil {
@@ -419,16 +419,16 @@ type MockAudiobookService_EnrichAudiobooksWithNames_Call struct {
 }
 
 // EnrichAudiobooksWithNames is a helper method to define mock.On call
-//   - books []database.Book
+//   - books []store.Book
 func (_e *MockAudiobookService_Expecter) EnrichAudiobooksWithNames(books any) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
 	return &MockAudiobookService_EnrichAudiobooksWithNames_Call{Call: _e.mock.On("EnrichAudiobooksWithNames", books)}
 }
 
-func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) Run(run func(books []database.Book)) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
+func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) Run(run func(books []store.Book)) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 []database.Book
+		var arg0 []store.Book
 		if args[0] != nil {
-			arg0 = args[0].([]database.Book)
+			arg0 = args[0].([]store.Book)
 		}
 		run(
 			arg0,
@@ -442,7 +442,7 @@ func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) Return(audiobookD
 	return _c
 }
 
-func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) RunAndReturn(run func(books []database.Book) []audiobooks.AudiobookDetail) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
+func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) RunAndReturn(run func(books []store.Book) []audiobooks.AudiobookDetail) *MockAudiobookService_EnrichAudiobooksWithNames_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -522,23 +522,23 @@ func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) RunAndReturn(run f
 }
 
 // GetAudiobook provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) GetAudiobook(ctx context.Context, id string) (*database.Book, error) {
+func (_mock *MockAudiobookService) GetAudiobook(ctx context.Context, id string) (*store.Book, error) {
 	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAudiobook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*store.Book, error)); ok {
 		return returnFunc(ctx, id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *store.Book); ok {
 		r0 = returnFunc(ctx, id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
@@ -579,12 +579,12 @@ func (_c *MockAudiobookService_GetAudiobook_Call) Run(run func(ctx context.Conte
 	return _c
 }
 
-func (_c *MockAudiobookService_GetAudiobook_Call) Return(book *database.Book, err error) *MockAudiobookService_GetAudiobook_Call {
+func (_c *MockAudiobookService_GetAudiobook_Call) Return(book *store.Book, err error) *MockAudiobookService_GetAudiobook_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_GetAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string) (*database.Book, error)) *MockAudiobookService_GetAudiobook_Call {
+func (_c *MockAudiobookService_GetAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string) (*store.Book, error)) *MockAudiobookService_GetAudiobook_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -732,23 +732,23 @@ func (_c *MockAudiobookService_GetBookUserTags_Call) RunAndReturn(run func(bookI
 }
 
 // GetSoftDeletedBooks provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) GetSoftDeletedBooks(ctx context.Context, limit int, offset int, olderThanDays *int) ([]database.Book, error) {
+func (_mock *MockAudiobookService) GetSoftDeletedBooks(ctx context.Context, limit int, offset int, olderThanDays *int) ([]store.Book, error) {
 	ret := _mock.Called(ctx, limit, offset, olderThanDays)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSoftDeletedBooks")
 	}
 
-	var r0 []database.Book
+	var r0 []store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, int, int, *int) ([]database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int, int, *int) ([]store.Book, error)); ok {
 		return returnFunc(ctx, limit, offset, olderThanDays)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, int, int, *int) []database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int, int, *int) []store.Book); ok {
 		r0 = returnFunc(ctx, limit, offset, olderThanDays)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Book)
+			r0 = ret.Get(0).([]store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, int, int, *int) error); ok {
@@ -801,12 +801,12 @@ func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) Run(run func(ctx contex
 	return _c
 }
 
-func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) Return(books []database.Book, err error) *MockAudiobookService_GetSoftDeletedBooks_Call {
+func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) Return(books []store.Book, err error) *MockAudiobookService_GetSoftDeletedBooks_Call {
 	_c.Call.Return(books, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) RunAndReturn(run func(ctx context.Context, limit int, offset int, olderThanDays *int) ([]database.Book, error)) *MockAudiobookService_GetSoftDeletedBooks_Call {
+func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) RunAndReturn(run func(ctx context.Context, limit int, offset int, olderThanDays *int) ([]store.Book, error)) *MockAudiobookService_GetSoftDeletedBooks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -891,23 +891,23 @@ func (_c *MockAudiobookService_LastPurgeBreakdown_Call) RunAndReturn(run func() 
 }
 
 // ListAllUserTags provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) ListAllUserTags() ([]database.TagWithCount, error) {
+func (_mock *MockAudiobookService) ListAllUserTags() ([]store.TagWithCount, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListAllUserTags")
 	}
 
-	var r0 []database.TagWithCount
+	var r0 []store.TagWithCount
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.TagWithCount, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.TagWithCount, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.TagWithCount); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.TagWithCount); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.TagWithCount)
+			r0 = ret.Get(0).([]store.TagWithCount)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -935,12 +935,12 @@ func (_c *MockAudiobookService_ListAllUserTags_Call) Run(run func()) *MockAudiob
 	return _c
 }
 
-func (_c *MockAudiobookService_ListAllUserTags_Call) Return(tagWithCounts []database.TagWithCount, err error) *MockAudiobookService_ListAllUserTags_Call {
+func (_c *MockAudiobookService_ListAllUserTags_Call) Return(tagWithCounts []store.TagWithCount, err error) *MockAudiobookService_ListAllUserTags_Call {
 	_c.Call.Return(tagWithCounts, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]database.TagWithCount, error)) *MockAudiobookService_ListAllUserTags_Call {
+func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]store.TagWithCount, error)) *MockAudiobookService_ListAllUserTags_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -999,23 +999,23 @@ func (_c *MockAudiobookService_PendingFileRemovals_Call) RunAndReturn(run func()
 }
 
 // RestoreAudiobook provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) RestoreAudiobook(ctx context.Context, id string) (*database.Book, error) {
+func (_mock *MockAudiobookService) RestoreAudiobook(ctx context.Context, id string) (*store.Book, error) {
 	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestoreAudiobook")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*store.Book, error)); ok {
 		return returnFunc(ctx, id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *store.Book); ok {
 		r0 = returnFunc(ctx, id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
@@ -1056,12 +1056,12 @@ func (_c *MockAudiobookService_RestoreAudiobook_Call) Run(run func(ctx context.C
 	return _c
 }
 
-func (_c *MockAudiobookService_RestoreAudiobook_Call) Return(book *database.Book, err error) *MockAudiobookService_RestoreAudiobook_Call {
+func (_c *MockAudiobookService_RestoreAudiobook_Call) Return(book *store.Book, err error) *MockAudiobookService_RestoreAudiobook_Call {
 	_c.Call.Return(book, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_RestoreAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string) (*database.Book, error)) *MockAudiobookService_RestoreAudiobook_Call {
+func (_c *MockAudiobookService_RestoreAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string) (*store.Book, error)) *MockAudiobookService_RestoreAudiobook_Call {
 	_c.Call.Return(run)
 	return _c
 }

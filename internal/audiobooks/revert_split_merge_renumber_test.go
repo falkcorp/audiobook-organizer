@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_split_merge_renumber_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c3082b9-b916-4ba1-9f7c-2cd4c0d34e4b
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

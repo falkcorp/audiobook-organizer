@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_acoustid_parallel_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9d3b6f1a-2c47-4e8b-9a0d-5f61c8e0a3b2
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Regression tests for CONC-3: AcoustIDScan's per-book loop is sharded across
 // a bounded worker pool (registry.RunItems) instead of running
@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestParallelAcoustIDScan_SameCandidatesAsSerial builds a "hub" fixture: a

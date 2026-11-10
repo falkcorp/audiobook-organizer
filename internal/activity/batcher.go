@@ -1,7 +1,7 @@
 // file: internal/activity/batcher.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7f3c1a2e-8b4d-4e9f-a5c6-2d0e3b7f9a1c
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package activity
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // BatchItem is one sub-entry within a batched ActivityEntry.

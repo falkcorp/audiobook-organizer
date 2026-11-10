@@ -1,7 +1,7 @@
 // file: internal/server/repairs_overview_lists_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b4e2d71-5c93-4a60-b7f2-e19d3a6c0845
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // The operations overview lists as the server wires them, driven through the
 // real router: every GET route under /operations and /op-defs that lists
@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: d0871769-241c-463d-91ac-02ba0dac2f94
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/require"
 )

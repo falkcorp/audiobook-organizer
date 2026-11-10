@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

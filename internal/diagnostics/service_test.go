@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d1a9n0st-1cs0-t3st-s3rv-1c3t3st0001
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package diagnostics
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

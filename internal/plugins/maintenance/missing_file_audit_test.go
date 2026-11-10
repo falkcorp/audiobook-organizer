@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c8e2a17-96d4-4b3f-a70e-1d92f4c6b085
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // auditFixture builds REAL files on disk and REAL absent paths beside them, and

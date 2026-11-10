@@ -1,7 +1,7 @@
 // file: internal/server/library_date_filters_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a0ea869a-92d6-4bed-9440-69e27ae052a0
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

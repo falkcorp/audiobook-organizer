@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op_preview_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d2f4a61-3c9e-4b75-a1d8-5e7c0b9f2a34
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestRescoreOp_OmittedApplyPreviews: dedup.rescore rewrites the stored band

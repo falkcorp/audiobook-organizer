@@ -1,7 +1,7 @@
 // file: internal/server/combine_revert_route_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c8a5f12-7e46-4d91-b0a3-9f2e6d17c548
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A manual combine (POST /api/v1/audiobooks/combine) answers 202 with the

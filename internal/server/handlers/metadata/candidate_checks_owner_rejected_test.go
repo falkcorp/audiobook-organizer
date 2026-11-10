@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/candidate_checks_owner_rejected_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b7e2d91-6c3a-4f08-a5d2-8e1f0c9b3a67
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metadatahandler
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/series_delete_refguard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5b6c1e07-9a34-4d82-bf16-0c72e9a35d84
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The series delete handlers used to guard with GetBooksBySeriesIDCore, the

@@ -1,14 +1,14 @@
 // file: internal/dedup/split_book_fill_empty.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 668a8c6b-8d6c-4b88-a86b-aa3127cfc705
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

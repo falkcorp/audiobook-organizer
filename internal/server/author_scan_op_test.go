@@ -1,7 +1,7 @@
 // file: internal/server/author_scan_op_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b0d7e32-9c41-4a86-b3f5-71e2a9c04d68
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // maintenance.author-dedup-scan (merged into dedup.author-scan, 04-P14a) once

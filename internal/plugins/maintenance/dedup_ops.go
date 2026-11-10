@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/oklog/ulid/v2"

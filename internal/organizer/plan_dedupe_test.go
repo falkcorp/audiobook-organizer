@@ -1,7 +1,7 @@
 // file: internal/organizer/plan_dedupe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a3a046f-53d2-4b05-9d4a-628af64326c9
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 // Tests for the duplicate-path collapse added to planTargetPaths (DUPROW-1).
 //
@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // dupeTestVars/dupeTestOpts are shared across the tests below; none of them

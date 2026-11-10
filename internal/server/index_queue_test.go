@@ -1,6 +1,6 @@
 // file: internal/server/index_queue_test.go
-// version: 2.0.1
-// last-edited: 2026-10-31
+// version: 2.0.2
+// last-edited: 2026-11-09
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

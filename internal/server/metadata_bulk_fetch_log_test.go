@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"

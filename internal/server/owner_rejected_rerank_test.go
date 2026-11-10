@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_rerank_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 118c8e73-9354-4107-840e-af173540ebc3
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

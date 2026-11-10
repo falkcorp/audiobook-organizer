@@ -1,7 +1,7 @@
 // file: internal/server/user_data_access_wiring_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b8b6eb72-5710-4aa4-bcd9-b827d8deba3d
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // The library.view routes that serve records holding other users' listening
 // state alongside library data, as the server wires them: the merge journals
@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

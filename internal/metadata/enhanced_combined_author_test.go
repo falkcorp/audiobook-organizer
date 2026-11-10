@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced_combined_author_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4cccd595-4313-4075-bffd-0e7d842088af
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestBatchUpdateMetadata_MultiAuthorNameIsSplit(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -254,7 +254,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// counter strands them behind an author row that no longer exists — and an
 	// author's name lives only in that row, so it is not recoverable afterwards.
 	// This is the author-side twin of the series damage recorded in
-	// internal/database/series_bookref.go (6,893 phantom series IDs held by
+	// internal/books/store/series_bookref.go (6,893 phantom series IDs held by
 	// 13,322 live books + 702 trashed, measured 2026-08-14). This op deletes in
 	// BULK — 4,975 authors were eligible on the live library — so it is by far
 	// the highest-volume way to reproduce that incident.

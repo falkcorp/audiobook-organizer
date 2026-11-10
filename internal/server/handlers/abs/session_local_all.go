@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package abs
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/gin-gonic/gin"

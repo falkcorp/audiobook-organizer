@@ -1,7 +1,7 @@
 // file: internal/undo/membership_handedit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8b6d41-93ae-4c07-a5d2-6e10b7c3f958
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package undo
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newHandSim(list ...string) *advSim {

@@ -1,7 +1,7 @@
 // file: internal/reconcile/app_dir_guard_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9d5c3e78-1b46-4a02-8f95-7c2e60b3d417
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

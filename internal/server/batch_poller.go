@@ -1,7 +1,7 @@
 // file: internal/server/batch_poller.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: f8a1b2c3-d4e5-6789-abcd-0123456789ab
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package server
 
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 )
 

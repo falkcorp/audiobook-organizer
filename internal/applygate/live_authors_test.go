@@ -1,14 +1,14 @@
 // file: internal/applygate/live_authors_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c5d2e81-7a4b-4f93-9e16-b8a3c1d7f042
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package applygate
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

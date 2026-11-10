@@ -1,5 +1,5 @@
 // file: internal/books/restore_stager_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a90739a-abf6-4e9f-a011-b364985a81cf
 // last-edited: 2026-11-09
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_refresh_scan_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c9e5a71-84d2-4f06-b1a7-6d20e8c4f953
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

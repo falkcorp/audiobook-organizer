@@ -1,7 +1,7 @@
 // file: internal/search/per_user_alternation_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d92f6a18-3b75-4c0e-8a41-6e5b1c9d7f03
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package search
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // matchPerUser translates q and runs only its per-user filters against state, the

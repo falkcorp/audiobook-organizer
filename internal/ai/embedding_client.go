@@ -1,7 +1,7 @@
 // file: internal/ai/embedding_client.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package ai
 
@@ -38,7 +38,7 @@ var ErrBatchUnsupported = errors.New("embedding: batch API unsupported for the c
 
 // EmbeddingCache is the minimal surface EmbeddingClient needs from
 // a content-hash cache layer. It's an interface (not a concrete
-// type) so internal/ai doesn't need to import internal/database,
+// type) so internal/ai doesn't need to import internal/books/store,
 // which would create a circular dependency. Production wires the
 // *database.EmbeddingStore implementation at server startup.
 //

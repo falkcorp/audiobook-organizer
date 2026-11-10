@@ -1,7 +1,7 @@
 // file: internal/dedup/author_scan_guards_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c7e2b91-8f36-4a0d-b214-6e9d3a75f0c2
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The tests in this file guard phase 3 THROUGH FindDuplicateAuthors, rather

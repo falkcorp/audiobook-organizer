@@ -1,7 +1,7 @@
 // file: internal/server/temp_cleanup_activity_order_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d3b9e52-4c1a-4f68-9a0e-2b5c8d1f6a37
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // drainActivity returns every entry currently queued on w, in queue order.

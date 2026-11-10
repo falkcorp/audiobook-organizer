@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge.go
-// version: 1.22.5
+// version: 1.22.6
 // guid: 3b5d7f9a-2e4c-6b8d-0f1a-3c5e7d9f1b3e
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 // Split-book cluster merge — portable across SQLite and Pebble.
 //
@@ -29,7 +29,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

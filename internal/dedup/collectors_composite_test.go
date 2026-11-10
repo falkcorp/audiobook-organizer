@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_composite_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -16,7 +16,7 @@ package dedup
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

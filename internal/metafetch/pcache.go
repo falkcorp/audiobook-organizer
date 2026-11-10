@@ -1,14 +1,14 @@
 // file: internal/metafetch/pcache.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0e7a4c92-3b15-4d68-8f2e-a91c5d73b046
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
 // The metafetch side of the shared provider-answer cache: the TTL rule per
 // provider, the clock, the metrics, the per-search pointer collector, and the
 // read-through helpers every provider call site uses. The rows themselves and
-// their key builders live in internal/database/metadata_fetch_cache.go; the
+// their key builders live in internal/books/store/metadata_fetch_cache.go; the
 // question normalization in question_key.go.
 
 import (
@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"

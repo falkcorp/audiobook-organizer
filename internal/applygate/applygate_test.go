@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.9
+// version: 1.5.10
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

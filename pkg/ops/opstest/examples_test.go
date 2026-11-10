@@ -1,7 +1,7 @@
 // file: pkg/ops/opstest/examples_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4b6d8e21-7c3f-4a95-9e12-0f5a3b7c8d64
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package opstest
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
@@ -323,7 +323,7 @@ func TestLoseLeaseAt(t *testing.T) {
 }
 
 // dirtyPrefix is the DirtySet the dirty-title example drains. It sits in the
-// opstest: family (internal/database/keyfamilies.go): the World's store is a
+// opstest: family (internal/books/store/keyfamilies.go): the World's store is a
 // strict-claims store like production's, so an unregistered prefix is refused.
 // Not ident:dirty:, the one production DirtySet: the def retitles, and a
 // retitle re-marks ident:dirty:<id> (MarkIdentDirtyBestEffort), so the entry

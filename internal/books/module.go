@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-09
 
@@ -30,8 +30,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
@@ -133,7 +133,7 @@ func (m *booksModule) Manifest() module.Manifest {
 		LegacyPrefixes: server.LegacyPrefixes(m.abs),
 		// Books' claims on HEAD's key families, its legacy migrations and
 		// its versioned ones, and the projection HEAD's guard reads
-		// (05-storage §5S.3.4, §5S.9.3; internal/database booksspec.go).
+		// (05-storage §5S.3.4, §5S.9.3; internal/books/store booksspec.go).
 		// The first step discards the HNSW clean-stop marker and marks this
 		// boot migrated (beforeMigration).
 		Storage: database.BooksSpec(m.beforeMigration),

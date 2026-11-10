@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/rules.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9e2b4c71-3a85-4d60-8f29-1b7c6a4e5d02
-// last-edited: 2026-07-12
+// last-edited: 2026-11-09
 
 package dataset
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 

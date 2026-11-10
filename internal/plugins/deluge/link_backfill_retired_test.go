@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c58e1a37-9f04-4d62-8b73-0a2d6e91f4b8
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A torrent is never linked to a retired row: the store's hash and path

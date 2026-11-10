@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfaccess_earlyout_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c9e0b74-6a31-4d58-8f07-1b5a6c2e9d43
 
 package middleware
@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The RequireAuth early-out (skip session check when contextUserKey is already set) is

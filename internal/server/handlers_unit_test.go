@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -20,9 +20,9 @@ import (
 	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/gin-gonic/gin"

@@ -1,14 +1,14 @@
 // file: internal/dedup/author_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestNormalizeAuthorName(t *testing.T) {

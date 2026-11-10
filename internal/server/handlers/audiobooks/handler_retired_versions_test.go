@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_retired_versions_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f0b9d52-6c1e-4a87-b2d4-9e5a17c80f36
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Tests for the retired-versions read endpoint and the restore stub (501). The store is the
 // generated AudiobooksStore mock wrapped in an in-memory fake that adds the
@@ -20,7 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
 )

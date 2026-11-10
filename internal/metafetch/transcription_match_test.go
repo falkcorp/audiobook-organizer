@@ -1,14 +1,14 @@
 // file: internal/metafetch/transcription_match_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9d3f1a6c-2b85-4e07-bc41-7a8e0f2d5c39
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

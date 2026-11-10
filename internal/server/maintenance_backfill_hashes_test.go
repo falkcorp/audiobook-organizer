@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_backfill_hashes_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 7c3e9a15-4d28-4b60-9f17-e2a8d05b6c43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
 	"github.com/stretchr/testify/require"
 )
 

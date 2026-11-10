@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_permissions_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 61966351-b637-469e-8483-4e3819bf56f6
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 // Covers TriggerOperationV2's per-def permission gate.
 //
@@ -24,8 +24,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

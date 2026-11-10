@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/review_status_index_repair_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a7d1e93-6c2b-4f58-9e0a-b3c8d5f17a29
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newReviewIndexFixture seeds a store with three pending review items and then

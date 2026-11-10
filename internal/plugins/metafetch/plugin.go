@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/plugin.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9c4d1f0a-2b7e-4c61-8a3d-5e9f0b1c2d34
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 // Package metafetch is the UOS plugin for metadata-fetch maintenance/analysis
 // operations. It wraps the internal metafetch.Service (persisted candidate
@@ -18,7 +18,7 @@
 package metafetch
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

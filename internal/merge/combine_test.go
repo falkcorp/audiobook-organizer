@@ -1,16 +1,16 @@
 // file: internal/merge/combine_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8e4d1a-9f3b-4e6a-8b7c-1d2e3f4a5b6c
-// last-edited: 2026-09-13
-// last-edited: 2026-06-21
+// last-edited: 2026-11-09
+// last-edited: 2026-11-09
 
 package merge
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

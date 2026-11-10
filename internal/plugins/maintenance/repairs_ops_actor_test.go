@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops_actor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a5ef5037-5850-466a-98c8-b0db67c38f1b
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type actorOpReader struct {

@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
 )

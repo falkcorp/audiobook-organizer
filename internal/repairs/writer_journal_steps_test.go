@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_journal_steps_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c7f4a19-8e63-4b05-9d2a-6f13b8e0c7d4
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // batchJournal is a journal that can write several rows in one commit

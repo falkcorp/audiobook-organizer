@@ -1,7 +1,7 @@
 // file: internal/bookfiles/first_audio_file_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8d3a6e21-4c75-4f08-b9a2-71e5c0d96b34
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package bookfiles
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

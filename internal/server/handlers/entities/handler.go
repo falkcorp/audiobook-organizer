@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -20,8 +20,8 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -726,7 +726,7 @@ func (h *Handler) DeleteAuthor(c *gin.Context) {
 	// which still hold the author_id, and it is a per-author listing rather than
 	// a junction-aware reference count. Deleting on its zero is what stranded
 	// 13,322 books behind 6,893 series on the series side of this same bug; see
-	// internal/database/author_bookref.go.
+	// internal/books/store/author_bookref.go.
 	refCounts, err := authorRefCounts(h.store)
 	if err != nil {
 		httputil.InternalError(c, "failed to count author references", err)
@@ -1161,7 +1161,7 @@ func (h *Handler) DeleteEmptySeries(c *gin.Context) {
 	// GetBooksBySeriesIDCore answers — it skips trashed and non-primary books,
 	// which still hold the series_id. Deleting on its zero is what stranded
 	// 13,322 books behind 6,893 series that no longer exist; see
-	// internal/database/series_bookref.go and executeSeriesPrune.
+	// internal/books/store/series_bookref.go and executeSeriesPrune.
 	refCounts, err := seriesRefCounts(h.store)
 	if err != nil {
 		httputil.InternalError(c, "failed to count series references", err)

@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: e354c0f7-eb13-49b7-94fa-e4fe6d9b985a
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/dailyquota"

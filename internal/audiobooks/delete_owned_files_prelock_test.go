@@ -1,7 +1,7 @@
 // file: internal/audiobooks/delete_owned_files_prelock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 229578be-5a67-41ac-86d2-aaf24b2f0b85
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

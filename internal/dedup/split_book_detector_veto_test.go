@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_detector_veto_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5d3a8e21-7c94-4b60-a1f2-9e0c4b7d6a35
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Every name below is synthetic: the repo is public, so no real library titles.

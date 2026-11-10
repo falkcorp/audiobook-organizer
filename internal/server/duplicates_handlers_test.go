@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_handlers_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9c1e2f3a-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

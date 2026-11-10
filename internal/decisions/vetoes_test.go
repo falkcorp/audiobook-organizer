@@ -1,7 +1,7 @@
 // file: internal/decisions/vetoes_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 47c2d9e5-1f80-4a36-b3d7-90e6a5c8142f
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package decisions
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestVetoes_SubjectsPairsAndFamilies(t *testing.T) {

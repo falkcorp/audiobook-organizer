@@ -1,14 +1,14 @@
 // file: internal/activity/api.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 9a4f2e1b-3c7d-4b8e-a6f0-5d2c8e1b7a3f
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package activity
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // batchableTypes is the set of type strings that route through the ActivityBatcher.

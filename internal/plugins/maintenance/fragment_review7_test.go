@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review7_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 05f9ce23-f920-4f23-9612-af3d87fce747
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -1020,7 +1020,7 @@ func anyOrgWord(words []string) bool {
 // whitespace; either alone mints a near-duplicate row.
 //
 // The implementation is util.FoldKey, moved to the leaf package so the store
-// (internal/database) can key an index by it; this wrapper keeps the name
+// (internal/books/store) can key an index by it; this wrapper keeps the name
 // every caller here uses.
 func FoldKey(name string) string { return util.FoldKey(name) }
 

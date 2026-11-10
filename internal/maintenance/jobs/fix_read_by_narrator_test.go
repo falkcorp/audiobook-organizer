@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a3b4c5d6-e7f8-9012-abcd-345678901234
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 // Package jobs_test exercises the fix-read-by-narrator maintenance job.
 // Importing the jobs package (via the blank import below) triggers all
@@ -12,7 +12,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs" // register all jobs
 )

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_authorfilter_credits_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8725df66-7845-486e-a6be-da257c9b07e1
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

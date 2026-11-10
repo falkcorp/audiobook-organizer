@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 552d8ccc-ffc7-41f3-8cef-f00ba6d70608
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // file: internal/transcode/transcode_integration_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: c9789340-1670-48d9-88e7-383f2c998be1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 //go:build integration
 
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 )

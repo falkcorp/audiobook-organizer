@@ -1,5 +1,5 @@
 // file: internal/testutil/rapidgen/rapidgen.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b093c713-a945-4937-8871-a7786dd843cb
 
 // Package rapidgen provides reusable `pgregory.net/rapid` generators for the
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"pgregory.net/rapid"
 )
 

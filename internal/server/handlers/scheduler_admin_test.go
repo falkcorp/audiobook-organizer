@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5b86925c-8469-4216-83f5-c7733c9ff488
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 // Unit tests for the task-scheduler and maintenance-window HTTP handlers,
 // moved verbatim (renamed to the SchedulerHandler receiver and its own
@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

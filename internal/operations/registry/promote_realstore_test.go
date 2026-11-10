@@ -1,7 +1,7 @@
 // file: internal/operations/registry/promote_realstore_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b5c6d7e8-f9a0-1b2c-3d4e-5f6a7b8c9d0e
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 // promote_realstore_test.go contains the regression test for the critical
 // "promoted ops never reach the dispatcher" bug. It uses a REAL PebbleStore
@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	ulid "github.com/oklog/ulid/v2"
 )

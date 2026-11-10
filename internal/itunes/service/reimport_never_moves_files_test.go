@@ -1,7 +1,7 @@
 // file: internal/itunes/service/reimport_never_moves_files_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6c2f1e8a-9b4d-4f3a-8e71-2d5c0a9b7f14
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"

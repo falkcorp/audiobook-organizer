@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_year_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e2b4f61-3c7a-4d95-b0e8-5a1f9c6d2e47
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/require"
 )

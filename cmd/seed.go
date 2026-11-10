@@ -1,5 +1,5 @@
 // file: cmd/seed.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7d2e9a4f-1b85-4c63-9f0a-3e8d7b2c1f56
 // last-edited: 2026-11-09
 //
@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/oklog/ulid/v2"
 	"github.com/spf13/cobra"

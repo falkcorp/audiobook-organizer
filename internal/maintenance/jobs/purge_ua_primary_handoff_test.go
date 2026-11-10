@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/purge_ua_primary_handoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f4d2a19-3c7b-4e65-9a81-b0e6c5d27f34
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

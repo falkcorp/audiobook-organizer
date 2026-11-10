@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
@@ -17,8 +17,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

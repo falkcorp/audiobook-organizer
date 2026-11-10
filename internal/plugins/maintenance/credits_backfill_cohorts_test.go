@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_cohorts_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: a1146b61-8486-4d68-8496-fefd5b154a64
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

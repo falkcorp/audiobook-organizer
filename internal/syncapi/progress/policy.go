@@ -1,13 +1,13 @@
 // file: internal/syncapi/progress/policy.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f93d8147-df19-4993-a09b-39f727b522ad
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 // Package progress implements the ABS-sync progress conflict-resolution policy
 // from docs/specs/2026-07-29-abs-sync-api-design.md §5, §5b and §1.8.7 as pure,
 // I/O-free decision functions.
 //
-// "Pure" is load-bearing: nothing here imports internal/database, touches HTTP,
+// "Pure" is load-bearing: nothing here imports internal/books/store, touches HTTP,
 // or reads the clock. Callers pass every timestamp in explicitly (see
 // NextServerTimestampMs's nowMs parameter), which makes each rule in §5
 // deterministically unit-testable ahead of the Phase-6 UserBookState /

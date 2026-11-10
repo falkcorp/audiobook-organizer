@@ -1,5 +1,5 @@
 // file: internal/config/config_unit_test.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: c50805f7-8e88-4a02-a03a-2e48863e2619
 // last-edited: 2026-11-09
 
@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"

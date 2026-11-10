@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3e8a1b64-2f9c-4d07-b5a3-91c6e0d4f728
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package versionprimary_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

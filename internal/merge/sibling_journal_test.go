@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c4377415-6df2-417a-99f1-a4bdef8080f0
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

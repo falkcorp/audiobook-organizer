@@ -1,7 +1,7 @@
 // file: internal/dedup/exact_provenance_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 29b011fa-6878-4516-b7f1-e680f303d4ea
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Tests for the placeholder-title guard and exact-rule provenance
 // (exact_provenance.go). The fixtures mirror the production pairs of
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

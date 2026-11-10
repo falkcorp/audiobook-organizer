@@ -1,14 +1,14 @@
 // file: internal/server/handlers/audiobooks/sort_by_metric_internal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d2e4b19-8c3a-4f60-a5e1-3b9d0c6f2e84
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package audiobookshandler
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestSortByMetricLabel_DefaultAndOther(t *testing.T) {

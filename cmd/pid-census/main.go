@@ -1,7 +1,7 @@
 // file: cmd/pid-census/main.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8f2b0d61-4a37-4c95-9e12-7d3a6b1c0e58
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 //
 // READ-ONLY book_file iTunes-PID integrity census. Point it at a COPY of the
 // production Pebble DB (never the live dir — Pebble opens read-write and wants the
@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 

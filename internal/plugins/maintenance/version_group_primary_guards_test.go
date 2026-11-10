@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_guards_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9e2c4a61-7b3d-4f58-a0c2-6d1e8b5f3a47
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 

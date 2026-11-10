@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.20.2
+// version: 1.20.3
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"

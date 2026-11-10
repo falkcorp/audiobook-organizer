@@ -1,14 +1,14 @@
 // file: internal/undo/merge_sibling_journal.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9b2e4f71-3c58-4a06-8d1e-6f7a0c35b2d9
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package undo
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

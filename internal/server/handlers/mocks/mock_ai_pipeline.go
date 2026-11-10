@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -97,23 +97,23 @@ func (_c *MockAIPipeline_CancelScan_Call) RunAndReturn(run func(scanID int) erro
 }
 
 // CreateScan provides a mock function for the type MockAIPipeline
-func (_mock *MockAIPipeline) CreateScan(mode string) (*database.Scan, error) {
+func (_mock *MockAIPipeline) CreateScan(mode string) (*store.Scan, error) {
 	ret := _mock.Called(mode)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateScan")
 	}
 
-	var r0 *database.Scan
+	var r0 *store.Scan
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.Scan, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.Scan, error)); ok {
 		return returnFunc(mode)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.Scan); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.Scan); ok {
 		r0 = returnFunc(mode)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Scan)
+			r0 = ret.Get(0).(*store.Scan)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -148,12 +148,12 @@ func (_c *MockAIPipeline_CreateScan_Call) Run(run func(mode string)) *MockAIPipe
 	return _c
 }
 
-func (_c *MockAIPipeline_CreateScan_Call) Return(scan *database.Scan, err error) *MockAIPipeline_CreateScan_Call {
+func (_c *MockAIPipeline_CreateScan_Call) Return(scan *store.Scan, err error) *MockAIPipeline_CreateScan_Call {
 	_c.Call.Return(scan, err)
 	return _c
 }
 
-func (_c *MockAIPipeline_CreateScan_Call) RunAndReturn(run func(mode string) (*database.Scan, error)) *MockAIPipeline_CreateScan_Call {
+func (_c *MockAIPipeline_CreateScan_Call) RunAndReturn(run func(mode string) (*store.Scan, error)) *MockAIPipeline_CreateScan_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_regression_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e4f5a6b7-c8d9-e0f1-a2b3-organizer-reg
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

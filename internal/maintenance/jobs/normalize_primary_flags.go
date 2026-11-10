@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/normalize_primary_flags.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4b8e2d19-7c5a-4f60-9d3b-1e6a8c4f2b07
-// last-edited: 2026-09-15
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"golang.org/x/sync/errgroup"
 )

@@ -1,7 +1,7 @@
 // file: internal/catalog/scope.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b9d3f27-8c1a-4e6b-9f42-1d7c0a8e3b56
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -15,7 +15,7 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )

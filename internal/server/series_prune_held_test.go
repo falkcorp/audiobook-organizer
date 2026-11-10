@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_held_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 010f0a3d-2158-471b-8424-64e39fbdf9c5
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package server
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A held series row (database.SeriesHeld) is referenced by nothing while a

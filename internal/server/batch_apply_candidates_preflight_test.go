@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_candidates_preflight_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d2a8e41-9c07-4b3f-a6e2-71f0c4d98b35
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 //
 // The rename preflight on /metadata/batch-apply-candidates: the handler writes
 // the database and then queues the file job that renames, which is the order
@@ -23,8 +23,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

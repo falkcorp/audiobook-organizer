@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestRevertChange_OrganizeRename verifies that organize_rename change

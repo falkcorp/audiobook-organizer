@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )

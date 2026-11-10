@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

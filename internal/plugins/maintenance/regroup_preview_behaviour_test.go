@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_preview_behaviour_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 646f265d-ef3c-42a4-b9c8-1764018f6b26
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 )
 

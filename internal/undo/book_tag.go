@@ -1,14 +1,14 @@
 // file: internal/undo/book_tag.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7ea2eab6-8661-4291-9ed1-943738848c44
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package undo
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeBookTagAdd: a repair added one book_tag row (FieldName is the

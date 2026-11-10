@@ -1,7 +1,7 @@
 // file: internal/server/wire_versions_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9b1e4d27-3c60-4a85-8f12-d7a5c0e63b49
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // retiredVersionAliasRoutes are the three /books/:id/versions/:vid... aliases

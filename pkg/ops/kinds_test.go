@@ -1,7 +1,7 @@
 // file: pkg/ops/kinds_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d3536389-9d87-4f21-b694-6ce022e230a8
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package ops
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // titleWriter is a minimal Writer over an in-memory title map.

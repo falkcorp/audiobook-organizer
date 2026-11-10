@@ -1,7 +1,7 @@
 // file: internal/server/candidate_feedback_judges_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3d1a47-2c90-4b6f-a1d5-7f04c9be3a62
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestCandidateFeedbackExport_OtherJudgesNeedUsersManage: the export serves the

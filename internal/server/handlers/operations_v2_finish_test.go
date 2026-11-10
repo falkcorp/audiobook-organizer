@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_finish_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d8f3b46-2a79-4c15-b6e8-91f4c7a53e20
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Covers POST /operations/v2/:id/finish ("Finish without resuming", the third
 // decision next to Retry and Discard) and the can_finish flag the Activity page
@@ -16,8 +16,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

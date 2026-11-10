@@ -1,7 +1,7 @@
 // file: internal/merge/service_guards_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7b2e9d4c-1a5f-4e83-9c6b-2d8f0a3e5b17
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_itunes_ordinary_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f2d8a41-3c7e-4b95-a1d0-8e4f7c2b9a63
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

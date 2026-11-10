@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup_concurrent_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9f2c7b41-6d38-4e05-a1b9-3c7e0d2f5a64
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // dedupSerializeProbe wraps a real database.Store and counts the maximum number

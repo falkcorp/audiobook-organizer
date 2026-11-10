@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 8e4a1c72-3d95-4b60-a7f1-9c2e6b0d5f83
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Tests for the universal review-queue handlers. The store is exercised through
 // a REAL pebble-backed *database.PebbleStore (which implements the ReviewStore
@@ -22,7 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 )

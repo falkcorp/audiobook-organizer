@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_fail_reset_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7091c056-0ab5-4755-bcfa-5e5f6c8c8ad9
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
 	"github.com/stretchr/testify/require"

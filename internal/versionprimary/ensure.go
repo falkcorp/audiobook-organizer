@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

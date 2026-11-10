@@ -1,7 +1,7 @@
 // file: internal/server/backup_optout_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e1296d8d-87ce-482e-a80c-45c24c802435
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 	taglib "go.senan.xyz/taglib"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"

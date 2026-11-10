@@ -1,7 +1,7 @@
 // file: internal/merge/combine_durability_unknown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c1e4b42-4a32-43ae-8b1b-221e8b793c22
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package merge
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // durUnknownBulkStore applies MoveBookFilesToBookBulk for real, then reports

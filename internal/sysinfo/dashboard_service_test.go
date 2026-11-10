@@ -1,5 +1,5 @@
 // file: internal/sysinfo/dashboard_service_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a0b1c2d3-e4f5-6a7b-8c9d-0e1f2a3b4c5d
 
 package sysinfo
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func statsFor(books, files, authors, series, organized, unorganized int) *database.LibraryStats {

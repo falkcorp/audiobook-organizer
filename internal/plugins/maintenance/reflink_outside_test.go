@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reflink_outside_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d2c4a71-6e08-4b3f-8c1a-2f7b0e5d9a34
-// last-edited: 2026-09-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

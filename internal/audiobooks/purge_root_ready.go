@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_root_ready.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7b3d52-9a14-4c68-b2f7-5d1c8a4e6b93
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -19,8 +19,8 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // libraryRootNotReady is the type of ErrLibraryRootNotReady. It is a type, not an

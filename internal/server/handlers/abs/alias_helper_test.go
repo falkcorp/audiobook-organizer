@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/alias_helper_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e2d8b61-7a93-4c05-b1f8-2d6e9c47a3b5
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_booksig_parallel_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3c9e7d21-6b48-4f0a-9d2e-8a1f5c04b7e6
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 // Regression tests for CONC-1: BookSignatureScan's O(n²) pairwise loop is now
 // sharded across a bounded worker pool (registry.RunItems) instead of running
@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

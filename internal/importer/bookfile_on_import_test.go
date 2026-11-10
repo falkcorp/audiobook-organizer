@@ -1,7 +1,7 @@
 // file: internal/importer/bookfile_on_import_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c1e93a7-4f28-4b60-a8d3-e29b7c046f51
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package importer
 
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // stageFixture writes a synthetic .m4b into a temp dir and registers that dir

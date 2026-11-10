@@ -1,15 +1,15 @@
 // file: internal/scanner/placeholder_author_gate_decorated_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f1b7c02-9d63-4a18-8e57-2c6b0af39d41
-// last-edited: 2026-09-01
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

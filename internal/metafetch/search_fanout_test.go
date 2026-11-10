@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: de3f610d-605b-4338-96c9-3316a2dcd8d4
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/membership_lock_writers_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8a3d5f92-1e6c-4b07-9d48-c2f7e0a1b635
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

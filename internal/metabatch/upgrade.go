@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.5.3
+// version: 2.5.4
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -39,8 +39,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

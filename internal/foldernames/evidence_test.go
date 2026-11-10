@@ -1,7 +1,7 @@
 // file: internal/foldernames/evidence_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 6cbae67b-604d-4b23-be02-29ef9669f74f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package foldernames
 
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

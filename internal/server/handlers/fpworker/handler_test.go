@@ -1,7 +1,7 @@
 // file: internal/server/handlers/fpworker/handler_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 1cf62cc0-1b49-43dd-a9f1-317ac56e7aa0
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package fpworker
 
@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
 	"github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )

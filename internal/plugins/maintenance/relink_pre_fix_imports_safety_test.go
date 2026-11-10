@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_safety_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 17b88502-dcdd-4723-9e9b-a13d2548dac6
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -24,7 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"

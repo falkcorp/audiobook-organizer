@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe_outcome_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 14d81b12-fa12-4c33-a945-a94795dd61f0
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

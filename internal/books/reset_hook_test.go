@@ -1,5 +1,5 @@
 // file: internal/books/reset_hook_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8ff8611d-2192-4368-9d9a-fbe5c21995ba
 // last-edited: 2026-11-09
 
@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"

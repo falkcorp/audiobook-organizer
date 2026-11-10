@@ -1,7 +1,7 @@
 // file: internal/dedup/enqueue_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7a4c2b-8d31-4f6a-b59e-1c3d7f2a9e64
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

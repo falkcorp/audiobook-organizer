@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.20.0
+// version: 2.20.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -380,7 +380,7 @@ const (
 // prod writes are whole-row (UpdateBook/UpdateBookFile carry every field), so
 // field-level tracking would still miss the lost-update collisions this gate
 // exists to prevent. The list mirrors the store interfaces in
-// internal/database (BookStore, AuthorStore, ...).
+// internal/books/store (BookStore, AuthorStore, ...).
 type Resource string
 
 const (

@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_standdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1d4e82-3b59-4a06-9f2d-e85a10b6c437
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 )
 

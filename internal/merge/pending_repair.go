@@ -1,7 +1,7 @@
 // file: internal/merge/pending_repair.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

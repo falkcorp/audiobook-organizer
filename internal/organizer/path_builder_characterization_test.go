@@ -1,7 +1,7 @@
 // file: internal/organizer/path_builder_characterization_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5d8e2a41-9b73-4c06-8f15-6e39a2c7b048
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Characterization tests for the TWO target-path builders, written while both
 // still exist, so that unifying them is a measurement rather than a promise.
@@ -47,8 +47,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func charOrganizer(folderPattern, filePattern string) *Organizer {

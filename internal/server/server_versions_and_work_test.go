@@ -1,7 +1,7 @@
 // file: internal/server/server_versions_and_work_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 3a4b5c6d-7e8f-9012-a345-678901234567
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

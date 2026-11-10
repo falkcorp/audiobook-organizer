@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.10
+// version: 2.6.11
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"

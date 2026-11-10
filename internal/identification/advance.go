@@ -1,7 +1,7 @@
 // file: internal/identification/advance.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6a0d049-6ba0-4351-921f-20f70d88eebf
-// last-edited: 2026-10-16
+// last-edited: 2026-11-09
 
 // Package identification is the body of the identification.advance driver
 // (spec 02 section 3.2 "The driver", section 4 PR 14): it drains the durable
@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // PageSize is one page of the dirty set. It is D28a's chunk size and the same

@@ -1,7 +1,7 @@
 // file: internal/metafetch/asin_backfill_queue.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3d8a5f21-9c47-4e0b-b6d2-71f4e0a9c853
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

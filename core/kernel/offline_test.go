@@ -1,5 +1,5 @@
 // file: core/kernel/offline_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dc0dbdfc-2776-4dc9-98cb-2d552f85078a
 // last-edited: 2026-11-09
 
@@ -407,6 +407,9 @@ func TestRestoreOfflineIntoEmptyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(into + restorejournal.LevelsSuffix); err != nil {
+		t.Fatalf("the --into copy has no level sidecar: %v", err)
+	}
 	h.assertNothingStaged()
 	if raw, _ := os.ReadFile(h.keyFile()); string(raw) != "bane" {
 		t.Fatalf("live key file = %q, want it untouched", raw)
@@ -433,6 +436,60 @@ func TestRestoreOfflineIntoEmptyPath(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(t.TempDir(), "outside")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a refused --into created its directory: %v", err)
+	}
+}
+
+// TestRestoreOfflineIntoWritesTheCopysLevels (05-storage §5S.3.12 row
+// make rollback-restore; R1-27): an --into copy gets its own level sidecar,
+// rewritten from the copy's stamps, so make rollback-restore reads an
+// archive's levels from the archived store itself before it touches the live
+// store. A copy at a level this build does not serve still reports it, the
+// live store's sidecar is untouched, nothing is staged, and a copy that does
+// not open leaves neither the copy nor a sidecar behind.
+func TestRestoreOfflineIntoWritesTheCopysLevels(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.config(nil)))
+	saved := filepath.Join(t.TempDir(), "archived.pebble")
+	h.tooNewStore(saved)
+	live := h.db + restorejournal.LevelsSuffix
+	before, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := filepath.Join(filepath.Dir(h.db), ".mediacore-checkpoints", "scratch")
+	into := filepath.Join(scratch, "rollback-restore-levels")
+	c := h.config(nil)
+	c.ArchiveExtract = func(_ context.Context, _, dir string) (string, error) {
+		copyTree(t, saved, dir)
+		return "archive-joker", nil
+	}
+	archive := filepath.Join(t.TempDir(), "joker.tar.gz")
+	if _, err := RestoreOffline(h.ctx, c, RestoreOfflineRequest{Archive: archive, Into: into}); err != nil {
+		t.Fatalf("--into = %v", err)
+	}
+	raw, err := os.ReadFile(into + restorejournal.LevelsSuffix)
+	if err != nil {
+		t.Fatalf("the copy has no level sidecar: %v", err)
+	}
+	if !slices.Contains(strings.Split(strings.TrimSpace(string(raw)), "\n"), "alfred 2") {
+		t.Fatalf("copy sidecar = %q, want alfred at the archived store's level 2", raw)
+	}
+	if after, _ := os.ReadFile(live); string(after) != string(before) {
+		t.Fatalf("live sidecar changed from %q to %q", before, after)
+	}
+	h.assertNothingStaged()
+
+	bad := filepath.Join(scratch, "unopenable")
+	c.ArchiveExtract = func(_ context.Context, _, dir string) (string, error) {
+		return "archive-mud", os.WriteFile(filepath.Join(dir, "clayface"), []byte("not a store"), 0o600)
+	}
+	if _, err := RestoreOffline(h.ctx, c, RestoreOfflineRequest{Archive: archive, Into: bad}); err == nil {
+		t.Fatal("--into of a copy that does not open succeeded")
+	}
+	for _, p := range []string{bad, bad + ".state", bad + restorejournal.LevelsSuffix} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s left behind after a failed --into: %v", p, err)
+		}
 	}
 }
 

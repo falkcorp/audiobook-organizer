@@ -1,11 +1,11 @@
 // file: internal/itunes/retired_rows.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d41c0a2-93e8-4b5f-a6d1-2c8e5b09f713
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package itunes
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // splitRetiredRows reads every book_file row, retired ones included, and
 // returns the live rows and the retired rows separately.

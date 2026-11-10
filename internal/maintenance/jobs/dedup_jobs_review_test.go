@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

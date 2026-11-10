@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_guards_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b3d1f62-47a9-4c05-9e1b-6f2a8d4c7e91
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

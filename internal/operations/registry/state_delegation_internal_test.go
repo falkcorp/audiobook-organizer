@@ -1,7 +1,7 @@
 // file: internal/operations/registry/state_delegation_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e01798b1-4fa6-4d50-af2d-757e73ceebb7
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 

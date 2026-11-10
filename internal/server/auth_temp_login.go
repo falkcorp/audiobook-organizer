@@ -1,7 +1,7 @@
 // file: internal/server/auth_temp_login.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Temp-login token: admin mints a short-lived single-use URL for a user.
 // User clicks the URL → server consumes the token → 24h session cookie
@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"

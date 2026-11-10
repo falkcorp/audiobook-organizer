@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6f7a8b9c-0d1e-2345-f012-34567890abcd
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/oklog/ulid/v2"
 )

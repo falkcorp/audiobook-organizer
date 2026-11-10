@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

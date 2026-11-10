@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_resume_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d71c936-4d00-48ec-b188-ad49586bbd4e
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package server
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

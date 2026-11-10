@@ -1,7 +1,7 @@
 // file: internal/catalog/match_title.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91c4e7a3-6b08-4d52-b3f9-2a7d5e1c8046
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package catalog
 
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"unicode"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // titleKey is a title in the form B2 compares: edition markers stripped and

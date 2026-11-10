@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_paired_lock_stripe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c9a51-6b7e-4d2a-9c84-1e5f7a2b8d63
-// last-edited: 2026-10-03
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

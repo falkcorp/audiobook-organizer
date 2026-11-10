@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

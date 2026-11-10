@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_database_only_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f6a9c13-8b47-4e05-a1d9-5c3e7b0f8a62
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

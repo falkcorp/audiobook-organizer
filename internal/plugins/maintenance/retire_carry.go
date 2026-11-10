@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0b8d3f64-72a1-4c5e-8f19-6e4a9d2c7b35
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: f1e2d3c4-b5a6-7890-cdef-1234567890ab
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"

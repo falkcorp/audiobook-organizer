@@ -1,7 +1,7 @@
 // file: internal/bookfileaudio/duration_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c0f4a8e-6b1d-4e52-9a77-2d5e8f1b9c04
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package bookfileaudio
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

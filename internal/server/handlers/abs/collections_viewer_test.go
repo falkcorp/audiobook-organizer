@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_viewer_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 6d3f9b28-4e71-4a05-b8c2-1f7a0e5d9c43
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	searchidx "github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"

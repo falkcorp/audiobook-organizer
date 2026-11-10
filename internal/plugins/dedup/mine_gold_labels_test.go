@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/mine_gold_labels_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: c5a71e38-9b20-4d64-8f12-3e6a9c7b2d05
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // End-to-end test for the dedup.mine-gold-labels op against a real PebbleStore +
 // EmbeddingStore: a candidate whose two books share a file hash is labeled
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func createBookWithHashedFile(t *testing.T, pebble *database.PebbleStore, title, fileHash string) string {

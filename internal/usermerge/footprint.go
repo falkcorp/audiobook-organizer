@@ -1,7 +1,7 @@
 // file: internal/usermerge/footprint.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a7c3e91-b284-4d06-9f1a-e8d62b05c473
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package usermerge
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 

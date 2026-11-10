@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )

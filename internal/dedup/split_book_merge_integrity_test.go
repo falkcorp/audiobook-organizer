@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_integrity_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5f81c3d2-9e4a-4b67-a0d8-2c7e9b13f456
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"

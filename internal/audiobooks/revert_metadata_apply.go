@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_metadata_apply.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e2d8a14-0b7c-4f39-a5e1-d3c9b8f27a60
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

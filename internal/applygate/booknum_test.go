@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 5e8a0b17-4c3d-4f92-a6e1-2d9c7b0f8e35
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )

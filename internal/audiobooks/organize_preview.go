@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize_preview.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/preview.go. This file provides type aliases and
@@ -11,7 +11,7 @@
 package audiobooks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

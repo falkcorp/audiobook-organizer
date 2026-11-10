@@ -1,7 +1,7 @@
 // file: internal/metrics/pebble_collector.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7dc3409f-5419-47d8-8770-916f33b019ae
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metrics
 
@@ -28,7 +28,7 @@ const pebbleLevels = 7
 
 // PebbleSample is one point-in-time read of a Pebble database's Metrics().
 // Every field is a float64 so the collector hands values straight to
-// MustNewConstMetric. internal/metrics must not import internal/database (the
+// MustNewConstMetric. internal/metrics must not import internal/books/store (the
 // dependency points the other way), so the database package fills this type.
 type PebbleSample struct {
 	BlockCacheBytes           float64

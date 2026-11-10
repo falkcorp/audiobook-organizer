@@ -1,14 +1,14 @@
 // file: internal/dedup/split_book_merge_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7c4e1a92-6d3b-4f18-b0a5-2e9c7d514af3
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

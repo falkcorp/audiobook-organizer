@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_query_shapes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f79f3c26-3085-46f4-9b30-058a6200bd75
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

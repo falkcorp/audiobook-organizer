@@ -1,5 +1,5 @@
 // file: internal/server/metadata_scoring_refactor_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3a7c2b1d-e84f-4d59-9f16-0e5a8b2c4d7e
 
 package server
@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

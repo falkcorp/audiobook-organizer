@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_standdown_apply_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c8e1a94-2d76-4f03-9b6e-1a4c7e0d258f
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

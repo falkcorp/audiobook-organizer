@@ -1,7 +1,7 @@
 // file: internal/config/mask_length_independent_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f0c9a52-7d1e-4b8a-9c64-5a2e81d7b0f3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // maskedFieldCase is one secret-bearing field that GET /api/v1/config masks and

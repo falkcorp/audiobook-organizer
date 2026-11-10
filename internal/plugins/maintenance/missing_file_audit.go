@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_progress_partial_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1e5a9c7d-2b48-4f36-8d0e-b7c4f2a9e613
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // corruptUserPositionsStore makes one user's position rows undecodable, the

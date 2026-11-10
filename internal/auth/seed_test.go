@@ -1,7 +1,7 @@
 // file: internal/auth/seed_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8c4d1e2f-5b3a-4f60-b9c7-2d8e0f1b9a56
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package auth
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestSeedRoles_FirstRun(t *testing.T) {

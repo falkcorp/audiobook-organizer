@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_whole_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b4e1f27-3a96-4c05-b7d2-6e0a9c5f1d38
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

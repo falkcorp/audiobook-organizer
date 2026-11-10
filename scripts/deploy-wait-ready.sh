@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
 # file: scripts/deploy-wait-ready.sh
-# version: 1.0.0
+# version: 2.1.0
 # guid: 08d3f99b-10a7-4a18-b6b6-c092d9177c08
-# last-edited: 2026-10-12
+# last-edited: 2026-11-09
 #
 # Wait for a restarted server to report "ready":true on /health.
-# Usage: deploy-wait-ready.sh BASE_URL [TIMEOUT_SECONDS]   (default 300)
-# Polls every 5 s. No answer or "ready":false keeps polling. A 200 body with
-# no "ready" field fails at once: that binary predates readiness reporting.
+# Usage: deploy-wait-ready.sh BASE_URL TIMEOUT [SSH_HOST UNIT [PREVIOUS_INVOCATION]]
+# With SSH_HOST it also reads the systemd unit over ssh: activating is
+# progress (TIMEOUT counts from when the unit leaves it), failed, inactive or
+# a rising NRestarts fails at once, and exit 78 (the binary refused the store)
+# is reported by name. With PREVIOUS_INVOCATION (the unit's InvocationID read
+# before the restart) it never calls the process that was already running
+# ready: a restart that never ran fails as "not restarted". Without SSH_HOST (Docker, launchd) it polls the URL
+# only, for at least DEPLOY_READY_URL_TIMEOUT (default 1800 s).
+# Exit: 0 ready, 1 not ready, 2 bad answer, 78 refused the store.
+# The logic is Python (repo rule: shell only for small scripts); the details
+# are in scripts/deploy_wait_ready.py.
 set -euo pipefail
-url="${1:?usage: deploy-wait-ready.sh BASE_URL [TIMEOUT_SECONDS]}/health"
-timeout="${2:-300}"
-start=$SECONDS
-while ((SECONDS - start < timeout)); do
-  body=$(curl -ksf --max-time 5 "$url") || body=""
-  case "$body" in
-    *'"ready":true'*) echo "   ready after $((SECONDS - start))s"; exit 0 ;;
-    "" | *'"ready":false'*) ;;
-    *) echo "ERROR: $url answered with no ready field after $((SECONDS - start))s (binary predates readiness reporting?)" >&2; exit 2 ;;
-  esac
-  sleep 5
-done
-echo "ERROR: $url not ready after $((SECONDS - start))s (limit ${timeout}s)" >&2
-exit 1
+exec python3 "$(dirname "$0")/deploy_wait_ready.py" "$@"

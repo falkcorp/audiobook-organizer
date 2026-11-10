@@ -1,14 +1,14 @@
 // file: internal/metafetch/fill_only.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9b4e2c71-5a3d-4f08-b6e1-2d7c8a90f513
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 package metafetch
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

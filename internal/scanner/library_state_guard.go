@@ -1,11 +1,11 @@
 // file: internal/scanner/library_state_guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 146e0696-abbc-4b4c-a3fd-889a292ad957
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package scanner
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // scannerMayChangeLibraryState reports whether a scan may write dst's
 // LibraryState at all. It is the one test every scan-derived state write

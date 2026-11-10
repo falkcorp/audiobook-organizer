@@ -1,12 +1,12 @@
 // file: internal/organizer/journal_record.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c4e7a2-5d38-4b6f-a1e9-3f8d20c7b564
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package organizer
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

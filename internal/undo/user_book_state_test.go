@@ -1,7 +1,7 @@
 // file: internal/undo/user_book_state_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 35f35ebb-9e54-4962-96ea-2558ca9f3a67
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func ubsRow(t *testing.T, oldS, newS UserStateSnapshot) *database.OperationChange {

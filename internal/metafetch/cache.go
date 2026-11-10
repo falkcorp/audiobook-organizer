@@ -1,10 +1,10 @@
 // file: internal/metafetch/cache.go
-// version: 1.39.1
+// version: 1.39.2
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
-// lives in internal/database (MetadataCandidateCache) — re-exported
+// lives in internal/books/store (MetadataCandidateCache) — re-exported
 // here via a type alias so existing metafetch callers keep their
 // import path. The forbidden direction (database → metafetch) is
 // preserved: metafetch imports database, never the other way.
@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"golang.org/x/time/rate"
@@ -91,7 +91,7 @@ func CandidateIdentityStale(entry *MetadataCandidateCache, book *database.Book, 
 }
 
 // MetadataCandidateCache is a re-export of the persistence type so
-// metafetch callers don't need to know about internal/database.
+// metafetch callers don't need to know about internal/books/store.
 type MetadataCandidateCache = database.MetadataCandidateCache
 
 // MetadataCacheSummary is the lightweight enumeration record.

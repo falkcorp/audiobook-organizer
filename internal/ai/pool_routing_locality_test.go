@@ -1,7 +1,7 @@
 // file: internal/ai/pool_routing_locality_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c2b8e-3f71-4a6e-9c24-8e1b7a3f6d95
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package ai
 
@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // mapSettings is a minimal database.SettingsStore so the test can drive the

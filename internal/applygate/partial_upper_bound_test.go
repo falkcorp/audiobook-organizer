@@ -1,7 +1,7 @@
 // file: internal/applygate/partial_upper_bound_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8b4e1d27-5c93-4a60-b7f2-0d6a9e3c1f58
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package applygate
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

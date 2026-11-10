@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8f2c6d1a-4b7e-4c93-a5d0-1e9b3f7a2c58
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // promoteNewestAltForTest flips the status of the book's most recently

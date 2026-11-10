@@ -1,7 +1,7 @@
 // file: internal/server/auth_lockout_test.go
-// version: 2.1.4
+// version: 2.1.5
 // guid: 8c4e5f3a-9b5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"

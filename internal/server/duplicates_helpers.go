@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.23.4
+// version: 1.23.5
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -35,7 +35,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -241,7 +241,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// be deleted — stranding every trashed row on a series ID that no longer
 	// resolves. That is the surviving half of the hazard that left 6,893 phantom
 	// series IDs held by 13,322 live books (+702 trashed) on production
-	// 2026-08-14; see internal/database/series_bookref.go.
+	// 2026-08-14; see internal/books/store/series_bookref.go.
 	//
 	// Read ONCE for the whole library rather than per series: it turns one scan
 	// per duplicate group into one scan total, and the counts cannot go stale in
@@ -329,7 +329,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	// zero from that counter left them pointing at a row that no longer exists.
 	// On production 2026-08-14 that had already produced 6,893 phantom series
 	// IDs held by 13,322 live books (+702 trashed), every one of them rendering
-	// with no series. See internal/database/series_bookref.go.
+	// with no series. See internal/books/store/series_bookref.go.
 	//
 	// The reference counts are computed ONCE for the whole library rather than
 	// per series: it turns 14,626 scans into one, and more importantly it is the

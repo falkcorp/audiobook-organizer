@@ -1,7 +1,7 @@
 // file: internal/metafetch/state_snapshot_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0b9d0f57-6fc7-45ea-9c21-992a7ba92708
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_repoint_conflict_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 25efa569-e8e9-4a4f-a9e6-552f22bd5863
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // failingModifyFiles is a book_file store whose ModifyBookFile runs the

@@ -1,7 +1,7 @@
 // file: internal/undo/retire_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package undo
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 )
 
 func retireRow(id, op, file, shell, holder, version string) *database.OperationChange {

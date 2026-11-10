@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

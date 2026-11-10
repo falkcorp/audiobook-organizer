@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -43,7 +43,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

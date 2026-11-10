@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/op_params_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b0e7d2c-3f41-4a8e-9c16-e2a7f4d90b38
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

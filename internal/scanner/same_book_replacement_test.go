@@ -1,7 +1,7 @@
 // file: internal/scanner/same_book_replacement_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4f0b7c2e-81d3-4a96-b5e7-2c9d0a6f3e18
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"

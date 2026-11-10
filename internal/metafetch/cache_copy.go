@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_copy.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b0f6c2e-9a41-4d7e-8c13-2e7a4f9d0b68
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ErrNoCandidatesToCopy is CopyCandidateCache's refusal when the source book

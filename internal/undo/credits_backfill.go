@@ -1,7 +1,7 @@
 // file: internal/undo/credits_backfill.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 28847eaf-80d0-49cd-95a2-6de0cb8f0381
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package undo
 
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeCreditsBackfill: maintenance.credits-backfill rewrote one book's

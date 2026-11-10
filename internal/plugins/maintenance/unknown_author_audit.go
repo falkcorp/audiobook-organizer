@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/unknown_author_audit.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 730dab79-4f62-426a-9ab9-ac727bf31a58
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -30,7 +30,7 @@ import (
 // The same TODO item asks to "audit how many books already have 'Unknown
 // Author' baked into their organizer-tree paths"; this op is that census.
 //
-// 🔴 NOT COVERED BY MIGRATION 61. migration061Up (internal/database/
+// 🔴 NOT COVERED BY MIGRATION 61. migration061Up (internal/books/store/
 // migrations.go) flags books whose FilePath contains a literal '{' -- an
 // UNRESOLVED {author} token. A path the organizer already expanded to
 // ".../Unknown Author/..." carries no '{', so migration 61 never sees it.

@@ -1,7 +1,7 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 

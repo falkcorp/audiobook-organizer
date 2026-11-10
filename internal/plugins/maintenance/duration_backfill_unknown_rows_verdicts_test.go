@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_verdicts_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c557639-7962-4db8-ae44-9f66c5954f1d
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // unknownRowActionable is the one rule the backfill's walk and the folder-books

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b40f9d2-7c15-4e83-a09b-2d5e1f847c36
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // provDeps supplies a real provenance store to the op under test.

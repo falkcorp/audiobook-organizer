@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

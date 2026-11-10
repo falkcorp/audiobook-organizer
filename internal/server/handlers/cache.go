@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.8.1
+// version: 2.8.2
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_attach_failure_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d540b8fe-78f6-4317-af34-77988b64e1b4
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The write that attaches a rowless absorbed book's file fails (here: the move of

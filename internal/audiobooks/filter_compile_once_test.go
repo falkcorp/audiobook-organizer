@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compile_once_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f11ca9f6-e8e7-49d7-9b65-2a501c9b4d52
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestListPath_CompilesFiltersOncePerRequest guards the list path against a

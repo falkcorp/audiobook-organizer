@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.5.0
+# version: 1.5.1
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
-# last-edited: 2026-10-30
+# last-edited: 2026-11-09
 """Run Go test packages split into shards, then merge their coverage.
 
 `go test` runs packages in parallel but each package's tests in one process,
@@ -96,7 +96,7 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
     if not pkgs:
         return {}
     # The summary lines name packages by import path, whatever form the
-    # caller used (`./internal/database` from the fixture sharder, import
+    # caller used (`./internal/books/store` from the fixture sharder, import
     # paths from the short-test sharder), so resolve first. Missed on
     # 2026-10-09 (#3882): the relative form matched nothing and every
     # Woodpecker fixture step failed with "no summary line".

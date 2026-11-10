@@ -1,7 +1,7 @@
 // file: internal/organizer/reorganize_inplace_test.go
-// version: 1.4.0
+// version: 1.4.2
 // guid: 7a1c9e4b-2f6d-4a83-9e0c-5b8d3f7a1c62
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -52,11 +52,11 @@ func TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-1").Return(book, nil)
-	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("UpdateBook", "book-1", mock.AnythingOfType("*store.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-1").Return([]database.BookFile{
 		{ID: "bf-1", FilePath: childFile},
 	}, nil)
-	mockStore.On("UpdateBookFile", "bf-1", mock.AnythingOfType("*database.BookFile")).
+	mockStore.On("UpdateBookFile", "bf-1", mock.AnythingOfType("*store.BookFile")).
 		Return(fmt.Errorf("simulated db write failure"))
 	mockStore.On("MarkNeedsRescan", "book-1").Return(nil)
 
@@ -111,11 +111,11 @@ func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-2").Return(book, nil)
-	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("UpdateBook", "book-2", mock.AnythingOfType("*store.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-2").Return([]database.BookFile{
 		{ID: "bf-2", FilePath: childFile},
 	}, nil)
-	mockStore.On("UpdateBookFile", "bf-2", mock.AnythingOfType("*database.BookFile")).Return(nil)
+	mockStore.On("UpdateBookFile", "bf-2", mock.AnythingOfType("*store.BookFile")).Return(nil)
 
 	svc := NewService(mockStore)
 	log := &noopLogger{}
@@ -161,11 +161,11 @@ func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-sf").Return(book, nil)
-	mockStore.On("UpdateBook", "book-sf", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("UpdateBook", "book-sf", mock.AnythingOfType("*store.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-sf").Return([]database.BookFile{
 		{ID: "bf-sf", FilePath: oldPath},
 	}, nil)
-	mockStore.On("UpdateBookFile", "bf-sf", mock.AnythingOfType("*database.BookFile")).
+	mockStore.On("UpdateBookFile", "bf-sf", mock.AnythingOfType("*store.BookFile")).
 		Run(func(args mock.Arguments) { wroteRow = args.Get(1).(*database.BookFile) }).
 		Return(nil)
 
@@ -226,12 +226,12 @@ func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-dir").Return(book, nil)
-	mockStore.On("UpdateBook", "book-dir", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("UpdateBook", "book-dir", mock.AnythingOfType("*store.Book")).Return(book, nil)
 	mockStore.On("GetBookFiles", "book-dir").Return([]database.BookFile{
 		{ID: "child", FilePath: child},
 		{ID: "sibling", FilePath: sibling},
 	}, nil)
-	mockStore.On("UpdateBookFile", mock.Anything, mock.AnythingOfType("*database.BookFile")).
+	mockStore.On("UpdateBookFile", mock.Anything, mock.AnythingOfType("*store.BookFile")).
 		Run(func(args mock.Arguments) { updated = append(updated, args.Get(0).(string)) }).
 		Return(nil)
 
@@ -281,7 +281,7 @@ func TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan(t *testing.T) {
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
 	mockStore.On("GetBookByID", "book-stale").Return(book, nil)
-	mockStore.On("UpdateBook", "book-stale", mock.AnythingOfType("*database.Book")).Return(book, nil)
+	mockStore.On("UpdateBook", "book-stale", mock.AnythingOfType("*store.Book")).Return(book, nil)
 	// The one row's path does NOT match oldPath — it drifted earlier.
 	mockStore.On("GetBookFiles", "book-stale").Return([]database.BookFile{
 		{ID: "bf-stale", FilePath: filepath.Join(rootDir, "somewhere", "else.mp3")},

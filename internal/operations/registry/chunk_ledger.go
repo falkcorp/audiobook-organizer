@@ -1,7 +1,7 @@
 // file: internal/operations/registry/chunk_ledger.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1d4e18b1-a85c-41de-bd02-4a39b90f180a
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package registry
 
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The chunk ledger (owner decision D28a, sdk-api.md §5) replaces the

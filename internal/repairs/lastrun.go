@@ -1,11 +1,11 @@
 // file: internal/repairs/lastrun.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0d6b94e2-7a3f-4c18-b5e0-2f91c8a47d36
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package repairs
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // Each fixer's newest plan and apply are recorded under a settings key when
 // they are enqueued, so GET /repairs is two point reads per fixer (scanning the

@@ -1,7 +1,7 @@
 // file: internal/config/update_service_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package config
 
@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/mock"
 )
 

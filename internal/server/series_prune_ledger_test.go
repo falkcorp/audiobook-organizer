@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_ledger_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d9e7a51-c06b-4f38-9b14-8a3f6e2c75d9
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The golden library ends every run with one refusal (a merged-away copy a

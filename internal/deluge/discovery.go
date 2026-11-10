@@ -1,7 +1,7 @@
 // file: internal/deluge/discovery.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 //
 // Four-tier matching to decide if a labeled Deluge torrent is already in
 // the library — run in order, stop on first hit:
@@ -34,8 +34,8 @@ import (
 	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

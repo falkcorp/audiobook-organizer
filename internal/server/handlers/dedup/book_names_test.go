@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/book_names_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 37540837-ee05-4c3d-b1a6-f85414974da2
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func intPtr(i int) *int { return &i }

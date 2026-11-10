@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -19,8 +19,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

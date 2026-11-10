@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/narrator_split_internal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: fad820b8-36c7-4108-a80e-6bcf9554b61e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs
 
@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // 2026-09-22: a book whose cast came from a metadata provider has no junction

@@ -1,12 +1,12 @@
 // file: internal/scanner/override_guard.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: c7c82b95-8fdb-4d7e-9787-b7f136df7a1e
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // libraryStateImported is the Book.LibraryState value the scanner assigns when a

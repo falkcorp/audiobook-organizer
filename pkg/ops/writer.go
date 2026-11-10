@@ -1,14 +1,14 @@
 // file: pkg/ops/writer.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: dc4d264d-6ac3-4ecd-bd11-247d5300dd3c
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package ops
 
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Writer is the only write path an op gets (internal/operations/opswriter

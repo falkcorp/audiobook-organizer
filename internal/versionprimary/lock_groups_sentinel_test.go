@@ -1,7 +1,7 @@
 // file: internal/versionprimary/lock_groups_sentinel_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6f2b8d14-3a9c-4e57-b0d2-8c1e7a5f3b96
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package versionprimary
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // collidingGroup returns a group id other than g that hashes onto g's stripe.

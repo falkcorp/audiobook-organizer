@@ -1,7 +1,7 @@
 // file: internal/repairs/guards_owner_manual_bench_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a2f9d83-1c75-4e08-b4a6-3d91e7f05c28
-// last-edited: 2026-10-22
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // benchGuardLibrary is a library-sized fake for the owner-manual guard: books

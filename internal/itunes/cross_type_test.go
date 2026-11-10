@@ -1,7 +1,7 @@
 // file: internal/itunes/cross_type_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6d1f8b40-2a95-4c73-8e60-3b7a1c9e0d58
-// last-edited: 2026-08-20
+// last-edited: 2026-11-09
 
 package itunes
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pidHexToBytes turns an 8-byte upper-hex PID string into the [8]byte the ITL

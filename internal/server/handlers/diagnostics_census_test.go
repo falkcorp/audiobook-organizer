@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_census_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 90aa916c-0432-4200-8e35-00b08069563b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newCensusHandlerStore(t *testing.T) *database.PebbleStore {

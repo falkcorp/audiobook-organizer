@@ -1,0 +1,531 @@
+// file: internal/books/store/pebble_store_atpath_markers_test.go
+// version: 1.1.10
+// guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+)
+
+// undecodableMarkerCount is the set's size.
+func (p *PebbleStore) undecodableMarkerCount() int {
+	m := &p.atpathMarkers
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.ids)
+}
+
+// batchDeletes captures the keys every UpdateBook/DeleteBook batch deletes,
+// keyed by op ("update"/"delete"), for the duration of the test.
+func batchDeletes(t *testing.T) func(op string) [][]byte {
+	t.Helper()
+	var mu sync.Mutex
+	got := map[string][][]byte{}
+	traceBatches(t)
+	bookWriteBatchPreCommitHook = func(op, _ string, b *GatedBatch) {
+		for _, w := range stagedWrites(t, b) {
+			if w.kind == batchOpDelete {
+				mu.Lock()
+				got[op] = append(got[op], bytes.Clone(w.key))
+				mu.Unlock()
+			}
+		}
+	}
+	t.Cleanup(func() { bookWriteBatchPreCommitHook = nil })
+	return func(op string) [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return got[op]
+	}
+}
+
+func deletedWithPrefix(keys [][]byte, prefix string) []string {
+	var out []string
+	for _, k := range keys {
+		if strings.HasPrefix(string(k), prefix) {
+			out = append(out, string(k))
+		}
+	}
+	return out
+}
+
+// TestUpdateBook_NoMarkerWritesNoMarkerDelete is the 2026-10-02 regression:
+// an UpdateBook (and a DeleteBook) on a book with no undecodable marker must
+// not stage a Delete for the marker key, and an identity change on a book
+// with no metadata cache entry must not stage one for the cache key. Each such
+// Delete was a tombstone that every later range scan of the family walked.
+func TestUpdateBook_NoMarkerWritesNoMarkerDelete(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	deletes := batchDeletes(t)
+
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asin := "B000TEST01"
+	b.ASIN = &asin // identity change: would have deleted metadata_cache:<id>
+	b.Title = "t2"
+	if _, err := s.UpdateBook(b.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	if got := deletedWithPrefix(deletes("update"), bookAtPathUndecodablePrefix); len(got) != 0 {
+		t.Fatalf("UpdateBook staged marker deletes %q for a book with no marker", got)
+	}
+	if got := deletedWithPrefix(deletes("update"), metadataCacheKeyPrefix); len(got) != 0 {
+		t.Fatalf("UpdateBook staged cache deletes %q for a book with no cache entry", got)
+	}
+
+	if err := s.DeleteBook(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{bookAtPathUndecodablePrefix, metadataCacheKeyPrefix, bookSigKeyPrefix,
+		embVecPfx, "chapters:", "book_authors:", "book_narrators:", "user_tag:book:", "alt_titles:book:"} {
+		if got := deletedWithPrefix(deletes("delete"), prefix); len(got) != 0 {
+			t.Errorf("DeleteBook staged %q deletes %q for keys that do not exist", prefix, got)
+		}
+	}
+}
+
+// TestUpdateBook_ExistingCacheEntryStillMarkedStale: the probe must not skip
+// the stale stamp that is owed; the row is kept, not deleted.
+func TestUpdateBook_ExistingCacheEntryStillMarkedStale(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	b.Title = "t retitled"
+	if _, err := s.UpdateBook(b.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMetadataCache(b.ID); err != nil || got == nil || !got.Stale {
+		t.Fatalf("cache entry not kept as Stale after a title change: %v %v", got, err)
+	}
+}
+
+// TestUpdateBook_MarkerStillCleared: a book that does carry a marker gets the
+// Delete, the marker leaves disk, and the id leaves the set.
+func TestUpdateBook_MarkerStillCleared(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	deletes := batchDeletes(t)
+
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantUndecodableMarker(t, s, b.ID)
+	if _, err := s.UpdateBook(b.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	if got := deletedWithPrefix(deletes("update"), bookAtPathUndecodablePrefix); len(got) != 1 {
+		t.Fatalf("marker deletes = %q, want exactly one", got)
+	}
+	if hasUndecodableMarker(t, s, b.ID) {
+		t.Fatal("marker still on disk after UpdateBook")
+	}
+	if n := s.undecodableMarkerCount(); n != 0 {
+		t.Fatalf("set size = %d after the delete committed, want 0", n)
+	}
+}
+
+// TestUndecodableMarker_EmptySetReaderDoesNoRangeScan: with the set empty the
+// readers must not look at the marker family at all. A marker planted on disk
+// BEHIND the set's back (no production writer can do this) is therefore
+// invisible: the lookups succeed instead of failing closed. Once the set knows
+// about it, the same lookups fail closed again.
+func TestUndecodableMarker_EmptySetReaderDoesNoRangeScan(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	setRawBookRow(t, s, "01BADROW", "{not json")
+	if err := s.db.Set(bookAtPathUndecodableKey("01BADROW"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.undecodableMarkerCount(); n != 0 {
+		t.Fatalf("set size = %d, want 0", n)
+	}
+	if _, err := s.LiveBookPathsUnderDir("/lib"); err != nil {
+		t.Fatalf("empty-set LiveBookPathsUnderDir read the marker family: %v", err)
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err != nil {
+		t.Fatalf("empty-set LiveBookIDsAtPath read the marker family: %v", err)
+	}
+
+	if err := s.noteUndecodableMarker("01BADROW"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LiveBookPathsUnderDir("/lib"); err == nil {
+		t.Fatal("LiveBookPathsUnderDir must fail closed on a known undecodable row")
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err == nil {
+		t.Fatal("LiveBookIDsAtPath must fail closed on a known undecodable row")
+	}
+}
+
+// TestUndecodableMarker_BackfillKeepsSetExact: the backfill adds every marker
+// it writes, and a rebuild drops every id whose marker it range-deleted and
+// did not re-add.
+func TestUndecodableMarker_BackfillKeepsSetExact(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedUndecodableAfterBackfill(t, s)
+	if n := s.undecodableMarkerCount(); n != 1 {
+		t.Fatalf("set size after backfill = %d, want 1", n)
+	}
+	if _, ok := s.undecodableMarkerMayExist("01BADROW"); !ok {
+		t.Fatal("backfill marker missing from the set")
+	}
+
+	// A stale id, then repair the bad row out of band and rebuild: both go.
+	if err := s.noteUndecodableMarker("01STALE"); err != nil {
+		t.Fatal(err)
+	}
+	setRawBookRow(t, s, "01BADROW", `{"id":"01BADROW","title":"fixed","file_path":"/fixed"}`)
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.undecodableMarkerCount(); n != 0 {
+		t.Fatalf("set size after rebuild = %d, want 0", n)
+	}
+	if hasUndecodableMarker(t, s, "01BADROW") {
+		t.Fatal("rebuild left the marker on disk")
+	}
+}
+
+// TestUndecodableMarker_ReAddBeatsStaleForget: an UpdateBook that looked
+// before a backfill worker re-added the id must not drop it after its own
+// commit, because the worker's marker may have committed after the delete.
+func TestUndecodableMarker_ReAddBeatsStaleForget(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	plantUndecodableMarker(t, s, "01X")
+	gen, ok := s.undecodableMarkerMayExist("01X")
+	if !ok {
+		t.Fatal("planted id not in the set")
+	}
+	if err := s.noteUndecodableMarker("01X"); err != nil { // worker re-adds
+		t.Fatal(err)
+	}
+	s.forgetUndecodableMarker("01X", gen) // the earlier writer's post-commit forget
+	if _, ok := s.undecodableMarkerMayExist("01X"); !ok {
+		t.Fatal("a stale forget dropped a re-added id")
+	}
+	gen2, _ := s.undecodableMarkerMayExist("01X")
+	s.forgetUndecodableMarker("01X", gen2)
+	if _, ok := s.undecodableMarkerMayExist("01X"); ok {
+		t.Fatal("a current forget did not drop the id")
+	}
+}
+
+// TestUndecodableMarker_ZeroValueStoreLoadsLazily: a store built without
+// newPebbleStore must treat the set as unknown and load it, never as empty.
+func TestUndecodableMarker_ZeroValueStoreLoadsLazily(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	if err := s.db.Set(bookAtPathUndecodableKey("01ONDISK"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	bare := &PebbleStore{db: s.db}
+	if _, ok := bare.undecodableMarkerMayExist("01ONDISK"); !ok {
+		t.Fatal("lazy load missed an on-disk marker")
+	}
+}
+
+// TestVerifyBookAtPathIndex_MarkerNotInSetReported (M1): a marker on disk that
+// the in-memory set lacks is the state in which the readers fail open. Verify
+// must find it by range-scanning the family (a point read of the set's own ids
+// cannot) and report it, without changing anything; the rebuild op is the
+// repair and puts the id back so lookups fail closed.
+func TestVerifyBookAtPathIndex_MarkerNotInSetReported(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BackfillBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	setRawBookRow(t, s, "01BADROW", "{not json")
+	if err := s.db.Set(bookAtPathUndecodableKey("01BADROW"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err != nil {
+		t.Fatalf("precondition: with the id missing from the set the lookup fails open, got %v", err)
+	}
+
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.MarkersNotInSet != 1 || !reflect.DeepEqual(rep.SampleNotInSet, []string{"01BADROW"}) {
+		t.Fatalf("MarkersNotInSet = %d %v, want 1 [01BADROW]", rep.MarkersNotInSet, rep.SampleNotInSet)
+	}
+	if rep.UnmarkedUndecodable != 0 || rep.StaleMarkers != 0 {
+		t.Fatalf("unmarked=%d stale=%d, want 0 0", rep.UnmarkedUndecodable, rep.StaleMarkers)
+	}
+	if _, ok := s.undecodableMarkerMayExist("01BADROW"); ok {
+		t.Fatal("verify is read-only but changed the marker set")
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err != nil {
+		t.Fatalf("verify is read-only but changed lookup behaviour: %v", err)
+	}
+
+	// The repair: the rebuild re-notes every still-undecodable row.
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.undecodableMarkerMayExist("01BADROW"); !ok {
+		t.Fatal("rebuild did not put the id back in the set")
+	}
+	if _, err := s.LiveBookIDsAtPath("/lib/a/t.m4b"); err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
+		t.Fatalf("after the rebuild the lookup must fail closed, got %v", err)
+	}
+
+	rep, err = s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.MarkersNotInSet != 0 {
+		t.Fatalf("second verify MarkersNotInSet = %d, want 0", rep.MarkersNotInSet)
+	}
+}
+
+// TestDeleteBook_HoldsBookAuthorsStripeAcrossProbeAndCommit (M2): DeleteBook
+// probes book_authors:<id> and stages its Delete only if present, so a
+// SetBookAuthors (which holds only the book_authors stripe) committing between
+// the probe and the commit would leak a credit row for a deleted book. The
+// stripe must be held at the pre-commit point, and released afterwards so a
+// waiting SetBookAuthors finishes rather than deadlocks.
+func TestDeleteBook_HoldsBookAuthorsStripeAcrossProbeAndCommit(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDone := make(chan error, 1)
+	var hookRan, stripeFree bool
+	bookWriteBatchPreCommitHook = func(op, id string, _ *GatedBatch) {
+		if op != "delete" || id != b.ID {
+			return
+		}
+		hookRan = true
+		mu := &s.bookAuthorLocks[stripeFor(id)]
+		if mu.TryLock() {
+			mu.Unlock()
+			stripeFree = true
+		}
+		// The racing credit write: it must wait for the commit.
+		go func() {
+			setDone <- s.SetBookAuthors(id, []BookAuthor{{BookID: id, AuthorID: 1, Role: "author"}})
+		}()
+		select {
+		case <-setDone:
+			stripeFree = true // it committed inside the probe-to-commit window
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	t.Cleanup(func() { bookWriteBatchPreCommitHook = nil })
+
+	if err := s.DeleteBook(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !hookRan {
+		t.Fatal("pre-commit hook never ran")
+	}
+	if stripeFree {
+		t.Fatal("book_authors stripe was free between DeleteBook's probe and its commit")
+	}
+	select {
+	case err := <-setDone:
+		if err != nil {
+			t.Logf("SetBookAuthors after the delete: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("SetBookAuthors still blocked after DeleteBook returned: stripe not released")
+	}
+}
+
+// TestUndecodableMarker_SurvivesReopenFailsClosed (L5a): the set lives only in
+// memory, so a reopen must rebuild it from disk and the lookup must still fail
+// closed on the undecodable row.
+func TestUndecodableMarker_SurvivesReopenFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewPebbleStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForWarmup()
+	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	setRawBookRow(t, s, "01BADROW", "{not json")
+	if res, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil || res.UndecodableRows != 1 {
+		s.Close()
+		t.Fatalf("rebuild: %+v %v, want 1 undecodable row", res, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := NewPebbleStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	s2.WaitForWarmup()
+	if n := s2.undecodableMarkerCount(); n != 1 {
+		t.Fatalf("set size after reopen = %d, want 1", n)
+	}
+	if _, err := s2.LiveBookIDsAtPath("/lib/a/t.m4b"); err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
+		t.Fatalf("after reopen LiveBookIDsAtPath must fail closed, got %v", err)
+	}
+}
+
+// TestUndecodableMarker_UpdateBookCommitBeforeBackfillMarkerCommit (L5b): the
+// real interleaving. A backfill worker notes a still-undecodable row and
+// stages its marker; before the worker commits, the row is repaired and an
+// UpdateBook commits its marker Delete and drops the id from the set. The
+// worker's marker then lands on disk. Its post-commit re-note must put the id
+// back (set stays a superset of disk), and the book stays findable.
+func TestUndecodableMarker_UpdateBookCommitBeforeBackfillMarkerCommit(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	b, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, closer, err := s.db.Get([]byte("book:" + b.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodJSON := string(bytes.Clone(good))
+	closer.Close()
+	setRawBookRow(t, s, b.ID, "{not json")
+
+	oldWorkers := bookAtPathBackfillWorkers
+	bookAtPathBackfillWorkers = 1 // one worker, one chunk, one commit
+	var fired int
+	bookAtPathBackfillBeforeChunkCommit = func() {
+		fired++
+		if _, ok := s.undecodableMarkerMayExist(b.ID); !ok {
+			t.Errorf("worker staged a marker it had not noted in the set")
+		}
+		// Repaired out of band, then an ordinary write commits first. This
+		// runs on the backfill worker goroutine, so no t.Fatal here.
+		if err := s.db.Set([]byte("book:"+b.ID), []byte(goodJSON), pebble.Sync); err != nil {
+			t.Errorf("repair row: %v", err)
+			return
+		}
+		cur, err := s.GetBookByID(b.ID)
+		if err != nil || cur == nil {
+			t.Errorf("GetBookByID after repair: %v %v", cur, err)
+			return
+		}
+		cur.Title = "t2"
+		if _, err := s.UpdateBook(b.ID, cur); err != nil {
+			t.Errorf("UpdateBook: %v", err)
+		}
+		if _, ok := s.undecodableMarkerMayExist(b.ID); ok {
+			t.Errorf("precondition: UpdateBook's committed delete should have dropped the id")
+		}
+	}
+	t.Cleanup(func() {
+		bookAtPathBackfillWorkers = oldWorkers
+		bookAtPathBackfillBeforeChunkCommit = nil
+	})
+
+	if _, err := s.RebuildBookAtPathIndex(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if fired != 1 {
+		t.Fatalf("pre-commit hook fired %d times, want 1", fired)
+	}
+	if !hasUndecodableMarker(t, s, b.ID) {
+		t.Fatal("precondition: the worker's marker should have landed after UpdateBook's delete")
+	}
+	if _, ok := s.undecodableMarkerMayExist(b.ID); !ok {
+		t.Fatal("marker on disk but not in the set: readers would fail open")
+	}
+	ids, err := s.LiveBookIDsAtPath("/lib/a/t.m4b")
+	if err != nil {
+		t.Fatalf("LiveBookIDsAtPath: %v", err)
+	}
+	if !reflect.DeepEqual(ids, []string{b.ID}) {
+		t.Fatalf("LiveBookIDsAtPath = %v, want [%s]", ids, b.ID)
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.MarkersNotInSet != 0 || rep.StaleMarkers != 1 {
+		t.Fatalf("verify: markers_not_in_set=%d stale=%d, want 0 1", rep.MarkersNotInSet, rep.StaleMarkers)
+	}
+}
+
+// TestBookAtPathRunLock_SerializesBackfillAndVerify (L1): the startup backfill
+// shares no ConcurrencyKey with the rebuild op, so the store serializes runs
+// itself, and a waiter gives up on its ctx.
+func TestBookAtPathRunLock_SerializesBackfillAndVerify(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	if _, err := s.CreateBook(&Book{Title: "t", FilePath: "/lib/a/t.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := s.atpathRuns.lock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.RebuildBookAtPathIndex(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("rebuild waiting on a held run lock with a cancelled ctx: %v, want context.Canceled", err)
+	}
+	if _, err := s.VerifyBookAtPathIndex(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("verify waiting on a held run lock with a cancelled ctx: %v, want context.Canceled", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("backfill ran while another run held the lock (err %v)", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("backfill did not proceed after the run lock was released")
+	}
+}

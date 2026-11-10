@@ -1,7 +1,7 @@
 // file: internal/server/server_helpers.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 8a40b808-2bf2-4a35-893c-ad5e3351dbae
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

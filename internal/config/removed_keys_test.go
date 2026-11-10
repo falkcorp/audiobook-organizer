@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package config
 
@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/mock"
 )

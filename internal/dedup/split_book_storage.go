@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_storage.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2a4b6c8e-1f3d-5a7b-9c0e-2d4f6a8b0c1d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Split-book candidate storage. The detector is purely analytical;
 // these helpers persist its results so the operator-facing CLI and the
@@ -28,7 +28,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	ulid "github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // splitBookKeyPrefix is the Pebble key prefix for stored candidates.

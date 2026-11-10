@@ -5,7 +5,7 @@
 package audiobooksmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockExternalIDStore) EXPECT() *MockExternalIDStore_Expecter {
 }
 
 // GetExternalIDsForBook provides a mock function for the type MockExternalIDStore
-func (_mock *MockExternalIDStore) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
+func (_mock *MockExternalIDStore) GetExternalIDsForBook(bookID string) ([]store.ExternalIDMapping, error) {
 	ret := _mock.Called(bookID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetExternalIDsForBook")
 	}
 
-	var r0 []database.ExternalIDMapping
+	var r0 []store.ExternalIDMapping
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.ExternalIDMapping, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.ExternalIDMapping, error)); ok {
 		return returnFunc(bookID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.ExternalIDMapping); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.ExternalIDMapping); ok {
 		r0 = returnFunc(bookID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.ExternalIDMapping)
+			r0 = ret.Get(0).([]store.ExternalIDMapping)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -97,12 +97,12 @@ func (_c *MockExternalIDStore_GetExternalIDsForBook_Call) Run(run func(bookID st
 	return _c
 }
 
-func (_c *MockExternalIDStore_GetExternalIDsForBook_Call) Return(externalIDMappings []database.ExternalIDMapping, err error) *MockExternalIDStore_GetExternalIDsForBook_Call {
+func (_c *MockExternalIDStore_GetExternalIDsForBook_Call) Return(externalIDMappings []store.ExternalIDMapping, err error) *MockExternalIDStore_GetExternalIDsForBook_Call {
 	_c.Call.Return(externalIDMappings, err)
 	return _c
 }
 
-func (_c *MockExternalIDStore_GetExternalIDsForBook_Call) RunAndReturn(run func(bookID string) ([]database.ExternalIDMapping, error)) *MockExternalIDStore_GetExternalIDsForBook_Call {
+func (_c *MockExternalIDStore_GetExternalIDsForBook_Call) RunAndReturn(run func(bookID string) ([]store.ExternalIDMapping, error)) *MockExternalIDStore_GetExternalIDsForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

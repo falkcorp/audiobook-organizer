@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_collapse_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c7e4b29-6a13-4d58-91f2-8e3b5d6a2c74
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"

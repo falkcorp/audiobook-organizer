@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // newPurgePlugin wires a MockStore over a fixed author table plus book and file

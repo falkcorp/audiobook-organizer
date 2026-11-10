@@ -7,7 +7,7 @@ package handlersmocks
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -48,26 +48,26 @@ func (_m *MockAPIKeyHandlerStore) EXPECT() *MockAPIKeyHandlerStore_Expecter {
 }
 
 // CreateAPIKey provides a mock function for the type MockAPIKeyHandlerStore
-func (_mock *MockAPIKeyHandlerStore) CreateAPIKey(key *database.APIKey) (*database.APIKey, error) {
+func (_mock *MockAPIKeyHandlerStore) CreateAPIKey(key *store.APIKey) (*store.APIKey, error) {
 	ret := _mock.Called(key)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateAPIKey")
 	}
 
-	var r0 *database.APIKey
+	var r0 *store.APIKey
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*database.APIKey) (*database.APIKey, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.APIKey) (*store.APIKey, error)); ok {
 		return returnFunc(key)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*database.APIKey) *database.APIKey); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.APIKey) *store.APIKey); ok {
 		r0 = returnFunc(key)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.APIKey)
+			r0 = ret.Get(0).(*store.APIKey)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*database.APIKey) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*store.APIKey) error); ok {
 		r1 = returnFunc(key)
 	} else {
 		r1 = ret.Error(1)
@@ -81,16 +81,16 @@ type MockAPIKeyHandlerStore_CreateAPIKey_Call struct {
 }
 
 // CreateAPIKey is a helper method to define mock.On call
-//   - key *database.APIKey
+//   - key *store.APIKey
 func (_e *MockAPIKeyHandlerStore_Expecter) CreateAPIKey(key any) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
 	return &MockAPIKeyHandlerStore_CreateAPIKey_Call{Call: _e.mock.On("CreateAPIKey", key)}
 }
 
-func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) Run(run func(key *database.APIKey)) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
+func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) Run(run func(key *store.APIKey)) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.APIKey
+		var arg0 *store.APIKey
 		if args[0] != nil {
-			arg0 = args[0].(*database.APIKey)
+			arg0 = args[0].(*store.APIKey)
 		}
 		run(
 			arg0,
@@ -99,34 +99,34 @@ func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) Run(run func(key *database.A
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) Return(aPIKey *database.APIKey, err error) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
+func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) Return(aPIKey *store.APIKey, err error) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
 	_c.Call.Return(aPIKey, err)
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) RunAndReturn(run func(key *database.APIKey) (*database.APIKey, error)) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
+func (_c *MockAPIKeyHandlerStore_CreateAPIKey_Call) RunAndReturn(run func(key *store.APIKey) (*store.APIKey, error)) *MockAPIKeyHandlerStore_CreateAPIKey_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetAPIKey provides a mock function for the type MockAPIKeyHandlerStore
-func (_mock *MockAPIKeyHandlerStore) GetAPIKey(id string) (*database.APIKey, error) {
+func (_mock *MockAPIKeyHandlerStore) GetAPIKey(id string) (*store.APIKey, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAPIKey")
 	}
 
-	var r0 *database.APIKey
+	var r0 *store.APIKey
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.APIKey, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.APIKey, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.APIKey); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.APIKey); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.APIKey)
+			r0 = ret.Get(0).(*store.APIKey)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -161,34 +161,34 @@ func (_c *MockAPIKeyHandlerStore_GetAPIKey_Call) Run(run func(id string)) *MockA
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_GetAPIKey_Call) Return(aPIKey *database.APIKey, err error) *MockAPIKeyHandlerStore_GetAPIKey_Call {
+func (_c *MockAPIKeyHandlerStore_GetAPIKey_Call) Return(aPIKey *store.APIKey, err error) *MockAPIKeyHandlerStore_GetAPIKey_Call {
 	_c.Call.Return(aPIKey, err)
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_GetAPIKey_Call) RunAndReturn(run func(id string) (*database.APIKey, error)) *MockAPIKeyHandlerStore_GetAPIKey_Call {
+func (_c *MockAPIKeyHandlerStore_GetAPIKey_Call) RunAndReturn(run func(id string) (*store.APIKey, error)) *MockAPIKeyHandlerStore_GetAPIKey_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetUserByID provides a mock function for the type MockAPIKeyHandlerStore
-func (_mock *MockAPIKeyHandlerStore) GetUserByID(id string) (*database.User, error) {
+func (_mock *MockAPIKeyHandlerStore) GetUserByID(id string) (*store.User, error) {
 	ret := _mock.Called(id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetUserByID")
 	}
 
-	var r0 *database.User
+	var r0 *store.User
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (*database.User, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) (*store.User, error)); ok {
 		return returnFunc(id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) *database.User); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) *store.User); ok {
 		r0 = returnFunc(id)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.User)
+			r0 = ret.Get(0).(*store.User)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -223,34 +223,34 @@ func (_c *MockAPIKeyHandlerStore_GetUserByID_Call) Run(run func(id string)) *Moc
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_GetUserByID_Call) Return(user *database.User, err error) *MockAPIKeyHandlerStore_GetUserByID_Call {
+func (_c *MockAPIKeyHandlerStore_GetUserByID_Call) Return(user *store.User, err error) *MockAPIKeyHandlerStore_GetUserByID_Call {
 	_c.Call.Return(user, err)
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_GetUserByID_Call) RunAndReturn(run func(id string) (*database.User, error)) *MockAPIKeyHandlerStore_GetUserByID_Call {
+func (_c *MockAPIKeyHandlerStore_GetUserByID_Call) RunAndReturn(run func(id string) (*store.User, error)) *MockAPIKeyHandlerStore_GetUserByID_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListAPIKeysForUser provides a mock function for the type MockAPIKeyHandlerStore
-func (_mock *MockAPIKeyHandlerStore) ListAPIKeysForUser(userID string) ([]database.APIKey, error) {
+func (_mock *MockAPIKeyHandlerStore) ListAPIKeysForUser(userID string) ([]store.APIKey, error) {
 	ret := _mock.Called(userID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListAPIKeysForUser")
 	}
 
-	var r0 []database.APIKey
+	var r0 []store.APIKey
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]database.APIKey, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) ([]store.APIKey, error)); ok {
 		return returnFunc(userID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string) []database.APIKey); ok {
+	if returnFunc, ok := ret.Get(0).(func(string) []store.APIKey); ok {
 		r0 = returnFunc(userID)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.APIKey)
+			r0 = ret.Get(0).([]store.APIKey)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
@@ -285,34 +285,34 @@ func (_c *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call) Run(run func(userID st
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call) Return(aPIKeys []database.APIKey, err error) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
+func (_c *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call) Return(aPIKeys []store.APIKey, err error) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
 	_c.Call.Return(aPIKeys, err)
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call) RunAndReturn(run func(userID string) ([]database.APIKey, error)) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
+func (_c *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call) RunAndReturn(run func(userID string) ([]store.APIKey, error)) *MockAPIKeyHandlerStore_ListAPIKeysForUser_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListAllAPIKeys provides a mock function for the type MockAPIKeyHandlerStore
-func (_mock *MockAPIKeyHandlerStore) ListAllAPIKeys() ([]database.APIKey, error) {
+func (_mock *MockAPIKeyHandlerStore) ListAllAPIKeys() ([]store.APIKey, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListAllAPIKeys")
 	}
 
-	var r0 []database.APIKey
+	var r0 []store.APIKey
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.APIKey, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.APIKey, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.APIKey); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.APIKey); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.APIKey)
+			r0 = ret.Get(0).([]store.APIKey)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -340,12 +340,12 @@ func (_c *MockAPIKeyHandlerStore_ListAllAPIKeys_Call) Run(run func()) *MockAPIKe
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_ListAllAPIKeys_Call) Return(aPIKeys []database.APIKey, err error) *MockAPIKeyHandlerStore_ListAllAPIKeys_Call {
+func (_c *MockAPIKeyHandlerStore_ListAllAPIKeys_Call) Return(aPIKeys []store.APIKey, err error) *MockAPIKeyHandlerStore_ListAllAPIKeys_Call {
 	_c.Call.Return(aPIKeys, err)
 	return _c
 }
 
-func (_c *MockAPIKeyHandlerStore_ListAllAPIKeys_Call) RunAndReturn(run func() ([]database.APIKey, error)) *MockAPIKeyHandlerStore_ListAllAPIKeys_Call {
+func (_c *MockAPIKeyHandlerStore_ListAllAPIKeys_Call) RunAndReturn(run func() ([]store.APIKey, error)) *MockAPIKeyHandlerStore_ListAllAPIKeys_Call {
 	_c.Call.Return(run)
 	return _c
 }

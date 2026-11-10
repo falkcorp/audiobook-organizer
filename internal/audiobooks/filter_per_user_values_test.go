@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_per_user_values_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2d8f4a67-b1c3-4e90-85a6-7c0e3d9f1b52
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,8 +9,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

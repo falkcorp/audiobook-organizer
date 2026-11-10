@@ -1,0 +1,4181 @@
+// file: internal/books/store/mock_store.go
+// version: 1.157.3
+// guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// Compile-time assertion: MockStore must implement Store. If a new
+// method is added to the Store interface without a corresponding
+// MockStore method, this line breaks the build before tests even
+// start — catching the drift that #241 had to fix after merge.
+//
+// (We keep this hand-written MockStore alongside the mockery-generated
+// one in internal/books/store/mocks because the two patterns serve
+// different callers: this one is permissive by default — unconfigured
+// methods return zero values silently, matching the historical
+// "minimal stub" idiom used by ~22 server test files. Converting all
+// of those to mockery's strict-expectation model would require
+// either adding .Maybe() expectations for every method each code
+// path happens to call, or writing a loose-mock helper that
+// re-creates this pattern on top of the generated mock. Neither is
+// clearly an improvement, so we keep the two patterns and rely on
+// this assertion + CI vet to prevent drift.)
+var _ Store = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*PebbleStore)(nil)
+
+// MockStore is a simple mock implementation for testing services
+type MockStore struct {
+	// BooksByFileHashFunc backs BooksByFileHash (the FileHashHolderLookup
+	// capability, not a Store method). Unset, BooksByFileHash answers with what
+	// GetBookByFileHash answers, as a one-element list, so a test that stubs
+	// only the single-answer lookup keeps working.
+	BooksByFileHashFunc func(hash string) ([]*Book, error)
+
+	// Book methods
+	GetBookByIDFunc           func(id string) (*Book, error)
+	ClearBookSignatureFunc    func(id string) error
+	GetBooksByIDsFunc         func(ids []string) ([]Book, error)
+	GetBookByFilePathFunc     func(path string) (*Book, error)
+	LiveBookIDsAtPathFunc     func(path string) ([]string, error)
+	BookIDsAtPathFunc         func(path string) ([]string, error)
+	LiveBookPathsUnderDirFunc func(dir string) (map[string]string, error)
+	// SampleLiveBookFilePathsUnderFunc backs SampleLiveBookFilePathsUnder (the
+	// LiveBookFileSampler capability, not a Store method).
+	SampleLiveBookFilePathsUnderFunc func(root string, k int) ([]string, error)
+	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
+	// GetAllBooks was removed from the interface in STOREFID W5z). Several
+	// dedup tests set only this; GetAllBooksCoreFunc's default (see
+	// setupTestEngine in internal/dedup) forwards to it so those tests keep
+	// working without a mechanical per-file migration.
+	GetAllBooksFunc     func(limit, offset int) ([]Book, error)
+	GetAllBooksCoreFunc func(limit, offset int) ([]BookCore, error)
+	// GetAllBooksCoreCompleteFunc backs the completeness-guarded getter. It is
+	// separate from GetAllBooksCoreFunc on purpose: a test that wants the
+	// orphan-file delete path to see a SHORT book list must be able to make
+	// this one return an error (or fewer rows) without also changing what every
+	// ordinary listing sees. Left nil, it falls back to GetAllBooksCoreFunc so
+	// existing tests that only stub the plain getter keep working.
+	GetAllBooksCoreCompleteFunc func(limit, offset int) ([]BookCore, error)
+
+	// GetAllBookFilesCoreCompleteFunc backs the completeness-guarded file
+	// listing; nil falls back to GetAllBookFilesCore.
+	GetAllBookFilesCoreCompleteFunc func() ([]BookFileCore, error)
+
+	GetAllBooksFullFromFunc    func(afterID string, limit int) ([]Book, error)
+	ListBookIDsFunc            func() ([]string, error)
+	ListBookSearchRowsFunc     func() ([]BookSearchRow, error)
+	GetAllBookSummariesFunc    func(limit, offset int) ([]BookSummary, error)
+	GetBooksByWorkIDFunc       func(workID string) ([]Book, error)
+	GetBooksBySeriesIDCoreFunc func(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
+	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
+	// rather than returning an empty slice — see the method for why.
+	GetBooksBySeriesIDAllVersionsFunc func(seriesID int) ([]BookCore, error)
+	// GetBooksBySeriesIDsAllVersionsFunc stubs the bulk membership read. When
+	// nil the mock answers per ID through GetBooksBySeriesIDAllVersions, so a
+	// suite that stubs one series at a time sees the same books either way.
+	GetBooksBySeriesIDsAllVersionsFunc   func(seriesIDs []int) (map[int][]BookCore, error)
+	GetBooksByAuthorIDCoreFunc           func(authorID int) ([]BookCore, error)
+	GetBooksByAuthorIDWithRoleFunc       func(authorID int) ([]BookCore, error)
+	GetBooksByAuthorIDForRelinkFunc      func(authorID int) ([]BookCore, error)
+	GetBookIDsCreditingAuthorDurableFunc func(authorID int) ([]string, error)
+	GetBookByITunesPersistentIDFunc      func(persistentID string) (*Book, error)
+	ListBooksByITunesPIDFunc             func(limit, offset int) ([]Book, error)
+	GetBookByFileHashFunc                func(hash string) (*Book, error)
+	GetBookByOriginalHashFunc            func(hash string) (*Book, error)
+	GetBookByOrganizedHashFunc           func(hash string) (*Book, error)
+	GetBookVersionsFunc                  func(id string, limit int) ([]BookSnapshot, error)
+	GetBookAtVersionFunc                 func(id string, ts time.Time) (*Book, error)
+	RevertBookToVersionFunc              func(id string, ts time.Time) (*Book, error)
+	PruneBookVersionsFunc                func(id string, keepCount int) (int, error)
+	CountBookSnapshotsFunc               func(id string) (int, error)
+	MarkITunesSyncedFunc                 func(bookIDs []string) (int64, error)
+	GetITunesDirtyBooksFunc              func() ([]Book, error)
+	GetITunesPurgePendingBooksFunc       func() ([]Book, error)
+	GetQuarantinedBooksFunc              func(limit, offset int) ([]Book, error)
+	CountQuarantinedBooksFunc            func() (int, error)
+	GetScanFailCountFunc                 func(pathHash string) (int, error)
+	IncrScanFailCountFunc                func(pathHash string) (int, error)
+	ResetScanFailCountFunc               func(pathHash string) error
+	FlagMetadataHashDuplicateFunc        func(primaryID, duplicateID string) error
+	RecomputeBookAggregatesFunc          func(bookID string) error
+	OptimizeFunc                         func() error
+	CompactionStatsFunc                  func() CompactionStats
+	GetDuplicateBooksFunc                func() ([][]Book, error)
+	GetBooksByTitleInDirFunc             func(normalizedTitle, dirPath string) ([]Book, error)
+	GetFolderDuplicatesCoreFunc          func() ([][]BookCore, error)
+	GetDuplicateBooksByMetadataFunc      func(threshold float64) ([][]BookCore, error)
+	CreateBookFunc                       func(book *Book) (*Book, error)
+	UpdateBookFunc                       func(id string, book *Book) (*Book, error)
+	ModifyBookFunc                       func(id string, fn func(*Book) error) (*Book, error)
+	FillBookMediaInfoFunc                func(id string, patch BookMediaInfoPatch) (*Book, error)
+	UpdateBookRatingFunc                 func(id string, req UpdateBookRatingRequest) error
+	UpdateBookRatingError                error
+	DeleteBookFunc                       func(id string) error
+	SearchBooksFunc                      func(query string, limit, offset int) ([]Book, error)
+	CountPrimaryBooksFunc                func() (int, error)
+	CountAllBooksFunc                    func() (int, error)
+	GetDistinctGenresFunc                func() ([]string, error)
+	GetGenreCountsFunc                   func() (map[string]int, error)
+	GetDistinctLanguagesFunc             func() ([]string, error)
+	GetDistinctPublishedYearsFunc        func() ([]int, error)
+	CountFilesFunc                       func() (int, error)
+	CountAuthorsFunc                     func() (int, error)
+	CountSeriesFunc                      func() (int, error)
+	GetBookCountsByLocationFunc          func(rootDir string) (int, int, error)
+	GetBookSizesByLocationFunc           func(rootDir string) (int64, int64, error)
+	GetDashboardStatsFunc                func() (*DashboardStats, error)
+	SetRootDirFunc                       func(string)
+	InvalidateLibraryStatsFunc           func()
+	ListSoftDeletedBooksFunc             func(limit, offset int, olderThan *time.Time) ([]Book, error)
+
+	// Work methods
+	GetAllWorksFunc     func() ([]Work, error)
+	WorksGenerationFunc func() uint64
+	ForEachWorkFunc     func(ctx context.Context, visit func(Work) error) error
+	GetWorkByIDFunc     func(id string) (*Work, error)
+	CreateWorkFunc      func(work *Work) (*Work, error)
+	UpdateWorkFunc      func(id string, work *Work) (*Work, error)
+	DeleteWorkFunc      func(id string) error
+
+	// Author methods
+	GetAllAuthorsFunc    func() ([]Author, error)
+	GetAuthorByIDFunc    func(id int) (*Author, error)
+	GetAuthorByNameFunc  func(name string) (*Author, error)
+	AuthorNameHolderFunc func(name string) (int, error)
+	// RenameAuthorCheckedFunc overrides RenameAuthorChecked
+	// (database.AuthorCheckedRenamer).
+	RenameAuthorCheckedFunc func(id int, name string, check func(cur *Author, nameHolder int) error) error
+	CreateAuthorFunc        func(name string) (*Author, error)
+	MintAuthorFunc          func(name string) (*Author, bool, error)
+	DeleteAuthorFunc        func(id int) error
+	// MergeDeleteAuthorFunc overrides MergeDeleteAuthor, which makes MockStore
+	// offer the AuthorMergeDeleter capability (it is not on Store). Unset, the
+	// test double approximates it with DeleteAuthor then CreateAuthorTombstone, so
+	// a test that stubs those two sees the merge; production code never does.
+	MergeDeleteAuthorFunc func(fromID, intoID int) (*AuthorMergeDeleteResult, error)
+	// Count overrides. Without these the getters below are hardcoded to empty
+	// maps, so a test asserting on "author has N books" cannot express its own
+	// fixture and silently exercises the zero case instead.
+	GetAllAuthorBookCountsFunc func() (map[int]int, error)
+	GetAllWorkBookCountsFunc   func() (map[string]int, error)
+	GetAllAuthorFileCountsFunc func() (map[int]int, error)
+	GetAllSeriesBookCountsFunc func() (map[int]int, error)
+	GetAllSeriesFileCountsFunc func() (map[int]int, error)
+	CreateNarratorFunc         func(name string) (*Narrator, error)
+	DeleteNarratorFunc         func(id int) error
+	GetNarratorByIDFunc        func(id int) (*Narrator, error)
+	GetNarratorByNameFunc      func(name string) (*Narrator, error)
+	ListNarratorsFunc          func() ([]Narrator, error)
+	GetBookNarratorsFunc       func(bookID string) ([]BookNarrator, error)
+	SetBookNarratorsFunc       func(bookID string, narrators []BookNarrator) error
+	UpdateAuthorNameFunc       func(id int, name string) error
+
+	GetAuthorsByIDsFunc func(ids []int) (map[int]*Author, error)
+
+	// Book<->Author join methods. These carry the link that matters for
+	// multi-author books: a credit list puts authors 2..n in this slice only,
+	// leaving Book.AuthorID pointing at the first. Tests that assert on a
+	// merge/relink must be able to observe writes here.
+	GetBookAuthorsFunc func(bookID string) ([]BookAuthor, error)
+	SetBookAuthorsFunc func(bookID string, authors []BookAuthor) error
+	// ModifyBookAuthorsFunc overrides the default Get -> fn -> Set composition.
+	ModifyBookAuthorsFunc func(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error)
+
+	// Author Alias methods
+	GetAuthorAliasesFunc    func(authorID int) ([]AuthorAlias, error)
+	GetAllAuthorAliasesFunc func() ([]AuthorAlias, error)
+	CreateAuthorAliasFunc   func(authorID int, aliasName string, aliasType string) (*AuthorAlias, error)
+	DeleteAuthorAliasFunc   func(id int) error
+	FindAuthorByAliasFunc   func(aliasName string) (*Author, error)
+
+	// Author Tombstones
+	CreateAuthorTombstoneFunc  func(oldID, canonicalID int) error
+	GetAuthorTombstoneFunc     func(oldID int) (int, error)
+	ResolveTombstoneChainsFunc func() (int, error)
+
+	// Series methods
+	GetAllSeriesFunc          func() ([]Series, error)
+	GetSeriesByIDFunc         func(id int) (*Series, error)
+	GetSeriesByNameFunc       func(name string, authorID *int) (*Series, error)
+	CreateSeriesFunc          func(name string, authorID *int) (*Series, error)
+	DeleteSeriesFunc          func(id int) error
+	UpdateSeriesNameFunc      func(id int, name string) error
+	RenameSeriesIfFunc        func(id int, expectCurrent, newName string) error
+	RenameSeriesIfCurrentFunc func(id int, expectCurrent, newName string) error
+	GetSeriesByIDsFunc        func(ids []int) (map[int]*Series, error)
+	// GetAllSeriesBookRefCountsFunc backs the SeriesBookRefStore capability.
+	// A nil func yields an empty map, i.e. "no series is referenced by
+	// anything" — the permissive answer, so a mock that does not care about
+	// reference counting still lets deletes through. Tests that assert a
+	// series must survive have to say so explicitly.
+	GetAllSeriesBookRefCountsFunc func() (map[int]int, error)
+	// GetAllAuthorBookRefCountsFunc backs the AuthorBookRefStore capability.
+	// Same contract as GetAllSeriesBookRefCountsFunc above: a nil func yields
+	// an empty map, i.e. "no author is referenced by anything", so a mock that
+	// does not care about reference counting still lets deletes through. Tests
+	// that assert an author must survive have to say so explicitly.
+	GetAllAuthorBookRefCountsFunc func() (map[int]int, error)
+	// GetAllAuthorBookRefBucketsFunc backs AuthorBookRefBucketStore. When nil,
+	// the bucketed answer is derived from GetAllAuthorBookRefCountsFunc with
+	// every reference counted as Live -- the conservative reading, since a live
+	// reference is the one kind that holds a merge back.
+	GetAllAuthorBookRefBucketsFunc func() (map[int]AuthorRefBuckets, error)
+
+	// GetAllAuthorFileRefCountsFunc backs the AuthorFileRefStore capability
+	// (internal/books/store/author_file_refs.go). It deliberately does NOT follow
+	// the permissive nil-func contract above: an unset func makes the method
+	// return an error, so a test that reaches the purge file-safety gate without
+	// stubbing it fails loudly instead of being handed an empty map and quietly
+	// asserting against a dead guard.
+	GetAllAuthorFileRefCountsFunc func() (map[int]int, error)
+
+	// GetAllNarratorRefsFunc and CountNarratorBookLinksFunc back the
+	// NarratorRefStore capability (internal/books/store/narrator_bookref.go). Like
+	// GetAllAuthorFileRefCountsFunc, an unset func is an ERROR, not an empty
+	// answer: these are new delete guards, and a mock that silently answered
+	// "referenced by nothing" would let a purge test pass against a dead guard.
+	GetAllNarratorRefsFunc     func() (NarratorRefs, error)
+	CountNarratorBookLinksFunc func(narratorID int) (int, error)
+	BookNarratorsLinkingFunc   func(narratorIDs map[int]bool) (map[string][]BookNarrator, error)
+
+	// Metadata
+	GetMetadataFieldStatesFunc   func(bookID string) ([]MetadataFieldState, error)
+	GetChaptersForBookFunc       func(bookID string) ([]Chapter, error)
+	UpsertMetadataFieldStateFunc func(state *MetadataFieldState) error
+	DeleteMetadataFieldStateFunc func(bookID, field string) error
+
+	// Metadata change history
+	RecordMetadataChangeFunc     func(record *MetadataChangeRecord) error
+	GetMetadataChangeHistoryFunc func(bookID string, field string, limit int) ([]MetadataChangeRecord, error)
+	GetBookChangeHistoryFunc     func(bookID string, limit int) ([]MetadataChangeRecord, error)
+
+	// Import Paths
+	GetAllImportPathsFunc      func() ([]ImportPath, error)
+	GetImportPathByIDFunc      func(id int) (*ImportPath, error)
+	GetImportPathByPathFunc    func(path string) (*ImportPath, error)
+	CreateImportPathFunc       func(path, name string) (*ImportPath, error)
+	UpdateImportPathFunc       func(id int, importPath *ImportPath) error
+	DeleteImportPathFunc       func(id int) error
+	CountBooksByPathPrefixFunc func(prefix string) (int, error)
+
+	// Operations
+	CreateOperationFunc           func(id, opType string, folderPath *string) (*Operation, error)
+	GetOperationByIDFunc          func(id string) (*Operation, error)
+	GetRecentOperationsFunc       func(limit int) ([]Operation, error)
+	ListOperationsFunc            func(limit, offset int) ([]Operation, int, error)
+	UpdateOperationStatusFunc     func(id, status string, progress, total int, message string) error
+	UpdateOperationErrorFunc      func(id, errorMessage string) error
+	UpdateOperationResultDataFunc func(id string, resultData string) error
+
+	// Operation State Persistence
+	SaveOperationStateFunc       func(opID string, state []byte) error
+	GetOperationStateFunc        func(opID string) ([]byte, error)
+	DeleteOperationStateFunc     func(opID string) error
+	DeleteOperationWithLogsFunc  func(id string) error
+	GetInterruptedOperationsFunc func() ([]Operation, error)
+
+	// Operation Logs
+	AddOperationLogFunc          func(operationID, level, message string, details *string) error
+	GetOperationLogsFunc         func(operationID string) ([]OperationLog, error)
+	SaveOperationSummaryLogFunc  func(op *OperationSummaryLog) error
+	GetOperationSummaryLogFunc   func(id string) (*OperationSummaryLog, error)
+	ListOperationSummaryLogsFunc func(limit, offset int) ([]OperationSummaryLog, error)
+
+	// System activity log
+	AddSystemActivityLogFunc  func(source, level, message string) error
+	GetSystemActivityLogsFunc func(source string, limit int) ([]SystemActivityLog, error)
+	PruneOperationLogsFunc    func(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
+	PruneOperationChangesFunc func(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
+	// CreateOperationChangeFunc lets a test observe the change rows an
+	// operation writes. CreateOperationChange returned a bare nil with no hook,
+	// so a test could assert an operation's SUMMARY but never its CHANGE LOG —
+	// and the two disagreeing, silently, is itself a defect class here.
+	CreateOperationChangeFunc        func(change *OperationChange) error
+	GetOperationChangesFunc          func(operationID string) ([]*OperationChange, error)
+	GetBookChangesFunc               func(bookID string) ([]*OperationChange, error)
+	MarkOperationChangesRevertedFunc func(operationID string, changeIDs []string) error
+	PruneSystemActivityLogsFunc      func(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error)
+
+	// AI jobs
+	CreateAIJobFunc          func(job AIJob, payloadJSON []byte) error
+	GetAIJobFunc             func(id string) (AIJob, error)
+	GetAIJobByBatchIDFunc    func(batchID string) (AIJob, error)
+	GetAIJobPayloadFunc      func(id string) ([]byte, error)
+	MarkAIJobSubmittedFunc   func(id, batchID string) error
+	MarkAIJobCompletedFunc   func(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error
+	MarkAIJobFailedFunc      func(id, errMsg string) error
+	MarkAIJobApplyFailedFunc func(id, errMsg string) (AIJob, error)
+	MarkAIJobAppliedFunc     func(id string, successCount, errorCount int, rowErrors []AIJobRowError) error
+	ListAIJobsFunc           func(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error)
+
+	// Metadata rejections
+	AddMetadataRejectionFunc          func(r MetadataRejection) error
+	GetMetadataRejectionsFunc         func(bookID string) ([]MetadataRejection, error)
+	DeleteMetadataRejectionsFunc      func(bookID string) error
+	GetAuthorsByBookIDsFunc           func(ctx context.Context, bookIDs []string) (map[string][]Author, error)
+	GetNarratorsByBookIDsFunc         func(ctx context.Context, bookIDs []string) (map[string][]Narrator, error)
+	UpsertOpDefinitionV2Func          func(row OpDefinitionV2Row) error
+	DeleteOrphanOpDefsV2Func          func(keepIDs []string) error
+	InsertOperationV2Func             func(row OperationV2Row) error
+	ListQueuedOperationsV2Func        func() ([]OperationV2Row, error)
+	GetOperationV2Func                func(id string) (*OperationV2Row, error)
+	UpdateOperationV2StatusFunc       func(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error
+	UpdateOperationV2StatusIfFunc     func(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error)
+	RepairOpsV2MissingCompletedAtFunc func() (int, error)
+	CountRunningByPluginV2Func        func(plugin string) (int, error)
+	ListActiveOperationsV2Func        func() ([]OperationV2Row, error)
+	ListResumableOperationsV2Func     func() ([]OperationV2Row, error)
+	IncrementResumeCountV2Func        func(id string) error
+	ResetOperationV2ForResumeFunc     func(id string) error
+	MarkOperationV2ManualRetryFunc    func(id string) error
+	SetOperationV2ResultFunc          func(id string, resultData string) error
+	InsertOpStrikeV2Func              func(row OpStrikeV2Row) error
+	GetOpStateV2Func                  func(opID string) (*OpStateV2Row, error)
+	DeleteOpStateV2Func               func(opID string) error
+	DeleteOperationV2Func             func(id string, allowedStatuses []string) (string, bool, error)
+	UpdateOperationV2ParamsFunc       func(id string, params []byte) error
+	UpdateOpProgressV2Func            func(id string, current, total int, message string) error
+	SetOpQueuedProgressV2Func         func(id string, current, total int, message string) (bool, error)
+	UpdateOpPhaseV2Func               func(id string, phase *string) error
+	UpdateOpCheckpointV2Func          func(id string, newHWM int) error
+	AppendOpLogsV2Func                func(rows []OpLogV2Row) error
+	InsertOpErrorV2Func               func(row OpErrorV2Row) error
+	UpsertOpStateV2Func               func(row OpStateV2Row) error
+	ListOperationsV2SinceFunc         func(since time.Time, limit int) ([]OperationV2Row, error)
+	GetOpLogsV2Func                   func(opID string, limit int) ([]OpLogV2Row, error)
+	GetDepRevFunc                     func(sub OpSubject) (uint64, error)
+	BumpDepRevFunc                    func(sub OpSubject) (uint64, error)
+	RecordOpCompletionFunc            func(sub OpSubject, opType, fileID string, depRev uint64) error
+	GetOpCompletionFunc               func(sub OpSubject, opType string) (uint64, bool, error)
+	ListFileCompletionsFunc           func(sub OpSubject, opType string) (map[string]uint64, error)
+	ListWaitingDepsOpsFunc            func() ([]OperationV2Row, error)
+	PromoteToQueuedFunc               func(id string) error
+	AddToBatchBucketFunc              func(opType string, sub OpSubject) error
+	ListBatchBucketFunc               func(opType string) ([]BatchBucketEntry, error)
+	ClearBatchBucketFunc              func(opType string, subs []OpSubject) error
+	UpsertReviewItemFunc              func(item ReviewItem) (ReviewItem, error)
+	GetReviewItemFunc                 func(id string) (*ReviewItem, error)
+	ListReviewItemsFunc               func(filter ReviewFilter) ([]ReviewItem, int, error)
+	CountReviewItemsFunc              func(status string) (int, error)
+	ReviewStatsByKindFunc             func() ([]ReviewKindStat, error)
+
+	// User Preferences
+	GetUserPreferenceFunc     func(key string) (*UserPreference, error)
+	DeleteUserPreferenceFunc  func(key string) error
+	SetUserPreferenceFunc     func(key, value string) error
+	GetAllUserPreferencesFunc func() ([]UserPreference, error)
+
+	// Settings
+	GetSettingFunc     func(key string) (*Setting, error)
+	SetSettingFunc     func(key, value, typ string, isSecret bool) error
+	GetAllSettingsFunc func() ([]Setting, error)
+	DeleteSettingFunc  func(key string) error
+
+	// RawKV — func delegates so tests can intercept prefix scans / deletes.
+	SetRawFunc                       func(key string, value []byte) error
+	GetRawFunc                       func(key string) ([]byte, error)
+	DeleteRawFunc                    func(key string) error
+	ScanPrefixFunc                   func(prefix string) ([]KVPair, error)
+	ScanPrefixPageFunc               func(prefix, after string, limit int) ([]KVPair, string, error)
+	DeleteRawBatchFunc               func(keys []string) error
+	CountPrefixFunc                  func(prefix string) (int64, error)
+	CreateOperationResultFunc        func(result *OperationResult) error
+	GetOperationResultsFunc          func(operationID string) ([]OperationResult, error)
+	GetOperationResultsPageFunc      func(operationID string, limit, offset int) ([]OperationResult, int, error)
+	GetRecentCompletedOperationsFunc func(limit int) ([]Operation, error)
+	GetBookUserTagsFunc              func(bookID string) ([]string, error)
+	SetBookUserTagsFunc              func(bookID string, tags []string) error
+	AddBookUserTagFunc               func(bookID string, tag string) error
+	RemoveBookUserTagFunc            func(bookID string, tag string) error
+	GetBookAlternativeTitlesFunc     func(bookID string) ([]BookAlternativeTitle, error)
+
+	// Playlists
+	CreatePlaylistFunc        func(name string, seriesID *int, filePath string) (*Playlist, error)
+	GetPlaylistByIDFunc       func(id int) (*Playlist, error)
+	GetPlaylistBySeriesIDFunc func(seriesID int) (*Playlist, error)
+	AddPlaylistItemFunc       func(playlistID, bookID, position int) error
+	GetPlaylistItemsFunc      func(playlistID int) ([]PlaylistItem, error)
+
+	// Users
+	CreateUserFunc             func(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error)
+	GetUserByIDFunc            func(id string) (*User, error)
+	GetUserByUsernameFunc      func(username string) (*User, error)
+	GetUserByVerifiedEmailFunc func(email string) (*User, error)
+	UpdateUserFunc             func(user *User) error
+	ListUsersFunc              func() ([]User, error)
+
+	// Sessions
+	CreateSessionFunc func(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error)
+	// CreateSessionWithOriginFunc; when nil, CreateSessionWithOrigin falls
+	// back to CreateSessionFunc and stamps the origin on its result.
+	CreateSessionWithOriginFunc func(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error)
+	GetSessionFunc              func(id string) (*Session, error)
+	RevokeSessionFunc           func(id string) error
+	ListUserSessionsFunc        func(userID string) ([]Session, error)
+
+	CreateOAuthIdentityFunc               func(identity *OAuthIdentity) (*OAuthIdentity, error)
+	GetOAuthIdentityByProviderSubjectFunc func(provider, subject string) (*OAuthIdentity, error)
+	GetOAuthIdentitiesForUserFunc         func(userID string) ([]OAuthIdentity, error)
+	DeleteExpiredABSSessionsFunc          func(now time.Time) (int, error)
+	DeleteExpiredSessionsFunc             func(now time.Time) (int, error)
+	CountUsersFunc                        func() (int, error)
+
+	// Roles
+	GetRoleByIDFunc   func(id string) (*Role, error)
+	GetRoleByNameFunc func(name string) (*Role, error)
+	ListRolesFunc     func() ([]Role, error)
+	CreateRoleFunc    func(role *Role) (*Role, error)
+	UpdateRoleFunc    func(role *Role) error
+	DeleteRoleFunc    func(id string) error
+
+	// User positions + book state (spec 3.6)
+	SetUserPositionFunc            func(userID, bookID, segmentID string, positionSeconds float64) error
+	GetUserPositionFunc            func(userID, bookID string) (*UserPosition, error)
+	ListUserPositionsForBookFunc   func(userID, bookID string) ([]UserPosition, error)
+	ClearUserPositionsFunc         func(userID, bookID string) error
+	SetUserBookStateFunc           func(state *UserBookState) error
+	GetUserBookStateFunc           func(userID, bookID string) (*UserBookState, error)
+	ListUserBookStatesByStatusFunc func(userID, status string, limit, offset int) ([]UserBookState, error)
+	ListUserPositionsSinceFunc     func(userID string, t time.Time) ([]UserPosition, error)
+
+	// Book versions
+	CreateBookVersionFunc           func(v *BookVersion) (*BookVersion, error)
+	GetBookVersionFunc              func(id string) (*BookVersion, error)
+	GetBookVersionsByBookIDFunc     func(bookID string) ([]BookVersion, error)
+	GetActiveVersionForBookFunc     func(bookID string) (*BookVersion, error)
+	UpdateBookVersionFunc           func(v *BookVersion) error
+	DeleteBookVersionFunc           func(id string) error
+	GetBookVersionByTorrentHashFunc func(hash string) (*BookVersion, error)
+	ListTrashedBookVersionsFunc     func() ([]BookVersion, error)
+	ListPurgedBookVersionsFunc      func() ([]BookVersion, error)
+	ListSwappingBookVersionsFunc    func() ([]BookVersion, error)
+
+	// User playlists (spec 3.4)
+	CreateUserPlaylistFunc         func(pl *UserPlaylist) (*UserPlaylist, error)
+	GetUserPlaylistFunc            func(id string) (*UserPlaylist, error)
+	GetUserPlaylistByNameFunc      func(name string) (*UserPlaylist, error)
+	GetUserPlaylistByITunesPIDFunc func(pid string) (*UserPlaylist, error)
+	ListUserPlaylistsFunc          func(playlistType string, limit, offset int) ([]UserPlaylist, int, error)
+	ListUserPlaylistsForUserFunc   func(userID, playlistType string, limit, offset int) ([]UserPlaylist, int, error)
+	UpdateUserPlaylistFunc         func(pl *UserPlaylist) error
+	DeleteUserPlaylistFunc         func(id string) error
+	ListDirtyUserPlaylistsFunc     func() ([]UserPlaylist, error)
+
+	// Collections (server-wide; static or dynamic)
+	CreateCollectionFunc    func(col *Collection) (*Collection, error)
+	GetCollectionFunc       func(id string) (*Collection, error)
+	GetCollectionByNameFunc func(name string) (*Collection, error)
+	ListCollectionsFunc     func(collectionType string, limit, offset int) ([]Collection, int, error)
+	// UpdateCollectionFunc: unlike PebbleStore.UpdateCollection, the default
+	// (Func nil) path does NOT enforce the Collection.Version compare-and-swap
+	// added there — this struct holds no collections state to validate a
+	// caller's Version against, matching the "permissive by default" contract
+	// documented at the top of this file. That is a deliberate, audited
+	// divergence from PebbleStore, not the undetected #2406/#2410/#2411 class of
+	// dual-implementation drift: those were two REAL backends (memdb vs pebble)
+	// silently disagreeing on business logic, whereas MockStore implements no
+	// business logic here to drift. A test that needs to exercise the
+	// conflict path must set this Func itself (see abscolFakeStore in
+	// internal/server/handlers/abs/collections_test.go for a stateful example
+	// that does).
+	UpdateCollectionFunc func(col *Collection) error
+	DeleteCollectionFunc func(id string) error
+
+	// API keys
+	CreateAPIKeyFunc        func(key *APIKey) (*APIKey, error)
+	GetAPIKeyFunc           func(id string) (*APIKey, error)
+	GetAPIKeyByHashFunc     func(hash string) (*APIKey, error)
+	ListAPIKeysForUserFunc  func(userID string) ([]APIKey, error)
+	ListAllAPIKeysFunc      func() ([]APIKey, error)
+	RevokeAPIKeyFunc        func(id string) error
+	SetAPIKeyStatusFunc     func(id, status string, at time.Time) error
+	SetAPIKeyExpiryFunc     func(id string, at time.Time) error
+	TouchAPIKeyLastUsedFunc func(id string, at time.Time, ip string) error
+
+	// Invites
+	CreateInviteFunc      func(invite *Invite) (*Invite, error)
+	GetInviteFunc         func(token string) (*Invite, error)
+	ListActiveInvitesFunc func() ([]Invite, error)
+	DeleteInviteFunc      func(token string) error
+	ConsumeInviteFunc     func(token, passwordHashAlgo, passwordHash string) (*User, error)
+
+	// Per-user preferences
+	SetUserPreferenceForUserFunc func(userID, key, value string) error
+	GetUserPreferenceForUserFunc func(userID, key string) (*UserPreferenceKV, error)
+	GetAllPreferencesForUserFunc func(userID string) ([]UserPreferenceKV, error)
+
+	// Book segments
+	CreateBookSegmentFunc  func(bookNumericID int, segment *BookSegment) (*BookSegment, error)
+	UpdateBookSegmentFunc  func(segment *BookSegment) error
+	ListBookSegmentsFunc   func(bookNumericID int) ([]BookSegment, error)
+	MergeBookSegmentsFunc  func(bookNumericID int, newSegment *BookSegment, supersedeIDs []string) error
+	GetBookSegmentByIDFunc func(segmentID string) (*BookSegment, error)
+	MoveSegmentsToBookFunc func(segmentIDs []string, targetBookNumericID int) error
+
+	// Playback events
+	AddPlaybackEventFunc       func(event *PlaybackEvent) error
+	ListPlaybackEventsFunc     func(userID string, bookNumericID int, limit int) ([]PlaybackEvent, error)
+	UpdatePlaybackProgressFunc func(progress *PlaybackProgress) error
+	GetPlaybackProgressFunc    func(userID string, bookNumericID int) (*PlaybackProgress, error)
+
+	// Stats
+	IncrementBookPlayStatsFunc   func(bookNumericID int, seconds int) error
+	GetBookStatsFunc             func(bookNumericID int) (*BookStats, error)
+	IncrementUserListenStatsFunc func(userID string, seconds int) error
+	GetUserStatsFunc             func(userID string) (*UserStats, error)
+
+	// Hash blocklist
+	IsHashBlockedFunc        func(hash string) (bool, error)
+	AddBlockedHashFunc       func(hash, reason string) error
+	RemoveBlockedHashFunc    func(hash string) error
+	GetAllBlockedHashesFunc  func() ([]DoNotImport, error)
+	GetBlockedHashByHashFunc func(hash string) (*DoNotImport, error)
+
+	// Tombstone operations
+	CreateBookTombstoneFunc func(book *Book) error
+	GetBookTombstoneFunc    func(id string) (*Book, error)
+	DeleteBookTombstoneFunc func(id string) error
+	ListBookTombstonesFunc  func(limit int) ([]Book, error)
+	// CreateStampedBookTombstoneFunc and GetBookTombstoneStampFunc back the
+	// StampedTombstoneWriter / TombstoneStampReader capabilities
+	// (tombstone_file_stamp.go). Unconfigured, a write is CreateBookTombstone
+	// (keeping no stamp) and a read answers "no stamp".
+	CreateStampedBookTombstoneFunc func(book *Book, stamp TombstoneFileStamp) error
+	GetBookTombstoneStampFunc      func(id string) (*TombstoneFileStamp, error)
+
+	// Version Management
+	GetBooksByVersionGroupFunc       func(groupID string) ([]Book, error)
+	GetBooksByMetadataSourceHashFunc func(hash string) ([]Book, error)
+	GetBookIDsByISBNASINFunc         func(isbn10, isbn13, asin string) ([]string, error)
+
+	// iTunes Library Fingerprints
+	SaveLibraryFingerprintFunc func(path string, size int64, modTime time.Time, crc32 uint32) error
+	GetLibraryFingerprintFunc  func(path string) (*LibraryFingerprintRecord, error)
+
+	// Scan cache
+	GetScanCacheMapFunc                  func() (map[string]ScanCacheEntry, error)
+	UpdateScanCacheFunc                  func(bookID string, mtime int64, size int64) error
+	MarkNeedsRescanFunc                  func(bookID string) error
+	GetDirtyBookFoldersFunc              func() ([]string, error)
+	GetDirtyBookFoldersContextFunc       func(ctx context.Context) ([]string, error)
+	GetScanCacheMapContextFunc           func(ctx context.Context) (map[string]ScanCacheEntry, error)
+	CreateDeferredITunesUpdateFunc       func(bookID, persistentID, oldPath, newPath, updateType string) error
+	GetPendingDeferredITunesUpdatesFunc  func() ([]DeferredITunesUpdate, error)
+	MarkDeferredITunesUpdateAppliedFunc  func(id int) error
+	GetDeferredITunesUpdatesByBookIDFunc func(bookID string) ([]DeferredITunesUpdate, error)
+
+	// External ID mapping
+	CreateExternalIDMappingFunc      func(mapping *ExternalIDMapping) error
+	GetBookByExternalIDFunc          func(source, externalID string) (string, error)
+	GetExternalIDsForBookFunc        func(bookID string) ([]ExternalIDMapping, error)
+	IsExternalIDTombstonedFunc       func(source, externalID string) (bool, error)
+	TombstoneExternalIDFunc          func(source, externalID string) error
+	ReassignExternalIDsFunc          func(oldBookID, newBookID string) error
+	ReassignExternalIDFunc           func(source, externalID, newBookID string) error
+	BulkCreateExternalIDMappingsFunc func(mappings []ExternalIDMapping) error
+	MarkExternalIDRemovedFunc        func(source, externalID string) error
+	SetExternalIDProvenanceFunc      func(source, externalID, provenance string) error
+	GetRemovedExternalIDsFunc        func(source string) ([]ExternalIDMapping, error)
+
+	// BookFile methods
+	CreateBookFileFunc                      func(file *BookFile) error
+	BatchCreateBookFilesFunc                func(files []*BookFile) error
+	GetAllBookFilesCoreFunc                 func() ([]BookFileCore, error)
+	GetBookFilesForIDsCoreFunc              func(bookIDs []string) (map[string][]BookFileCore, error)
+	GetBookFilesNeedingDelugeImportCoreFunc func() ([]BookFileCore, error)
+	UpdateBookFileFunc                      func(id string, file *BookFile) error
+	UpdateBookFilesFunc                     func(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error)
+	UpdateBookFileHashesFunc                func(id, originalHash, postMetadataHash, fileHash string) error
+	GetBookFilesFunc                        func(bookID string) ([]BookFile, error)
+	GetBookFileByIDFunc                     func(bookID, fileID string) (*BookFile, error)
+	GetBookFileByPIDFunc                    func(itunesPID string) (*BookFile, error)
+	GetBookFileByPathFunc                   func(filePath string) (*BookFile, error)
+	BookFilesAtPathFunc                     func(path string) ([]BookFile, error)
+	BookFilesWithHashFunc                   func(hash string) ([]BookFile, error)
+	// HasRetiredVersionsFunc overrides HasRetiredVersions (retired_mock_store.go).
+	HasRetiredVersionsFunc                  func() (bool, error)
+	ClaimBookFilePathKeyFunc                func(bookID, fileID, path string) (bool, error)
+	BookAtPathIndexBuiltFunc                func() (bool, error)
+	GetBookFileByAcoustIDFunc               func(fingerprint string) (*BookFile, error)
+	GetBookFileByAcoustIDFuzzyFunc          func(fingerprint string, minSimilarity float64) (*BookFile, error)
+	DeleteBookFileFunc                      func(id string) error
+	DeleteBookFilesByIDsFunc                func(refs []BookFileRef) ([]BookFile, error)
+	DeleteBookFilesForBookFunc              func(bookID string) error
+	UpsertBookFileFunc                      func(file *BookFile) error
+	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
+	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	ModifyBookFileDeferAggregatesFunc       func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	BatchUpsertBookFilesFunc                func(files []*BookFile) error
+	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
+	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
+	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
+	MoveBookFilesToBookBulkFunc             func(moves []BookFileMove, targetBookID string) error
+	GetDuplicateFilesByHashFunc             func(limit int) ([]DuplicateFileGroup, error)
+	GetBookBySegmentFileHashFunc            func(hash string) (*Book, error)
+	SetBookFileHashFunc                     func(id, hash string) error
+	GetBookFileHashStatsFunc                func() (*BookFileHashStats, error)
+	GetBookMetadataHashStatsFunc            func() (*BookMetadataHashStats, error)
+	GetFilesWithFingerprintFailuresFunc     func(reason string, limit, offset int) ([]BookFile, int64, error)
+	GetFilesWithZeroDurationFingerprintFunc func(limit, offset int) ([]BookFile, int64, error)
+	GetAcoustIDStatsFunc                    func() (*AcoustIDStats, error)
+
+	// Fingerprint windows (fpwin: sidecar)
+	PutFingerprintWindowFunc           func(w *FingerprintWindow) error
+	GetFingerprintWindowsFunc          func(ref FingerprintWindowRef) ([]FingerprintWindow, error)
+	WindowsForFileFunc                 func(fileID string) ([]FingerprintWindow, error)
+	DeleteFingerprintWindowsFunc       func(ref FingerprintWindowRef) (int, error)
+	CarryOverFingerprintWindowsFunc    func(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error)
+	ReplaceFingerprintWindowsFunc      func(ref FingerprintWindowRef, ws []FingerprintWindow) error
+	RecordFingerprintWindowFailureFunc func(f *FingerprintWindowFailure) error
+	GetFingerprintWindowFailureFunc    func(ref FingerprintWindowRef) (*FingerprintWindowFailure, error)
+
+	// Path history
+	RecordPathChangeFunc   func(change *BookPathChange) error
+	GetBookPathHistoryFunc func(bookID string) ([]BookPathChange, error)
+
+	// Book Tags
+	AddBookTagFunc             func(bookID, tag string) error
+	AddBookTagWithSourceFunc   func(bookID, tag, source string) error
+	RemoveBookTagFunc          func(bookID, tag string) error
+	RemoveBookTagsByPrefixFunc func(bookID, prefix, source string) error
+	GetBookTagsFunc            func(bookID string) ([]string, error)
+	GetBookTagsByBookIDsFunc   func(bookIDs []string) (map[string][]string, error)
+	GetBookTagsDetailedFunc    func(bookID string) ([]BookTag, error)
+	SetBookTagsFunc            func(bookID string, tags []string) error
+	ListAllTagsFunc            func() ([]TagWithCount, error)
+	GetBooksByTagFunc          func(tag string) ([]string, error)
+
+	// Author Tags
+	AddAuthorTagWithSourceFunc   func(authorID int, tag, source string) error
+	RemoveAuthorTagFunc          func(authorID int, tag string) error
+	RemoveAuthorTagsByPrefixFunc func(authorID int, prefix, source string) error
+	GetAuthorTagsFunc            func(authorID int) ([]string, error)
+	GetAuthorTagsDetailedFunc    func(authorID int) ([]BookTag, error)
+	SetAuthorTagsFunc            func(authorID int, tags []string) error
+	ListAllAuthorTagsFunc        func() ([]TagWithCount, error)
+	GetAuthorsByTagFunc          func(tag string) ([]int, error)
+
+	// Series Tags
+	AddSeriesTagWithSourceFunc   func(seriesID int, tag, source string) error
+	RemoveSeriesTagFunc          func(seriesID int, tag string) error
+	RemoveSeriesTagsByPrefixFunc func(seriesID int, prefix, source string) error
+	GetSeriesTagsFunc            func(seriesID int) ([]string, error)
+	GetSeriesTagsDetailedFunc    func(seriesID int) ([]BookTag, error)
+	SetSeriesTagsFunc            func(seriesID int, tags []string) error
+	ListAllSeriesTagsFunc        func() ([]TagWithCount, error)
+	GetSeriesByTagFunc           func(tag string) ([]int, error)
+
+	// Lifecycle
+	CloseFunc            func() error
+	SetLastWrittenAtFunc func(id string, t time.Time) error
+
+	// MetadataCacheStore (METADATA-CACHED-MATCHER)
+	GetMetadataCacheFunc      func(bookID string) (*MetadataCandidateCache, error)
+	PutMetadataCacheFunc      func(entry *MetadataCandidateCache) error
+	DeleteMetadataCacheFunc   func(bookID string) error
+	ListMetadataCacheKeysFunc func() ([]MetadataCacheSummary, error)
+}
+
+func (m *MockStore) GetMetadataCache(bookID string) (*MetadataCandidateCache, error) {
+	if m.GetMetadataCacheFunc != nil {
+		return m.GetMetadataCacheFunc(bookID)
+	}
+	return nil, nil
+}
+func (m *MockStore) PutMetadataCache(entry *MetadataCandidateCache) error {
+	if m.PutMetadataCacheFunc != nil {
+		return m.PutMetadataCacheFunc(entry)
+	}
+	return nil
+}
+func (m *MockStore) DeleteMetadataCache(bookID string) error {
+	if m.DeleteMetadataCacheFunc != nil {
+		return m.DeleteMetadataCacheFunc(bookID)
+	}
+	return nil
+}
+func (m *MockStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
+	if m.ListMetadataCacheKeysFunc != nil {
+		return m.ListMetadataCacheKeysFunc()
+	}
+	return nil, nil
+}
+
+// Implement all Store interface methods
+
+func (m *MockStore) Close() error {
+	if m.CloseFunc != nil {
+		return m.CloseFunc()
+	}
+	return nil
+}
+
+func (m *MockStore) GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error) {
+	if m.GetMetadataFieldStatesFunc != nil {
+		return m.GetMetadataFieldStatesFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetChaptersForBook(bookID string) ([]Chapter, error) {
+	if m.GetChaptersForBookFunc != nil {
+		return m.GetChaptersForBookFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpsertMetadataFieldState(state *MetadataFieldState) error {
+	if m.UpsertMetadataFieldStateFunc != nil {
+		return m.UpsertMetadataFieldStateFunc(state)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteMetadataFieldState(bookID, field string) error {
+	if m.DeleteMetadataFieldStateFunc != nil {
+		return m.DeleteMetadataFieldStateFunc(bookID, field)
+	}
+	return nil
+}
+
+func (m *MockStore) RecordMetadataChange(record *MetadataChangeRecord) error {
+	if m.RecordMetadataChangeFunc != nil {
+		return m.RecordMetadataChangeFunc(record)
+	}
+	return nil
+}
+
+func (m *MockStore) GetMetadataChangeHistory(bookID string, field string, limit int) ([]MetadataChangeRecord, error) {
+	if m.GetMetadataChangeHistoryFunc != nil {
+		return m.GetMetadataChangeHistoryFunc(bookID, field, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookChangeHistory(bookID string, limit int) ([]MetadataChangeRecord, error) {
+	if m.GetBookChangeHistoryFunc != nil {
+		return m.GetBookChangeHistoryFunc(bookID, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllAuthors() ([]Author, error) {
+	if m.GetAllAuthorsFunc != nil {
+		return m.GetAllAuthorsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAuthorByID(id int) (*Author, error) {
+	if m.GetAuthorByIDFunc != nil {
+		return m.GetAuthorByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAuthorsByIDs(ids []int) (map[int]*Author, error) {
+	if m.GetAuthorsByIDsFunc != nil {
+		return m.GetAuthorsByIDsFunc(ids)
+	}
+	return map[int]*Author{}, nil
+}
+
+func (m *MockStore) GetAuthorByName(name string) (*Author, error) {
+	if m.GetAuthorByNameFunc != nil {
+		return m.GetAuthorByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) MintAuthor(name string) (*Author, bool, error) {
+	if m.MintAuthorFunc != nil {
+		return m.MintAuthorFunc(name)
+	}
+	a, err := m.CreateAuthor(name)
+	return a, a != nil && err == nil, err
+}
+
+func (m *MockStore) MergeDeleteAuthor(fromID, intoID int) (*AuthorMergeDeleteResult, error) {
+	if m.MergeDeleteAuthorFunc != nil {
+		return m.MergeDeleteAuthorFunc(fromID, intoID)
+	}
+	if err := m.DeleteAuthor(fromID); err != nil {
+		return nil, err
+	}
+	if err := m.CreateAuthorTombstone(fromID, intoID); err != nil {
+		return nil, err
+	}
+	return &AuthorMergeDeleteResult{OwnedNameIndex: true}, nil
+}
+
+// AuthorNameHolder (database.AuthorNameHolderReader) approximates the raw name
+// index with GetAuthorByName: the holder's id, or 0.
+func (m *MockStore) AuthorNameHolder(name string) (int, error) {
+	if m.AuthorNameHolderFunc != nil {
+		return m.AuthorNameHolderFunc(name)
+	}
+	a, err := m.GetAuthorByName(name)
+	if err != nil || a == nil {
+		return 0, err
+	}
+	return a.ID, nil
+}
+
+// RenameAuthorChecked (database.AuthorCheckedRenamer) approximates the store's
+// locked check-and-rename: it reads the row (GetAuthorByID) and the holder
+// (AuthorNameHolder), runs check, and renames through UpdateAuthorName only
+// when check passes and the row read is live under id (a nil or redirected row
+// is refused, as the PebbleStore does). There is no lock to hold in a mock.
+func (m *MockStore) RenameAuthorChecked(id int, name string, check func(cur *Author, nameHolder int) error) error {
+	if m.RenameAuthorCheckedFunc != nil {
+		return m.RenameAuthorCheckedFunc(id, name, check)
+	}
+	cur, err := m.GetAuthorByID(id)
+	if err != nil {
+		return err
+	}
+	holder, err := m.AuthorNameHolder(name)
+	if err != nil {
+		return err
+	}
+	if err := check(cur, holder); err != nil {
+		return err
+	}
+	if cur == nil || cur.ID != id {
+		return fmt.Errorf("author %d not found", id)
+	}
+	return m.UpdateAuthorName(id, name)
+}
+
+func (m *MockStore) CreateAuthor(name string) (*Author, error) {
+	if m.CreateAuthorFunc != nil {
+		return m.CreateAuthorFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteAuthor(id int) error {
+	if m.DeleteAuthorFunc != nil {
+		return m.DeleteAuthorFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) UpdateAuthorName(id int, name string) error {
+	if m.UpdateAuthorNameFunc != nil {
+		return m.UpdateAuthorNameFunc(id, name)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAuthorAliases(authorID int) ([]AuthorAlias, error) {
+	if m.GetAuthorAliasesFunc != nil {
+		return m.GetAuthorAliasesFunc(authorID)
+	}
+	return []AuthorAlias{}, nil
+}
+
+func (m *MockStore) GetAllAuthorAliases() ([]AuthorAlias, error) {
+	if m.GetAllAuthorAliasesFunc != nil {
+		return m.GetAllAuthorAliasesFunc()
+	}
+	return []AuthorAlias{}, nil
+}
+
+func (m *MockStore) CreateAuthorAlias(authorID int, aliasName string, aliasType string) (*AuthorAlias, error) {
+	if m.CreateAuthorAliasFunc != nil {
+		return m.CreateAuthorAliasFunc(authorID, aliasName, aliasType)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteAuthorAlias(id int) error {
+	if m.DeleteAuthorAliasFunc != nil {
+		return m.DeleteAuthorAliasFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) FindAuthorByAlias(aliasName string) (*Author, error) {
+	if m.FindAuthorByAliasFunc != nil {
+		return m.FindAuthorByAliasFunc(aliasName)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllSeries() ([]Series, error) {
+	if m.GetAllSeriesFunc != nil {
+		return m.GetAllSeriesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetSeriesByID(id int) (*Series, error) {
+	if m.GetSeriesByIDFunc != nil {
+		return m.GetSeriesByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetSeriesByIDs(ids []int) (map[int]*Series, error) {
+	if m.GetSeriesByIDsFunc != nil {
+		return m.GetSeriesByIDsFunc(ids)
+	}
+	return map[int]*Series{}, nil
+}
+
+func (m *MockStore) GetSeriesByName(name string, authorID *int) (*Series, error) {
+	if m.GetSeriesByNameFunc != nil {
+		return m.GetSeriesByNameFunc(name, authorID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateSeries(name string, authorID *int) (*Series, error) {
+	if m.CreateSeriesFunc != nil {
+		return m.CreateSeriesFunc(name, authorID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteSeries(id int) error {
+	if m.DeleteSeriesFunc != nil {
+		return m.DeleteSeriesFunc(id)
+	}
+	return nil
+}
+
+// GetAllSeriesBookRefCounts satisfies SeriesBookRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED reference question. Without
+// it, AsSeriesBookRefStore returns nil and every caller correctly fails closed,
+// which would make the mock unusable for the delete paths rather than merely
+// permissive.
+func (m *MockStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	if m.GetAllSeriesBookRefCountsFunc != nil {
+		return m.GetAllSeriesBookRefCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+// GetAllAuthorBookRefCounts satisfies AuthorBookRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED author reference question.
+// Without it, AsAuthorBookRefStore returns nil and every caller correctly fails
+// closed, which would make the mock unusable for the author delete paths rather
+// than merely permissive.
+func (m *MockStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
+	if m.GetAllAuthorBookRefCountsFunc != nil {
+		return m.GetAllAuthorBookRefCountsFunc()
+	}
+	if m.GetAllAuthorBookRefBucketsFunc != nil {
+		buckets, err := m.GetAllAuthorBookRefBucketsFunc()
+		if err != nil {
+			return nil, err
+		}
+		return sumAuthorRefBuckets(buckets), nil
+	}
+	return map[int]int{}, nil
+}
+
+// GetAllAuthorBookRefBuckets satisfies AuthorBookRefBucketStore; see the field
+// comment on GetAllAuthorBookRefBucketsFunc for the nil-func fallback.
+func (m *MockStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error) {
+	if m.GetAllAuthorBookRefBucketsFunc != nil {
+		return m.GetAllAuthorBookRefBucketsFunc()
+	}
+	counts, err := m.GetAllAuthorBookRefCounts()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]AuthorRefBuckets, len(counts))
+	for id, n := range counts {
+		out[id] = AuthorRefBuckets{Live: n}
+	}
+	return out, nil
+}
+
+// GetAllAuthorFileRefCounts satisfies AuthorFileRefStore so a MockStore can
+// stand in for a store that answers the UNFILTERED author FILE question.
+//
+// Unset means UNANSWERABLE, not zero. Returning an empty map here would mirror
+// the very defect author_file_refs.go exists to close — a filtered/absent count
+// read as "this author has no files" by a gate that deletes on it.
+func (m *MockStore) GetAllAuthorFileRefCounts() (map[int]int, error) {
+	if m.GetAllAuthorFileRefCountsFunc != nil {
+		return m.GetAllAuthorFileRefCountsFunc()
+	}
+	return nil, fmt.Errorf("MockStore.GetAllAuthorFileRefCountsFunc is not set: " +
+		"a test reaching the author file-safety gate must say what the unfiltered file count is")
+}
+
+// GetAllNarratorRefs satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) GetAllNarratorRefs() (NarratorRefs, error) {
+	if m.GetAllNarratorRefsFunc != nil {
+		return m.GetAllNarratorRefsFunc()
+	}
+	return NarratorRefs{}, fmt.Errorf("MockStore.GetAllNarratorRefsFunc is not set: " +
+		"a test reaching the narrator purge guard must say what the unfiltered reference count is")
+}
+
+// CountNarratorBookLinks satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) CountNarratorBookLinks(narratorID int) (int, error) {
+	if m.CountNarratorBookLinksFunc != nil {
+		return m.CountNarratorBookLinksFunc(narratorID)
+	}
+	return 0, fmt.Errorf("MockStore.CountNarratorBookLinksFunc is not set: "+
+		"a test reaching the per-narrator re-check must say what the live link count is (narrator %d)", narratorID)
+}
+
+// BookNarratorsLinking satisfies NarratorRefStore. Unset means UNANSWERABLE.
+func (m *MockStore) BookNarratorsLinking(narratorIDs map[int]bool) (map[string][]BookNarrator, error) {
+	if m.BookNarratorsLinkingFunc != nil {
+		return m.BookNarratorsLinkingFunc(narratorIDs)
+	}
+	return nil, fmt.Errorf("MockStore.BookNarratorsLinkingFunc is not set: " +
+		"a test reaching the narrator split must say which books link the joined narrators")
+}
+
+func (m *MockStore) UpdateSeriesName(id int, name string) error {
+	if m.UpdateSeriesNameFunc != nil {
+		return m.UpdateSeriesNameFunc(id, name)
+	}
+	return nil
+}
+
+func (m *MockStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
+	if m.RenameSeriesIfFunc != nil {
+		return m.RenameSeriesIfFunc(id, expectCurrent, newName)
+	}
+	return nil
+}
+
+func (m *MockStore) RenameSeriesIfCurrent(id int, expectCurrent, newName string) error {
+	if m.RenameSeriesIfCurrentFunc != nil {
+		return m.RenameSeriesIfCurrentFunc(id, expectCurrent, newName)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAllWorks() ([]Work, error) {
+	if m.GetAllWorksFunc != nil {
+		return m.GetAllWorksFunc()
+	}
+	return nil, nil
+}
+
+// ForEachWork visits GetAllWorks' result, honouring ctx between rows, unless
+// ForEachWorkFunc overrides it.
+func (m *MockStore) ForEachWork(ctx context.Context, visit func(Work) error) error {
+	if m.ForEachWorkFunc != nil {
+		return m.ForEachWorkFunc(ctx, visit)
+	}
+	works, err := m.GetAllWorks()
+	if err != nil {
+		return err
+	}
+	for _, w := range works {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := visit(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WorksGeneration returns WorksGenerationFunc's value, or 0 (a constant, so a
+// works cache built against the mock is always reusable unless a test sets
+// the func).
+func (m *MockStore) WorksGeneration() uint64 {
+	if m.WorksGenerationFunc != nil {
+		return m.WorksGenerationFunc()
+	}
+	return 0
+}
+
+func (m *MockStore) GetWorkByID(id string) (*Work, error) {
+	if m.GetWorkByIDFunc != nil {
+		return m.GetWorkByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateWork(work *Work) (*Work, error) {
+	if m.CreateWorkFunc != nil {
+		return m.CreateWorkFunc(work)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateWork(id string, work *Work) (*Work, error) {
+	if m.UpdateWorkFunc != nil {
+		return m.UpdateWorkFunc(id, work)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteWork(id string) error {
+	if m.DeleteWorkFunc != nil {
+		return m.DeleteWorkFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBooksByWorkID(workID string) ([]Book, error) {
+	if m.GetBooksByWorkIDFunc != nil {
+		return m.GetBooksByWorkIDFunc(workID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
+	if m.GetAllBooksCoreFunc != nil {
+		return m.GetAllBooksCoreFunc(limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error) {
+	if m.GetAllBooksCoreCompleteFunc != nil {
+		return m.GetAllBooksCoreCompleteFunc(limit, offset)
+	}
+	return m.GetAllBooksCore(limit, offset)
+}
+
+func (m *MockStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {
+	if m.GetAllBooksFullFromFunc != nil {
+		return m.GetAllBooksFullFromFunc(afterID, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListBookSearchRows() ([]BookSearchRow, error) {
+	if m.ListBookSearchRowsFunc != nil {
+		return m.ListBookSearchRowsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListBookIDs() ([]string, error) {
+	if m.ListBookIDsFunc != nil {
+		return m.ListBookIDsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllBookSummaries(limit, offset int) ([]BookSummary, error) {
+	if m.GetAllBookSummariesFunc != nil {
+		return m.GetAllBookSummariesFunc(limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookByID(id string) (*Book, error) {
+	if m.GetBookByIDFunc != nil {
+		return m.GetBookByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByIDs(ids []string) ([]Book, error) {
+	if m.GetBooksByIDsFunc != nil {
+		return m.GetBooksByIDsFunc(ids)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookByFilePath(path string) (*Book, error) {
+	if m.GetBookByFilePathFunc != nil {
+		return m.GetBookByFilePathFunc(path)
+	}
+	return nil, nil
+}
+
+// LiveBookIDsAtPath returns nil, nil when unconfigured: "no live book at this
+// path". A test whose code path decides "is this path free?" must set the Func.
+func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	if m.LiveBookIDsAtPathFunc != nil {
+		return m.LiveBookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// BookIDsAtPath returns nil, nil when unconfigured: "no book, trashed or not,
+// at this path". A test whose code path decides "is this path free?" must set
+// the Func.
+func (m *MockStore) BookIDsAtPath(path string) ([]string, error) {
+	if m.BookIDsAtPathFunc != nil {
+		return m.BookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// SampleLiveBookFilePathsUnder returns nil, nil when unconfigured: "no live
+// book has a file under root", which a root check reads as nothing to compare
+// against. A test of the check sets the Func.
+func (m *MockStore) SampleLiveBookFilePathsUnder(root string, k int) ([]string, error) {
+	if m.SampleLiveBookFilePathsUnderFunc != nil {
+		return m.SampleLiveBookFilePathsUnderFunc(root, k)
+	}
+	return nil, nil
+}
+
+// LiveBookPathsUnderDir returns nil, nil when unconfigured: "no live book
+// under this dir", like LiveBookIDsAtPath.
+func (m *MockStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
+	if m.LiveBookPathsUnderDirFunc != nil {
+		return m.LiveBookPathsUnderDirFunc(dir)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookByITunesPersistentID(persistentID string) (*Book, error) {
+	if m.GetBookByITunesPersistentIDFunc != nil {
+		return m.GetBookByITunesPersistentIDFunc(persistentID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListBooksByITunesPID(limit, offset int) ([]Book, error) {
+	if m.ListBooksByITunesPIDFunc != nil {
+		return m.ListBooksByITunesPIDFunc(limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookByFileHash(hash string) (*Book, error) {
+	if m.GetBookByFileHashFunc != nil {
+		return m.GetBookByFileHashFunc(hash)
+	}
+	return nil, nil
+}
+
+// BooksByFileHash is the FileHashHolderLookup capability: BooksByFileHashFunc
+// when set, else the single book GetBookByFileHash answers with.
+func (m *MockStore) BooksByFileHash(hash string) ([]*Book, error) {
+	if m.BooksByFileHashFunc != nil {
+		return m.BooksByFileHashFunc(hash)
+	}
+	b, err := m.GetBookByFileHash(hash)
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return []*Book{b}, nil
+}
+
+func (m *MockStore) GetBookByOriginalHash(hash string) (*Book, error) {
+	if m.GetBookByOriginalHashFunc != nil {
+		return m.GetBookByOriginalHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookByOrganizedHash(hash string) (*Book, error) {
+	if m.GetBookByOrganizedHashFunc != nil {
+		return m.GetBookByOrganizedHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetDuplicateBooks() ([][]Book, error) {
+	if m.GetDuplicateBooksFunc != nil {
+		return m.GetDuplicateBooksFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error) {
+	if m.GetBooksByTitleInDirFunc != nil {
+		return m.GetBooksByTitleInDirFunc(normalizedTitle, dirPath)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
+	if m.GetFolderDuplicatesCoreFunc != nil {
+		return m.GetFolderDuplicatesCoreFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetDuplicateBooksByMetadataCore(threshold float64) ([][]BookCore, error) {
+	if m.GetDuplicateBooksByMetadataFunc != nil {
+		return m.GetDuplicateBooksByMetadataFunc(threshold)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
+	if m.GetBooksBySeriesIDCoreFunc != nil {
+		return m.GetBooksBySeriesIDCoreFunc(seriesID)
+	}
+	return nil, nil
+}
+
+// GetBooksBySeriesIDAllVersions falls back to GetBooksBySeriesIDCoreFunc when
+// its own stub is unset, instead of the usual bare `return nil, nil`.
+//
+// The bare-nil default would be actively harmful here. Every existing test that
+// stubs a series' membership does so through GetBooksBySeriesIDCoreFunc, and
+// the series merge path was switched from Core to AllVersions — so a bare-nil
+// default would hand those suites an EMPTY series and let them go green while
+// asserting nothing. A vacuous pass is worse than a failure. Since AllVersions
+// is by contract a superset of Core, deferring to the Core stub reproduces the
+// pre-switch behaviour exactly. A test that needs the two to DIFFER (the
+// non-primary version the merge must see and the listing must not) sets both.
+func (m *MockStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error) {
+	if m.GetBooksBySeriesIDAllVersionsFunc != nil {
+		return m.GetBooksBySeriesIDAllVersionsFunc(seriesID)
+	}
+	if m.GetBooksBySeriesIDCoreFunc != nil {
+		return m.GetBooksBySeriesIDCoreFunc(seriesID)
+	}
+	return nil, nil
+}
+
+// GetBooksBySeriesIDsAllVersions satisfies SeriesMembershipStore. Unset, it
+// defers to GetBooksBySeriesIDAllVersions per ID (and so, transitively, to the
+// Core stub), keeping the hoisted and per-series answers identical by
+// construction for every existing fixture. An error from any ID fails the
+// whole read, as the real store's single scan would.
+func (m *MockStore) GetBooksBySeriesIDsAllVersions(seriesIDs []int) (map[int][]BookCore, error) {
+	if m.GetBooksBySeriesIDsAllVersionsFunc != nil {
+		return m.GetBooksBySeriesIDsAllVersionsFunc(seriesIDs)
+	}
+	out := make(map[int][]BookCore, len(seriesIDs))
+	for _, id := range seriesIDs {
+		books, err := m.GetBooksBySeriesIDAllVersions(id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = books
+	}
+	return out, nil
+}
+
+func (m *MockStore) GetBooksByAuthorIDCore(authorID int) ([]BookCore, error) {
+	if m.GetBooksByAuthorIDCoreFunc != nil {
+		return m.GetBooksByAuthorIDCoreFunc(authorID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
+	if m.GetBookAuthorsFunc != nil {
+		return m.GetBookAuthorsFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
+	if m.SetBookAuthorsFunc != nil {
+		return m.SetBookAuthorsFunc(bookID, authors)
+	}
+	return nil
+}
+
+// ModifyBookAuthors defaults to GetBookAuthors -> fn -> SetBookAuthors through
+// the configured funcs, so a test that stubs only those two still observes the
+// write. It is not atomic; concurrency tests use a real PebbleStore.
+func (m *MockStore) ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]BookAuthor, error)) ([]BookAuthor, error) {
+	if m.ModifyBookAuthorsFunc != nil {
+		return m.ModifyBookAuthorsFunc(bookID, fn)
+	}
+	current, err := m.GetBookAuthors(bookID)
+	if err != nil {
+		return nil, err
+	}
+	next, err := fn(append([]BookAuthor(nil), current...))
+	if err != nil {
+		if errors.Is(err, ErrSkipBookAuthorsWrite) {
+			return current, nil
+		}
+		return nil, err
+	}
+	if err := m.SetBookAuthors(bookID, next); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func (m *MockStore) GetBooksByAuthorIDWithRoleCore(authorID int) ([]BookCore, error) {
+	if m.GetBooksByAuthorIDWithRoleFunc != nil {
+		return m.GetBooksByAuthorIDWithRoleFunc(authorID)
+	}
+	return nil, nil
+}
+
+// GetBooksByAuthorIDForRelinkCore is backed by GetBooksByAuthorIDForRelinkFunc.
+// Like GetAllAuthorFileRefCounts, and unlike the permissive nil-func contract
+// most of this mock follows, an unset func is an ERROR, not "no books". The
+// getter feeds database.VerifyAuthorUnlinked, the last check before a
+// DeleteAuthor: an empty default would let that check pass in any test that
+// never stubbed it, and falling back to the WithRole stub would answer from a
+// list that by construction excludes the trash.
+func (m *MockStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore, error) {
+	if m.GetBooksByAuthorIDForRelinkFunc != nil {
+		return m.GetBooksByAuthorIDForRelinkFunc(authorID)
+	}
+	return nil, fmt.Errorf("MockStore.GetBooksByAuthorIDForRelinkFunc is not set: "+
+		"a test reaching a relink-then-DeleteAuthor path must say which books still credit author %d", authorID)
+}
+
+// GetBookIDsCreditingAuthorDurable is backed by
+// GetBookIDsCreditingAuthorDurableFunc. Unset is an ERROR, for the same reason
+// as GetBooksByAuthorIDForRelinkCore above: it guards a delete, and a permissive
+// empty default would let any unstubbed test pass that guard.
+func (m *MockStore) GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error) {
+	if m.GetBookIDsCreditingAuthorDurableFunc != nil {
+		return m.GetBookIDsCreditingAuthorDurableFunc(authorID)
+	}
+	return nil, fmt.Errorf("MockStore.GetBookIDsCreditingAuthorDurableFunc is not set: "+
+		"a test reaching a delete-when-empty check must say which books still credit author %d", authorID)
+}
+
+func (m *MockStore) GetAllAuthorBookCounts() (map[int]int, error) {
+	if m.GetAllAuthorBookCountsFunc != nil {
+		return m.GetAllAuthorBookCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+func (m *MockStore) GetAllWorkBookCounts() (map[string]int, error) {
+	if m.GetAllWorkBookCountsFunc != nil {
+		return m.GetAllWorkBookCountsFunc()
+	}
+	return map[string]int{}, nil
+}
+
+func (m *MockStore) GetAllAuthorFileCounts() (map[int]int, error) {
+	if m.GetAllAuthorFileCountsFunc != nil {
+		return m.GetAllAuthorFileCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+func (m *MockStore) GetAllSeriesBookCounts() (map[int]int, error) {
+	if m.GetAllSeriesBookCountsFunc != nil {
+		return m.GetAllSeriesBookCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+func (m *MockStore) GetAllSeriesFileCounts() (map[int]int, error) {
+	if m.GetAllSeriesFileCountsFunc != nil {
+		return m.GetAllSeriesFileCountsFunc()
+	}
+	return map[int]int{}, nil
+}
+
+func (m *MockStore) CreateNarrator(name string) (*Narrator, error) {
+	if m.CreateNarratorFunc != nil {
+		return m.CreateNarratorFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteNarrator(id int) error {
+	if m.DeleteNarratorFunc != nil {
+		return m.DeleteNarratorFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) GetNarratorByID(id int) (*Narrator, error) {
+	if m.GetNarratorByIDFunc != nil {
+		return m.GetNarratorByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetNarratorByName(name string) (*Narrator, error) {
+	if m.GetNarratorByNameFunc != nil {
+		return m.GetNarratorByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListNarrators() ([]Narrator, error) {
+	if m.ListNarratorsFunc != nil {
+		return m.ListNarratorsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
+	if m.GetBookNarratorsFunc != nil {
+		return m.GetBookNarratorsFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetBookNarrators(bookID string, narrators []BookNarrator) error {
+	if m.SetBookNarratorsFunc != nil {
+		return m.SetBookNarratorsFunc(bookID, narrators)
+	}
+	return nil
+}
+
+func (m *MockStore) CreateBook(book *Book) (*Book, error) {
+	if m.CreateBookFunc != nil {
+		return m.CreateBookFunc(book)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
+	if m.UpdateBookFunc != nil {
+		return m.UpdateBookFunc(id, book)
+	}
+	return nil, nil
+}
+
+// ModifyBook uses ModifyBookFunc when set; otherwise it composes the mock's
+// own GetBookByID and UpdateBook, so a test that stubs those two keeps working
+// against a caller converted to ModifyBook.
+//
+// The callback runs on an independent SNAPSHOT of what GetBookByID returned,
+// as it does in PebbleStore (which unmarshals a fresh Book per read). Stubs
+// commonly return one stored pointer from GetBookByIDFunc; running fn on that
+// pointer edited the "stored row" in place, so a caller that wrote back a stale
+// copy instead of merging looked correct and lost-update tests passed
+// vacuously (found 2026-09-19).
+// ClearBookSignature calls ClearBookSignatureFunc when set; otherwise no-op.
+func (m *MockStore) ClearBookSignature(id string) error {
+	if m.ClearBookSignatureFunc != nil {
+		return m.ClearBookSignatureFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) ModifyBook(id string, fn func(*Book) error) (*Book, error) {
+	if m.ModifyBookFunc != nil {
+		return m.ModifyBookFunc(id, fn)
+	}
+	stored, err := m.GetBookByID(id)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	book, err := SnapshotBook(stored)
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(book); err != nil {
+		if errors.Is(err, ErrSkipBookWrite) {
+			return book, nil
+		}
+		return nil, err
+	}
+	return m.UpdateBook(id, book)
+}
+
+func (m *MockStore) FillBookMediaInfo(id string, patch BookMediaInfoPatch) (*Book, error) {
+	if m.FillBookMediaInfoFunc != nil {
+		return m.FillBookMediaInfoFunc(id, patch)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateBookRating(id string, req UpdateBookRatingRequest) error {
+	if m.UpdateBookRatingFunc != nil {
+		return m.UpdateBookRatingFunc(id, req)
+	}
+	return m.UpdateBookRatingError
+}
+
+func (m *MockStore) DeleteBook(id string) error {
+	if m.DeleteBookFunc != nil {
+		return m.DeleteBookFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) SearchBooks(query string, limit, offset int) ([]Book, error) {
+	if m.SearchBooksFunc != nil {
+		return m.SearchBooksFunc(query, limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CountPrimaryBooks() (int, error) {
+	if m.CountPrimaryBooksFunc != nil {
+		return m.CountPrimaryBooksFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CountAllBooks() (int, error) {
+	if m.CountAllBooksFunc != nil {
+		return m.CountAllBooksFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) GetDistinctGenres() ([]string, error) {
+	if m.GetDistinctGenresFunc != nil {
+		return m.GetDistinctGenresFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetGenreCounts() (map[string]int, error) {
+	if m.GetGenreCountsFunc != nil {
+		return m.GetGenreCountsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetDistinctLanguages() ([]string, error) {
+	if m.GetDistinctLanguagesFunc != nil {
+		return m.GetDistinctLanguagesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetDistinctPublishedYears() ([]int, error) {
+	if m.GetDistinctPublishedYearsFunc != nil {
+		return m.GetDistinctPublishedYearsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CountFiles() (int, error) {
+	if m.CountFilesFunc != nil {
+		return m.CountFilesFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CountAuthors() (int, error) {
+	if m.CountAuthorsFunc != nil {
+		return m.CountAuthorsFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CountSeries() (int, error) {
+	if m.CountSeriesFunc != nil {
+		return m.CountSeriesFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) GetBookCountsByLocation(rootDir string) (int, int, error) {
+	if m.GetBookCountsByLocationFunc != nil {
+		return m.GetBookCountsByLocationFunc(rootDir)
+	}
+	return 0, 0, nil
+}
+
+func (m *MockStore) GetBookSizesByLocation(rootDir string) (int64, int64, error) {
+	if m.GetBookSizesByLocationFunc != nil {
+		return m.GetBookSizesByLocationFunc(rootDir)
+	}
+	return 0, 0, nil
+}
+
+func (m *MockStore) GetDashboardStats() (*DashboardStats, error) {
+	if m.GetDashboardStatsFunc != nil {
+		return m.GetDashboardStatsFunc()
+	}
+	return &DashboardStats{
+		StateDistribution:  map[string]int{},
+		FormatDistribution: map[string]int{},
+		BooksByImportPath:  map[int]int{},
+		SizeByImportPath:   map[int]int64{},
+	}, nil
+}
+
+func (m *MockStore) SetRootDir(rootDir string) {
+	if m.SetRootDirFunc != nil {
+		m.SetRootDirFunc(rootDir)
+	}
+}
+
+func (m *MockStore) InvalidateLibraryStats() {
+	if m.InvalidateLibraryStatsFunc != nil {
+		m.InvalidateLibraryStatsFunc()
+	}
+}
+
+func (m *MockStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]Book, error) {
+	if m.ListSoftDeletedBooksFunc != nil {
+		return m.ListSoftDeletedBooksFunc(limit, offset, olderThan)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateBookTombstone(book *Book) error {
+	if m.CreateBookTombstoneFunc != nil {
+		return m.CreateBookTombstoneFunc(book)
+	}
+	return nil
+}
+
+// CreateStampedBookTombstone implements StampedTombstoneWriter.
+func (m *MockStore) CreateStampedBookTombstone(book *Book, stamp TombstoneFileStamp) error {
+	if m.CreateStampedBookTombstoneFunc != nil {
+		return m.CreateStampedBookTombstoneFunc(book, stamp)
+	}
+	// Unconfigured, it is the plain tombstone write (and so honours
+	// CreateBookTombstoneFunc): a test that injects a tombstone failure must see
+	// it whether or not the purge stamped.
+	return m.CreateBookTombstone(book)
+}
+
+// GetBookTombstoneStamp implements TombstoneStampReader.
+func (m *MockStore) GetBookTombstoneStamp(id string) (*TombstoneFileStamp, error) {
+	if m.GetBookTombstoneStampFunc != nil {
+		return m.GetBookTombstoneStampFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookTombstone(id string) (*Book, error) {
+	if m.GetBookTombstoneFunc != nil {
+		return m.GetBookTombstoneFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteBookTombstone(id string) error {
+	if m.DeleteBookTombstoneFunc != nil {
+		return m.DeleteBookTombstoneFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) ListBookTombstones(limit int) ([]Book, error) {
+	if m.ListBookTombstonesFunc != nil {
+		return m.ListBookTombstonesFunc(limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByVersionGroup(groupID string) ([]Book, error) {
+	if m.GetBooksByVersionGroupFunc != nil {
+		return m.GetBooksByVersionGroupFunc(groupID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) {
+	if m.GetBooksByMetadataSourceHashFunc != nil {
+		return m.GetBooksByMetadataSourceHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookIDsByISBNASIN(isbn10, isbn13, asin string) ([]string, error) {
+	if m.GetBookIDsByISBNASINFunc != nil {
+		return m.GetBookIDsByISBNASINFunc(isbn10, isbn13, asin)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllImportPaths() ([]ImportPath, error) {
+	if m.GetAllImportPathsFunc != nil {
+		return m.GetAllImportPathsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetImportPathByID(id int) (*ImportPath, error) {
+	if m.GetImportPathByIDFunc != nil {
+		return m.GetImportPathByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetImportPathByPath(path string) (*ImportPath, error) {
+	if m.GetImportPathByPathFunc != nil {
+		return m.GetImportPathByPathFunc(path)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateImportPath(path, name string) (*ImportPath, error) {
+	if m.CreateImportPathFunc != nil {
+		return m.CreateImportPathFunc(path, name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateImportPath(id int, importPath *ImportPath) error {
+	if m.UpdateImportPathFunc != nil {
+		return m.UpdateImportPathFunc(id, importPath)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteImportPath(id int) error {
+	if m.DeleteImportPathFunc != nil {
+		return m.DeleteImportPathFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) CountBooksByPathPrefix(prefix string) (int, error) {
+	if m.CountBooksByPathPrefixFunc != nil {
+		return m.CountBooksByPathPrefixFunc(prefix)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CreateOperation(id, opType string, folderPath *string) (*Operation, error) {
+	if m.CreateOperationFunc != nil {
+		return m.CreateOperationFunc(id, opType, folderPath)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetOperationByID(id string) (*Operation, error) {
+	if m.GetOperationByIDFunc != nil {
+		return m.GetOperationByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetRecentOperations(limit int) ([]Operation, error) {
+	if m.GetRecentOperationsFunc != nil {
+		return m.GetRecentOperationsFunc(limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListOperations(limit, offset int) ([]Operation, int, error) {
+	if m.ListOperationsFunc != nil {
+		return m.ListOperationsFunc(limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) UpdateOperationStatus(id, status string, progress, total int, message string) error {
+	if m.UpdateOperationStatusFunc != nil {
+		return m.UpdateOperationStatusFunc(id, status, progress, total, message)
+	}
+	return nil
+}
+
+func (m *MockStore) UpdateOperationError(id, errorMessage string) error {
+	if m.UpdateOperationErrorFunc != nil {
+		return m.UpdateOperationErrorFunc(id, errorMessage)
+	}
+	return nil
+}
+
+func (m *MockStore) UpdateOperationResultData(id string, resultData string) error {
+	if m.UpdateOperationResultDataFunc != nil {
+		return m.UpdateOperationResultDataFunc(id, resultData)
+	}
+	return nil
+}
+
+func (m *MockStore) SaveOperationState(opID string, state []byte) error {
+	if m.SaveOperationStateFunc != nil {
+		return m.SaveOperationStateFunc(opID, state)
+	}
+	return nil
+}
+
+func (m *MockStore) GetOperationState(opID string) ([]byte, error) {
+	if m.GetOperationStateFunc != nil {
+		return m.GetOperationStateFunc(opID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteOperationState(opID string) error {
+	if m.DeleteOperationStateFunc != nil {
+		return m.DeleteOperationStateFunc(opID)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteOperationWithLogs(id string) error {
+	if m.DeleteOperationWithLogsFunc != nil {
+		return m.DeleteOperationWithLogsFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) GetInterruptedOperations() ([]Operation, error) {
+	if m.GetInterruptedOperationsFunc != nil {
+		return m.GetInterruptedOperationsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) AddOperationLog(operationID, level, message string, details *string) error {
+	if m.AddOperationLogFunc != nil {
+		return m.AddOperationLogFunc(operationID, level, message, details)
+	}
+	return nil
+}
+
+func (m *MockStore) GetOperationLogs(operationID string) ([]OperationLog, error) {
+	if m.GetOperationLogsFunc != nil {
+		return m.GetOperationLogsFunc(operationID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SaveOperationSummaryLog(op *OperationSummaryLog) error {
+	if m.SaveOperationSummaryLogFunc != nil {
+		return m.SaveOperationSummaryLogFunc(op)
+	}
+	return nil
+}
+
+func (m *MockStore) GetOperationSummaryLog(id string) (*OperationSummaryLog, error) {
+	if m.GetOperationSummaryLogFunc != nil {
+		return m.GetOperationSummaryLogFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListOperationSummaryLogs(limit, offset int) ([]OperationSummaryLog, error) {
+	if m.ListOperationSummaryLogsFunc != nil {
+		return m.ListOperationSummaryLogsFunc(limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserPreference(key string) (*UserPreference, error) {
+	if m.GetUserPreferenceFunc != nil {
+		return m.GetUserPreferenceFunc(key)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetUserPreference(key, value string) error {
+	if m.SetUserPreferenceFunc != nil {
+		return m.SetUserPreferenceFunc(key, value)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteUserPreference(key string) error {
+	if m.DeleteUserPreferenceFunc != nil {
+		return m.DeleteUserPreferenceFunc(key)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAllUserPreferences() ([]UserPreference, error) {
+	if m.GetAllUserPreferencesFunc != nil {
+		return m.GetAllUserPreferencesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetSetting(key string) (*Setting, error) {
+	if m.GetSettingFunc != nil {
+		return m.GetSettingFunc(key)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetSetting(key, value, typ string, isSecret bool) error {
+	if m.SetSettingFunc != nil {
+		return m.SetSettingFunc(key, value, typ, isSecret)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAllSettings() ([]Setting, error) {
+	if m.GetAllSettingsFunc != nil {
+		return m.GetAllSettingsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteSetting(key string) error {
+	if m.DeleteSettingFunc != nil {
+		return m.DeleteSettingFunc(key)
+	}
+	return nil
+}
+
+func (m *MockStore) CreatePlaylist(name string, seriesID *int, filePath string) (*Playlist, error) {
+	if m.CreatePlaylistFunc != nil {
+		return m.CreatePlaylistFunc(name, seriesID, filePath)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetPlaylistByID(id int) (*Playlist, error) {
+	if m.GetPlaylistByIDFunc != nil {
+		return m.GetPlaylistByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetPlaylistBySeriesID(seriesID int) (*Playlist, error) {
+	if m.GetPlaylistBySeriesIDFunc != nil {
+		return m.GetPlaylistBySeriesIDFunc(seriesID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) AddPlaylistItem(playlistID, bookID, position int) error {
+	if m.AddPlaylistItemFunc != nil {
+		return m.AddPlaylistItemFunc(playlistID, bookID, position)
+	}
+	return nil
+}
+
+func (m *MockStore) GetPlaylistItems(playlistID int) ([]PlaylistItem, error) {
+	if m.GetPlaylistItemsFunc != nil {
+		return m.GetPlaylistItemsFunc(playlistID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error) {
+	if m.CreateUserFunc != nil {
+		return m.CreateUserFunc(username, email, passwordHashAlgo, passwordHash, roles, status)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserByID(id string) (*User, error) {
+	if m.GetUserByIDFunc != nil {
+		return m.GetUserByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserByUsername(username string) (*User, error) {
+	if m.GetUserByUsernameFunc != nil {
+		return m.GetUserByUsernameFunc(username)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserByVerifiedEmail(email string) (*User, error) {
+	if m.GetUserByVerifiedEmailFunc != nil {
+		return m.GetUserByVerifiedEmailFunc(email)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateUser(user *User) error {
+	if m.UpdateUserFunc != nil {
+		return m.UpdateUserFunc(user)
+	}
+	return nil
+}
+
+func (m *MockStore) ListUsers() ([]User, error) {
+	if m.ListUsersFunc != nil {
+		return m.ListUsersFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateSession(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error) {
+	if m.CreateSessionFunc != nil {
+		return m.CreateSessionFunc(userID, ip, userAgent, ttl, credentialEpoch)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error) {
+	if m.CreateSessionWithOriginFunc != nil {
+		return m.CreateSessionWithOriginFunc(userID, ip, userAgent, ttl, origin, credentialEpoch)
+	}
+	s, err := m.CreateSession(userID, ip, userAgent, ttl, credentialEpoch)
+	if s != nil {
+		s.Origin = origin
+	}
+	return s, err
+}
+
+func (m *MockStore) GetSession(id string) (*Session, error) {
+	if m.GetSessionFunc != nil {
+		return m.GetSessionFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateOAuthIdentity(identity *OAuthIdentity) (*OAuthIdentity, error) {
+	if m.CreateOAuthIdentityFunc != nil {
+		return m.CreateOAuthIdentityFunc(identity)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetOAuthIdentityByProviderSubject(provider, subject string) (*OAuthIdentity, error) {
+	if m.GetOAuthIdentityByProviderSubjectFunc != nil {
+		return m.GetOAuthIdentityByProviderSubjectFunc(provider, subject)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetOAuthIdentitiesForUser(userID string) ([]OAuthIdentity, error) {
+	if m.GetOAuthIdentitiesForUserFunc != nil {
+		return m.GetOAuthIdentitiesForUserFunc(userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) RevokeSession(id string) error {
+	if m.RevokeSessionFunc != nil {
+		return m.RevokeSessionFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) ListUserSessions(userID string) ([]Session, error) {
+	if m.ListUserSessionsFunc != nil {
+		return m.ListUserSessionsFunc(userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteExpiredABSSessions(now time.Time) (int, error) {
+	if m.DeleteExpiredABSSessionsFunc != nil {
+		return m.DeleteExpiredABSSessionsFunc(now)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) DeleteExpiredSessions(now time.Time) (int, error) {
+	if m.DeleteExpiredSessionsFunc != nil {
+		return m.DeleteExpiredSessionsFunc(now)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CountUsers() (int, error) {
+	if m.CountUsersFunc != nil {
+		return m.CountUsersFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) GetRoleByID(id string) (*Role, error) {
+	if m.GetRoleByIDFunc != nil {
+		return m.GetRoleByIDFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetRoleByName(name string) (*Role, error) {
+	if m.GetRoleByNameFunc != nil {
+		return m.GetRoleByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListRoles() ([]Role, error) {
+	if m.ListRolesFunc != nil {
+		return m.ListRolesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateRole(role *Role) (*Role, error) {
+	if m.CreateRoleFunc != nil {
+		return m.CreateRoleFunc(role)
+	}
+	return role, nil
+}
+
+func (m *MockStore) UpdateRole(role *Role) error {
+	if m.UpdateRoleFunc != nil {
+		return m.UpdateRoleFunc(role)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteRole(id string) error {
+	if m.DeleteRoleFunc != nil {
+		return m.DeleteRoleFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error {
+	if m.SetUserPositionFunc != nil {
+		return m.SetUserPositionFunc(userID, bookID, segmentID, positionSeconds)
+	}
+	return nil
+}
+
+func (m *MockStore) GetUserPosition(userID, bookID string) (*UserPosition, error) {
+	if m.GetUserPositionFunc != nil {
+		return m.GetUserPositionFunc(userID, bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListUserPositionsForBook(userID, bookID string) ([]UserPosition, error) {
+	if m.ListUserPositionsForBookFunc != nil {
+		return m.ListUserPositionsForBookFunc(userID, bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ClearUserPositions(userID, bookID string) error {
+	if m.ClearUserPositionsFunc != nil {
+		return m.ClearUserPositionsFunc(userID, bookID)
+	}
+	return nil
+}
+
+// SetUserBookState dates a finish the way PebbleStore does (stampFinishedAt),
+// using GetUserBookState as the stored row, before handing the state to
+// SetUserBookStateFunc. Without this, a mock-backed test never sees a
+// FinishedAt, so it can never observe an iTunes play-count bump. The stored
+// row is read only for a Finished write, because that is the only case
+// where the stamp depends on it.
+func (m *MockStore) SetUserBookState(state *UserBookState) error {
+	if state != nil {
+		var prev *UserBookState
+		var prevErr error
+		if state.Status == UserBookStatusFinished {
+			prev, prevErr = m.GetUserBookState(state.UserID, state.BookID)
+		}
+		stampFinishedAt(state, prev, prevErr, time.Now())
+	}
+	if m.SetUserBookStateFunc != nil {
+		return m.SetUserBookStateFunc(state)
+	}
+	return nil
+}
+
+func (m *MockStore) GetUserBookState(userID, bookID string) (*UserBookState, error) {
+	if m.GetUserBookStateFunc != nil {
+		return m.GetUserBookStateFunc(userID, bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListUserBookStatesByStatus(userID, status string, limit, offset int) ([]UserBookState, error) {
+	if m.ListUserBookStatesByStatusFunc != nil {
+		return m.ListUserBookStatesByStatusFunc(userID, status, limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListUserPositionsSince(userID string, t time.Time) ([]UserPosition, error) {
+	if m.ListUserPositionsSinceFunc != nil {
+		return m.ListUserPositionsSinceFunc(userID, t)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateBookVersion(v *BookVersion) (*BookVersion, error) {
+	if m.CreateBookVersionFunc != nil {
+		return m.CreateBookVersionFunc(v)
+	}
+	return v, nil
+}
+
+func (m *MockStore) GetBookVersion(id string) (*BookVersion, error) {
+	if m.GetBookVersionFunc != nil {
+		return m.GetBookVersionFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookVersionsByBookID(bookID string) ([]BookVersion, error) {
+	if m.GetBookVersionsByBookIDFunc != nil {
+		return m.GetBookVersionsByBookIDFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetActiveVersionForBook(bookID string) (*BookVersion, error) {
+	if m.GetActiveVersionForBookFunc != nil {
+		return m.GetActiveVersionForBookFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateBookVersion(v *BookVersion) error {
+	if m.UpdateBookVersionFunc != nil {
+		return m.UpdateBookVersionFunc(v)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteBookVersion(id string) error {
+	if m.DeleteBookVersionFunc != nil {
+		return m.DeleteBookVersionFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookVersionByTorrentHash(hash string) (*BookVersion, error) {
+	if m.GetBookVersionByTorrentHashFunc != nil {
+		return m.GetBookVersionByTorrentHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListTrashedBookVersions() ([]BookVersion, error) {
+	if m.ListTrashedBookVersionsFunc != nil {
+		return m.ListTrashedBookVersionsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListPurgedBookVersions() ([]BookVersion, error) {
+	if m.ListPurgedBookVersionsFunc != nil {
+		return m.ListPurgedBookVersionsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListSwappingBookVersions() ([]BookVersion, error) {
+	if m.ListSwappingBookVersionsFunc != nil {
+		return m.ListSwappingBookVersionsFunc()
+	}
+	return nil, nil
+}
+
+// ---- User playlists (spec 3.4) ----
+
+func (m *MockStore) CreateCollection(col *Collection) (*Collection, error) {
+	if m.CreateCollectionFunc != nil {
+		return m.CreateCollectionFunc(col)
+	}
+	return col, nil
+}
+
+func (m *MockStore) GetCollection(id string) (*Collection, error) {
+	if m.GetCollectionFunc != nil {
+		return m.GetCollectionFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetCollectionByName(name string) (*Collection, error) {
+	if m.GetCollectionByNameFunc != nil {
+		return m.GetCollectionByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListCollections(collectionType string, limit, offset int) ([]Collection, int, error) {
+	if m.ListCollectionsFunc != nil {
+		return m.ListCollectionsFunc(collectionType, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) UpdateCollection(col *Collection) error {
+	if m.UpdateCollectionFunc != nil {
+		return m.UpdateCollectionFunc(col)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteCollection(id string) error {
+	if m.DeleteCollectionFunc != nil {
+		return m.DeleteCollectionFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) CreateUserPlaylist(pl *UserPlaylist) (*UserPlaylist, error) {
+	if m.CreateUserPlaylistFunc != nil {
+		return m.CreateUserPlaylistFunc(pl)
+	}
+	return pl, nil
+}
+
+func (m *MockStore) GetUserPlaylist(id string) (*UserPlaylist, error) {
+	if m.GetUserPlaylistFunc != nil {
+		return m.GetUserPlaylistFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserPlaylistByName(name string) (*UserPlaylist, error) {
+	if m.GetUserPlaylistByNameFunc != nil {
+		return m.GetUserPlaylistByNameFunc(name)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetUserPlaylistByITunesPID(pid string) (*UserPlaylist, error) {
+	if m.GetUserPlaylistByITunesPIDFunc != nil {
+		return m.GetUserPlaylistByITunesPIDFunc(pid)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListUserPlaylists(playlistType string, limit, offset int) ([]UserPlaylist, int, error) {
+	if m.ListUserPlaylistsFunc != nil {
+		return m.ListUserPlaylistsFunc(playlistType, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) ListUserPlaylistsForUser(userID, playlistType string, limit, offset int) ([]UserPlaylist, int, error) {
+	if m.ListUserPlaylistsForUserFunc != nil {
+		return m.ListUserPlaylistsForUserFunc(userID, playlistType, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) UpdateUserPlaylist(pl *UserPlaylist) error {
+	if m.UpdateUserPlaylistFunc != nil {
+		return m.UpdateUserPlaylistFunc(pl)
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteUserPlaylist(id string) error {
+	if m.DeleteUserPlaylistFunc != nil {
+		return m.DeleteUserPlaylistFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) ListDirtyUserPlaylists() ([]UserPlaylist, error) {
+	if m.ListDirtyUserPlaylistsFunc != nil {
+		return m.ListDirtyUserPlaylistsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateAPIKey(key *APIKey) (*APIKey, error) {
+	if m.CreateAPIKeyFunc != nil {
+		return m.CreateAPIKeyFunc(key)
+	}
+	return key, nil
+}
+
+func (m *MockStore) GetAPIKey(id string) (*APIKey, error) {
+	if m.GetAPIKeyFunc != nil {
+		return m.GetAPIKeyFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAPIKeyByHash(hash string) (*APIKey, error) {
+	if m.GetAPIKeyByHashFunc != nil {
+		return m.GetAPIKeyByHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListAPIKeysForUser(userID string) ([]APIKey, error) {
+	if m.ListAPIKeysForUserFunc != nil {
+		return m.ListAPIKeysForUserFunc(userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListAllAPIKeys() ([]APIKey, error) {
+	if m.ListAllAPIKeysFunc != nil {
+		return m.ListAllAPIKeysFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) RevokeAPIKey(id string) error {
+	if m.RevokeAPIKeyFunc != nil {
+		return m.RevokeAPIKeyFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) SetAPIKeyStatus(id, status string, at time.Time) error {
+	if m.SetAPIKeyStatusFunc != nil {
+		return m.SetAPIKeyStatusFunc(id, status, at)
+	}
+	return nil
+}
+
+func (m *MockStore) SetAPIKeyExpiry(id string, at time.Time) error {
+	if m.SetAPIKeyExpiryFunc != nil {
+		return m.SetAPIKeyExpiryFunc(id, at)
+	}
+	return nil
+}
+
+func (m *MockStore) TouchAPIKeyLastUsed(id string, at time.Time, ip string) error {
+	if m.TouchAPIKeyLastUsedFunc != nil {
+		return m.TouchAPIKeyLastUsedFunc(id, at, ip)
+	}
+	return nil
+}
+
+func (m *MockStore) CreateInvite(invite *Invite) (*Invite, error) {
+	if m.CreateInviteFunc != nil {
+		return m.CreateInviteFunc(invite)
+	}
+	return invite, nil
+}
+
+func (m *MockStore) GetInvite(token string) (*Invite, error) {
+	if m.GetInviteFunc != nil {
+		return m.GetInviteFunc(token)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListActiveInvites() ([]Invite, error) {
+	if m.ListActiveInvitesFunc != nil {
+		return m.ListActiveInvitesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteInvite(token string) error {
+	if m.DeleteInviteFunc != nil {
+		return m.DeleteInviteFunc(token)
+	}
+	return nil
+}
+
+func (m *MockStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string) (*User, error) {
+	if m.ConsumeInviteFunc != nil {
+		return m.ConsumeInviteFunc(token, passwordHashAlgo, passwordHash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetUserPreferenceForUser(userID, key, value string) error {
+	if m.SetUserPreferenceForUserFunc != nil {
+		return m.SetUserPreferenceForUserFunc(userID, key, value)
+	}
+	return nil
+}
+
+func (m *MockStore) GetUserPreferenceForUser(userID, key string) (*UserPreferenceKV, error) {
+	if m.GetUserPreferenceForUserFunc != nil {
+		return m.GetUserPreferenceForUserFunc(userID, key)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllPreferencesForUser(userID string) ([]UserPreferenceKV, error) {
+	if m.GetAllPreferencesForUserFunc != nil {
+		return m.GetAllPreferencesForUserFunc(userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateBookSegment(bookNumericID int, segment *BookSegment) (*BookSegment, error) {
+	if m.CreateBookSegmentFunc != nil {
+		return m.CreateBookSegmentFunc(bookNumericID, segment)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateBookSegment(segment *BookSegment) error {
+	if m.UpdateBookSegmentFunc != nil {
+		return m.UpdateBookSegmentFunc(segment)
+	}
+	return nil
+}
+
+func (m *MockStore) ListBookSegments(bookNumericID int) ([]BookSegment, error) {
+	if m.ListBookSegmentsFunc != nil {
+		return m.ListBookSegmentsFunc(bookNumericID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) MergeBookSegments(bookNumericID int, newSegment *BookSegment, supersedeIDs []string) error {
+	if m.MergeBookSegmentsFunc != nil {
+		return m.MergeBookSegmentsFunc(bookNumericID, newSegment, supersedeIDs)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookSegmentByID(segmentID string) (*BookSegment, error) {
+	if m.GetBookSegmentByIDFunc != nil {
+		return m.GetBookSegmentByIDFunc(segmentID)
+	}
+	return nil, fmt.Errorf("segment not found: %s", segmentID)
+}
+
+func (m *MockStore) MoveSegmentsToBook(segmentIDs []string, targetBookNumericID int) error {
+	if m.MoveSegmentsToBookFunc != nil {
+		return m.MoveSegmentsToBookFunc(segmentIDs, targetBookNumericID)
+	}
+	return nil
+}
+
+func (m *MockStore) AddPlaybackEvent(event *PlaybackEvent) error {
+	if m.AddPlaybackEventFunc != nil {
+		return m.AddPlaybackEventFunc(event)
+	}
+	return nil
+}
+
+func (m *MockStore) ListPlaybackEvents(userID string, bookNumericID int, limit int) ([]PlaybackEvent, error) {
+	if m.ListPlaybackEventsFunc != nil {
+		return m.ListPlaybackEventsFunc(userID, bookNumericID, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdatePlaybackProgress(progress *PlaybackProgress) error {
+	if m.UpdatePlaybackProgressFunc != nil {
+		return m.UpdatePlaybackProgressFunc(progress)
+	}
+	return nil
+}
+
+func (m *MockStore) GetPlaybackProgress(userID string, bookNumericID int) (*PlaybackProgress, error) {
+	if m.GetPlaybackProgressFunc != nil {
+		return m.GetPlaybackProgressFunc(userID, bookNumericID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) IncrementBookPlayStats(bookNumericID int, seconds int) error {
+	if m.IncrementBookPlayStatsFunc != nil {
+		return m.IncrementBookPlayStatsFunc(bookNumericID, seconds)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookStats(bookNumericID int) (*BookStats, error) {
+	if m.GetBookStatsFunc != nil {
+		return m.GetBookStatsFunc(bookNumericID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) IncrementUserListenStats(userID string, seconds int) error {
+	if m.IncrementUserListenStatsFunc != nil {
+		return m.IncrementUserListenStatsFunc(userID, seconds)
+	}
+	return nil
+}
+
+func (m *MockStore) GetUserStats(userID string) (*UserStats, error) {
+	if m.GetUserStatsFunc != nil {
+		return m.GetUserStatsFunc(userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) IsHashBlocked(hash string) (bool, error) {
+	if m.IsHashBlockedFunc != nil {
+		return m.IsHashBlockedFunc(hash)
+	}
+	return false, nil
+}
+
+func (m *MockStore) AddBlockedHash(hash, reason string) error {
+	if m.AddBlockedHashFunc != nil {
+		return m.AddBlockedHashFunc(hash, reason)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveBlockedHash(hash string) error {
+	if m.RemoveBlockedHashFunc != nil {
+		return m.RemoveBlockedHashFunc(hash)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAllBlockedHashes() ([]DoNotImport, error) {
+	if m.GetAllBlockedHashesFunc != nil {
+		return m.GetAllBlockedHashesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBlockedHashByHash(hash string) (*DoNotImport, error) {
+	if m.GetBlockedHashByHashFunc != nil {
+		return m.GetBlockedHashByHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SaveLibraryFingerprint(path string, size int64, modTime time.Time, crc32 uint32) error {
+	if m.SaveLibraryFingerprintFunc != nil {
+		return m.SaveLibraryFingerprintFunc(path, size, modTime, crc32)
+	}
+	return nil
+}
+
+func (m *MockStore) GetLibraryFingerprint(path string) (*LibraryFingerprintRecord, error) {
+	if m.GetLibraryFingerprintFunc != nil {
+		return m.GetLibraryFingerprintFunc(path)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetLastWrittenAt(id string, t time.Time) error {
+	if m.SetLastWrittenAtFunc != nil {
+		return m.SetLastWrittenAtFunc(id, t)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookSnapshots(id string, limit int) ([]BookSnapshot, error) {
+	if m.GetBookVersionsFunc != nil {
+		return m.GetBookVersionsFunc(id, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
+	if m.GetBookAtVersionFunc != nil {
+		return m.GetBookAtVersionFunc(id, ts)
+	}
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *MockStore) RevertBookToVersion(id string, ts time.Time) (*Book, error) {
+	if m.RevertBookToVersionFunc != nil {
+		return m.RevertBookToVersionFunc(id, ts)
+	}
+	return nil, fmt.Errorf("not implemented in mock")
+}
+
+func (m *MockStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
+	if m.PruneBookVersionsFunc != nil {
+		return m.PruneBookVersionsFunc(id, keepCount)
+	}
+	return 0, nil
+}
+
+// CountBookSnapshots reports a book's snapshot count. Backed by its own hook so
+// a test can make counting disagree with pruning -- which is exactly the shape a
+// dry run has to get right.
+func (m *MockStore) CountBookSnapshots(id string) (int, error) {
+	if m.CountBookSnapshotsFunc != nil {
+		return m.CountBookSnapshotsFunc(id)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) MarkITunesSynced(bookIDs []string) (int64, error) {
+	if m.MarkITunesSyncedFunc != nil {
+		return m.MarkITunesSyncedFunc(bookIDs)
+	}
+	return int64(len(bookIDs)), nil
+}
+func (m *MockStore) GetITunesDirtyBooks() ([]Book, error) {
+	if m.GetITunesDirtyBooksFunc != nil {
+		return m.GetITunesDirtyBooksFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) GetITunesPurgePendingBooks() ([]Book, error) {
+	if m.GetITunesPurgePendingBooksFunc != nil {
+		return m.GetITunesPurgePendingBooksFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) GetQuarantinedBooks(limit, offset int) ([]Book, error) {
+	if m.GetQuarantinedBooksFunc != nil {
+		return m.GetQuarantinedBooksFunc(limit, offset)
+	}
+	return nil, nil
+}
+func (m *MockStore) CountQuarantinedBooks() (int, error) {
+	if m.CountQuarantinedBooksFunc != nil {
+		return m.CountQuarantinedBooksFunc()
+	}
+	return 0, nil
+}
+func (m *MockStore) GetScanFailCount(pathHash string) (int, error) {
+	if m.GetScanFailCountFunc != nil {
+		return m.GetScanFailCountFunc(pathHash)
+	}
+	return 0, nil
+}
+func (m *MockStore) IncrScanFailCount(pathHash string) (int, error) {
+	if m.IncrScanFailCountFunc != nil {
+		return m.IncrScanFailCountFunc(pathHash)
+	}
+	return 1, nil
+}
+func (m *MockStore) ResetScanFailCount(pathHash string) error {
+	if m.ResetScanFailCountFunc != nil {
+		return m.ResetScanFailCountFunc(pathHash)
+	}
+	return nil
+}
+func (m *MockStore) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
+	if m.FlagMetadataHashDuplicateFunc != nil {
+		return m.FlagMetadataHashDuplicateFunc(primaryID, duplicateID)
+	}
+	return nil
+}
+
+func (m *MockStore) RecomputeBookAggregates(bookID string) error {
+	if m.RecomputeBookAggregatesFunc != nil {
+		return m.RecomputeBookAggregatesFunc(bookID)
+	}
+	return nil
+}
+
+// CompactionStats defaults to a zero value: the mock has no LSM, and a caller
+// under test that reads it gets "no compactions, no debt" — which the
+// heartbeat correctly treats as "nothing moved". Overridable like every other
+// mock method so a test can drive the heartbeat's progress predicate.
+func (m *MockStore) CompactionStats() CompactionStats {
+	if m.CompactionStatsFunc != nil {
+		return m.CompactionStatsFunc()
+	}
+	return CompactionStats{}
+}
+
+func (m *MockStore) Optimize(_ context.Context) error {
+	if m.OptimizeFunc != nil {
+		return m.OptimizeFunc()
+	}
+	return nil
+}
+
+func (m *MockStore) CreateOperationChange(change *OperationChange) error {
+	if m.CreateOperationChangeFunc != nil {
+		return m.CreateOperationChangeFunc(change)
+	}
+	return nil
+}
+
+func (m *MockStore) GetOperationChanges(operationID string) ([]*OperationChange, error) {
+	if m.GetOperationChangesFunc != nil {
+		return m.GetOperationChangesFunc(operationID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
+	if m.GetBookChangesFunc != nil {
+		return m.GetBookChangesFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	if m.MarkOperationChangesRevertedFunc != nil {
+		return m.MarkOperationChangesRevertedFunc(operationID, changeIDs)
+	}
+	// Fail loudly: a silent nil here would let a test "pass" a revert whose
+	// rows were never marked.
+	return fmt.Errorf("MockStore.MarkOperationChangesReverted called without MarkOperationChangesRevertedFunc set")
+}
+
+func (m *MockStore) CreateAuthorTombstone(oldID, canonicalID int) error {
+	if m.CreateAuthorTombstoneFunc != nil {
+		return m.CreateAuthorTombstoneFunc(oldID, canonicalID)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAuthorTombstone(oldID int) (int, error) {
+	if m.GetAuthorTombstoneFunc != nil {
+		return m.GetAuthorTombstoneFunc(oldID)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) ResolveTombstoneChains() (int, error) {
+	if m.ResolveTombstoneChainsFunc != nil {
+		return m.ResolveTombstoneChainsFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockStore) AddSystemActivityLog(source, level, message string) error {
+	if m.AddSystemActivityLogFunc != nil {
+		return m.AddSystemActivityLogFunc(source, level, message)
+	}
+	return nil
+}
+
+func (m *MockStore) GetSystemActivityLogs(source string, limit int) ([]SystemActivityLog, error) {
+	if m.GetSystemActivityLogsFunc != nil {
+		return m.GetSystemActivityLogsFunc(source, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) PruneOperationLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
+	if m.PruneOperationLogsFunc != nil {
+		return m.PruneOperationLogsFunc(ctx, olderThan, onProgress)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) PruneOperationChanges(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
+	if m.PruneOperationChangesFunc != nil {
+		return m.PruneOperationChangesFunc(ctx, olderThan, onProgress)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) PruneSystemActivityLogs(ctx context.Context, olderThan time.Time, onProgress PruneProgressFunc) (int, error) {
+	if m.PruneSystemActivityLogsFunc != nil {
+		return m.PruneSystemActivityLogsFunc(ctx, olderThan, onProgress)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) GetScanCacheMap() (map[string]ScanCacheEntry, error) {
+	if m.GetScanCacheMapFunc != nil {
+		return m.GetScanCacheMapFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateScanCache(bookID string, mtime int64, size int64) error {
+	if m.UpdateScanCacheFunc != nil {
+		return m.UpdateScanCacheFunc(bookID, mtime, size)
+	}
+	return nil
+}
+
+func (m *MockStore) MarkNeedsRescan(bookID string) error {
+	if m.MarkNeedsRescanFunc != nil {
+		return m.MarkNeedsRescanFunc(bookID)
+	}
+	return nil
+}
+
+func (m *MockStore) GetDirtyBookFolders() ([]string, error) {
+	if m.GetDirtyBookFoldersFunc != nil {
+		return m.GetDirtyBookFoldersFunc()
+	}
+	return nil, nil
+}
+
+// GetDirtyBookFoldersContext delegates to GetDirtyBookFolders after a ctx check,
+// unless GetDirtyBookFoldersContextFunc overrides it.
+func (m *MockStore) GetDirtyBookFoldersContext(ctx context.Context) ([]string, error) {
+	if m.GetDirtyBookFoldersContextFunc != nil {
+		return m.GetDirtyBookFoldersContextFunc(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.GetDirtyBookFolders()
+}
+
+// GetScanCacheMapContext delegates to GetScanCacheMap after a ctx check, unless
+// GetScanCacheMapContextFunc overrides it.
+func (m *MockStore) GetScanCacheMapContext(ctx context.Context) (map[string]ScanCacheEntry, error) {
+	if m.GetScanCacheMapContextFunc != nil {
+		return m.GetScanCacheMapContextFunc(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.GetScanCacheMap()
+}
+
+func (m *MockStore) CreateDeferredITunesUpdate(bookID, persistentID, oldPath, newPath, updateType string) error {
+	if m.CreateDeferredITunesUpdateFunc != nil {
+		return m.CreateDeferredITunesUpdateFunc(bookID, persistentID, oldPath, newPath, updateType)
+	}
+	return nil
+}
+
+func (m *MockStore) GetPendingDeferredITunesUpdates() ([]DeferredITunesUpdate, error) {
+	if m.GetPendingDeferredITunesUpdatesFunc != nil {
+		return m.GetPendingDeferredITunesUpdatesFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) MarkDeferredITunesUpdateApplied(id int) error {
+	if m.MarkDeferredITunesUpdateAppliedFunc != nil {
+		return m.MarkDeferredITunesUpdateAppliedFunc(id)
+	}
+	return nil
+}
+
+func (m *MockStore) GetDeferredITunesUpdatesByBookID(bookID string) ([]DeferredITunesUpdate, error) {
+	if m.GetDeferredITunesUpdatesByBookIDFunc != nil {
+		return m.GetDeferredITunesUpdatesByBookIDFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateExternalIDMapping(mapping *ExternalIDMapping) error {
+	if m.CreateExternalIDMappingFunc != nil {
+		return m.CreateExternalIDMappingFunc(mapping)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookByExternalID(source, externalID string) (string, error) {
+	if m.GetBookByExternalIDFunc != nil {
+		return m.GetBookByExternalIDFunc(source, externalID)
+	}
+	return "", nil
+}
+
+func (m *MockStore) GetExternalIDsForBook(bookID string) ([]ExternalIDMapping, error) {
+	if m.GetExternalIDsForBookFunc != nil {
+		return m.GetExternalIDsForBookFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) IsExternalIDTombstoned(source, externalID string) (bool, error) {
+	if m.IsExternalIDTombstonedFunc != nil {
+		return m.IsExternalIDTombstonedFunc(source, externalID)
+	}
+	return false, nil
+}
+
+func (m *MockStore) TombstoneExternalID(source, externalID string) error {
+	if m.TombstoneExternalIDFunc != nil {
+		return m.TombstoneExternalIDFunc(source, externalID)
+	}
+	return nil
+}
+
+func (m *MockStore) ReassignExternalIDs(oldBookID, newBookID string) error {
+	if m.ReassignExternalIDsFunc != nil {
+		return m.ReassignExternalIDsFunc(oldBookID, newBookID)
+	}
+	return nil
+}
+
+func (m *MockStore) ReassignExternalID(source, externalID, newBookID string) error {
+	if m.ReassignExternalIDFunc != nil {
+		return m.ReassignExternalIDFunc(source, externalID, newBookID)
+	}
+	return nil
+}
+
+func (m *MockStore) BulkCreateExternalIDMappings(mappings []ExternalIDMapping) error {
+	if m.BulkCreateExternalIDMappingsFunc != nil {
+		return m.BulkCreateExternalIDMappingsFunc(mappings)
+	}
+	return nil
+}
+
+func (m *MockStore) MarkExternalIDRemoved(source, externalID string) error {
+	if m.MarkExternalIDRemovedFunc != nil {
+		return m.MarkExternalIDRemovedFunc(source, externalID)
+	}
+	return nil
+}
+func (m *MockStore) SetExternalIDProvenance(source, externalID, provenance string) error {
+	if m.SetExternalIDProvenanceFunc != nil {
+		return m.SetExternalIDProvenanceFunc(source, externalID, provenance)
+	}
+	return nil
+}
+func (m *MockStore) GetRemovedExternalIDs(source string) ([]ExternalIDMapping, error) {
+	if m.GetRemovedExternalIDsFunc != nil {
+		return m.GetRemovedExternalIDsFunc(source)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetRaw(key string, value []byte) error {
+	if m.SetRawFunc != nil {
+		return m.SetRawFunc(key, value)
+	}
+	return nil
+}
+func (m *MockStore) GetRaw(key string) ([]byte, error) {
+	if m.GetRawFunc != nil {
+		return m.GetRawFunc(key)
+	}
+	return nil, nil
+}
+func (m *MockStore) DeleteRaw(key string) error {
+	if m.DeleteRawFunc != nil {
+		return m.DeleteRawFunc(key)
+	}
+	return nil
+}
+func (m *MockStore) ScanPrefix(prefix string) ([]KVPair, error) {
+	if m.ScanPrefixFunc != nil {
+		return m.ScanPrefixFunc(prefix)
+	}
+	return nil, nil
+}
+func (m *MockStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, string, error) {
+	if m.ScanPrefixPageFunc != nil {
+		return m.ScanPrefixPageFunc(prefix, after, limit)
+	}
+	return nil, "", nil
+}
+func (m *MockStore) DeleteRawBatch(keys []string) error {
+	if m.DeleteRawBatchFunc != nil {
+		return m.DeleteRawBatchFunc(keys)
+	}
+	return nil
+}
+func (m *MockStore) CountPrefix(prefix string) (int64, error) {
+	if m.CountPrefixFunc != nil {
+		return m.CountPrefixFunc(prefix)
+	}
+	return 0, nil
+}
+func (m *MockStore) CreateOperationResult(result *OperationResult) error {
+	if m.CreateOperationResultFunc != nil {
+		return m.CreateOperationResultFunc(result)
+	}
+	return nil
+}
+func (m *MockStore) GetOperationResults(operationID string) ([]OperationResult, error) {
+	if m.GetOperationResultsFunc != nil {
+		return m.GetOperationResultsFunc(operationID)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetOperationResultsPage(operationID string, limit, offset int) ([]OperationResult, int, error) {
+	if m.GetOperationResultsPageFunc != nil {
+		return m.GetOperationResultsPageFunc(operationID, limit, offset)
+	}
+	return nil, 0, nil
+}
+func (m *MockStore) GetRecentCompletedOperations(limit int) ([]Operation, error) {
+	if m.GetRecentCompletedOperationsFunc != nil {
+		return m.GetRecentCompletedOperationsFunc(limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookUserTags(bookID string) ([]string, error) {
+	if m.GetBookUserTagsFunc != nil {
+		return m.GetBookUserTagsFunc(bookID)
+	}
+	return nil, nil
+}
+func (m *MockStore) SetBookUserTags(bookID string, tags []string) error {
+	if m.SetBookUserTagsFunc != nil {
+		return m.SetBookUserTagsFunc(bookID, tags)
+	}
+	return nil
+}
+func (m *MockStore) AddBookUserTag(bookID string, tag string) error {
+	if m.AddBookUserTagFunc != nil {
+		return m.AddBookUserTagFunc(bookID, tag)
+	}
+	return nil
+}
+func (m *MockStore) RemoveBookUserTag(bookID string, tag string) error {
+	if m.RemoveBookUserTagFunc != nil {
+		return m.RemoveBookUserTagFunc(bookID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookAlternativeTitles(bookID string) ([]BookAlternativeTitle, error) {
+	if m.GetBookAlternativeTitlesFunc != nil {
+		return m.GetBookAlternativeTitlesFunc(bookID)
+	}
+	return nil, nil
+}
+func (m *MockStore) RecordPathChange(change *BookPathChange) error {
+	if m.RecordPathChangeFunc != nil {
+		return m.RecordPathChangeFunc(change)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookPathHistory(bookID string) ([]BookPathChange, error) {
+	if m.GetBookPathHistoryFunc != nil {
+		return m.GetBookPathHistoryFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) AddBookTag(bookID, tag string) error {
+	if m.AddBookTagFunc != nil {
+		return m.AddBookTagFunc(bookID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveBookTag(bookID, tag string) error {
+	if m.RemoveBookTagFunc != nil {
+		return m.RemoveBookTagFunc(bookID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookTags(bookID string) ([]string, error) {
+	if m.GetBookTagsFunc != nil {
+		return m.GetBookTagsFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	if m.GetBookTagsByBookIDsFunc != nil {
+		return m.GetBookTagsByBookIDsFunc(bookIDs)
+	}
+	return map[string][]string{}, nil
+}
+
+func (m *MockStore) SetBookTags(bookID string, tags []string) error {
+	if m.SetBookTagsFunc != nil {
+		return m.SetBookTagsFunc(bookID, tags)
+	}
+	return nil
+}
+
+func (m *MockStore) ListAllTags() ([]TagWithCount, error) {
+	if m.ListAllTagsFunc != nil {
+		return m.ListAllTagsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBooksByTag(tag string) ([]string, error) {
+	if m.GetBooksByTagFunc != nil {
+		return m.GetBooksByTagFunc(tag)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) AddBookTagWithSource(bookID, tag, source string) error {
+	if m.AddBookTagWithSourceFunc != nil {
+		return m.AddBookTagWithSourceFunc(bookID, tag, source)
+	}
+	if m.AddBookTagFunc != nil {
+		return m.AddBookTagFunc(bookID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveBookTagsByPrefix(bookID, prefix, source string) error {
+	if m.RemoveBookTagsByPrefixFunc != nil {
+		return m.RemoveBookTagsByPrefixFunc(bookID, prefix, source)
+	}
+	return nil
+}
+
+func (m *MockStore) GetBookTagsDetailed(bookID string) ([]BookTag, error) {
+	if m.GetBookTagsDetailedFunc != nil {
+		return m.GetBookTagsDetailedFunc(bookID)
+	}
+	return nil, nil
+}
+
+// ---- Author tag methods ----
+
+func (m *MockStore) AddAuthorTagWithSource(authorID int, tag, source string) error {
+	if m.AddAuthorTagWithSourceFunc != nil {
+		return m.AddAuthorTagWithSourceFunc(authorID, tag, source)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveAuthorTag(authorID int, tag string) error {
+	if m.RemoveAuthorTagFunc != nil {
+		return m.RemoveAuthorTagFunc(authorID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveAuthorTagsByPrefix(authorID int, prefix, source string) error {
+	if m.RemoveAuthorTagsByPrefixFunc != nil {
+		return m.RemoveAuthorTagsByPrefixFunc(authorID, prefix, source)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAuthorTags(authorID int) ([]string, error) {
+	if m.GetAuthorTagsFunc != nil {
+		return m.GetAuthorTagsFunc(authorID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAuthorTagsDetailed(authorID int) ([]BookTag, error) {
+	if m.GetAuthorTagsDetailedFunc != nil {
+		return m.GetAuthorTagsDetailedFunc(authorID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetAuthorTags(authorID int, tags []string) error {
+	if m.SetAuthorTagsFunc != nil {
+		return m.SetAuthorTagsFunc(authorID, tags)
+	}
+	return nil
+}
+
+func (m *MockStore) ListAllAuthorTags() ([]TagWithCount, error) {
+	if m.ListAllAuthorTagsFunc != nil {
+		return m.ListAllAuthorTagsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAuthorsByTag(tag string) ([]int, error) {
+	if m.GetAuthorsByTagFunc != nil {
+		return m.GetAuthorsByTagFunc(tag)
+	}
+	return nil, nil
+}
+
+// ---- Series tag methods ----
+
+func (m *MockStore) AddSeriesTagWithSource(seriesID int, tag, source string) error {
+	if m.AddSeriesTagWithSourceFunc != nil {
+		return m.AddSeriesTagWithSourceFunc(seriesID, tag, source)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveSeriesTag(seriesID int, tag string) error {
+	if m.RemoveSeriesTagFunc != nil {
+		return m.RemoveSeriesTagFunc(seriesID, tag)
+	}
+	return nil
+}
+
+func (m *MockStore) RemoveSeriesTagsByPrefix(seriesID int, prefix, source string) error {
+	if m.RemoveSeriesTagsByPrefixFunc != nil {
+		return m.RemoveSeriesTagsByPrefixFunc(seriesID, prefix, source)
+	}
+	return nil
+}
+
+func (m *MockStore) GetSeriesTags(seriesID int) ([]string, error) {
+	if m.GetSeriesTagsFunc != nil {
+		return m.GetSeriesTagsFunc(seriesID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetSeriesTagsDetailed(seriesID int) ([]BookTag, error) {
+	if m.GetSeriesTagsDetailedFunc != nil {
+		return m.GetSeriesTagsDetailedFunc(seriesID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) SetSeriesTags(seriesID int, tags []string) error {
+	if m.SetSeriesTagsFunc != nil {
+		return m.SetSeriesTagsFunc(seriesID, tags)
+	}
+	return nil
+}
+
+func (m *MockStore) ListAllSeriesTags() ([]TagWithCount, error) {
+	if m.ListAllSeriesTagsFunc != nil {
+		return m.ListAllSeriesTagsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetSeriesByTag(tag string) ([]int, error) {
+	if m.GetSeriesByTagFunc != nil {
+		return m.GetSeriesByTagFunc(tag)
+	}
+	return nil, nil
+}
+
+// ---- BookFile methods ----
+
+func (m *MockStore) CreateBookFile(file *BookFile) error {
+	if m.CreateBookFileFunc != nil {
+		return m.CreateBookFileFunc(file)
+	}
+	return nil
+}
+
+// BatchCreateBookFiles falls back to CreateBookFileFunc per row when no batch
+// hook is set, so a test that already observes creates through CreateBookFileFunc
+// keeps seeing every row after a caller switches to the batch method. Set
+// BatchCreateBookFilesFunc explicitly to assert on the batch shape itself.
+func (m *MockStore) BatchCreateBookFiles(files []*BookFile) error {
+	if m.BatchCreateBookFilesFunc != nil {
+		return m.BatchCreateBookFilesFunc(files)
+	}
+	if m.CreateBookFileFunc != nil {
+		for _, f := range files {
+			if f == nil {
+				continue
+			}
+			if err := m.CreateBookFileFunc(f); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+func (m *MockStore) UpdateBookFile(id string, file *BookFile) error {
+	if m.UpdateBookFileFunc != nil {
+		return m.UpdateBookFileFunc(id, file)
+	}
+	return nil
+}
+
+// UpdateBookFiles defaults to UpdateBookFile per row (through
+// UpdateBookFileFunc when set), honouring ctx between rows and calling
+// afterRow, so a test that only stubs UpdateBookFileFunc still sees its rows.
+// A row counts as applied by PebbleStore's rule (bookFileApplied): a
+// durability-unknown error is applied, so mock tests agree with prod.
+func (m *MockStore) UpdateBookFiles(ctx context.Context, files []*BookFile, afterRow func(i int, applied bool)) (int, error) {
+	if m.UpdateBookFilesFunc != nil {
+		return m.UpdateBookFilesFunc(ctx, files, afterRow)
+	}
+	written := 0
+	var errs []error
+	for i, f := range files {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		err := m.UpdateBookFile(f.ID, f)
+		applied := bookFileApplied(err)
+		if applied {
+			written++
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if afterRow != nil {
+			afterRow(i, applied)
+		}
+	}
+	return written, errors.Join(errs...)
+}
+func (m *MockStore) GetBookFiles(bookID string) ([]BookFile, error) {
+	if m.GetBookFilesFunc != nil {
+		return m.GetBookFilesFunc(bookID)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetAllBookFilesCore() ([]BookFileCore, error) {
+	if m.GetAllBookFilesCoreFunc != nil {
+		return m.GetAllBookFilesCoreFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
+	if m.GetAllBookFilesCoreCompleteFunc != nil {
+		return m.GetAllBookFilesCoreCompleteFunc()
+	}
+	return m.GetAllBookFilesCore()
+}
+
+// GetBookFilesForIDsCore defaults to GetBookFiles per id, so a test that
+// stubs only GetBookFilesFunc sees the same rows through the batch read.
+func (m *MockStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error) {
+	if m.GetBookFilesForIDsCoreFunc != nil {
+		return m.GetBookFilesForIDsCoreFunc(bookIDs)
+	}
+	out := make(map[string][]BookFileCore, len(bookIDs))
+	for _, id := range bookIDs {
+		files, err := m.GetBookFiles(id)
+		if err != nil {
+			return nil, err
+		}
+		for i := range files {
+			out[id] = append(out[id], files[i].Core())
+		}
+	}
+	return out, nil
+}
+func (m *MockStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
+	if m.GetBookFilesNeedingDelugeImportCoreFunc != nil {
+		return m.GetBookFilesNeedingDelugeImportCoreFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookFileByID(bookID, fileID string) (*BookFile, error) {
+	if m.GetBookFileByIDFunc != nil {
+		return m.GetBookFileByIDFunc(bookID, fileID)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
+	if m.GetBookFileByPIDFunc != nil {
+		return m.GetBookFileByPIDFunc(itunesPID)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetBookFileByPath(filePath string) (*BookFile, error) {
+	if m.GetBookFileByPathFunc != nil {
+		return m.GetBookFileByPathFunc(filePath)
+	}
+	return nil, nil
+}
+func (m *MockStore) BookAtPathIndexBuilt() (bool, error) {
+	if m.BookAtPathIndexBuiltFunc != nil {
+		return m.BookAtPathIndexBuiltFunc()
+	}
+	return true, nil
+}
+func (m *MockStore) BookFilesWithHash(hash string) ([]BookFile, error) {
+	if m.BookFilesWithHashFunc != nil {
+		return m.BookFilesWithHashFunc(hash)
+	}
+	// Fail closed: its callers veto a write on a hit, so an unstubbed lookup
+	// answering "no holder" would let a test pass by accident.
+	return nil, fmt.Errorf("MockStore.BookFilesWithHash not stubbed: %w", ErrBookFilesWithHashUnavailable)
+}
+func (m *MockStore) ClaimBookFilePathKey(bookID, fileID, path string) (bool, error) {
+	if m.ClaimBookFilePathKeyFunc != nil {
+		return m.ClaimBookFilePathKeyFunc(bookID, fileID, path)
+	}
+	return false, nil
+}
+func (m *MockStore) BookFilesAtPath(path string) ([]BookFile, error) {
+	if m.BookFilesAtPathFunc != nil {
+		return m.BookFilesAtPathFunc(path)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
+	if m.GetBookFileByAcoustIDFunc != nil {
+		return m.GetBookFileByAcoustIDFunc(fp)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float64) (*BookFile, error) {
+	if m.GetBookFileByAcoustIDFuzzyFunc != nil {
+		return m.GetBookFileByAcoustIDFuzzyFunc(fp, minSimilarity)
+	}
+	return nil, nil
+}
+func (m *MockStore) DeleteBookFile(id string) error {
+	if m.DeleteBookFileFunc != nil {
+		return m.DeleteBookFileFunc(id)
+	}
+	return nil
+}
+func (m *MockStore) DeleteBookFilesByIDs(refs []BookFileRef) ([]BookFile, error) {
+	if m.DeleteBookFilesByIDsFunc != nil {
+		return m.DeleteBookFilesByIDsFunc(refs)
+	}
+	// Default to the same fallback DeleteBookFileFunc-less mocks get: succeed
+	// silently. Tests that care about which rows were deleted set the Func.
+	return nil, nil
+}
+func (m *MockStore) DeleteBookFilesForBook(bookID string) error {
+	if m.DeleteBookFilesForBookFunc != nil {
+		return m.DeleteBookFilesForBookFunc(bookID)
+	}
+	return nil
+}
+func (m *MockStore) UpsertBookFile(file *BookFile) error {
+	if m.UpsertBookFileFunc != nil {
+		return m.UpsertBookFileFunc(file)
+	}
+	return nil
+}
+func (m *MockStore) PatchBookFileFields(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error) {
+	if m.PatchBookFileFieldsFunc != nil {
+		return m.PatchBookFileFieldsFunc(bookID, fileID, patch)
+	}
+	return nil, nil, nil
+}
+
+// ModifyBookFile uses ModifyBookFileFunc when set; otherwise it composes the
+// mock's own GetBookFiles and UpdateBookFile (no atomicity), so a test that
+// stubs those two keeps working against a caller converted to ModifyBookFile.
+func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileFunc != nil {
+		return m.ModifyBookFileFunc(bookID, fileID, fn)
+	}
+	files, err := m.GetBookFiles(bookID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range files {
+		if files[i].ID != fileID {
+			continue
+		}
+		row := files[i]
+		if err := fn(&row); err != nil {
+			if errors.Is(err, ErrSkipBookFileWrite) {
+				return &files[i], nil
+			}
+			return nil, err
+		}
+		if err := m.UpdateBookFile(fileID, &row); err != nil {
+			return nil, err
+		}
+		return &row, nil
+	}
+	return nil, nil
+}
+
+// ModifyBookFileDeferAggregates uses ModifyBookFileDeferAggregatesFunc when set;
+// otherwise it behaves as ModifyBookFile (the mock keeps no aggregates, so there
+// is nothing to defer), so a test that only stubs ModifyBookFileFunc keeps working.
+// It is not part of Store (TestStoreFlattenedWidth: Store may only narrow); the
+// mock has it so a job that resolves the capability with database.AsCapability
+// (backfill-file-hashes) finds it on a MockStore, as it does on a *PebbleStore.
+func (m *MockStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileDeferAggregatesFunc != nil {
+		return m.ModifyBookFileDeferAggregatesFunc(bookID, fileID, fn)
+	}
+	return m.ModifyBookFile(bookID, fileID, fn)
+}
+
+func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
+	if m.BatchUpsertBookFilesFunc != nil {
+		return m.BatchUpsertBookFilesFunc(files)
+	}
+	return nil
+}
+func (m *MockStore) BatchUpsertBookFilesKeepPaths(files []*BookFile) error {
+	if m.BatchUpsertBookFilesKeepPathsFunc != nil {
+		return m.BatchUpsertBookFilesKeepPathsFunc(files)
+	}
+	return nil
+}
+func (m *MockStore) BatchUpsertScannedBookFiles(rows []ScannedBookFile) error {
+	if m.BatchUpsertScannedBookFilesFunc != nil {
+		return m.BatchUpsertScannedBookFilesFunc(rows)
+	}
+	return nil
+}
+func (m *MockStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
+	if m.MoveBookFilesToBookFunc != nil {
+		return m.MoveBookFilesToBookFunc(fileIDs, sourceBookID, targetBookID)
+	}
+	return nil
+}
+
+// MoveBookFilesToBookBulk falls back to replaying each move through
+// MoveBookFilesToBookFunc so that tests written before the bulk method existed
+// keep observing their moves.
+//
+// ⚠️ DO NOT USE THAT FALLBACK TO ASSERT COALESCING. Replaying per move is exactly
+// the shape the bulk method exists to eliminate, so a test that leaves
+// MoveBookFilesToBookBulkFunc nil and counts calls to the singular hook cannot
+// tell a coalesced implementation from a per-move loop — it is blind by
+// construction. Set MoveBookFilesToBookBulkFunc to assert anything about
+// batching, and see move_bookfiles_aggregates_test.go for counting recomputes
+// against a real store instead.
+func (m *MockStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error {
+	if m.MoveBookFilesToBookBulkFunc != nil {
+		return m.MoveBookFilesToBookBulkFunc(moves, targetBookID)
+	}
+	for _, mv := range moves {
+		if err := m.MoveBookFilesToBook(mv.FileIDs, mv.SourceBookID, targetBookID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MockStore) GetDuplicateFilesByHash(limit int) ([]DuplicateFileGroup, error) {
+	if m.GetDuplicateFilesByHashFunc != nil {
+		return m.GetDuplicateFilesByHashFunc(limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookBySegmentFileHash(hash string) (*Book, error) {
+	if m.GetBookBySegmentFileHashFunc != nil {
+		return m.GetBookBySegmentFileHashFunc(hash)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetBookFileHashStats() (*BookFileHashStats, error) {
+	if m.GetBookFileHashStatsFunc != nil {
+		return m.GetBookFileHashStatsFunc()
+	}
+	return &BookFileHashStats{}, nil
+}
+
+func (m *MockStore) GetBookMetadataHashStats() (*BookMetadataHashStats, error) {
+	if m.GetBookMetadataHashStatsFunc != nil {
+		return m.GetBookMetadataHashStatsFunc()
+	}
+	return &BookMetadataHashStats{}, nil
+}
+
+func (m *MockStore) GetFilesWithFingerprintFailures(reason string, limit, offset int) ([]BookFile, int64, error) {
+	if m.GetFilesWithFingerprintFailuresFunc != nil {
+		return m.GetFilesWithFingerprintFailuresFunc(reason, limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) GetFilesWithZeroDurationFingerprint(limit, offset int) ([]BookFile, int64, error) {
+	if m.GetFilesWithZeroDurationFingerprintFunc != nil {
+		return m.GetFilesWithZeroDurationFingerprintFunc(limit, offset)
+	}
+	return nil, 0, nil
+}
+
+func (m *MockStore) GetAcoustIDStats() (*AcoustIDStats, error) {
+	if m.GetAcoustIDStatsFunc != nil {
+		return m.GetAcoustIDStatsFunc()
+	}
+	return &AcoustIDStats{}, nil
+}
+
+func (m *MockStore) PutFingerprintWindow(w *FingerprintWindow) error {
+	if m.PutFingerprintWindowFunc != nil {
+		return m.PutFingerprintWindowFunc(w)
+	}
+	return nil
+}
+
+func (m *MockStore) GetFingerprintWindows(ref FingerprintWindowRef) ([]FingerprintWindow, error) {
+	if m.GetFingerprintWindowsFunc != nil {
+		return m.GetFingerprintWindowsFunc(ref)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) WindowsForFile(fileID string) ([]FingerprintWindow, error) {
+	if m.WindowsForFileFunc != nil {
+		return m.WindowsForFileFunc(fileID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteFingerprintWindows(ref FingerprintWindowRef) (int, error) {
+	if m.DeleteFingerprintWindowsFunc != nil {
+		return m.DeleteFingerprintWindowsFunc(ref)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CarryOverFingerprintWindows(from []FingerprintWindowRef, to FingerprintWindowRef) (int, error) {
+	if m.CarryOverFingerprintWindowsFunc != nil {
+		return m.CarryOverFingerprintWindowsFunc(from, to)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) ReplaceFingerprintWindows(ref FingerprintWindowRef, ws []FingerprintWindow) error {
+	if m.ReplaceFingerprintWindowsFunc != nil {
+		return m.ReplaceFingerprintWindowsFunc(ref, ws)
+	}
+	return nil
+}
+
+func (m *MockStore) RecordFingerprintWindowFailure(f *FingerprintWindowFailure) error {
+	if m.RecordFingerprintWindowFailureFunc != nil {
+		return m.RecordFingerprintWindowFailureFunc(f)
+	}
+	return nil
+}
+
+func (m *MockStore) GetFingerprintWindowFailure(ref FingerprintWindowRef) (*FingerprintWindowFailure, error) {
+	if m.GetFingerprintWindowFailureFunc != nil {
+		return m.GetFingerprintWindowFailureFunc(ref)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) CreateAIJob(job AIJob, payloadJSON []byte) error {
+	if m.CreateAIJobFunc != nil {
+		return m.CreateAIJobFunc(job, payloadJSON)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAIJob(id string) (AIJob, error) {
+	if m.GetAIJobFunc != nil {
+		return m.GetAIJobFunc(id)
+	}
+	return AIJob{}, nil
+}
+
+func (m *MockStore) GetAIJobByBatchID(batchID string) (AIJob, error) {
+	if m.GetAIJobByBatchIDFunc != nil {
+		return m.GetAIJobByBatchIDFunc(batchID)
+	}
+	return AIJob{}, nil
+}
+
+func (m *MockStore) GetAIJobPayload(id string) ([]byte, error) {
+	if m.GetAIJobPayloadFunc != nil {
+		return m.GetAIJobPayloadFunc(id)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) MarkAIJobSubmitted(id, batchID string) error {
+	if m.MarkAIJobSubmittedFunc != nil {
+		return m.MarkAIJobSubmittedFunc(id, batchID)
+	}
+	return nil
+}
+
+func (m *MockStore) MarkAIJobCompleted(id, status string, successCount, errorCount int, rowErrors []AIJobRowError) error {
+	if m.MarkAIJobCompletedFunc != nil {
+		return m.MarkAIJobCompletedFunc(id, status, successCount, errorCount, rowErrors)
+	}
+	return nil
+}
+
+func (m *MockStore) MarkAIJobFailed(id, errMsg string) error {
+	if m.MarkAIJobFailedFunc != nil {
+		return m.MarkAIJobFailedFunc(id, errMsg)
+	}
+	return nil
+}
+
+func (m *MockStore) MarkAIJobApplyFailed(id, errMsg string) (AIJob, error) {
+	if m.MarkAIJobApplyFailedFunc != nil {
+		return m.MarkAIJobApplyFailedFunc(id, errMsg)
+	}
+	return AIJob{}, nil
+}
+
+func (m *MockStore) MarkAIJobApplied(id string, successCount, errorCount int, rowErrors []AIJobRowError) error {
+	if m.MarkAIJobAppliedFunc != nil {
+		return m.MarkAIJobAppliedFunc(id, successCount, errorCount, rowErrors)
+	}
+	return nil
+}
+
+func (m *MockStore) ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]AIJob, error) {
+	if m.ListAIJobsFunc != nil {
+		return m.ListAIJobsFunc(typeFilter, statusFilter, limit, offset)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
+	if m.UpdateBookFileHashesFunc != nil {
+		return m.UpdateBookFileHashesFunc(id, originalHash, postMetadataHash, fileHash)
+	}
+	return nil
+}
+
+func (m *MockStore) SetBookFileHash(id, hash string) error {
+	if m.SetBookFileHashFunc != nil {
+		return m.SetBookFileHashFunc(id, hash)
+	}
+	return nil
+}
+
+func (m *MockStore) AddMetadataRejection(r MetadataRejection) error {
+	if m.AddMetadataRejectionFunc != nil {
+		return m.AddMetadataRejectionFunc(r)
+	}
+	return nil
+}
+
+func (m *MockStore) GetMetadataRejections(bookID string) ([]MetadataRejection, error) {
+	if m.GetMetadataRejectionsFunc != nil {
+		return m.GetMetadataRejectionsFunc(bookID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) DeleteMetadataRejections(bookID string) error {
+	if m.DeleteMetadataRejectionsFunc != nil {
+		return m.DeleteMetadataRejectionsFunc(bookID)
+	}
+	return nil
+}
+
+func (m *MockStore) GetAuthorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Author, error) {
+	if m.GetAuthorsByBookIDsFunc != nil {
+		return m.GetAuthorsByBookIDsFunc(ctx, bookIDs)
+	}
+	return make(map[string][]Author), nil
+}
+
+func (m *MockStore) GetNarratorsByBookIDs(ctx context.Context, bookIDs []string) (map[string][]Narrator, error) {
+	if m.GetNarratorsByBookIDsFunc != nil {
+		return m.GetNarratorsByBookIDsFunc(ctx, bookIDs)
+	}
+	return make(map[string][]Narrator), nil
+}
+
+// OpsV2Store stub methods — permissive no-ops for tests that don't need v2 ops.
+func (m *MockStore) UpsertOpDefinitionV2(row OpDefinitionV2Row) error {
+	if m.UpsertOpDefinitionV2Func != nil {
+		return m.UpsertOpDefinitionV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) DeleteOrphanOpDefsV2(keepIDs []string) error {
+	if m.DeleteOrphanOpDefsV2Func != nil {
+		return m.DeleteOrphanOpDefsV2Func(keepIDs)
+	}
+	return nil
+}
+func (m *MockStore) InsertOperationV2(row OperationV2Row) error {
+	if m.InsertOperationV2Func != nil {
+		return m.InsertOperationV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) ListQueuedOperationsV2() ([]OperationV2Row, error) {
+	if m.ListQueuedOperationsV2Func != nil {
+		return m.ListQueuedOperationsV2Func()
+	}
+	return nil, nil
+}
+func (m *MockStore) GetOperationV2(id string) (*OperationV2Row, error) {
+	if m.GetOperationV2Func != nil {
+		return m.GetOperationV2Func(id)
+	}
+	return nil, nil
+}
+func (m *MockStore) UpdateOperationV2Status(id string, status string, startedAt, completedAt *time.Time, errMsg *string) error {
+	if m.UpdateOperationV2StatusFunc != nil {
+		return m.UpdateOperationV2StatusFunc(id, status, startedAt, completedAt, errMsg)
+	}
+	return nil
+}
+
+// UpdateOperationV2StatusIf reports the write as applied by default, matching
+// UpdateOperationV2Status's default of success.
+func (m *MockStore) UpdateOperationV2StatusIf(id, fromStatus, status string, startedAt, completedAt *time.Time, errMsg *string) (bool, error) {
+	if m.UpdateOperationV2StatusIfFunc != nil {
+		return m.UpdateOperationV2StatusIfFunc(id, fromStatus, status, startedAt, completedAt, errMsg)
+	}
+	return true, nil
+}
+func (m *MockStore) RepairOpsV2MissingCompletedAt() (int, error) {
+	if m.RepairOpsV2MissingCompletedAtFunc != nil {
+		return m.RepairOpsV2MissingCompletedAtFunc()
+	}
+	return 0, nil
+}
+func (m *MockStore) CountRunningByPluginV2(plugin string) (int, error) {
+	if m.CountRunningByPluginV2Func != nil {
+		return m.CountRunningByPluginV2Func(plugin)
+	}
+	return 0, nil
+}
+func (m *MockStore) ListActiveOperationsV2() ([]OperationV2Row, error) {
+	if m.ListActiveOperationsV2Func != nil {
+		return m.ListActiveOperationsV2Func()
+	}
+	return nil, nil
+}
+func (m *MockStore) ListResumableOperationsV2() ([]OperationV2Row, error) {
+	if m.ListResumableOperationsV2Func != nil {
+		return m.ListResumableOperationsV2Func()
+	}
+	return nil, nil
+}
+func (m *MockStore) IncrementResumeCountV2(id string) error {
+	if m.IncrementResumeCountV2Func != nil {
+		return m.IncrementResumeCountV2Func(id)
+	}
+	return nil
+}
+func (m *MockStore) MarkOperationV2ManualRetry(id string) error {
+	if m.MarkOperationV2ManualRetryFunc != nil {
+		return m.MarkOperationV2ManualRetryFunc(id)
+	}
+	return nil
+}
+func (m *MockStore) ResetOperationV2ForResume(id string) error {
+	if m.ResetOperationV2ForResumeFunc != nil {
+		return m.ResetOperationV2ForResumeFunc(id)
+	}
+	return nil
+}
+func (m *MockStore) SetOperationV2Result(id string, resultData string) error {
+	if m.SetOperationV2ResultFunc != nil {
+		return m.SetOperationV2ResultFunc(id, resultData)
+	}
+	return nil
+}
+func (m *MockStore) InsertOpStrikeV2(row OpStrikeV2Row) error {
+	if m.InsertOpStrikeV2Func != nil {
+		return m.InsertOpStrikeV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) GetOpStateV2(opID string) (*OpStateV2Row, error) {
+	if m.GetOpStateV2Func != nil {
+		return m.GetOpStateV2Func(opID)
+	}
+	return nil, nil
+}
+func (m *MockStore) DeleteOpStateV2(opID string) error {
+	if m.DeleteOpStateV2Func != nil {
+		return m.DeleteOpStateV2Func(opID)
+	}
+	return nil
+}
+func (m *MockStore) DeleteOperationV2(id string, allowedStatuses []string) (string, bool, error) {
+	if m.DeleteOperationV2Func != nil {
+		return m.DeleteOperationV2Func(id, allowedStatuses)
+	}
+	return "", false, nil
+}
+func (m *MockStore) UpdateOperationV2Params(id string, params []byte) error {
+	if m.UpdateOperationV2ParamsFunc != nil {
+		return m.UpdateOperationV2ParamsFunc(id, params)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOpProgressV2(id string, current, total int, message string) error {
+	if m.UpdateOpProgressV2Func != nil {
+		return m.UpdateOpProgressV2Func(id, current, total, message)
+	}
+	return nil
+}
+func (m *MockStore) SetOpQueuedProgressV2(id string, current, total int, message string) (bool, error) {
+	if m.SetOpQueuedProgressV2Func != nil {
+		return m.SetOpQueuedProgressV2Func(id, current, total, message)
+	}
+	return false, nil
+}
+func (m *MockStore) UpdateOpPhaseV2(id string, phase *string) error {
+	if m.UpdateOpPhaseV2Func != nil {
+		return m.UpdateOpPhaseV2Func(id, phase)
+	}
+	return nil
+}
+func (m *MockStore) UpdateOpCheckpointV2(id string, newHWM int) error {
+	if m.UpdateOpCheckpointV2Func != nil {
+		return m.UpdateOpCheckpointV2Func(id, newHWM)
+	}
+	return nil
+}
+func (m *MockStore) AppendOpLogsV2(rows []OpLogV2Row) error {
+	if m.AppendOpLogsV2Func != nil {
+		return m.AppendOpLogsV2Func(rows)
+	}
+	return nil
+}
+func (m *MockStore) InsertOpErrorV2(row OpErrorV2Row) error {
+	if m.InsertOpErrorV2Func != nil {
+		return m.InsertOpErrorV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) UpsertOpStateV2(row OpStateV2Row) error {
+	if m.UpsertOpStateV2Func != nil {
+		return m.UpsertOpStateV2Func(row)
+	}
+	return nil
+}
+func (m *MockStore) ListOperationsV2Since(since time.Time, limit int) ([]OperationV2Row, error) {
+	if m.ListOperationsV2SinceFunc != nil {
+		return m.ListOperationsV2SinceFunc(since, limit)
+	}
+	return nil, nil
+}
+func (m *MockStore) GetOpLogsV2(opID string, limit int) ([]OpLogV2Row, error) {
+	if m.GetOpLogsV2Func != nil {
+		return m.GetOpLogsV2Func(opID, limit)
+	}
+	return nil, nil
+}
+
+// UOS dependency-scheduling stubs (Task 2).
+func (m *MockStore) GetDepRev(sub OpSubject) (uint64, error) {
+	if m.GetDepRevFunc != nil {
+		return m.GetDepRevFunc(sub)
+	}
+	return 0, nil
+}
+func (m *MockStore) BumpDepRev(sub OpSubject) (uint64, error) {
+	if m.BumpDepRevFunc != nil {
+		return m.BumpDepRevFunc(sub)
+	}
+	return 1, nil
+}
+func (m *MockStore) RecordOpCompletion(sub OpSubject, opType, fileID string, depRev uint64) error {
+	if m.RecordOpCompletionFunc != nil {
+		return m.RecordOpCompletionFunc(sub, opType, fileID, depRev)
+	}
+	return nil
+}
+func (m *MockStore) GetOpCompletion(sub OpSubject, opType string) (uint64, bool, error) {
+	if m.GetOpCompletionFunc != nil {
+		return m.GetOpCompletionFunc(sub, opType)
+	}
+	return 0, false, nil
+}
+func (m *MockStore) ListFileCompletions(sub OpSubject, opType string) (map[string]uint64, error) {
+	if m.ListFileCompletionsFunc != nil {
+		return m.ListFileCompletionsFunc(sub, opType)
+	}
+	return nil, nil
+}
+func (m *MockStore) ListWaitingDepsOps() ([]OperationV2Row, error) {
+	if m.ListWaitingDepsOpsFunc != nil {
+		return m.ListWaitingDepsOpsFunc()
+	}
+	return nil, nil
+}
+func (m *MockStore) PromoteToQueued(id string) error {
+	if m.PromoteToQueuedFunc != nil {
+		return m.PromoteToQueuedFunc(id)
+	}
+	return nil
+}
+
+// M3 batch bucket stubs. MockStore is a permissive stub — these are no-ops
+// by default. Tests that need batch-bucket behaviour should use fakeStore
+// (in internal/operations/registry/teststore_test.go) which carries real state.
+func (m *MockStore) AddToBatchBucket(opType string, sub OpSubject) error {
+	if m.AddToBatchBucketFunc != nil {
+		return m.AddToBatchBucketFunc(opType, sub)
+	}
+	return nil
+}
+func (m *MockStore) ListBatchBucket(opType string) ([]BatchBucketEntry, error) {
+	if m.ListBatchBucketFunc != nil {
+		return m.ListBatchBucketFunc(opType)
+	}
+	return nil, nil
+}
+func (m *MockStore) ClearBatchBucket(opType string, subs []OpSubject) error {
+	if m.ClearBatchBucketFunc != nil {
+		return m.ClearBatchBucketFunc(opType, subs)
+	}
+	return nil
+}
+
+// ReviewStore stubs (PR-A1) — permissive no-ops for tests that don't exercise
+// the review queue. Handler/store tests use a real *PebbleStore, not this mock.
+func (m *MockStore) UpsertReviewItem(item ReviewItem) (ReviewItem, error) {
+	if m.UpsertReviewItemFunc != nil {
+		return m.UpsertReviewItemFunc(item)
+	}
+	return item, nil
+}
+func (m *MockStore) GetReviewItem(id string) (*ReviewItem, error) {
+	if m.GetReviewItemFunc != nil {
+		return m.GetReviewItemFunc(id)
+	}
+	return nil, nil
+}
+func (m *MockStore) ListReviewItems(filter ReviewFilter) ([]ReviewItem, int, error) {
+	if m.ListReviewItemsFunc != nil {
+		return m.ListReviewItemsFunc(filter)
+	}
+	return nil, 0, nil
+}
+func (m *MockStore) CountReviewItems(status string) (int, error) {
+	if m.CountReviewItemsFunc != nil {
+		return m.CountReviewItemsFunc(status)
+	}
+	return 0, nil
+}
+func (m *MockStore) ReviewStatsByKind() ([]ReviewKindStat, error) {
+	if m.ReviewStatsByKindFunc != nil {
+		return m.ReviewStatsByKindFunc()
+	}
+	return nil, nil
+}

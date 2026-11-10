@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Every relink-then-DeleteAuthor path in this package used to build its relink

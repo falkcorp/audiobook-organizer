@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

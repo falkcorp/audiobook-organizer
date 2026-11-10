@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_budget_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 87f0a067-4601-427f-9ecf-398a030c9059
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 

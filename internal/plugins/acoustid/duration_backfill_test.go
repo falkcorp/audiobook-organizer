@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/duration_backfill_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f7a8b9c
-// last-edited: 2026-07-07
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestDurationBackfill_DryRunDoesNotWrite verifies that omitting "live" (or

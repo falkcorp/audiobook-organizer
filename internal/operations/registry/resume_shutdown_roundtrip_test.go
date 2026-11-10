@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume_shutdown_roundtrip_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 0b5c4a19-7e2d-4f83-9a61-3c8d5e7f012a
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -289,7 +289,7 @@ func TestResume_ShutdownTimeoutLeavesQuiescedAndResumable(t *testing.T) {
 // all -- resume_test.go starts every case at insertRunningOp. But the PR's own
 // two fixes are pinned elsewhere, and those DO fail against the merge-base:
 // TestMaintenancePolicy_RestartWithoutCheckpointing for the watchdog gate, and
-// TestUpdateOpProgressV2_AdvancesHighWaterProgress (internal/database) for the
+// TestUpdateOpProgressV2_AdvancesHighWaterProgress (internal/books/store) for the
 // high-water mark. Do not cite this test as evidence for either.
 //
 // FIXTURE NOTE (2026-08-23): the queued row is PLANTED after r1.Shutdown returns
@@ -428,7 +428,7 @@ func TestResume_QueuedAtShutdownIsRestartedNotDropped(t *testing.T) {
 // for defs that promised a cadence and stay silent for defs that never could.
 //
 // The high_water_progress half is pinned at the store level, where the change
-// lives, by TestUpdateOpProgressV2_AdvancesHighWaterProgress in internal/database
+// lives, by TestUpdateOpProgressV2_AdvancesHighWaterProgress in internal/books/store
 // -- asserting it through the reporter here would race its async flush loop.
 func TestMaintenancePolicy_RestartWithoutCheckpointing(t *testing.T) {
 	// runProgressOnlyOp starts a ResumeRestart op that reports progress and never

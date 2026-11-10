@@ -1,7 +1,7 @@
 // file: internal/scanner/replaced_file_probe_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1d7c4a92-5e63-4b8f-b0a2-9c3e6f1d8b57
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"

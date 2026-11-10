@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_rank_order_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a628796c-ecbd-4442-8944-e88a2628321a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package metadatahandler_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package authormerge
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

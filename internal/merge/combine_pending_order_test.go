@@ -1,7 +1,7 @@
 // file: internal/merge/combine_pending_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 40362a91-201c-4c22-bc85-28be669fd4ae
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A pending user-state repair Z -> survivor that the combine completes is

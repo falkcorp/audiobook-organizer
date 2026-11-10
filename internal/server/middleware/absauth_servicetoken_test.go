@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_servicetoken_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9f2b60d4-38a1-4c75-b9e0-71a5c34e8206
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )

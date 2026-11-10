@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_round4_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d2f8b41-9c3e-4a57-b0e8-1f7a5c9d3e62
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Round-4 regression tests. They use only helpers that already existed at

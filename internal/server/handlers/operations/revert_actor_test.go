@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/revert_actor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1b6c8a4e-fe5c-436d-a9cc-dde22d9be34f
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package operations_test
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	operationsmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

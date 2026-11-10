@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_field_state_guards_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4673e12e-5c70-456a-a4c6-11a63dd02ed2
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // database.MetadataFieldState and metafetch.MetadataFieldState are two views of

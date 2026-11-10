@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package metabatch
 
@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

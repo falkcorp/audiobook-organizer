@@ -1,7 +1,7 @@
 // file: internal/server/organize_folder_scope_op_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 68a4ccb3-bf07-4543-afe9-e41ff5d49960
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/require"
 )

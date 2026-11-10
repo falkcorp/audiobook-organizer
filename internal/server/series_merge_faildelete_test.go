@@ -1,7 +1,7 @@
 // file: internal/server/series_merge_faildelete_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4c9e17ab-52d3-4f80-b6a1-9e35b7c0284f
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // These pin the FAIL-CLOSED ordering on the two series-merge paths in

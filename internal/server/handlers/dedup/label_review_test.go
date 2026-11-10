@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_review_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8a3e1c46-9b20-4d75-8f31-2a6e0c9d5b39
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -14,7 +14,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	deduphandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"

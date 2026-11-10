@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_repairs_access_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c7d2f9a1-3b84-4e60-91a5-0d6e8f2b4c37
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -19,7 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package abs
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -24,7 +24,7 @@ var playlistsLog = logger.New("abs")
 // Replaces the h.EmptyPage stub on the playlist route with the real user-playlist
 // list.
 //
-// 🔴 THE MODEL IS UserPlaylist, NOT Playlist. internal/database carries two
+// 🔴 THE MODEL IS UserPlaylist, NOT Playlist. internal/books/store carries two
 // unrelated types with confusingly similar names. `Playlist` (store.go:380, int
 // ids, SeriesID, FilePath) is the LEGACY series M3U auto-generator. `UserPlaylist`
 // (store.go:389, ULID ids, static|smart, BookIDs, CreatedByUserID) is the spec-3.4

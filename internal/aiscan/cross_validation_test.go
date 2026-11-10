@@ -1,7 +1,7 @@
 // file: internal/aiscan/cross_validation_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e1f7a3b5-8c9d-0e1f-2a3b-4c5d6e7f8a9b
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

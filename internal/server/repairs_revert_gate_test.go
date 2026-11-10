@@ -1,7 +1,7 @@
 // file: internal/server/repairs_revert_gate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d1c8e2a-7b43-4f96-8a10-c3e9f2b6d704
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

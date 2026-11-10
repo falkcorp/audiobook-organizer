@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/pair_dedupe.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8b1a90-2c47-4d1e-9a6b-7e0c5d84f2a1
-// last-edited: 2026-07-11
+// last-edited: 2026-11-09
 
 // Package dataset — pair-level dedupe of labeled examples (INIT-1 T3).
 //
@@ -14,7 +14,7 @@
 package dataset
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // sourceRank orders LabelSource by trust: human > llm_judge > itunes_attr >

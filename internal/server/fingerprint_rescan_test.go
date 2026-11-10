@@ -1,5 +1,5 @@
 // file: internal/server/fingerprint_rescan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a8c1b59-7e6f-4d12-9b1a-2c4f5d8a9e6b
 
 package server
@@ -11,7 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

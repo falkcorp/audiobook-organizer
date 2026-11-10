@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus_undated_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ae477977-e81a-4ed8-9798-de127c538696
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package readstatus
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func timestampWriter(t *testing.T, store database.Store) database.UserPositionTimestampWriter {

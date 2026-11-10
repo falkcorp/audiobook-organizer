@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_source_fields_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0dfe3afe-fcd9-49ee-a139-7a5fd7ad56c9
-// last-edited: 2026-10-08
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/assert"

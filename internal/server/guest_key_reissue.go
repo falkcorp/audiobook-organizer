@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -36,7 +36,7 @@ import (
 //     in through Cloudflare's own login (owner decision 2026-11-07, later). A
 //     record that already exists is reissued whoever holds it.
 //
-// "Trusted" is the store's rule (trustedEmailSource in internal/database): an
+// "Trusted" is the store's rule (trustedEmailSource in internal/books/store): an
 // address an admin set counts, one the user typed in themselves does not. The
 // admin-facing wording therefore says "the account's email address", not
 // "verified".

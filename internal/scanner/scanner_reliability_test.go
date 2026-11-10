@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_reliability_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9f8e7d6c-5b4a-3921-8c7d-6e5f4a3b2c1d
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // Tests for the 2026-07-17 multi-discipline-review scanner findings:
 // R-4 (refcounted scan/works caches surviving concurrent runs) and
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // resetScanCacheRefsForTest forces the refcounted scan-cache globals back to a

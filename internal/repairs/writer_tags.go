@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_tags.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 637b4ad2-17cd-41f7-9b6f-361a057071bf
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package repairs
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/remux/remux_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package remux
 
@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // MockStore is a test double for Store interface.

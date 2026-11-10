@@ -1,5 +1,5 @@
 // file: internal/server/author_series_service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 
 package server
@@ -7,7 +7,7 @@ package server
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func TestAuthorSeriesService_ListAuthors_Empty(t *testing.T) {

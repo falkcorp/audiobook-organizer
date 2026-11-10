@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_path_record_clear_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f3c1a58-e926-4b04-8d7e-2a5b9c0e1f64
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

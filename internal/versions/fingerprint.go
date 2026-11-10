@@ -1,7 +1,7 @@
 // file: internal/versions/fingerprint.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 8d5e7f4c-9c5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 //
 // Fingerprint check for incoming files (spec 3.1 task 4).
 //
@@ -16,7 +16,7 @@
 
 package versions
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // FingerprintMatch describes a match between an incoming file/torrent
 // and a previously-seen version in the library. The caller uses this

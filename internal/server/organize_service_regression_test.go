@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_regression_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a1b2c3d4-e5f6-7890-abcd-organize-regr
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/assert"

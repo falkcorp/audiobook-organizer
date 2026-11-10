@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer_review_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 0f4f7d0e-5a2b-4d63-9a51-3c9b8e2f6a14
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"

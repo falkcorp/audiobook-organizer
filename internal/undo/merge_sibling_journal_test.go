@@ -1,7 +1,7 @@
 // file: internal/undo/merge_sibling_journal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d7a1e93-6b20-4f85-a3c9-0e58b2d7f146
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package search
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 

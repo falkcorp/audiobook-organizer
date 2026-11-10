@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_chapters_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a17c3e5-8f62-4b04-bd31-7e05c9a2f861
-// last-edited: 2026-09-22
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

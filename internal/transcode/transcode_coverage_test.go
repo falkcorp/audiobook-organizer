@@ -1,6 +1,6 @@
 // file: internal/transcode/transcode_coverage_test.go
-// version: 1.3.0
-// last-edited: 2026-10-15
+// version: 1.3.1
+// last-edited: 2026-11-09
 
 package transcode
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // --- TranscodeOpts coverage ---

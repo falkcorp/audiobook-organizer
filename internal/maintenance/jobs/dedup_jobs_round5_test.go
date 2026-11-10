@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_round5_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8e4a1c73-2f6b-4d90-a5c8-3b7e9f1d2a64
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Follow-ups to #3395's final review, on a real PebbleStore. They use only

@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )

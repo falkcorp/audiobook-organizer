@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_class_lists_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b4d81e07-93c2-4a5f-8e16-5f0c2a7d9e38
-// last-edited: 2026-10-27
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The class id lists of a full-library result are 5-12 MB. They are stored as

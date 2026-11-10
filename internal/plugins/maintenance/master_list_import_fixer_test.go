@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 91c3d7e5-0a48-4b6f-8e12-d5f7a3b9c640
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

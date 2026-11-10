@@ -5,7 +5,7 @@
 package operationsmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -46,23 +46,23 @@ func (_m *MockAIScanLister) EXPECT() *MockAIScanLister_Expecter {
 }
 
 // ListScans provides a mock function for the type MockAIScanLister
-func (_mock *MockAIScanLister) ListScans() ([]database.Scan, error) {
+func (_mock *MockAIScanLister) ListScans() ([]store.Scan, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListScans")
 	}
 
-	var r0 []database.Scan
+	var r0 []store.Scan
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() ([]database.Scan, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() ([]store.Scan, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() []database.Scan); ok {
+	if returnFunc, ok := ret.Get(0).(func() []store.Scan); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]database.Scan)
+			r0 = ret.Get(0).([]store.Scan)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
@@ -90,12 +90,12 @@ func (_c *MockAIScanLister_ListScans_Call) Run(run func()) *MockAIScanLister_Lis
 	return _c
 }
 
-func (_c *MockAIScanLister_ListScans_Call) Return(scans []database.Scan, err error) *MockAIScanLister_ListScans_Call {
+func (_c *MockAIScanLister_ListScans_Call) Return(scans []store.Scan, err error) *MockAIScanLister_ListScans_Call {
 	_c.Call.Return(scans, err)
 	return _c
 }
 
-func (_c *MockAIScanLister_ListScans_Call) RunAndReturn(run func() ([]database.Scan, error)) *MockAIScanLister_ListScans_Call {
+func (_c *MockAIScanLister_ListScans_Call) RunAndReturn(run func() ([]store.Scan, error)) *MockAIScanLister_ListScans_Call {
 	_c.Call.Return(run)
 	return _c
 }

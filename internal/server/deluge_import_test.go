@@ -1,7 +1,7 @@
 // file: internal/server/deluge_import_test.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: e1b5d8f2-3c7a-4091-a2e9-6f4d0c8b3a15
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 //
 // Tests for ImportToLibrary — delegates to internal/deluge/import.go.
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 )
 

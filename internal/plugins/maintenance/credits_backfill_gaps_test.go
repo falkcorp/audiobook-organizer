@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_gaps_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 812b813b-fe22-4b23-bf28-6de81d6c94be
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

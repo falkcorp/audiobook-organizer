@@ -1,7 +1,7 @@
 // file: internal/dedup/llm_review_hooks_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8c4e2a17-5b93-4d06-9e1f-a3d7c0b64f52
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // llmReviewEngine returns an engine wired for RunLLMReviewWithHooks with no network: an

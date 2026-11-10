@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/user_merge.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c2f8a14-93d7-4b50-a1e6-d0b45f7c9823
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 // maintenance.user-merge runs the admin "merge user B into user A" tool
 // (internal/usermerge) as a background operation: the apply, the resume of an
@@ -29,7 +29,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"

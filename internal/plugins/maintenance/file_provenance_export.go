@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 )

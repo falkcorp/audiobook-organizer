@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_junk_author_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6f61a9d0-210f-4702-ae53-7ec0a671e4ff
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

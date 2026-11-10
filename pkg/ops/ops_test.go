@@ -1,7 +1,7 @@
 // file: pkg/ops/ops_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: eaba1ee0-42be-4790-9727-c2d336c273de
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package ops
 
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeHost records what a run asked of the executor. Children "run" by

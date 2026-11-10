@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"maps"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/oklog/ulid/v2"

@@ -1,14 +1,14 @@
 // file: internal/operations/registry/resume_supersede_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e1a4c92-6b3d-4f58-9a07-2d5e8b1c4f60
-// last-edited: 2026-09-25
+// last-edited: 2026-11-09
 
 package registry
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // supersedeStaleQuiesced is the guard that makes including interrupted_quiesced

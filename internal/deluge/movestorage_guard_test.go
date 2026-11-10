@@ -1,7 +1,7 @@
 // file: internal/deluge/movestorage_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e3a7c15-4d28-4b6f-8a01-c5f2d7b30e64
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 //
 // D57 regression: with deluge_move_enabled=false (the copy model), nothing
 // that holds a torrent hash may send core.move_storage to Deluge.
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 const guardTestHash = "aabbccddeeff00112233445566778899aabbccdd"

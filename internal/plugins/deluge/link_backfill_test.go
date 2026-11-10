@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )

@@ -1,7 +1,7 @@
 // file: internal/organizer/collision_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ---------------------------------------------------------------------------

@@ -1,14 +1,14 @@
 // file: internal/audiobooks/service_filtering_conformance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2a9f14-7c85-4b30-a1e9-3f8c5b26d047
-// last-edited: 2026-08-13
+// last-edited: 2026-11-09
 
 package audiobooks
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

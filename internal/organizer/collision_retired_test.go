@@ -1,7 +1,7 @@
 // file: internal/organizer/collision_retired_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8d2c5e90-31b7-4a6f-9c14-e07a5b3d2f68
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A byte-identical occupant that is a RETIRED version's row still claims the

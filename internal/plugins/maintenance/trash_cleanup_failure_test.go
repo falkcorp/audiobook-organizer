@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_exact.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Package dedup — exact-tier collector family (fable5 T014).
 //
@@ -34,7 +34,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

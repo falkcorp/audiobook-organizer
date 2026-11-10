@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard_nothing_served_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e0b7a93-41d6-4c28-9f1a-d8c36b72e054
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // servedPathPresent decides whether a path the book serves counts: a file that

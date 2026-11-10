@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -77,7 +77,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

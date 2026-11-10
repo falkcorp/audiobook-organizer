@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.19.2
+// version: 1.19.3
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -16,8 +16,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

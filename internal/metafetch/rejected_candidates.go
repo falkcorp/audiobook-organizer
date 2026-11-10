@@ -1,7 +1,7 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_result_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d92f038-71b4-42ce-9a67-04e1b83fd7a2
-// last-edited: 2026-08-22
+// last-edited: 2026-11-09
 
 package registry
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem_autoscan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e3b1a58-64c0-4d29-9f17-2b8d5c0a4e63
-// last-edited: 2026-08-23
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )

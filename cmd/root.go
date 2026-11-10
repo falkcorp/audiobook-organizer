@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.30.2
+// version: 1.30.3
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package cmd
 
@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -547,7 +547,7 @@ func initConfig() {
 	config.Mutate(func(c *config.Config) { c.EnabledSortIndexes = builtSortIndexes })
 
 	// Same import-cycle constraint as SetEnabledSortIndexes above:
-	// internal/database can't import internal/config directly.
+	// internal/books/store can't import internal/config directly.
 	database.SetLibraryCountsCacheMinInterval(config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
 }
 

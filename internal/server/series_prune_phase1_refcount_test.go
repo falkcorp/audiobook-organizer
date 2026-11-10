@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_phase1_refcount_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3f8c1d64-7a52-4be0-9c31-64d0f2a8ab17
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

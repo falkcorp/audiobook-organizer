@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_primary_handoff_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c3a9e15-4d2b-4f80-a6e1-b95d0c28f473
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

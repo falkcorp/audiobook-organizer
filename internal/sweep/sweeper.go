@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-4789-abcd-ef2345678901
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package sweep
 
@@ -12,7 +12,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

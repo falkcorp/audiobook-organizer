@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_standdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e9c4a70-5d18-4b63-8f07-c1a6e3d9b254
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

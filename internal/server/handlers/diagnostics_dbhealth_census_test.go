@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_dbhealth_census_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 637c4ea3-5b82-4c17-88fb-4256b6233cd3
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // fetchCachePad makes each row ~24 KB so a few dozen rows pass the census's

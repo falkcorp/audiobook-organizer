@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package itunesservice
 
@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

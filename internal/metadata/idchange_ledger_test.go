@@ -1,7 +1,7 @@
 // file: internal/metadata/idchange_ledger_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d7a1c85-6e29-4b03-9f71-0c8d5e2a3b64
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ledgerStore records every metadata-history row BatchUpdateMetadata writes, so

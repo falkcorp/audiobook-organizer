@@ -1,7 +1,7 @@
 // file: internal/server/server_library_clone.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f7c2a91-5d4e-4b8a-9c61-0e2d7f4a8b35
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"os"
 	"path/filepath"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"

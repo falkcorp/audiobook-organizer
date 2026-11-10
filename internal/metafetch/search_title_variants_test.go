@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_title_variants_test.go
-// version: 3.7.1
+// version: 3.7.2
 // guid: 5b1c7d0e-3a4f-4e8b-9c2d-7f6a1e0b9d31
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

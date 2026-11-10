@@ -1,7 +1,7 @@
 // file: internal/scheduler/v3_schedule.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b41c7e92-6d05-4a38-9f1e-2c8a5d70e3b6
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 package scheduler
 
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"

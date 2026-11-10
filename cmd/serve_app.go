@@ -1,5 +1,5 @@
 // file: cmd/serve_app.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c0933565-208e-4f5b-b8ec-3af1ebc3ee07
 // last-edited: 2026-11-09
 
@@ -112,7 +112,7 @@ func closeUnrunApp(a *app.App) {
 //     PebbleStore.Close refuses new leases, syncs the WAL and waits for held
 //     ones (DefaultCloseDrainTimeout); a write after that gets an error
 //     wrapping pebble.ErrClosed, never a use-after-close panic
-//     (internal/database/pebble_gate.go; TestStoreCloseUnderAbandonedStop
+//     (internal/books/store/pebble_gate.go; TestStoreCloseUnderAbandonedStop
 //     drives it through books' own wiring). The kernel's storage close then
 //     drains core's own leases up to core.storage.close_timeout and leaves
 //     the engine open, its WAL synced, if one outlives that.

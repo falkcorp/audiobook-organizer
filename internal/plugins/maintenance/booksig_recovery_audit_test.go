@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8a1d3f27-6c04-4e59-b2a7-9f5e1c8d0b46
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // snapshotOf serializes a Book into a BookSnapshot at ts (raw JSON, like Pebble).

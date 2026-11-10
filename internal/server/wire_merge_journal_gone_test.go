@@ -1,7 +1,7 @@
 // file: internal/server/wire_merge_journal_gone_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f7287a40-9996-4784-8c46-4f09afcab92e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

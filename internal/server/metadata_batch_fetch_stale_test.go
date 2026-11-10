@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_fetch_stale_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 94517ca9-634c-4760-83e5-5b98eecf127a
-// last-edited: 2026-09-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

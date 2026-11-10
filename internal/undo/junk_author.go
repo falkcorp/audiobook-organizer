@@ -1,7 +1,7 @@
 // file: internal/undo/junk_author.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: afd8a648-29e9-471a-aa53-2dbf60224fdf
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package undo
 
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ChangeTypeJunkAuthorCredits: the Repairs lane's junk-author fixer moved one

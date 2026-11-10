@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary_close_recovery_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e1c7a39-84d2-4b06-9f3a-c2d8e60b1a47
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 )

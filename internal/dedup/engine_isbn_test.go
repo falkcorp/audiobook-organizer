@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_isbn_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 // Tests for checkExactISBN: verifies that the indexed fast path is used when
 // the isbn-index-build flag is set, and that the O(N) GetAllBooks fallback is
@@ -12,7 +12,7 @@ package dedup
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

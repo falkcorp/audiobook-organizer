@@ -1,7 +1,7 @@
 // file: internal/metafetch/queued_apply_history.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: de7ac5f2-cd18-4dc9-8b95-a2f28a9fb8b5
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The queued single-book apply (metadata.apply-when-scanned) is enqueued

@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_retry_record_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 2b6f8d13-9a47-4e50-8c1d-5e0a7f3b9d64
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

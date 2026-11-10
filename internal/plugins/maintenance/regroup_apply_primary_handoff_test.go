@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_primary_handoff_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a7c3e91-8b24-4f06-9d1e-2c6b8f4a0e37
-// last-edited: 2026-09-24
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 

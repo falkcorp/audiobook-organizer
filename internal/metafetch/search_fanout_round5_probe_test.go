@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_round5_probe_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 0b6f2a8e-4c1d-4e7a-9f35-8d2c61e0a4b7
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

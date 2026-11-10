@@ -1,7 +1,7 @@
 // file: internal/operations/registry/deps_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package registry
 
@@ -11,7 +11,7 @@ import (
 	"maps"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // fakeDepStore is a minimal in-memory DepStore for unit testing the evaluator.

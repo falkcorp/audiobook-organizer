@@ -1,11 +1,11 @@
 // file: internal/organizer/checkpoint_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b3d5f17-4c92-4e60-a781-2d0f96c4e5a3
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package organizer
 
-import "github.com/falkcorp/audiobook-organizer/internal/database"
+import database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
 // Measured with an empty-interface compiler probe under -gcflags=-e: these two
 // functions need two methods between them. Both took database.Store -- 398

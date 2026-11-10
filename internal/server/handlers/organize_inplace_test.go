@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_inplace_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9a4c7e21-5d3b-4f80-b6e2-1c8d0a7f3e94
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"

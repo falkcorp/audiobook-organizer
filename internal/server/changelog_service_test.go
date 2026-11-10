@@ -1,7 +1,7 @@
 // file: internal/server/changelog_service_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3dcbb4a3-7fa5-425f-8247-5f96f81f2f22
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

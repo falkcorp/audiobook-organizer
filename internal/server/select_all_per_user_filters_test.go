@@ -1,7 +1,7 @@
 // file: internal/server/select_all_per_user_filters_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f7282f66-4b94-48cf-9012-922b3d4cc25d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

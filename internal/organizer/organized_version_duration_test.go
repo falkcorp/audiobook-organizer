@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_duration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0d6c3b7e-94a2-4f1e-8c5d-7b2a1e9f4c36
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )

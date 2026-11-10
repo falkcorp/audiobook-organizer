@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_bulk_reject_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d65b248-8432-43e0-9a13-2da6e1228ceb
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

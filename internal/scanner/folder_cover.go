@@ -1,13 +1,13 @@
 // file: internal/scanner/folder_cover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a7c9e14-5d3b-4f60-8b21-9e4d7f1c6a38
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/foldercover"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f3144b62-7dfb-4ee1-95d2-ea314e1fde3c
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // LibraryCopyResolver maps a book to the row an organize should act on. For a

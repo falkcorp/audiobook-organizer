@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_viewer_edges_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9a4e2c61-7d03-4f58-b1a9-d6c80e3f2547
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	searchidx "github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -17,8 +17,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Replays the 2026-09-30 prod failure: a protected original (outside RootDir)

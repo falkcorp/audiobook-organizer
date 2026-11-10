@@ -1,7 +1,7 @@
 // file: internal/dedup/apply_verdicts_stale_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: f1e7f635-5dfb-46da-b1e4-fc3f63f6cacc
-// last-edited: 2026-09-26
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -15,8 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

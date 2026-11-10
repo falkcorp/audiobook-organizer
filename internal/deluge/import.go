@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -18,8 +18,8 @@ import (
 	"reflect"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/keyedmutex"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

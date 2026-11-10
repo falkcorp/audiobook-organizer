@@ -1,14 +1,14 @@
 // file: internal/applygate/partsuffix_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4a7e2c91-3b6d-4f08-9e15-c2d8a0b7f364
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package applygate
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )

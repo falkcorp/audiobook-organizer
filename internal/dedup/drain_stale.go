@@ -1,7 +1,7 @@
 // file: internal/dedup/drain_stale.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 60d982e2-6836-4327-9ddf-9b55375f39ea
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 // Package dedup — DrainStaleCandidates (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -44,7 +44,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"

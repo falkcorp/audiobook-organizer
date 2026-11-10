@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_trashed_loser_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c6f2a9e-5b1d-4e83-9f47-3d8a1b6c7e20
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,8 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"

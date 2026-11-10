@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -73,8 +73,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"

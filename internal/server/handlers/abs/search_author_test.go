@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/search_author_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 6c1f0d2e-7b3a-4c5d-9e8f-2a1b3c4d5e6f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"time"
 )
 

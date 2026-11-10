@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_repair_lock_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 69231be7-4f65-4f30-89ff-e01c12a59008
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 )
 

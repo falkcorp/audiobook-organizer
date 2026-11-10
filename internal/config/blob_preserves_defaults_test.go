@@ -1,5 +1,5 @@
 // file: internal/config/blob_preserves_defaults_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9e14c7b2-58fa-4d63-8071-2ab6f5cd913e
 // last-edited: 2026-11-09
 
@@ -41,7 +41,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // restoreAppConfig pins the process-wide config for the duration of one test.

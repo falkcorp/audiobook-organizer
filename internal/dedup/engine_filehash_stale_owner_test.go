@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_filehash_stale_owner_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4e7c1b9a-3d2f-4a86-b5e0-8c9d1f2a3b4c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestCheckExactFileHash_SoftDeletedIndexOwner_IsNotADuplicate pins dedup bug

@@ -1,5 +1,5 @@
 // file: cmd/commands_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
 // last-edited: 2026-11-09
 
@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"

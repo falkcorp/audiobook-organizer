@@ -1,14 +1,14 @@
 // file: internal/metabatch/store.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metabatch
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Measured with an empty-interface compiler probe under -gcflags=-e: four

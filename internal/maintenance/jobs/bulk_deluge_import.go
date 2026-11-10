@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"

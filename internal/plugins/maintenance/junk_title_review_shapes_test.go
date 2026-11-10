@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_review_shapes_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5d2e8a1c-47b3-4c90-9e6f-3a1b7c0d8e24
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )

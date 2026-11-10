@@ -1,7 +1,7 @@
 // file: internal/organizer/author_from_join_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c1e2d94-6a3f-4b81-9d20-3e5a8c7f1b64
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // authorJoinStore is a hand-wired OrganizerStore that lets each test decide

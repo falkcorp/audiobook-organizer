@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 47ea834f-d1ec-4c9f-a8c5-e26626311d2e
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 

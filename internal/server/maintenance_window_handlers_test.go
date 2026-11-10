@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_window_handlers_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d5e6f7a8-b9c0-1234-efab-456789012345
-// last-edited: 2026-10-15
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

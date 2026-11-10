@@ -1,0 +1,718 @@
+// file: internal/books/store/pebble_store_tags.go
+// version: 1.6.1
+// guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
+// last-edited: 2026-11-09
+
+package store
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+)
+
+// AddBookTag adds a user-sourced tag to a book. Server code that
+// auto-applies tags should use AddBookTagWithSource so provenance
+// is preserved.
+func (p *PebbleStore) AddBookTag(bookID, tag string) error {
+	return p.AddBookTagWithSource(bookID, tag, "user")
+}
+
+// AddBookTagWithSource adds a tag with an explicit source. Typical
+// sources: "user" (default), "system" (auto-applied by the server).
+// Upserts when the row already exists — later writes overwrite the
+// source field so a user-claimed tag can promote to system or vice
+// versa without needing a delete-first step.
+func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+	if source == "" {
+		source = "user"
+	}
+
+	bt := BookTag{
+		BookID:    bookID,
+		Tag:       tag,
+		Source:    source,
+		CreatedAt: time.Now(),
+	}
+	data, err := json.Marshal(bt)
+	if err != nil {
+		return err
+	}
+
+	// Primary key book_tag:<bookID>:<tag> and reverse index
+	// tag_idx:<tag>:<bookID>, in ONE batch: a failure between two separate
+	// writes left a tag row with no index entry (or the reverse) that the
+	// caller was told failed -- an untracked tag a journaled write then
+	// voided its undo row for.
+	batch := p.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+	if err := batch.Set([]byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag)), data, nil); err != nil {
+		return err
+	}
+	if err := batch.Set([]byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID)), []byte{}, nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+// RemoveBookTag removes a tag from a book regardless of source.
+func (p *PebbleStore) RemoveBookTag(bookID, tag string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+
+	// Both keys in one batch, as AddBookTagWithSource writes them.
+	batch := p.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+	if err := batch.Delete([]byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag)), nil); err != nil {
+		return err
+	}
+	if err := batch.Delete([]byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID)), nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
+}
+
+// RemoveBookTagsByPrefix removes every tag on a book whose name
+// begins with `prefix`, optionally scoped to a specific source.
+// Used to clear a namespace before writing a fresh system tag —
+// e.g., re-applying metadata from a new source removes any
+// existing `metadata:source:*` system tags first so each book has
+// exactly one source tag at a time.
+//
+// If `source` is empty, all sources match.
+func (p *PebbleStore) RemoveBookTagsByPrefix(bookID, prefix, source string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
+	prefix = util.NormalizeString(prefix)
+	if prefix == "" {
+		return fmt.Errorf("prefix cannot be empty")
+	}
+
+	detailed, err := p.GetBookTagsDetailed(bookID)
+	if err != nil {
+		return err
+	}
+	for _, bt := range detailed {
+		if !strings.HasPrefix(bt.Tag, prefix) {
+			continue
+		}
+		if source != "" && bt.Source != source {
+			continue
+		}
+		if err := p.RemoveBookTag(bookID, bt.Tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetBookTags returns all tag strings for a book, sorted alphabetically.
+func (p *PebbleStore) GetBookTags(bookID string) ([]string, error) {
+	prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var tags []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		var bt BookTag
+		if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+			continue
+		}
+		tags = append(tags, bt.Tag)
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+// GetBookTagsByBookIDs returns bookID → sorted tag strings for every book
+// in bookIDs using a single Pebble iterator: one SeekGE per book inside
+// one iterator spanning the whole `book_tag:` keyspace, instead of one
+// iterator (and one store call) per book as GetBookTags does. Duplicate
+// IDs are resolved once; books with no tags are absent from the map.
+func (p *PebbleStore) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(bookIDs))
+	if len(bookIDs) == 0 {
+		return result, nil
+	}
+	space := []byte("book_tag:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: space,
+		UpperBound: prefixEnd(space),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for _, bookID := range bookIDs {
+		if bookID == "" {
+			continue
+		}
+		if _, already := result[bookID]; already {
+			continue
+		}
+		prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+		var tags []string
+		for valid := iter.SeekGE(prefix); valid && bytes.HasPrefix(iter.Key(), prefix); valid = iter.Next() {
+			var bt BookTag
+			if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+				continue
+			}
+			tags = append(tags, bt.Tag)
+		}
+		if len(tags) == 0 {
+			continue
+		}
+		sort.Strings(tags)
+		result[bookID] = tags
+	}
+	return result, iter.Error()
+}
+
+// GetBookTagsDetailed returns tags with their source attribution.
+// Rows written before migration 47 deserialize with source="" which
+// we promote to "user" so downstream filters treat them as user
+// tags (the sensible default for legacy data).
+func (p *PebbleStore) GetBookTagsDetailed(bookID string) ([]BookTag, error) {
+	prefix := []byte(fmt.Sprintf("book_tag:%s:", bookID))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var out []BookTag
+	for iter.First(); iter.Valid(); iter.Next() {
+		var bt BookTag
+		if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+			continue
+		}
+		if bt.Source == "" {
+			bt.Source = "user"
+		}
+		out = append(out, bt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Tag < out[j].Tag
+	})
+	return out, nil
+}
+
+// SetBookTags replaces all USER tags on a book with the given set.
+// System tags (dedup:*, metadata:source:*, ...) are preserved so the
+// user-facing bulk-replace doesn't clobber server-applied provenance.
+func (p *PebbleStore) SetBookTags(bookID string, tags []string) (err error) {
+	defer func() {
+		if err == nil {
+			p.notifyBooksNeedReindex(bookID)
+		}
+	}()
+
+	detailed, err := p.GetBookTagsDetailed(bookID)
+	if err != nil {
+		return err
+	}
+
+	// Normalize incoming tags.
+	normalized := make(map[string]bool)
+	for _, t := range tags {
+		t = util.NormalizeString(t)
+		if t != "" {
+			normalized[t] = true
+		}
+	}
+
+	// Existing user tags we may need to drop.
+	existingUser := make(map[string]bool)
+	for _, bt := range detailed {
+		if bt.Source == "user" || bt.Source == "" {
+			existingUser[bt.Tag] = true
+		}
+	}
+
+	// Remove user tags not in new set.
+	for t := range existingUser {
+		if !normalized[t] {
+			if err := p.RemoveBookTag(bookID, t); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Add user tags not already present.
+	for t := range normalized {
+		if !existingUser[t] {
+			if err := p.AddBookTagWithSource(bookID, t, "user"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// ListAllTags returns all unique tags with their usage counts.
+func (p *PebbleStore) ListAllTags() ([]TagWithCount, error) {
+	prefix := []byte("tag_idx:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	counts := make(map[string]int)
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Key format: tag_idx:<tag>:<bookID>. Tags may themselves contain
+		// colons (e.g. "metadata:source:audible"), so the tag/bookID
+		// boundary is the LAST colon, not a fixed split arity — bookIDs
+		// (ULIDs) are guaranteed colon-free, which is what makes this
+		// unambiguous.
+		key := string(iter.Key())
+		rest := strings.TrimPrefix(key, "tag_idx:")
+		if idx := strings.LastIndex(rest, ":"); idx > 0 {
+			counts[rest[:idx]]++
+		}
+	}
+
+	result := make([]TagWithCount, 0, len(counts))
+	for tag, count := range counts {
+		result = append(result, TagWithCount{Tag: tag, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Tag < result[j].Tag
+	})
+	return result, nil
+}
+
+// CountTagsForBookIDs returns tag -> number of books in ids carrying it, from
+// ONE sequential scan of the tag_idx: keyspace (keys only, no JSON decode).
+// It is the large-set path for scoped tag facets: its cost is the number of
+// tag rows in the library, independent of len(ids), where
+// GetBookTagsByBookIDs pays one seek plus a JSON decode per tag row per book.
+// A nil or empty ids yields an empty map.
+func (p *PebbleStore) CountTagsForBookIDs(ids map[string]struct{}) (map[string]int, error) {
+	counts := make(map[string]int)
+	if len(ids) == 0 {
+		return counts, nil
+	}
+	prefix := []byte("tag_idx:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		// tag_idx:<tag>:<bookID>; the boundary is the LAST colon (tags may
+		// contain colons, book IDs never do) — same parse as ListAllTags.
+		rest := iter.Key()[len(prefix):]
+		idx := bytes.LastIndexByte(rest, ':')
+		if idx <= 0 {
+			continue
+		}
+		if _, ok := ids[string(rest[idx+1:])]; !ok {
+			continue
+		}
+		counts[string(rest[:idx])]++
+	}
+	return counts, iter.Error()
+}
+
+// GetBooksByTag returns all book IDs that have the given tag.
+func (p *PebbleStore) GetBooksByTag(tag string) ([]string, error) {
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return nil, fmt.Errorf("tag cannot be empty")
+	}
+
+	prefix := []byte(fmt.Sprintf("tag_idx:%s:", tag))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var bookIDs []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Key format: tag_idx:<tag>:<bookID>. A byte-prefix scan for
+		// "tag_idx:<tag>:" also matches longer tags sharing that prefix
+		// (e.g. tag="metadata" matches keys belonging to
+		// "metadata:source:audible" too), so every match must be
+		// re-validated: the segment before the LAST colon must equal the
+		// requested tag exactly, or the key belongs to a different
+		// (longer) tag and is skipped rather than mis-parsed into a fake
+		// bookID.
+		key := string(iter.Key())
+		rest := strings.TrimPrefix(key, "tag_idx:")
+		idx := strings.LastIndex(rest, ":")
+		if idx <= 0 || rest[:idx] != tag {
+			continue
+		}
+		bookIDs = append(bookIDs, rest[idx+1:])
+	}
+	return bookIDs, nil
+}
+
+// pebbleAddTag upserts a tag for any entity type. Serializes a
+// BookTag with the source field so it survives round-trips.
+func (p *PebbleStore) pebbleAddTag(ks pebbleTagKeyspace, entityID, tag, source string) error {
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+	if source == "" {
+		source = "user"
+	}
+	bt := BookTag{
+		BookID:    entityID, // reused as the generic entity ID
+		Tag:       tag,
+		Source:    source,
+		CreatedAt: time.Now(),
+	}
+	data, err := json.Marshal(bt)
+	if err != nil {
+		return err
+	}
+	primary := []byte(fmt.Sprintf("%s%s:%s", ks.tagPrefix, entityID, tag))
+	if err := p.db.Set(primary, data, pebble.Sync); err != nil {
+		return err
+	}
+	idx := []byte(fmt.Sprintf("%s%s:%s", ks.indexPrefix, tag, entityID))
+	return p.db.Set(idx, []byte{}, pebble.Sync)
+}
+
+func (p *PebbleStore) pebbleRemoveTag(ks pebbleTagKeyspace, entityID, tag string) error {
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+	primary := []byte(fmt.Sprintf("%s%s:%s", ks.tagPrefix, entityID, tag))
+	if err := p.db.Delete(primary, pebble.Sync); err != nil && err != pebble.ErrNotFound {
+		return err
+	}
+	idx := []byte(fmt.Sprintf("%s%s:%s", ks.indexPrefix, tag, entityID))
+	if err := p.db.Delete(idx, pebble.Sync); err != nil && err != pebble.ErrNotFound {
+		return err
+	}
+	return nil
+}
+
+func (p *PebbleStore) pebbleGetTags(ks pebbleTagKeyspace, entityID string) ([]string, error) {
+	prefix := []byte(fmt.Sprintf("%s%s:", ks.tagPrefix, entityID))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var tags []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		var bt BookTag
+		if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+			continue
+		}
+		tags = append(tags, bt.Tag)
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+func (p *PebbleStore) pebbleGetTagsDetailed(ks pebbleTagKeyspace, entityID string) ([]BookTag, error) {
+	prefix := []byte(fmt.Sprintf("%s%s:", ks.tagPrefix, entityID))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var out []BookTag
+	for iter.First(); iter.Valid(); iter.Next() {
+		var bt BookTag
+		if err := json.Unmarshal(iter.Value(), &bt); err != nil {
+			continue
+		}
+		if bt.Source == "" {
+			bt.Source = "user"
+		}
+		out = append(out, bt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Tag < out[j].Tag
+	})
+	return out, nil
+}
+
+func (p *PebbleStore) pebbleRemoveTagsByPrefix(ks pebbleTagKeyspace, entityID, prefix, source string) error {
+	prefix = util.NormalizeString(prefix)
+	if prefix == "" {
+		return fmt.Errorf("prefix cannot be empty")
+	}
+	detailed, err := p.pebbleGetTagsDetailed(ks, entityID)
+	if err != nil {
+		return err
+	}
+	for _, bt := range detailed {
+		if !strings.HasPrefix(bt.Tag, prefix) {
+			continue
+		}
+		if source != "" && bt.Source != source {
+			continue
+		}
+		if err := p.pebbleRemoveTag(ks, entityID, bt.Tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *PebbleStore) pebbleSetTags(ks pebbleTagKeyspace, entityID string, tags []string) error {
+	detailed, err := p.pebbleGetTagsDetailed(ks, entityID)
+	if err != nil {
+		return err
+	}
+	normalized := make(map[string]bool)
+	for _, t := range tags {
+		t = util.NormalizeString(t)
+		if t != "" {
+			normalized[t] = true
+		}
+	}
+	existingUser := make(map[string]bool)
+	for _, bt := range detailed {
+		if bt.Source == "user" || bt.Source == "" {
+			existingUser[bt.Tag] = true
+		}
+	}
+	for t := range existingUser {
+		if !normalized[t] {
+			if err := p.pebbleRemoveTag(ks, entityID, t); err != nil {
+				return err
+			}
+		}
+	}
+	for t := range normalized {
+		if !existingUser[t] {
+			if err := p.pebbleAddTag(ks, entityID, t, "user"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *PebbleStore) pebbleListAllTags(ks pebbleTagKeyspace) ([]TagWithCount, error) {
+	prefix := []byte(ks.indexPrefix)
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	counts := make(map[string]int)
+	for iter.First(); iter.Valid(); iter.Next() {
+		// Key format: <indexPrefix><tag>:<entityID>. Tags may themselves
+		// contain colons, so the tag/entityID boundary is the LAST colon —
+		// entityIDs (strconv.Itoa'd author/series IDs) are guaranteed
+		// colon-free.
+		key := string(iter.Key())
+		rest := strings.TrimPrefix(key, ks.indexPrefix)
+		if idx := strings.LastIndex(rest, ":"); idx > 0 {
+			counts[rest[:idx]]++
+		}
+	}
+
+	result := make([]TagWithCount, 0, len(counts))
+	for tag, count := range counts {
+		result = append(result, TagWithCount{Tag: tag, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Tag < result[j].Tag
+	})
+	return result, nil
+}
+
+func (p *PebbleStore) pebbleEntitiesByTag(ks pebbleTagKeyspace, tag string) ([]string, error) {
+	tag = util.NormalizeString(tag)
+	if tag == "" {
+		return nil, fmt.Errorf("tag cannot be empty")
+	}
+	prefix := []byte(fmt.Sprintf("%s%s:", ks.indexPrefix, tag))
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var ids []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		// A byte-prefix scan for "<indexPrefix><tag>:" also matches longer
+		// tags sharing that prefix (e.g. tag="metadata" matches keys
+		// belonging to "metadata:source:audible" too). Re-validate via the
+		// LAST colon: the segment before it must equal the requested tag
+		// exactly, or the key belongs to a different (longer) tag and must
+		// be skipped rather than returned as a garbage entity ID.
+		key := string(iter.Key())
+		rest := strings.TrimPrefix(key, ks.indexPrefix)
+		idx := strings.LastIndex(rest, ":")
+		if idx <= 0 || rest[:idx] != tag {
+			continue
+		}
+		if id := rest[idx+1:]; id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (p *PebbleStore) AddAuthorTagWithSource(authorID int, tag, source string) error {
+	return p.pebbleAddTag(authorTagKeyspace, strconv.Itoa(authorID), tag, source)
+}
+
+func (p *PebbleStore) RemoveAuthorTag(authorID int, tag string) error {
+	return p.pebbleRemoveTag(authorTagKeyspace, strconv.Itoa(authorID), tag)
+}
+
+func (p *PebbleStore) RemoveAuthorTagsByPrefix(authorID int, prefix, source string) error {
+	return p.pebbleRemoveTagsByPrefix(authorTagKeyspace, strconv.Itoa(authorID), prefix, source)
+}
+
+func (p *PebbleStore) GetAuthorTags(authorID int) ([]string, error) {
+	return p.pebbleGetTags(authorTagKeyspace, strconv.Itoa(authorID))
+}
+
+func (p *PebbleStore) GetAuthorTagsDetailed(authorID int) ([]BookTag, error) {
+	return p.pebbleGetTagsDetailed(authorTagKeyspace, strconv.Itoa(authorID))
+}
+
+func (p *PebbleStore) SetAuthorTags(authorID int, tags []string) error {
+	return p.pebbleSetTags(authorTagKeyspace, strconv.Itoa(authorID), tags)
+}
+
+func (p *PebbleStore) ListAllAuthorTags() ([]TagWithCount, error) {
+	return p.pebbleListAllTags(authorTagKeyspace)
+}
+
+func (p *PebbleStore) GetAuthorsByTag(tag string) ([]int, error) {
+	raw, err := p.pebbleEntitiesByTag(authorTagKeyspace, tag)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(raw))
+	for _, s := range raw {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			continue // skip malformed entries
+		}
+		ids = append(ids, n)
+	}
+	return ids, nil
+}
+
+func (p *PebbleStore) AddSeriesTagWithSource(seriesID int, tag, source string) error {
+	return p.pebbleAddTag(seriesTagKeyspace, strconv.Itoa(seriesID), tag, source)
+}
+
+func (p *PebbleStore) RemoveSeriesTag(seriesID int, tag string) error {
+	return p.pebbleRemoveTag(seriesTagKeyspace, strconv.Itoa(seriesID), tag)
+}
+
+func (p *PebbleStore) RemoveSeriesTagsByPrefix(seriesID int, prefix, source string) error {
+	return p.pebbleRemoveTagsByPrefix(seriesTagKeyspace, strconv.Itoa(seriesID), prefix, source)
+}
+
+func (p *PebbleStore) GetSeriesTags(seriesID int) ([]string, error) {
+	return p.pebbleGetTags(seriesTagKeyspace, strconv.Itoa(seriesID))
+}
+
+func (p *PebbleStore) GetSeriesTagsDetailed(seriesID int) ([]BookTag, error) {
+	return p.pebbleGetTagsDetailed(seriesTagKeyspace, strconv.Itoa(seriesID))
+}
+
+func (p *PebbleStore) SetSeriesTags(seriesID int, tags []string) error {
+	return p.pebbleSetTags(seriesTagKeyspace, strconv.Itoa(seriesID), tags)
+}
+
+func (p *PebbleStore) ListAllSeriesTags() ([]TagWithCount, error) {
+	return p.pebbleListAllTags(seriesTagKeyspace)
+}
+
+func (p *PebbleStore) GetSeriesByTag(tag string) ([]int, error) {
+	raw, err := p.pebbleEntitiesByTag(seriesTagKeyspace, tag)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(raw))
+	for _, s := range raw {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, n)
+	}
+	return ids, nil
+}

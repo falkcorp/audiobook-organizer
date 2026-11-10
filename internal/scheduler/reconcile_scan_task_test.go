@@ -1,5 +1,5 @@
 // file: internal/scheduler/reconcile_scan_task_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d9c6b18-2e57-4f03-a8b1-7c3e5d0f9a26
 // last-edited: 2026-11-09
 
@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/operations/childop/follow.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c2e9a41-5d3b-4f86-a0e7-1b9c6d4f2a58
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 // Package childop follows a child operation to a terminal status and tells the
 // parent when the child has shown signs of life, so the parent can feed its own
@@ -38,7 +38,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 

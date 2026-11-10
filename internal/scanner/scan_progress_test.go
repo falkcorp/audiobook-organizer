@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_progress_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5f2a9c14-8e63-4b07-a5d9-1c4e7b0f6a38
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 

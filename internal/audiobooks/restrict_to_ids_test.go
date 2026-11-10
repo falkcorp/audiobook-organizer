@@ -1,7 +1,7 @@
 // file: internal/audiobooks/restrict_to_ids_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d2f5b91-3ac6-4e18-b520-9f4e6c8a1d33
-// last-edited: 2026-08-25
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

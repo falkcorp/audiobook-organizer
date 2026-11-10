@@ -1,7 +1,7 @@
 // file: internal/dedup/manual_candidate_protection_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8c81c949-8a0f-4c52-9f6b-839b956d087d
-// last-edited: 2026-09-27
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 

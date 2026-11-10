@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_referenced_path_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3e0b9a-5c14-4f82-a6e7-2b9c41f8d035
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // cleanupFixture is a version group of three copies: 01 (the oldest library copy, the

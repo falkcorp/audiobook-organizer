@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/quarantine_chapter_artifacts.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 1d7a4f92-3c60-4e85-9b21-6a5e8c0d3f47
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 // Package dedup — op dedup.quarantine-chapter-artifacts.
 //
@@ -46,8 +46,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"

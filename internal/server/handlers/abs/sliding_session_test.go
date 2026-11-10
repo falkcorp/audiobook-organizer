@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/sliding_session_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e1047d7e-5e2b-4df6-aa64-51878f896f74
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package abs_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 

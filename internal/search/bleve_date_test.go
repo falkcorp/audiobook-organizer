@@ -1,7 +1,7 @@
 // file: internal/search/bleve_date_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5b81c3a-2d97-4f06-8a14-9c07d3f1b6e2
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package search
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // dateTestNow is the fixed instant the date index tests resolve relative terms

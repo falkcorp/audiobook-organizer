@@ -1,14 +1,14 @@
 // file: internal/operations/registry/external_id_reassigner_capability_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: edde5f04-bafb-4c86-bae9-d95e29a23481
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package registry
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

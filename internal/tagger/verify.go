@@ -1,7 +1,7 @@
 // file: internal/tagger/verify.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8d1b6a-5c47-4a92-b0f3-7d2a9c4e1f58
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 //
 // verify_after_write: the read-back every tag writer shares.
 //
@@ -21,8 +21,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )

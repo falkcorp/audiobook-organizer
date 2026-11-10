@@ -1,7 +1,7 @@
 // file: internal/server/search_coverage.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: ee9cc3d9-3925-4f72-af8a-e9f25a943fb9
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 //
 // Boot-time repair for a PARTIALLY built Bleve search index.
 //
@@ -46,7 +46,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // bookIDLister is the narrow capability this repair needs. Declared here

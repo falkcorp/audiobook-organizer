@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_blockers.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: ef5d7b19-e54c-4787-ba5b-cbc96add5858
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c2bb743-3521-45cf-8815-32a1bb927cca
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 //
 // Reconciles the Bleve search index against the DB after dropped updates.
 //
@@ -69,7 +69,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/search"

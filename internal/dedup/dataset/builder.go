@@ -1,7 +1,7 @@
 // file: internal/dedup/dataset/builder.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4a91c7e0-6d83-4b25-9f10-2c5a8e7d4b31
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 // Package dataset builds labeled dedup examples and runs deterministic catchers
 // over them. Pure: a store interface in, a database.LabeledExample out, no
@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

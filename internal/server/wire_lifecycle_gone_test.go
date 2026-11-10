@@ -1,7 +1,7 @@
 // file: internal/server/wire_lifecycle_gone_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2d9b6e84-1a3c-4f57-8e20-b7c5a41d9f63
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

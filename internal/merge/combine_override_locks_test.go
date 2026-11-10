@@ -1,14 +1,14 @@
 // file: internal/merge/combine_override_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f4a7e91-58c6-4b23-9d07-3e1b6c8a5d24
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package merge
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
@@ -465,7 +465,7 @@ func TestRepointBookFileRows_LiveAllowedHashMismatchStoresNewHash(t *testing.T) 
 
 // casRetryStore stands in for a ModifyBookFile whose compare-and-swap lost
 // rounds: the store re-runs the callback on a fresh copy of the row for every
-// lost round (internal/database/bookfile_cas.go), so a callback that does
+// lost round (internal/books/store/bookfile_cas.go), so a callback that does
 // anything but edit its argument runs more than once. extraRuns is how many
 // discarded runs happen before the one the write commits; conflict makes the
 // final write give up the way an exhausted retry budget does, after the

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_retry_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9d2f4b61-8a3e-4c07-b5d1-6e9a0c7f2b48
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

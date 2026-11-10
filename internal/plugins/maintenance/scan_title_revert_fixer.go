@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: beeafd36-1bf8-48f8-b62c-bd5e1be4135c
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"

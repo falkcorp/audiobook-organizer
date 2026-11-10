@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.3.2
+// version: 2.3.3
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_duplicateof_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3d81b47a-52e9-4c6f-9a13-8be07f2c65d1
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.52.1
+# version: 2.54.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-08
+# last-edited: 2026-11-09
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -66,6 +66,20 @@ DEPLOY_DB   ?=
 # ~/.ssh/config (Host/HostName) does not, so set DEPLOY_URL or API_URL then.
 DEPLOY_URL  ?= $(if $(API_URL),$(patsubst %/api/v1,%,$(patsubst %/,%,$(API_URL))),$(if $(DEPLOY_HOST),https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484))
 BACKUP_DIR  ?= $(CURDIR)/backups
+# Seconds scripts/deploy-wait-ready.sh waits for "ready":true after a restart,
+# counted from when the unit leaves `activating` (09 §9.4 R1): a first boot
+# that migrates stays activating while its steps extend the start timeout, and
+# that time is not counted. Raise it for a release whose first boot is slow
+# after it is serving (R2's runbook: the measured first-boot time).
+DEPLOY_READY_TIMEOUT ?= 300
+# The systemd unit the rollback recipes stop, start and watch. It, DEPLOY_BIN
+# and DEPLOY_DB must match the rollback helpers' config on the host
+# (/etc/audiobook-organizer/rollback.conf), which also holds the state
+# directory, the service user, the checkpoint directory and the archive
+# directory (docs/system/deploy-and-gpu-ops.md, "Rollback helpers").
+DEPLOY_UNIT ?= audiobook-organizer.service
+# The rollback guard (a variable so the recipe tests can run a mutated copy).
+ROLLBACK_GUARD ?= scripts/storage_format_guard.py
 
 # Generic build flags (owner decision D37). The committed Makefile owns these so
 # every Makefile build target, including `make build-linux` (and so every
@@ -517,7 +531,7 @@ mutate-matrix:
 ## Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3).
 ## Install with `make mockery-install`. Mockery v2.x cannot regenerate
 ## these mocks: it does not support merging multiple interfaces into one
-## shared output file (e.g. internal/database/mocks/mock_store.go), so
+## shared output file (e.g. internal/books/store/mocks/mock_store.go), so
 ## running an older/newer mockery binary here will silently corrupt or
 ## truncate that file. If `make mocks` produces a huge, repo-wide diff,
 ## you are running the wrong mockery version — check `mockery version`.
@@ -556,15 +570,15 @@ mocks-check: mockery-install
 
 ## (removed 2026-08-17) check-mock-fresh — deleted, not repaired. It claimed to
 ## catch a stale MockStore and could not: it ran `go generate
-## ./internal/database/...` in a repo with ZERO //go:generate directives (mocks
+## ./internal/books/store/...` in a repo with ZERO //go:generate directives (mocks
 ## come from .mockery.yaml), so the regeneration was a no-op and the following
-## `git diff --exit-code internal/database/mocks/` only ever detected a dirty
+## `git diff --exit-code internal/books/store/mocks/` only ever detected a dirty
 ## worktree. Measured: add a method to the Store interface and leave the mock
 ## alone — the exact drift the docstring named — and it printed "Mock is fresh"
 ## and exited 0. Its own error message told you to run `make generate`, a target
 ## that does not exist. Coverage lost by removing it: none. Store/mock
 ## divergence is a COMPILE error via the assertions at
-## internal/database/iface_assert.go:12 and internal/database/mock_store.go:30,
+## internal/books/store/iface_assert.go:12 and internal/books/store/mock_store.go:30,
 ## `vet` (a test-short prerequisite) runs over every package, and `mocks-check`
 ## below regenerates from .mockery.yaml and diffs. All three go red on that same
 ## mutation. Do not reintroduce this target; add cases to mocks-check instead.
@@ -980,53 +994,73 @@ backup:
 
 ## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
 #
-# Storage-format guard (docs/system/runbooks.md#storage-format-restore): the
-# swap happens only when the store's storage format (DEPLOY_DB.storage-format)
-# is not above the format DEPLOY_BIN.prev supports. Past a format change it
-# refuses, swaps nothing and prints the restore-from-checkpoint steps.
-# ROLLBACK_IGNORE_FORMAT=1 only covers an unreadable sidecar; it never
-# overrides a format change, and even then the guard refuses when the CURRENT
-# binary reports a format above .prev's.
-#
-# The sidecar and checkpoint record are read with `sudo -n cat` (the store's
-# parent directory belongs to the service user); `-n` fails at once instead
-# of waiting for a password no tty can type. Each ssh command's stderr is
-# captured and handed to the guard, so a refusal names its cause. The sudoers
-# lines this needs are in docs/system/deploy-and-gpu-ops.md.
-#
-# Unit type: before the swap, scripts/deploy-match-unit-type.sh asks .prev
-# for --print-capabilities. A .prev without sd_notify (any build older than
-# readiness notification) never sends READY=1, so under the Type=notify unit
-# systemd would kill it at TimeoutStartSec and restart it in a loop; the
-# script installs a Type=simple drop-in (zz-rollback-type-simple.conf) and
-# daemon-reloads first. The next deploy of a notify-capable binary removes it.
+# scripts/deploy_rollback.py rollback runs it; the decisions are the store
+# guard's (scripts/storage_format_guard.py; 05-storage §5S.3.7 "The
+# binary-swap guard"). Before anything is swapped it
+#   - reads the rollback helpers' config on the host and refuses unless it
+#     names DEPLOY_BIN, DEPLOY_DB and DEPLOY_UNIT;
+#   - refuses while a restore or reset swap is in flight (the in-flight
+#     probe, shared with rollback-restore, no override); a pending intent
+#     passes, because the older build rejects it;
+#   - compares the store's levels (DEPLOY_DB.storage-levels) with what
+#     DEPLOY_BIN.prev serves (--print-storage-levels; an R0 binary falls back
+#     to --print-storage-format) and refuses when any owner's store level is
+#     above .prev's, naming `make rollback-restore`. Only a store no core
+#     build opened (no levels file and no checkpoint pointer) keeps HEAD's
+#     projection rule; ROLLBACK_IGNORE_FORMAT=1 only covers an unreadable
+#     projection sidecar, never levels and never the probe.
+# Then it matches the unit type to .prev, reads the unit's InvocationID,
+# installs .prev atomically and restarts. The wait refuses "ready" until the
+# unit has a new InvocationID: a restart that never ran leaves the old
+# process ready on /health. A restart sudo refuses fails at once.
+# Privileged steps go through the root-owned rollback helpers, each granted
+# in the deploy user's sudoers drop-in (docs/system/deploy-and-gpu-ops.md).
 .PHONY: rollback
 rollback:
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
-	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
-	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
-	@errs=$$(mktemp -d) && trap 'rm -rf "$$errs"' EXIT; \
-	  prev_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN).prev --print-storage-format' 2>"$$errs/prev"); \
-	  current_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN) --print-storage-format' 2>"$$errs/current"); \
-	  sidecar=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).storage-format' 2>"$$errs/sidecar"); \
-	  checkpoint=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).migration-checkpoint' 2>"$$errs/checkpoint"); \
-	  ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 scripts/storage_format_guard.py \
-	    --db="$(DEPLOY_DB)" --bin="$(DEPLOY_BIN)" \
-	    --prev="$$prev_fmt" --prev-err="$$(cat "$$errs/prev")" \
-	    --current="$$current_fmt" --current-err="$$(cat "$$errs/current")" \
-	    --sidecar="$$sidecar" --sidecar-err="$$(cat "$$errs/sidecar")" \
-	    --checkpoint="$$checkpoint" --checkpoint-err="$$(cat "$$errs/checkpoint")"
-	@echo "→ Matching the service type to $(DEPLOY_BIN).prev..."
-	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) $(DEPLOY_BIN).prev
-	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
-	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
-	  sudo systemctl restart audiobook-organizer.service'
-	@echo "→ Restarted on the previous binary; waiting for /health to report ready (up to 300s)..."
-	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) 300 || (echo "ERROR: the swap and restart are done, but the server did not report ready. A previous binary older than readiness reporting has no ready field; check it by hand."; exit 1)
-	@echo "✅ Rolled back $(DEPLOY_BIN) to previous version and restarted."
+	@ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 scripts/deploy_rollback.py rollback \
+	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)"
+
+## rollback-restore: Restore the pre-upgrade checkpoint (or ROLLBACK_ARCHIVE=<file name in the helpers' archive_dir>) with the current binary, then reinstall .prev and start (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL as for rollback)
+#
+# The rollback of a release whose boot ran a level step (R2), where a binary
+# swap is refused (05-storage §5S.3.12 row `make rollback-restore`, 09 §9.2.1
+# "Rollback"). scripts/deploy_rollback.py restore runs it:
+#   1. RELEASE set: refuse. Fetching a named release is F8's
+#      `updater fetch-release`, which this build does not have.
+#   2. Read-only checks while the service still runs, so a refusal leaves it
+#      running: the helpers' config, DEPLOY_BIN.prev exists, the in-flight
+#      probe, the source (the latest restorable checkpoint's from_vector, or
+#      the levels of the archived store, read from a scratch copy the helper
+#      extracts and deletes as the service user), and DEPLOY_BIN.prev
+#      --print-storage-levels, which must EQUAL the source's levels.
+#   3. Match the unit type to .prev and read the InvocationID, still before
+#      the stop.
+#   4. Stop the unit; check it stays stopped; probe again.
+#   5. The CURRENT binary's storage restore-offline --accept-loss through the
+#      restore-offline helper: as the service user, in a transient unit that
+#      outlives a dropped connection. Its swap lock refuses while a service
+#      is running or starting; nothing retries it.
+#   6. Check the unit stayed stopped; install .prev atomically; start; wait
+#      as rollback does.
+# Every failure after a change says what state the host is in and prints the
+# commands that finish or undo the rollback. The unit is not masked
+# (systemctl mask refuses a unit file installed in /etc/systemd/system).
+.PHONY: rollback-restore
+rollback-restore:
+	@[ -z "$(RELEASE)" ] || (echo "ERROR: RELEASE=$(RELEASE): fetching a named release needs F8's updater fetch-release, which this build does not have. Install that release's binary as $(DEPLOY_BIN).prev on $(DEPLOY_HOST) by hand, then run make rollback-restore without RELEASE."; exit 1)
+	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
+	@python3 scripts/deploy_rollback.py restore \
+	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
+	  --archive="$(ROLLBACK_ARCHIVE)"
 
 # Quick aliases
 .PHONY: t c b v

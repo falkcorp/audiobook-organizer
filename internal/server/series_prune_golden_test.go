@@ -1,7 +1,7 @@
 // file: internal/server/series_prune_golden_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f0e3653a-d221-478a-89b2-2d7da58ed8af
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The series prune's per-group merge and per-orphan delete were extracted

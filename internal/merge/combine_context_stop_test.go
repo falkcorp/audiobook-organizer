@@ -1,7 +1,7 @@
 // file: internal/merge/combine_context_stop_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d0c4e19-b2a6-4f83-9a15-e6c1d8f3a057
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // cancelAfterBulkMoveStore applies MoveBookFilesToBookBulk for real and then

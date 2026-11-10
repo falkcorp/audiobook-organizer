@@ -1,7 +1,7 @@
 // file: internal/ai/dedup_review_aijobs_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7f3c4a8d-9b2e-4f6a-8c1d-2e5f9a1b3c7d
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package ai
 
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

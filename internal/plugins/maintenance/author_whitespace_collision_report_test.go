@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_whitespace_collision_report_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 153134ba-aa4f-4a82-ae54-9e54490af6c5
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

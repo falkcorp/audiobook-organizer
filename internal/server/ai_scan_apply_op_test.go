@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

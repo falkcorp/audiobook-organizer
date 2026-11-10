@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle_scoped_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: cc0f61e4-02a1-4f7d-b22f-ec410f2ddc4a
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )

@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 //
 // Registers identification.advance (spec 02 PR 14): the v2 ADAPTER around
 // the v3-shaped driver body in internal/identification.
@@ -20,8 +20,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/identification"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"

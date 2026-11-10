@@ -1,7 +1,7 @@
 // file: internal/activity/service_unit_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 33be7b20-e994-4c24-9017-3f20f6ea2fe4
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package activity
 
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

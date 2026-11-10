@@ -1,7 +1,7 @@
 // file: internal/dedup/ann_reconcile_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b41e9a6b-d62b-4ab5-97f2-4498e245117b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

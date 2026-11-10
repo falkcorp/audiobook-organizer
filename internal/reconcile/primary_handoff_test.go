@@ -1,7 +1,7 @@
 // file: internal/reconcile/primary_handoff_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7b3e9c50-2a64-4d18-8f71-c5a0d2e6b394
-// last-edited: 2026-10-05
+// last-edited: 2026-11-09
 
 package reconcile
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )

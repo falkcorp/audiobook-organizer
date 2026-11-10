@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_unit_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f1a2b3c4-d5e6-7890-abcd-1234567890ab
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

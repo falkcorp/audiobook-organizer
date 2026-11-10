@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_fallback_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ea9f0acf-53b5-4342-885a-5843289a5fa7
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

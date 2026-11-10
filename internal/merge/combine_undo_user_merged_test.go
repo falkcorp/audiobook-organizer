@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_user_merged_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c4d1e07-2f65-4b93-a0d8-51e7b3c96a24
-// last-edited: 2026-10-23
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // A book merge carried a user's progress; then an admin merged that user's

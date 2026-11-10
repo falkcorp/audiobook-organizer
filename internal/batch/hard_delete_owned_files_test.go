@@ -1,7 +1,7 @@
 // file: internal/batch/hard_delete_owned_files_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b8e2d71-3c94-4a06-9f1d-7e2a60c4b839
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package batch
 
@@ -14,7 +14,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ownedFilesFixture is a version group with a listed book ("keep") and the

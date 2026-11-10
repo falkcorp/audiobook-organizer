@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_deferred_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 50ced779-c827-4b62-93cb-f6b631d3a60b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

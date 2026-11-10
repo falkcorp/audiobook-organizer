@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize_watchdog_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e1f8c3a-9b27-4d60-a4c8-3d6b2f9e7a15
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )

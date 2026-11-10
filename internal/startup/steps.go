@@ -1,7 +1,7 @@
 // file: internal/startup/steps.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 // Package startup holds the one reviewed table that says, for every step of
 // server startup, whether its failure stops the process (Fatal) or leaves the
@@ -80,7 +80,7 @@ const (
 // Where each step lives (verified 2026-11-08):
 //   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133; run in books.Options
 //   - guardAgainstKeyRegeneration: internal/books/boot.go guardAgainstKeyRegeneration; run in books' Register (bootSettings)
-//   - initEncryption:              database.InitEncryption, internal/database/settings.go:109
+//   - initEncryption:              database.InitEncryption, internal/books/store/settings.go:109
 //   - loadConfigFromDB:            config.LoadConfigFromDatabase, internal/config/persistence.go:698
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
 //   - settingsWrites:              internal/books/module.go (*booksModule).startRepairs (deferredSettings.apply)

@@ -1,7 +1,7 @@
 // file: internal/metafetch/ensure_library_copy_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2a7b6c31-8e94-4f52-9d0a-6c1e5b83f742
-// last-edited: 2026-11-08
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // ensureLibraryCopy is the third caller that moved audio into the library

@@ -1,7 +1,7 @@
 // file: internal/undo/author_delete_preflight_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7c2e94-5d31-4f8a-9e26-c3a1d8f47b05
-// last-edited: 2026-10-25
+// last-edited: 2026-11-09
 
 package undo
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // legacyNameStore is a ConflictChecker for one author delete row. Its name index

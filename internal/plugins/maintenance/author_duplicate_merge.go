@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"

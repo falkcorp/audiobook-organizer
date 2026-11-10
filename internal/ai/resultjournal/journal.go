@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 10003ffd-5d00-48b1-865a-37ac9f9ae826
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Package resultjournal is a durable, content-keyed cache of finished AI
 // results (whisper transcripts first; LLM results later). It exists so a
@@ -41,7 +41,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

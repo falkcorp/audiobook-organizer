@@ -1,15 +1,15 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
-// last-edited: 2026-10-06
+// last-edited: 2026-11-09
 
 package scanner
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbmocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 )
 
 // TestExtractInfoFromPath_ChapterFilesAndNoSeriesFromPrefix is task E on the

@@ -6,7 +6,7 @@ package audiobooksmocks
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -47,7 +47,7 @@ func (_m *MockChangelogService) EXPECT() *MockChangelogService_Expecter {
 }
 
 // GetBookChangelog provides a mock function for the type MockChangelogService
-func (_mock *MockChangelogService) GetBookChangelog(bookID string, mayRead func(*database.OperationChange) bool) ([]activity.ChangeLogEntry, error) {
+func (_mock *MockChangelogService) GetBookChangelog(bookID string, mayRead func(*store.OperationChange) bool) ([]activity.ChangeLogEntry, error) {
 	ret := _mock.Called(bookID, mayRead)
 
 	if len(ret) == 0 {
@@ -56,17 +56,17 @@ func (_mock *MockChangelogService) GetBookChangelog(bookID string, mayRead func(
 
 	var r0 []activity.ChangeLogEntry
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, func(*database.OperationChange) bool) ([]activity.ChangeLogEntry, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, func(*store.OperationChange) bool) ([]activity.ChangeLogEntry, error)); ok {
 		return returnFunc(bookID, mayRead)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, func(*database.OperationChange) bool) []activity.ChangeLogEntry); ok {
+	if returnFunc, ok := ret.Get(0).(func(string, func(*store.OperationChange) bool) []activity.ChangeLogEntry); ok {
 		r0 = returnFunc(bookID, mayRead)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]activity.ChangeLogEntry)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, func(*database.OperationChange) bool) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(string, func(*store.OperationChange) bool) error); ok {
 		r1 = returnFunc(bookID, mayRead)
 	} else {
 		r1 = ret.Error(1)
@@ -81,20 +81,20 @@ type MockChangelogService_GetBookChangelog_Call struct {
 
 // GetBookChangelog is a helper method to define mock.On call
 //   - bookID string
-//   - mayRead func(*database.OperationChange) bool
+//   - mayRead func(*store.OperationChange) bool
 func (_e *MockChangelogService_Expecter) GetBookChangelog(bookID any, mayRead any) *MockChangelogService_GetBookChangelog_Call {
 	return &MockChangelogService_GetBookChangelog_Call{Call: _e.mock.On("GetBookChangelog", bookID, mayRead)}
 }
 
-func (_c *MockChangelogService_GetBookChangelog_Call) Run(run func(bookID string, mayRead func(*database.OperationChange) bool)) *MockChangelogService_GetBookChangelog_Call {
+func (_c *MockChangelogService_GetBookChangelog_Call) Run(run func(bookID string, mayRead func(*store.OperationChange) bool)) *MockChangelogService_GetBookChangelog_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 func(*database.OperationChange) bool
+		var arg1 func(*store.OperationChange) bool
 		if args[1] != nil {
-			arg1 = args[1].(func(*database.OperationChange) bool)
+			arg1 = args[1].(func(*store.OperationChange) bool)
 		}
 		run(
 			arg0,
@@ -109,7 +109,7 @@ func (_c *MockChangelogService_GetBookChangelog_Call) Return(changeLogEntrys []a
 	return _c
 }
 
-func (_c *MockChangelogService_GetBookChangelog_Call) RunAndReturn(run func(bookID string, mayRead func(*database.OperationChange) bool) ([]activity.ChangeLogEntry, error)) *MockChangelogService_GetBookChangelog_Call {
+func (_c *MockChangelogService_GetBookChangelog_Call) RunAndReturn(run func(bookID string, mayRead func(*store.OperationChange) bool) ([]activity.ChangeLogEntry, error)) *MockChangelogService_GetBookChangelog_Call {
 	_c.Call.Return(run)
 	return _c
 }

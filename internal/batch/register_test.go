@@ -1,6 +1,6 @@
 // file: internal/batch/register_test.go
-// version: 1.1.2
-// last-edited: 2026-11-08
+// version: 1.1.3
+// last-edited: 2026-11-09
 
 package batch_test
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 

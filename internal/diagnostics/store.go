@@ -1,14 +1,14 @@
 // file: internal/diagnostics/store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2a8c4f61-5b07-4d39-8e15-9c0b6a3e7d21
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package diagnostics
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The store surface this package needs, measured with an empty-interface

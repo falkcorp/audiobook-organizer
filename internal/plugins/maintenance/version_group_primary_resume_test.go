@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_resume_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e9a1c37-5b2d-4f86-a0e3-8c71d2b9f564
-// last-edited: 2026-10-01
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_folder_scope_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c41e0d2-93ab-4f58-b6a1-0e5d28c9f347
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

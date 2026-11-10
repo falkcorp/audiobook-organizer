@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/add_short_skip.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: c99b33b9-4a04-4018-835a-6605dd438591
-# last-edited: 2026-10-20
+# last-edited: 2026-11-09
 
 """Add `if testing.Short() { t.Skip(...) }` to the top of every TestProp_*
 function in the listed slow property-test files. Idempotent — re-runs leave
@@ -20,7 +20,7 @@ import re
 import sys
 
 SLOW_FILES = [
-    "internal/database/pebble_store_prop_test.go",
+    "internal/books/store/pebble_store_prop_test.go",
     "internal/server/audiobook_service_prop_test.go",
     "internal/server/dedup_engine_prop_test.go",
     "internal/server/playlist_evaluator_prop_test.go",

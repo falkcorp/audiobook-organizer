@@ -1,7 +1,7 @@
 // file: internal/search/index_builder_relations_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1eddba97-38b6-4647-aaf6-6012f7a3c758
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package search
 
@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestBookToDocWithRelations_MatchesBookToDoc: the batch path must

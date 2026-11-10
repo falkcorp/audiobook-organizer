@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner_stop_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: c8ee28eb-1a14-43aa-9e77-8473ae796708
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package registry
 
@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_id_filters_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: de1c4eca-5371-4c44-9c6e-8a7d61b37aeb
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 // Regression tests for author_id / series_id surviving a search, and for
 // author_id + series_id intersecting instead of author winning.
@@ -34,8 +34,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

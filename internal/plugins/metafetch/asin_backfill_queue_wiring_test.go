@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill_queue_wiring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b1e8c37-2f04-4d9a-8e6b-c03a71f2d945
-// last-edited: 2026-10-02
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

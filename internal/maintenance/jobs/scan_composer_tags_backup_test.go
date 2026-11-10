@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags_backup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cefa0c9d-7187-413d-ad0b-faa8afc3f0f4
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package jobs_test
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	taglib "go.senan.xyz/taglib"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 )
 

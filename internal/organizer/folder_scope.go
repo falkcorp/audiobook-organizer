@@ -1,7 +1,7 @@
 // file: internal/organizer/folder_scope.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3e8a51c7-2b94-4d06-a7f3-9c1d60e4b825
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 

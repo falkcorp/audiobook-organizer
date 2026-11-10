@@ -1,7 +1,7 @@
 // file: internal/merge/merge_carry_followups_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d83771a3-8e26-4d42-94a4-742624eb59ee
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package merge
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Review follow-ups to #3777 (merge-state carry).

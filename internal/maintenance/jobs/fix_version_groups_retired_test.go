@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups_retired_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3c1b57-4a92-4d06-b7f1-2c5d9a60e417
-// last-edited: 2026-10-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // vgRetireRowOnto creates a row for path under a fresh shell book and retires it

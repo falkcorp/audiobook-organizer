@@ -1,7 +1,7 @@
 // file: internal/openlibrary/store.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package openlibrary
 
@@ -20,7 +20,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 

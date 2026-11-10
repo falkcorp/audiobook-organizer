@@ -1,7 +1,7 @@
 // file: internal/server/candidate_feedback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f919198-8b0e-41f4-886a-3bc7515e7ddb
-// last-edited: 2026-10-07
+// last-edited: 2026-11-09
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_transfer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d3f2a90-5c1e-4b86-9a47-e0b8c4d1f259
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package merge
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

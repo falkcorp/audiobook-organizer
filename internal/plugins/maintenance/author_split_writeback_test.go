@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestAuthorSplit_WritesFreshAuthorNotStaleOrNil proves the composite-author

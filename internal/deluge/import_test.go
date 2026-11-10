@@ -1,7 +1,7 @@
 // file: internal/deluge/import_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 //
 // Tests for ImportToLibrary in internal/deluge/import.go.
 
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // fakeDelugStore is a minimal database.Store for import tests.

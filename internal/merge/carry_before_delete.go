@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package merge
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

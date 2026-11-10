@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"

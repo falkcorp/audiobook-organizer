@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/helpers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 83b0b0e7-6219-4470-952a-df087898cae5
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package opsv3
 
@@ -21,7 +21,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )

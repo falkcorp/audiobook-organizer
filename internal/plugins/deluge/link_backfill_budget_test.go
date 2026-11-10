@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_budget_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b1e9d34-0c7a-4f52-a8d3-5e72c9b04f81
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 )

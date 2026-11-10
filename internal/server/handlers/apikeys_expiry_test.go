@@ -1,7 +1,7 @@
 // file: internal/server/handlers/apikeys_expiry_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4c8e2a17-9b3d-4f61-8a05-d7e2c9b14f38
-// last-edited: 2026-11-05
+// last-edited: 2026-11-09
 
 package handlers_test
 
@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )

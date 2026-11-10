@@ -1,7 +1,7 @@
 // file: internal/operations/registry/zombie_v3_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b2d29b34-41c4-40f1-93e1-3d616e6251bc
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -26,7 +26,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )

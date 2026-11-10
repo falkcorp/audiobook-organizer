@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_owner_redeemer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0d83e6-4c19-47aa-9f52-e1a7c60d3b84
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

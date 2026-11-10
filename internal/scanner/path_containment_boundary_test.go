@@ -1,7 +1,7 @@
 // file: internal/scanner/path_containment_boundary_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e6f1a3c8-5d24-4b07-9a6e-3c8b2f7d10a5
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // saveBookToDatabase decides "is this copy in the library" from RootDir in four

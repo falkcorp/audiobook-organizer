@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_heavyfilter_sort_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ea41b5f4-dba5-4cb7-b067-2498e7aa707c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -10,7 +10,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

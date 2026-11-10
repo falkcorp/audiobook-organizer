@@ -1,7 +1,7 @@
 // file: internal/deluge/swap_notify_dir_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77a49ce3-e2ba-4ba9-8abf-c142385b4ace
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 //
 // A version swap must send Deluge the folder each torrent's files live in:
 // the book folder for the entering version, its .versions/{id} slot for the
@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type moveCall struct {

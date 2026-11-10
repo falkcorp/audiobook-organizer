@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"

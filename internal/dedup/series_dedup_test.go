@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package dedup
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

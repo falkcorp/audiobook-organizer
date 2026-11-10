@@ -1,7 +1,7 @@
 // file: core/archtest/core_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bae86fdb-f804-4079-b250-514259741720
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package archtest
 
@@ -111,7 +111,7 @@ func TestCoreImportsOnlyCore(t *testing.T) {
 	// Positive control: the same scan flags an app import in a test file.
 	fake := map[string]*Package{corePath + "/x": {
 		ImportPath:  corePath + "/x",
-		TestImports: []string{"github.com/falkcorp/audiobook-organizer/internal/database"},
+		TestImports: []string{"github.com/falkcorp/audiobook-organizer/internal/books/store"},
 	}}
 	if got := outsideCore(fake, nil); len(got) != 1 {
 		t.Fatalf("control: an app import in a test file was not flagged: %v", got)

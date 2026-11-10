@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-11-07
+// last-edited: 2026-11-09
 
 package operations
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"

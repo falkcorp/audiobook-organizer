@@ -1,7 +1,7 @@
 // file: internal/organizer/apply_failure.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8a2d64f1-0c53-4b97-91ae-63f7c0d5b284
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 // Durable per-book failure records for the metadata apply pipeline's rename
 // phase.
@@ -50,7 +50,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 

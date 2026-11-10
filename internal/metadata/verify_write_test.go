@@ -1,7 +1,7 @@
 // file: internal/metadata/verify_write_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2f6a8d13-4c79-4b05-8e1a-96d0b3f7c524
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package metadata
 
@@ -12,8 +12,8 @@ import (
 	"sort"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"

@@ -1,7 +1,7 @@
 // file: internal/metafetch/rejected_candidates_crosssource_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d1f7c3a-8e2b-4a96-b0c4-3e7a9d6f2b18
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

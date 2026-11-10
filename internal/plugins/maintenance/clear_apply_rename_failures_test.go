@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d5b2e09-3f41-4c86-95a2-0be7143d8c66
-// last-edited: 2026-09-07
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 

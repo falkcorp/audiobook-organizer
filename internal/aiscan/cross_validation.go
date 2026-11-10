@@ -1,12 +1,12 @@
 // file: internal/aiscan/cross_validation.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d0e6f2a4-7b8c-9d0e-1f2a-3b4c5d6e7f8a
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // CrossValidate compares groups scan suggestions against full scan suggestions.

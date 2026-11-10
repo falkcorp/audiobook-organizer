@@ -1,15 +1,15 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package merge
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dbtest "github.com/falkcorp/audiobook-organizer/internal/books/store/storetest"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	ulid "github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"

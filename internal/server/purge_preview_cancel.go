@@ -1,7 +1,7 @@
 // file: internal/server/purge_preview_cancel.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ad206e0f-d077-4aec-b3da-08af104ee0c5
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"

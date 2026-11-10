@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 // dedup.run-all is the Review page's one-button "Find all duplicates" run: every
 // duplicate check, in order, as ONE server-side operation. Until 2026-09-28 the
@@ -116,8 +116,8 @@ import (
 	"strings"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

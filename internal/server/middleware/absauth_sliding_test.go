@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_sliding_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 23a1f237-1dc7-4ba6-b00b-fd8d85b71221
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package middleware
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 )

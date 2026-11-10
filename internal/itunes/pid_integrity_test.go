@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package itunes
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // pidCensusMock is a minimal PIDIntegrityStore: a flat book_file list plus a

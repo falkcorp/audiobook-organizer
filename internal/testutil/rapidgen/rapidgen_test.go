@@ -1,5 +1,5 @@
 // file: internal/testutil/rapidgen/rapidgen_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2931b48a-8535-4f2a-a455-cf322f99cea5
 
 package rapidgen
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"pgregory.net/rapid"
 )

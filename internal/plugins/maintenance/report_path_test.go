@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/report_path_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b7314ebb-e6db-49d3-af82-37738df6214a
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/stretchr/testify/require"
 )

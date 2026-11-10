@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_timings_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2f6a9d13-4c85-4e7b-9b20-6d1e8a3c5f47
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

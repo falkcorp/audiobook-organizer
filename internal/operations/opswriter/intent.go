@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/intent.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fe6fcac0-ca20-4243-81b3-c0efd1ca5d30
-// last-edited: 2026-10-13
+// last-edited: 2026-11-09
 
 package opswriter
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // IntentStore is the write-ahead surface (database.OpsV3AuxStore's intents).

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combine_journal_check.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b7d4e91-6c35-4a08-9f12-8d0a5e3c7b64
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

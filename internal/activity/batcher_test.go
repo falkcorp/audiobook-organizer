@@ -1,7 +1,7 @@
 // file: internal/activity/batcher_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a8b2c1d-5e9f-4a3b-b7c8-1d2e4f6a8b0c
-// last-edited: 2026-09-02
+// last-edited: 2026-11-09
 
 package activity
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // drainAll collects up to n entries from ch, waiting at most timeout each time.

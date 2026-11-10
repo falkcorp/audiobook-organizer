@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_import_roots_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9e4b27c1-5a3d-4f80-b6c2-0d7e18a9f354
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )

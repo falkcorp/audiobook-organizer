@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9b3d1f57-4c20-4e8a-bf16-2a7e9c5d013a
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"

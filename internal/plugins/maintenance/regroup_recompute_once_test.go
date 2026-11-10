@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_recompute_once_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1459a1bf-2291-48b5-9eaa-be04214b421c
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 

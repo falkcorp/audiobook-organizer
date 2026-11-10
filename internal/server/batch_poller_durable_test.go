@@ -1,7 +1,7 @@
 // file: internal/server/batch_poller_durable_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: fe113f87-b567-440e-8ec1-63022b2e72db
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/ai/aijobs"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

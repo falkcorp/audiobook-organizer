@@ -5,7 +5,7 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	mock "github.com/stretchr/testify/mock"
@@ -48,26 +48,26 @@ func (_m *MockOrganizeServicer) EXPECT() *MockOrganizeServicer_Expecter {
 }
 
 // CreateOrganizedVersion provides a mock function for the type MockOrganizeServicer
-func (_mock *MockOrganizeServicer) CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error) {
+func (_mock *MockOrganizeServicer) CreateOrganizedVersion(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error) {
 	ret := _mock.Called(book, landing, operationID, log)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateOrganizedVersion")
 	}
 
-	var r0 *database.Book
+	var r0 *store.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*database.Book, *organizer.Landing, string, logger.Logger) (*database.Book, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Book, *organizer.Landing, string, logger.Logger) (*store.Book, error)); ok {
 		return returnFunc(book, landing, operationID, log)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*database.Book, *organizer.Landing, string, logger.Logger) *database.Book); ok {
+	if returnFunc, ok := ret.Get(0).(func(*store.Book, *organizer.Landing, string, logger.Logger) *store.Book); ok {
 		r0 = returnFunc(book, landing, operationID, log)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*database.Book)
+			r0 = ret.Get(0).(*store.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*database.Book, *organizer.Landing, string, logger.Logger) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*store.Book, *organizer.Landing, string, logger.Logger) error); ok {
 		r1 = returnFunc(book, landing, operationID, log)
 	} else {
 		r1 = ret.Error(1)
@@ -81,7 +81,7 @@ type MockOrganizeServicer_CreateOrganizedVersion_Call struct {
 }
 
 // CreateOrganizedVersion is a helper method to define mock.On call
-//   - book *database.Book
+//   - book *store.Book
 //   - landing *organizer.Landing
 //   - operationID string
 //   - log logger.Logger
@@ -89,11 +89,11 @@ func (_e *MockOrganizeServicer_Expecter) CreateOrganizedVersion(book any, landin
 	return &MockOrganizeServicer_CreateOrganizedVersion_Call{Call: _e.mock.On("CreateOrganizedVersion", book, landing, operationID, log)}
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Run(run func(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Run(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 *database.Book
+		var arg0 *store.Book
 		if args[0] != nil {
-			arg0 = args[0].(*database.Book)
+			arg0 = args[0].(*store.Book)
 		}
 		var arg1 *organizer.Landing
 		if args[1] != nil {
@@ -117,18 +117,18 @@ func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Run(run func(book *d
 	return _c
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Return(book1 *database.Book, err error) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Return(book1 *store.Book, err error) *MockOrganizeServicer_CreateOrganizedVersion_Call {
 	_c.Call.Return(book1, err)
 	return _c
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) RunAndReturn(run func(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) RunAndReturn(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // OrganizeOneBook provides a mock function for the type MockOrganizeServicer
-func (_mock *MockOrganizeServicer) OrganizeOneBook(org *organizer.Organizer, book *database.Book, log logger.Logger) (*organizer.Landing, error) {
+func (_mock *MockOrganizeServicer) OrganizeOneBook(org *organizer.Organizer, book *store.Book, log logger.Logger) (*organizer.Landing, error) {
 	ret := _mock.Called(org, book, log)
 
 	if len(ret) == 0 {
@@ -137,17 +137,17 @@ func (_mock *MockOrganizeServicer) OrganizeOneBook(org *organizer.Organizer, boo
 
 	var r0 *organizer.Landing
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(*organizer.Organizer, *database.Book, logger.Logger) (*organizer.Landing, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(*organizer.Organizer, *store.Book, logger.Logger) (*organizer.Landing, error)); ok {
 		return returnFunc(org, book, log)
 	}
-	if returnFunc, ok := ret.Get(0).(func(*organizer.Organizer, *database.Book, logger.Logger) *organizer.Landing); ok {
+	if returnFunc, ok := ret.Get(0).(func(*organizer.Organizer, *store.Book, logger.Logger) *organizer.Landing); ok {
 		r0 = returnFunc(org, book, log)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*organizer.Landing)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(*organizer.Organizer, *database.Book, logger.Logger) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(*organizer.Organizer, *store.Book, logger.Logger) error); ok {
 		r1 = returnFunc(org, book, log)
 	} else {
 		r1 = ret.Error(1)
@@ -162,21 +162,21 @@ type MockOrganizeServicer_OrganizeOneBook_Call struct {
 
 // OrganizeOneBook is a helper method to define mock.On call
 //   - org *organizer.Organizer
-//   - book *database.Book
+//   - book *store.Book
 //   - log logger.Logger
 func (_e *MockOrganizeServicer_Expecter) OrganizeOneBook(org any, book any, log any) *MockOrganizeServicer_OrganizeOneBook_Call {
 	return &MockOrganizeServicer_OrganizeOneBook_Call{Call: _e.mock.On("OrganizeOneBook", org, book, log)}
 }
 
-func (_c *MockOrganizeServicer_OrganizeOneBook_Call) Run(run func(org *organizer.Organizer, book *database.Book, log logger.Logger)) *MockOrganizeServicer_OrganizeOneBook_Call {
+func (_c *MockOrganizeServicer_OrganizeOneBook_Call) Run(run func(org *organizer.Organizer, book *store.Book, log logger.Logger)) *MockOrganizeServicer_OrganizeOneBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *organizer.Organizer
 		if args[0] != nil {
 			arg0 = args[0].(*organizer.Organizer)
 		}
-		var arg1 *database.Book
+		var arg1 *store.Book
 		if args[1] != nil {
-			arg1 = args[1].(*database.Book)
+			arg1 = args[1].(*store.Book)
 		}
 		var arg2 logger.Logger
 		if args[2] != nil {
@@ -196,7 +196,7 @@ func (_c *MockOrganizeServicer_OrganizeOneBook_Call) Return(landing *organizer.L
 	return _c
 }
 
-func (_c *MockOrganizeServicer_OrganizeOneBook_Call) RunAndReturn(run func(org *organizer.Organizer, book *database.Book, log logger.Logger) (*organizer.Landing, error)) *MockOrganizeServicer_OrganizeOneBook_Call {
+func (_c *MockOrganizeServicer_OrganizeOneBook_Call) RunAndReturn(run func(org *organizer.Organizer, book *store.Book, log logger.Logger) (*organizer.Landing, error)) *MockOrganizeServicer_OrganizeOneBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

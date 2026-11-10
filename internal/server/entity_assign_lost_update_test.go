@@ -1,14 +1,14 @@
 // file: internal/server/entity_assign_lost_update_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 878f4dbf-a0fb-4112-be16-7ed225a85aa6
-// last-edited: 2026-09-14
+// last-edited: 2026-11-09
 
 package server
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestAssignPublisherPreservingRecord_DoesNotRevertConcurrentColumns pins the

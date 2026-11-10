@@ -1,8 +1,8 @@
 #!/bin/bash
 # file: scripts/setup-mockery.sh
-# version: 1.6.0
+# version: 1.6.1
 # guid: c3d4e5f6-a7b8-9012-cdef-345678901abc
-# last-edited: 2026-10-10
+# last-edited: 2026-11-09
 
 # Setup script for integrating mockery v3 into the project.
 #
@@ -38,10 +38,10 @@ echo ""
 echo "✨ Setup complete!"
 echo ""
 echo "Generated mocks:"
-ls -la internal/database/mocks/*.go 2>/dev/null || echo "  (check internal/database/mocks/)"
+ls -la internal/books/store/mocks/*.go 2>/dev/null || echo "  (check internal/books/store/mocks/)"
 echo ""
 echo "Next steps:"
-echo "1. Review the generated mock in internal/database/mocks/"
+echo "1. Review the generated mock in internal/books/store/mocks/"
 echo "2. Update server tests to use the mock (see server_mockery_example_test.go.example)"
 echo "3. Run: go test ./internal/server -v"
 echo "4. Add 'make mocks' target to Makefile for CI/CD"

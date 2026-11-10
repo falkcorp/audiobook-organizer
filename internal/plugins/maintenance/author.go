@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-10-31
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"

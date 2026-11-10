@@ -1,7 +1,7 @@
 // file: internal/merge/combine_busy_move_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0f6c8f0e-6a52-4a39-8b7a-5d2f1c9e4b17
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // busyBulkStore reports what the store reports when a bulk move's rows kept

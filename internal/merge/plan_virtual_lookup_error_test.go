@@ -1,7 +1,7 @@
 // file: internal/merge/plan_virtual_lookup_error_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 34eec890-9285-4b3a-96ac-ea435703e5ee
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package merge
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // errPathLookup is what indexErrStore answers for the one path it fails: an I/O

@@ -1,7 +1,7 @@
 // file: internal/server/app_dir_guard_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1f6a92d4-3b58-4e07-ac21-5d8b04e3719f
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/stretchr/testify/require"
 )

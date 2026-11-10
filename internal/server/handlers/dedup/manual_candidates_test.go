@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/manual_candidates_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f2b9c1e-6a47-4d8e-b5c0-9e1d7a4f2c68
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package deduphandler_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type manualResp struct {

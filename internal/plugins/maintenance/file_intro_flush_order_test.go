@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_flush_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2ad847a-b6b5-4d01-9dd0-37434f3087e5
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // orderSink records every snapshot PutFileIntroStats receives, in arrival

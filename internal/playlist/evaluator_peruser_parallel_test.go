@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_peruser_parallel_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 8e3a6c1d-47b2-4d95-a0f8-5c2b9e7d1346
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package playlist
 
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

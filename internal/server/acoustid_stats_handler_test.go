@@ -1,7 +1,7 @@
 // file: internal/server/acoustid_stats_handler_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f6a7b8c9-d0e1-2345-fabc-345678901234
-// last-edited: 2026-05-31
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

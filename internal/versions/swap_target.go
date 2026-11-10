@@ -1,7 +1,7 @@
 // file: internal/versions/swap_target.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0e5b7a4c-83d1-4f6a-9c2e-7d1a5b3f8e64
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // ErrNoSwapTarget is what PickSwapTarget returns, having changed nothing, when

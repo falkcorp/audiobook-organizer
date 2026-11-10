@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package diagnostics
 
@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
 

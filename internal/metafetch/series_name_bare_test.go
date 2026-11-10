@@ -1,7 +1,7 @@
 // file: internal/metafetch/series_name_bare_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b7e9d14-6a3f-4c58-b0e1-9f4d7c2a8e63
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // TestApplyMetadataCandidate_SeriesNameStaysBare pins the owner's condition of

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f7a9d14-6c83-4e50-b927-8d1e5a3c07b6
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 // Tests for the ?q= search path: the book-ID resolver's matching rules, and the
 // handler wiring that feeds it. Both were entirely untested when the feature
@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // searchCorpus is deliberately built so each book is reachable by exactly ONE

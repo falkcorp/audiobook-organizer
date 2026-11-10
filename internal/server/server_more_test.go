@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-10-17
+// last-edited: 2026-11-09
 
 //go:build !windows
 
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/require"
 )

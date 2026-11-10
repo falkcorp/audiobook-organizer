@@ -1,7 +1,7 @@
 // file: internal/organizer/listener_identity_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 237f021f-dc2b-4f70-98e1-5a6cd60ed033
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )

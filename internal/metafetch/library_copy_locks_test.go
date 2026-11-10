@@ -1,7 +1,7 @@
 // file: internal/metafetch/library_copy_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c2d6b03-7f18-4a54-b3e6-5d0a91c7e482
-// last-edited: 2026-09-13
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

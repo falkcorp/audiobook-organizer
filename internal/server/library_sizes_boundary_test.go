@@ -1,7 +1,7 @@
 // file: internal/server/library_sizes_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d6f8b13-c4e7-4a90-9f35-81b0e6a2c7d4
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package server
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // expireLibrarySizeCache forces the next calculateLibrarySizes call to walk

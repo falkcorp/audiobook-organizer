@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_resume_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 117ace2e-1939-411e-8876-5015c7e30f68
-// last-edited: 2026-10-30
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 

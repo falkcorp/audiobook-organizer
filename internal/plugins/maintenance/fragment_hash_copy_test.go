@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_hash_copy_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d2f4a68-3c1b-4e95-b0a7-6f8e1d5c9b34
-// last-edited: 2026-10-21
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 

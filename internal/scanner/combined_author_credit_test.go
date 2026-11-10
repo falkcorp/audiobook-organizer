@@ -1,7 +1,7 @@
 // file: internal/scanner/combined_author_credit_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f2cc271-d7d5-4284-9075-9184112447ee
-// last-edited: 2026-10-04
+// last-edited: 2026-11-09
 
 package scanner
 
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func usePebbleForCombined(t *testing.T, authors ...string) *database.PebbleStore {

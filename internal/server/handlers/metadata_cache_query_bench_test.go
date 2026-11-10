@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package handlers
 
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )

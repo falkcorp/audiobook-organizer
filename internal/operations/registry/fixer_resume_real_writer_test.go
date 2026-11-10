@@ -1,7 +1,7 @@
 // file: internal/operations/registry/fixer_resume_real_writer_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 53c15d37-1fc7-4e53-ac78-538932952997
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package registry
 
@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 

@@ -1,14 +1,14 @@
 // file: internal/aiscan/keep.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5e1c8a42-93d7-4b60-a8f1-2c7d4e90b315
-// last-edited: 2026-10-14
+// last-edited: 2026-11-09
 
 package aiscan
 
 import (
 	"fmt"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_era_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8c1f3e76-4a2b-4d9e-9f05-b7e2a6c4d830
-// last-edited: 2026-09-19
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 )
 

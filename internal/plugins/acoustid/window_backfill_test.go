@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 28adbfaa-a61f-4e34-ae2b-516e70cf775f
-// last-edited: 2026-11-04
+// last-edited: 2026-11-09
 
 package acoustid
 
@@ -25,8 +25,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"

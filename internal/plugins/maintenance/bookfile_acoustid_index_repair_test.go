@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f9a6c42-d718-4e05-b2a3-6e1c80d4f957
-// last-edited: 2026-11-03
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const acoustIDKeyPrefix = "book_file_acoustid:"

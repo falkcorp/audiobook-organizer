@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8b1c47-90fd-4a26-b5e1-6c7a24f0d913
-// last-edited: 2026-09-20
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 const (

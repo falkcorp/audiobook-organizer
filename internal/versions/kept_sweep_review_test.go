@@ -1,7 +1,7 @@
 // file: internal/versions/kept_sweep_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f96f6820-9489-4ec7-b233-d61df1dfbefd
-// last-edited: 2026-10-29
+// last-edited: 2026-11-09
 
 package versions
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The review of the kept-file sweep (PR 4255): the sweep and the purge that

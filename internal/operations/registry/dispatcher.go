@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.8.1
+// version: 2.8.2
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 package registry
 
@@ -11,7 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // runDispatcher is the central dispatch loop. It ticks every 100ms or

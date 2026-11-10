@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a
-// last-edited: 2026-10-20
+// last-edited: 2026-11-09
 
 package deluge
 
@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

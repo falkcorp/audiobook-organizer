@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer_hash_holders_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2e8d94-1c37-4a60-9e8f-d03a7c61b425
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package organizer
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // The organizer's same-hash check lists EVERY holder of the hash and acts on

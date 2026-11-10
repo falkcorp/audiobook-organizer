@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series_allversions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e2a9f13-84c7-4d05-b1e6-3a7f52cd8091
-// last-edited: 2026-08-24
+// last-edited: 2026-11-09
 
 package jobs
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // These cover the BEHAVIOUR CHANGE in phase 1: it used to compare the unfiltered

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a3c1f9e-4b2d-4a7f-b5c0-8e1d6f4a9b2c
-// last-edited: 2026-10-11
+// last-edited: 2026-11-09
 
 // Tests for the dedup.emb-reencode op (T021).
 //
@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

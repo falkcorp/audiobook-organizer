@@ -1,7 +1,7 @@
 // file: internal/operations/registry/cancel_row_cas_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 90197191-b0f8-4979-823d-4e5265a1c1c4
-// last-edited: 2026-10-10
+// last-edited: 2026-11-09
 
 package registry_test
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 

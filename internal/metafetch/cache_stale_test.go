@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_stale_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4a81e27-96d3-4b05-8f7a-3e5d0b2c9a16
-// last-edited: 2026-10-09
+// last-edited: 2026-11-09
 
 package metafetch
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 

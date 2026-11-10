@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_collection_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e8b2d5a7-1f43-4c96-9a08-b7d3c6e4f215
-// last-edited: 2026-10-26
+// last-edited: 2026-11-09
 
 package playlist
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 

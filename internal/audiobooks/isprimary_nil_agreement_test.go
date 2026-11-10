@@ -1,7 +1,7 @@
 // file: internal/audiobooks/isprimary_nil_agreement_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 69cb8a54-5f1e-4d77-a32a-38f6fe11cc10
-// last-edited: 2026-09-12
+// last-edited: 2026-11-09
 
 package audiobooks
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/stretchr/testify/require"
 )
 

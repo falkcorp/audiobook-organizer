@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_split_joined_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9882c157-c994-478a-89fd-0568ba93a56c
-// last-edited: 2026-09-23
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/stretchr/testify/require"
 )
 

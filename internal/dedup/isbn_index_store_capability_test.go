@@ -1,14 +1,14 @@
 // file: internal/dedup/isbn_index_store_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e58c3b7-1f42-4a06-85d3-7c2e4a9b6f30
-// last-edited: 2026-08-19
+// last-edited: 2026-11-09
 
 package dedup
 
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 type isbnCapableStore struct {

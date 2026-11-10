@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 2d7e9b41-5c3a-4f86-9e10-4b8a6c2d1f57
-// last-edited: 2026-10-19
+// last-edited: 2026-11-09
 
 package server
 
@@ -14,9 +14,9 @@ import (
 	"sync"
 	"testing"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7830431a-11dc-4bee-97c0-82047798cb98
-// last-edited: 2026-11-06
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 func newPlanStore(t *testing.T, buildAtPath bool) *database.PebbleStore {

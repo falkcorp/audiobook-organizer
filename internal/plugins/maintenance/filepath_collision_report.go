@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 80fcbf6b-a38f-4f44-86f4-7f1f06d2a0d2
-// last-edited: 2026-09-11
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )

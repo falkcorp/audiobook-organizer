@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
-// last-edited: 2026-10-18
+// last-edited: 2026-11-09
 
 package maintenance
 
@@ -12,7 +12,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -20,7 +20,7 @@ import (
 // --- ident: identification index rebuild op ---
 //
 // The index (ident:state:, ident:by:, the in-memory counters), its
-// write-through and its boot build live in internal/database/ident_state.go.
+// write-through and its boot build live in internal/books/store/ident_state.go.
 // Every boot builds or reconciles it, and SuperviseIdentIndex retries a failed
 // boot build with backoff; once those retries are spent it logs an ERROR
 // naming this op. This op is the

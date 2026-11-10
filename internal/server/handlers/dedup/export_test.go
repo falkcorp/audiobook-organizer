@@ -1,14 +1,14 @@
 // file: internal/server/handlers/dedup/export_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 028a211d-147e-4bdf-bfdc-55af33f7b2b8
-// last-edited: 2026-10-12
+// last-edited: 2026-11-09
 
 package deduphandler
 
 import (
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )

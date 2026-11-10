@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_purge_failures_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3d8a1f64-27c9-4b05-9e73-a1c5e0b84f29
-// last-edited: 2026-10-28
+// last-edited: 2026-11-09
 
 package versions
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // bookRowLookupStore makes the all-rows book path lookup
