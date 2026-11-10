@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -33,8 +33,8 @@ const corePath = "github.com/falkcorp/mediacore"
 // R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
 // §3.5.1 item 2), never this table; the exceptions are R1-13's
 // internal/openapi entry, R1-20's internal/pebble entry, R1-16's
-// internal/sdnotify entry and R1-21's internal/bootseam entry, R4 packages
-// the table missed.
+// internal/sdnotify entry, R1-21's internal/bootseam entry and F4-01's
+// internal/rbacstore entry, R4 packages the table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -60,6 +60,9 @@ var coreLayerOf = map[string]int{
 	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4,
 	"health": 4, "health/diagnostics": 4,
 	"internal/storagemigrate": 4, "internal/logjournal": 4,
+	// internal/rbacstore implements rbac's role Store over c/rbac/ (F4-01,
+	// 05-rbac §6.3), so it takes rbac's layer (R4).
+	"internal/rbacstore": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)

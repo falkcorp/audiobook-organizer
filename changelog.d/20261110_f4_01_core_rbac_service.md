@@ -1,0 +1,3 @@
+### Added
+
+- core: the authorization service (`core/rbac`, dark): the SDK role `Store` and `Importer`, the native store `core/internal/rbacstore` over `c/rbac/`, the `rbactest.StoreSuite` conformance kit, catalog assembly and `Freeze`, role CRUD with the escalation, last-admin and role-in-use rules, `CanAssign`, `Dominates`, the checker cache in front of the injected `Deps.Compile`, `Can`/`Require`/`RequireAll` with denial audit, the seed merge of the core seed roles with restricted additions held for acceptance (`AcceptSeed`), and the confinement and ambient rules (F4-01; nothing calls it until F4-08).

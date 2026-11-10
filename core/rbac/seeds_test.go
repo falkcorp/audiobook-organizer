@@ -322,6 +322,7 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 	}
 	restricted := map[rbac.Permission]bool{"gotham:cave.manage": true, "gotham:vault": true, "gotham:settings.manage": true, "gotham:integrations.manage": true}
 	rng := rand.New(rand.NewPCG(7, 20261110))
+	held := 0
 	for seq := range 12 {
 		e := newEnv(t)
 		var prev map[rbac.RoleName][]rbac.Permission
@@ -329,7 +330,6 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 			m := module{id: "gotham"}
 			var detective []rbac.Permission
 			for _, spec := range pool {
-				spec := spec
 				if !restricted[spec.Name] && rng.IntN(2) == 0 {
 					spec.DefaultGrants = []rbac.RoleName{rbac.RoleEditor}
 				}
@@ -351,6 +351,7 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 				if got := normalized(append(slices.Clone(eff), pend...)); !slices.Equal(got, seed) {
 					t.Fatalf("%s: %s effective %v + pending %v, want the seed %v", where, name, eff, pend, seed)
 				}
+				held += len(pend)
 				for _, p := range pend {
 					if slices.Contains(eff, p) {
 						t.Fatalf("%s: %s holds %s both effective and pending", where, name, p)
@@ -387,6 +388,9 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 				prev["gotham.detective"] = acc.Permissions()
 			}
 		}
+	}
+	if held == 0 {
+		t.Fatal("no release held a scope: the property ran without its interesting case")
 	}
 }
 

@@ -535,13 +535,11 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
 		for i, r := range []*rbac.Role{wayne, fox} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				arrived.Done()
 				_, errs[i] = f.svc.UpdateRole(ctx, f.admin(), r.Name, rbac.RoleInput{Permissions: perms("gotham:patrol")}, r.Version)
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
