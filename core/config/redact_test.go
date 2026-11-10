@@ -1,5 +1,5 @@
 // file: core/config/redact_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0d8e3a51-6b2f-4c97-a1e4-5f7b9c2d8e63
 // last-edited: 2026-11-10
 
@@ -262,25 +262,37 @@ type gadgetEntry struct {
 	Label string `json:"label"`
 }
 
-// gadgetMap's Validator builds a FieldError path from an entry's sensitive
-// code, which is not a valid entry ID.
+// gadgetMap's Validator names a FieldError path by its entry's label: an
+// invalid ID built from the sensitive code ("upper"), a valid ID invented
+// from it ("invent"), or the entry's own ID ("own").
 type gadgetMap map[string]gadgetEntry
 
 func (m *gadgetMap) Validate() error {
-	for _, e := range *m {
-		if e.Label == "leak" {
-			return &config.FieldError{Path: gadgetSection + "." + config.Path(strings.ToUpper(e.Code)) + ".label", Err: errors.New("the label leaks")}
+	for id, e := range *m {
+		var at string
+		switch e.Label {
+		case "upper":
+			at = strings.ToUpper(e.Code)
+		case "invent":
+			at = e.Code
+		case "own":
+			at = id
+		default:
+			continue
 		}
+		return &config.FieldError{Path: gadgetSection + "." + config.Path(at) + ".label", Err: fmt.Errorf("the label %q is refused", e.Code)}
 	}
 	return nil
 }
 
-// TestValidatorPathWithInvalidEntryID (05-config §1.3.1): in a map section
-// that holds a sensitive key, a Validator's FieldError whose entry ID is not
-// a valid segment does not name a key, so its path is not kept either: the
-// error becomes a fixed message on the section, and the text the Validator
-// put in the path reaches no error.
-func TestValidatorPathWithInvalidEntryID(t *testing.T) {
+// TestValidatorPathNamesOnlyAnExistingEntry (T4 re-verify follow-up,
+// 05-config §1.3.1): in a map section that holds a sensitive key, the path
+// of a Validator's FieldError is kept only when its entry ID is an entry of
+// the candidate. A path whose ID is invalid, or valid but invented (here from
+// the sensitive code), becomes a fixed FieldError on the section, so the text
+// the Validator put in the path reaches no error. A path on an existing entry
+// keeps its path and loses its message.
+func TestValidatorPathNamesOnlyAnExistingEntry(t *testing.T) {
 	ctx := context.Background()
 	st, err := config.NewStore(config.Options{AppID: "gotham", Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
@@ -302,12 +314,21 @@ func TestValidatorPathWithInvalidEntryID(t *testing.T) {
 		t.Fatal(err)
 	}
 	admin := config.Actor{Subject: "alfred", Interactive: true, Can: func(string) bool { return true }}
-	_, err = st.Apply(ctx, config.Patch{Set: map[config.Path]json.RawMessage{
-		gadgetSection + ".batarang.code":  json.RawMessage(`"riddler"`),
-		gadgetSection + ".batarang.label": json.RawMessage(`"leak"`),
-	}}, admin)
-	var fe *config.FieldError
-	if !errors.As(err, &fe) || fe.Path != gadgetSection || strings.Contains(strings.ToLower(err.Error()), "riddler") {
-		t.Errorf("Apply = %v, want a fixed FieldError on %s without the code", err, gadgetSection)
+	for _, c := range []struct {
+		label string
+		want  config.Path
+	}{
+		{"upper", gadgetSection},
+		{"invent", gadgetSection},
+		{"own", gadgetSection + ".batarang.label"},
+	} {
+		_, err := st.Apply(ctx, config.Patch{Set: map[config.Path]json.RawMessage{
+			gadgetSection + ".batarang.code":  json.RawMessage(`"riddler"`),
+			gadgetSection + ".batarang.label": json.RawMessage(`"` + c.label + `"`),
+		}}, admin)
+		var fe *config.FieldError
+		if !errors.As(err, &fe) || fe.Path != c.want || strings.Contains(strings.ToLower(err.Error()), "riddler") {
+			t.Errorf("%s: Apply = %v, want a fixed FieldError on %s without the code", c.label, err, c.want)
+		}
 	}
 }
