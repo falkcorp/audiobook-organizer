@@ -203,8 +203,7 @@ func TestAudit_QueueFullDropsWithoutBlocking(t *testing.T) {
 	t.Run("writer stuck in a write", func(t *testing.T) {
 		g := newGate()
 		s := sinkStore(t, e, Options{AsyncBuffer: 2, BatchMax: 1}, g)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 		if err := s.Start(ctx); err != nil {
 			t.Fatal(err)
 		}
