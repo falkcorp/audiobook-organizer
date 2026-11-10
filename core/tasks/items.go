@@ -1,5 +1,5 @@
 // file: core/tasks/items.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4939aca5-9ac9-469d-bb84-fc497d308458
 // last-edited: 2026-11-10
 
@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +42,7 @@ func RunItems[T any](rc *RC, par Parallelism, items []T,
 	l := newLoop(rc.ctx, rc.h, par, o)
 	n := len(items)
 	l.total = int64(n)
+	l.exhausted.Store(true) // a slice: every item is counted in pulled
 	if err := l.restoreIndex(); err != nil {
 		return ItemsResult{}, refusal(err)
 	}
@@ -91,6 +94,7 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 		defer mu.Unlock()
 		item, ok := next()
 		if !ok {
+			l.exhausted.Store(true)
 			var zero T
 			return 0, zero, false
 		}
@@ -121,6 +125,13 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // context, ForEach joins that run's CPU budget, pause gate, ref-lock table and
 // liveness; otherwise it is a plain bounded pool. Watermark is refused
 // (ErrNoRunContext): checkpointing needs a run.
+//
+// Nested CPU loops: a CPU() item holds one core.tasks.cpu_slots slot, and its
+// ItemRC context is marked as holding it. A CPU() ForEach (or RunItems) whose
+// context carries that mark runs on the inherited slot, with one worker, and
+// never calls AcquireCPU: an item that waited for a second slot while holding
+// one could deadlock the budget. A nested loop must therefore be given the
+// item's context (ic.Context()); a RunItems over the outer *RC sees no mark.
 func ForEach[T any](ctx context.Context, par Parallelism, items []T,
 	fn func(ctx context.Context, item T) error, opts ...ItemsOptions[T]) (ItemsResult, error) {
 	o, err := oneOptions(opts)
@@ -139,6 +150,7 @@ func ForEach[T any](ctx context.Context, par Parallelism, items []T,
 	l := newLoop(ctx, hostFrom(ctx), par, o)
 	n := len(items)
 	l.total = int64(n)
+	l.exhausted.Store(true) // a slice: every item is counted in pulled
 	var cursor atomic.Int64
 	take := func() (int, T, bool) {
 		i := int(cursor.Add(1) - 1)
@@ -194,7 +206,7 @@ type ItemsError struct {
 	First      error   // the first item error to COMPLETE (completion order, both modes)
 	FirstIndex int     // -1 when no item ran (ErrNoParallelism, ErrNoRunContext)
 	Errs       []error // every item error observed before the loop stopped, completion order
-	Cause      error   // context.Cause(rc.Context()) when the run was stopped, else nil
+	Cause      error   // context.Cause(rc.Context()) when the run's context ended before the loop did (items left unstarted), else nil
 }
 
 // Error summarises the first error, how many were observed and the cause.
@@ -252,7 +264,7 @@ func oneOptions[T any](opts []ItemsOptions[T]) (ItemsOptions[T], error) {
 // ItemRC is one item's context. Executor-owned counters: callers keep none.
 type ItemRC struct {
 	ctx      context.Context
-	h        runHost // nil inside a plain ForEach
+	h        RunHost // nil inside a plain ForEach
 	counters *counters
 	skip     atomic.Pointer[string]
 	returned atomic.Bool
@@ -350,7 +362,7 @@ type watermark struct {
 // field belongs to this call (03 R5).
 type loop[T any] struct {
 	ctx      context.Context // the run (or ForEach) context
-	h        runHost         // nil: a plain bounded pool
+	h        RunHost         // nil: a plain bounded pool
 	par      Parallelism
 	opts     ItemsOptions[T]
 	itemsCtx context.Context // child of ctx, canceled with ErrItemsStopped on a FailFast stop
@@ -361,9 +373,10 @@ type loop[T any] struct {
 
 	started   atomic.Int64
 	pulledSeq atomic.Int64
-	pulled    int64 // items handed to the loop (all of a slice), set after run
-	resumed   int   // items skipped because an earlier attempt completed them
-	total     int64 // item count when known, else 0
+	exhausted atomic.Bool // every item was handed out or counted (a slice, or a drained stream)
+	pulled    int64       // items handed to the loop (all of a slice), set after run
+	resumed   int         // items skipped because an earlier attempt completed them
+	total     int64       // item count when known, else 0
 
 	mu         sync.Mutex // completion order: errors, counts, progress, watermark
 	errs       []error
@@ -379,7 +392,7 @@ type loop[T any] struct {
 	ckptFailed bool
 }
 
-func newLoop[T any](ctx context.Context, h runHost, par Parallelism, o ItemsOptions[T]) *loop[T] {
+func newLoop[T any](ctx context.Context, h RunHost, par Parallelism, o ItemsOptions[T]) *loop[T] {
 	itemsCtx, stop := context.WithCancelCause(ctx)
 	l := &loop[T]{ctx: ctx, h: h, par: par, opts: o, itemsCtx: itemsCtx, stop: stop, firstIdx: -1}
 	l.counters.m = make(map[string]*atomic.Int64)
@@ -393,11 +406,27 @@ func newLoop[T any](ctx context.Context, h runHost, par Parallelism, o ItemsOpti
 }
 
 func (l *loop[T]) workers() int {
+	if l.inheritsCPUSlot() {
+		return 1 // runs on the enclosing item's slot (see ForEach)
+	}
 	n := l.par.Workers()
 	if l.h != nil {
 		n = l.h.CapWorkers(n)
 	}
 	return max(n, 1)
+}
+
+// cpuSlotKey marks an item context whose item holds a CPU slot.
+type cpuSlotKey struct{}
+
+// inheritsCPUSlot reports a CPU() loop nested inside a CPU() item of a run:
+// it uses the item's slot instead of acquiring one.
+func (l *loop[T]) inheritsCPUSlot() bool {
+	if l.h == nil || !l.par.UsesCPUBudget() {
+		return false
+	}
+	held, _ := l.ctx.Value(cpuSlotKey{}).(bool)
+	return held
 }
 
 // halted reports a done run context or a FailFast stop.
@@ -433,25 +462,32 @@ func (l *loop[T]) restoreKeyed(take func() (int, T, bool)) error {
 	if err != nil {
 		return fmt.Errorf("tasks: restore watermark %q: %w", l.opts.Watermark, err)
 	}
-	if !ok || w.N <= 0 {
+	// The checkpoint is absolute (ProgressBase + prefix, checkpointLocked);
+	// this call's stream starts at ProgressBase, as in restoreIndex.
+	n := w.N - l.opts.ProgressBase
+	if !ok || n <= 0 {
 		return nil
 	}
 	var last string
-	for i := range w.N {
+	for i := range n {
 		_, item, more := take()
 		if !more {
-			return fmt.Errorf("tasks: watermark %q: the stream ended after %d items, the checkpoint recorded %d", l.opts.Watermark, i, w.N)
+			return fmt.Errorf("tasks: watermark %q: the stream ended after %d items, the checkpoint recorded %d", l.opts.Watermark, i, n)
 		}
-		last = l.opts.Key(item)
+		key, err := guarded("Key", func() (string, error) { return l.opts.Key(item), nil })
+		if err != nil {
+			return fmt.Errorf("tasks: watermark %q: %w", l.opts.Watermark, err)
+		}
+		last = key
 	}
 	if last != w.Key {
-		return fmt.Errorf("tasks: watermark %q: item %d has key %q, the checkpoint recorded %q; the order is not stable", l.opts.Watermark, w.N, last, w.Key)
+		return fmt.Errorf("tasks: watermark %q: item %d has key %q, the checkpoint recorded %q; the order is not stable", l.opts.Watermark, n, last, w.Key)
 	}
-	l.resumed = w.N
-	l.prefix = w.N
+	l.resumed = n
+	l.prefix = n
 	l.prefixKey = w.Key
-	l.done = int64(w.N)
-	l.completed = int64(w.N)
+	l.done = int64(n)
+	l.completed = int64(n)
 	return nil
 }
 
@@ -480,54 +516,110 @@ func (l *loop[T]) run(n int, take func() (int, T, bool), fn func(ic *ItemRC, ite
 
 // one runs a single item: pause gate, ref locks, CPU slot, the second
 // context check, then the item clock and fn.
+//
+// A gate (AwaitUnpaused, LockRefs, AcquireCPU) that returns an error while
+// the loop's context is still live is not a cancellation: the item fails with
+// that error and the loop stops, in both error modes, because the run's
+// pause gate, ref-lock table or CPU budget is broken. With the context done
+// the item is simply not started. A panic in fn, Label, Key or ExclusiveRefs
+// fails the item with the panic value and its stack.
 func (l *loop[T]) one(i int, item T, fn func(ic *ItemRC, item T) error) {
 	ctx := l.itemsCtx
-	if l.h != nil {
-		if err := l.h.AwaitUnpaused(ctx); err != nil {
-			return // not started
+	var releases []func()
+	defer func() {
+		for _, release := range slices.Backward(releases) {
+			release()
 		}
+	}()
+	fail := func(err error, gate bool) {
+		l.started.Add(1)
+		l.complete(i, "", "", err, nil)
+		if gate {
+			l.halt()
+		}
+	}
+	gateErr := func(what string, err error) bool {
+		if err == nil {
+			return false
+		}
+		if l.itemsCtx.Err() == nil {
+			fail(fmt.Errorf("tasks: item %d: %s: %w", i, what, err), true)
+		}
+		return true // not started when the context is done
+	}
+	if l.h != nil && gateErr("pause gate", l.h.AwaitUnpaused(ctx)) {
+		return
 	}
 	if l.opts.ExclusiveRefs != nil {
-		release, err := l.lockRefs(ctx, l.opts.ExclusiveRefs(item))
+		refs, err := guarded("ExclusiveRefs", func() ([]entity.Ref, error) { return l.opts.ExclusiveRefs(item), nil })
 		if err != nil {
-			return // not started
+			fail(err, false)
+			return
 		}
-		defer release()
+		release, err := l.lockRefs(ctx, refs)
+		if gateErr("ref locks", err) {
+			return
+		}
+		releases = append(releases, release)
 	}
-	if l.h != nil && l.par.UsesCPUBudget() {
+	if l.h != nil && l.par.UsesCPUBudget() && !l.inheritsCPUSlot() {
 		release, err := l.h.AcquireCPU(ctx)
-		if err != nil {
-			return // not started
+		if gateErr("CPU slot", err) {
+			return
 		}
-		defer release()
+		releases = append(releases, release)
+		ctx = context.WithValue(ctx, cpuSlotKey{}, true) // a nested CPU() loop inherits this slot
 	}
 	if l.halted() { // checked again BEFORE calling fn
 		return
 	}
-	var label string
-	if l.opts.Label != nil {
-		label = l.opts.Label(item)
-	}
 	l.started.Add(1)
+	var label string
+	err := l.guard("Label", func() error {
+		if l.opts.Label != nil {
+			label = l.opts.Label(item)
+		}
+		return nil
+	})
 	itemCtx, cancel := ctx, context.CancelFunc(func() {})
 	if l.opts.ItemTimeout > 0 {
 		itemCtx, cancel = context.WithTimeout(ctx, l.opts.ItemTimeout)
 	}
 	ic := &ItemRC{ctx: itemCtx, h: l.h, counters: &l.counters}
-	var err error
-	if l.h != nil {
+	if err == nil && l.h != nil {
 		err = l.h.RenewHold(itemCtx) // a lost stand-down hold fails the item before its write
 	}
 	if err == nil {
-		err = fn(ic, item)
+		err = l.guard("fn", func() error { return fn(ic, item) })
 	}
 	ic.returned.Store(true)
 	cancel()
 	var key string
-	if l.opts.Watermark != "" && l.opts.Key != nil {
-		key = l.opts.Key(item)
+	if err == nil && l.opts.Watermark != "" && l.opts.Key != nil {
+		key, err = guarded("Key", func() (string, error) { return l.opts.Key(item), nil })
 	}
 	l.complete(i, key, label, err, ic.skip.Load())
+}
+
+// guard runs f, turning a panic into an error that carries the stack.
+func (l *loop[T]) guard(what string, f func() error) error {
+	_, err := guarded(what, func() (struct{}, error) { return struct{}{}, f() })
+	return err
+}
+
+// guarded runs f, turning a panic into an error naming what panicked, with
+// the panic value (wrapped when it is an error) and the goroutine's stack.
+func guarded[V any](what string, f func() (V, error)) (v V, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(error); ok {
+				err = fmt.Errorf("tasks: %s panicked: %w\n%s", what, e, debug.Stack())
+			} else {
+				err = fmt.Errorf("tasks: %s panicked: %v\n%s", what, r, debug.Stack())
+			}
+		}
+	}()
+	return f()
 }
 
 func (l *loop[T]) lockRefs(ctx context.Context, refs []entity.Ref) (func(), error) {
@@ -564,9 +656,13 @@ func (l *loop[T]) complete(i int, key, label string, err error, skip *string) {
 	if l.finished != nil && err == nil { // failed items never advance the watermark
 		l.advanceLocked(i, key)
 	}
+	stop := err != nil && l.opts.OnError == FailFast
+	if stop {
+		l.stopped.Store(true) // before unlocking: no worker takes another index after this error
+	}
 	l.mu.Unlock()
-	if err != nil && l.opts.OnError == FailFast {
-		l.halt()
+	if stop {
+		l.stop(ErrItemsStopped)
 	}
 }
 
@@ -636,8 +732,8 @@ func (l *loop[T]) result() (ItemsResult, error) {
 		Watermark:  l.opts.ProgressBase + l.prefix,
 	}
 	var cause error
-	if l.ctx.Err() != nil {
-		cause = context.Cause(l.ctx)
+	if l.ctx.Err() != nil && (res.NotStarted > 0 || !l.exhausted.Load()) {
+		cause = context.Cause(l.ctx) // the run ended before the loop did
 	}
 	if len(l.errs) == 0 && cause == nil {
 		return res, nil
