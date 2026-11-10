@@ -1,10 +1,11 @@
 # file: .github/workflows/nightly.yml
-# version: 1.6.3
+# version: 1.7.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-# last-edited: 2026-11-07
+# last-edited: 2026-11-10
 
-# Nightly full CI: property tests, coverage check, E2E, staticcheck, and core's
-# non-short tests (the core-nightly job).
+# Nightly full CI: property tests, coverage check, E2E, staticcheck, core's
+# non-short tests (the core-nightly job) and the production-shaped store's
+# boot-time measurement (the production-shaped-store job).
 # Runs the complete reusable-ci.yml suite on a schedule.
 # Does NOT run on PRs — use ci.yml (minimal/fast) for PR feedback.
 name: Nightly Full CI
@@ -83,3 +84,55 @@ jobs:
 
       - name: make -C core test-nightly
         run: make -C core test-nightly
+
+  # F2-14 (09 §9.3 item 1, "Boot time"): the current build's boot on a store
+  # grown to the owner's P1 counts and sizes, every night; boot_time.json is
+  # uploaded as an artifact. The same job runs on unit-lifecycle's triggers in
+  # extraction-gates.yml, and both run scripts/ci/run_production_shaped_store.sh.
+  production-shaped-store:
+    name: production-shaped-store
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Generate the production-shaped store and measure the boot
+        env:
+          R2_SHAPED_OUT: ${{ runner.temp }}/r2-shaped-out
+        run: scripts/ci/run_production_shaped_store.sh
+
+      - name: Upload boot_time.json
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-shaped-boot-time
+          path: ${{ runner.temp }}/r2-shaped-out
+          if-no-files-found: warn

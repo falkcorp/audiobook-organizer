@@ -1,0 +1,3 @@
+### Added
+
+- A production-shaped store for R2's boot-time measurement (F2-14). `scripts/r2corpus/gen_production_shaped.py` grows F2-12's stage-1 corpus to the owner's recorded P1 key counts and raw key and value sizes per key family (`internal/books/testdata/r2corpus/p1_counts.json`, counts only) with a Go row writer (`scripts/r2corpus/shaped`, build tag `r2corpus_shaped`), and `TestProductionShapedStore_BootTime` boots the current build on a copy and writes every `kernel_boot_phase_seconds` sample, the restart-to-ready time and the steady-boot time to `boot_time.json`. The `production-shaped-store` job runs it on `unit-lifecycle`'s path triggers in `extraction-gates.yml` and every night in `nightly.yml`, and uploads `boot_time.json`.
