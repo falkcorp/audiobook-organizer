@@ -549,7 +549,10 @@ func (s *Service) CreateRole(ctx context.Context, actor Checker, in RoleInput) (
 		if err := s.deps.Store.PutRole(b, r); err != nil {
 			return nil, err
 		}
-		if err := s.record(ctx, b, "core.role.create", in.Name, map[string]any{"permissions": permStrings(perms)}); err != nil {
+		if err := s.record(ctx, b, audit.Event{
+			Action: "core.role.create", Outcome: audit.Success, Target: roleRef(in.Name),
+			Details: map[string]any{"permissions": permStrings(perms)},
+		}); err != nil {
 			return nil, err
 		}
 		return []*roleChange{{name: in.Name, role: r}}, nil
@@ -605,8 +608,10 @@ func (s *Service) UpdateRole(ctx context.Context, actor Checker, id RoleName, in
 		if err := s.deps.Store.PutRole(b, next); err != nil {
 			return nil, err
 		}
-		details := map[string]any{"added": permStrings(minus(perms, old)), "removed": permStrings(removed)}
-		if err := s.record(ctx, b, "core.role.update", id, details); err != nil {
+		if err := s.record(ctx, b, audit.Event{
+			Action: "core.role.update", Outcome: audit.Success, Target: roleRef(id),
+			Details: map[string]any{"added": permStrings(minus(perms, old)), "removed": permStrings(removed)},
+		}); err != nil {
 			return nil, err
 		}
 		out = next
@@ -651,7 +656,10 @@ func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, if
 		if err := s.deps.Store.DeleteRole(b, cur); err != nil {
 			return nil, err
 		}
-		if err := s.record(ctx, b, "core.role.delete", id, map[string]any{"permissions": permStrings(cur.Permissions())}); err != nil {
+		if err := s.record(ctx, b, audit.Event{
+			Action: "core.role.delete", Outcome: audit.Success, Target: roleRef(id),
+			Details: map[string]any{"permissions": permStrings(cur.Permissions())},
+		}); err != nil {
 			return nil, err
 		}
 		return []*roleChange{{name: id}}, nil
@@ -963,12 +971,12 @@ func (s *Service) revoke(ctx context.Context, b *storage.Batch, r journal.Revoca
 }
 
 // record stages the audit record of a role change into b (sync, same batch).
-func (s *Service) record(ctx context.Context, b *storage.Batch, action string, role RoleName, details map[string]any) error {
-	err := s.deps.Audit.RecordIn(ctx, b, audit.Event{
-		Action: action, Outcome: audit.Success, Target: roleRef(role), Details: details,
-	})
-	if err != nil {
-		return fmt.Errorf("rbac: audit %s: %w", action, err)
+// Every caller builds e as a composite literal with a string-literal Action,
+// so audit's TestAuditAction_Grammar sees each action rbac records and checks
+// it against §7.1's table; never pass an Action held in a variable.
+func (s *Service) record(ctx context.Context, b *storage.Batch, e audit.Event) error {
+	if err := s.deps.Audit.RecordIn(ctx, b, e); err != nil {
+		return fmt.Errorf("rbac: audit %s: %w", e.Action, err)
 	}
 	return nil
 }

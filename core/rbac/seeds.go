@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -302,13 +303,17 @@ func (s *Service) CommitSeeds(ctx context.Context) error {
 			if err := s.deps.Store.PutRole(b, next); err != nil {
 				return nil, fmt.Errorf("rbac: seed role %s: %w", def.name, err)
 			}
-			action, details := "core.role.update_seed", map[string]any{
-				"added": permStrings(delta.added), "held": permStrings(delta.held), "withdrawn": permStrings(delta.withdrawn),
+			e := audit.Event{
+				Action: "core.role.update_seed", Outcome: audit.Success, Target: roleRef(def.name),
+				Details: map[string]any{"added": permStrings(delta.added), "held": permStrings(delta.held), "withdrawn": permStrings(delta.withdrawn)},
 			}
 			if delta.created {
-				action, details = "core.role.create", map[string]any{"permissions": permStrings(next.SeedPermissions), "seed": true}
+				e = audit.Event{
+					Action: "core.role.create", Outcome: audit.Success, Target: roleRef(def.name),
+					Details: map[string]any{"permissions": permStrings(next.SeedPermissions), "seed": true},
+				}
 			}
-			if err := s.record(ctx, b, action, def.name, details); err != nil {
+			if err := s.record(ctx, b, e); err != nil {
 				return nil, err
 			}
 			if len(delta.held) > 0 {
@@ -359,7 +364,10 @@ func (s *Service) AcceptSeed(ctx context.Context, actor Checker, id RoleName, if
 		if err := s.deps.Store.PutRole(b, next); err != nil {
 			return nil, err
 		}
-		if err := s.record(ctx, b, "core.role.accept_seed", id, map[string]any{"accepted": permStrings(accepted)}); err != nil {
+		if err := s.record(ctx, b, audit.Event{
+			Action: "core.role.accept_seed", Outcome: audit.Success, Target: roleRef(id),
+			Details: map[string]any{"accepted": permStrings(accepted)},
+		}); err != nil {
 			return nil, err
 		}
 		out = next
