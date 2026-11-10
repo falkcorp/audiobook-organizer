@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.52.1 -->
+<!-- version: 1.53.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -114,6 +114,12 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W25 | R1-06 | #4498 `de0ab0a1d` | T2: report-only core version check in core's merge gate, `core-checkpoint` job in the production release, `make -C core readiness` with the SC scripts, and a nightly split-readiness fold-in through the CI bot app (not a PAT). Draft #4489 closed after the re-cut |
 | W26 | R1-23 | #4504 `552d57c4f` | T4: storage flip: the kernel opens the one store at P2 and takes the pre-migration checkpoint before the first write; books reaches its rows only through strict claims (`ABO_CORE_STORAGE_CLAIMS_MODE=shadow` is the emergency dial; scans stay clipped either way). The review's six unregistered key families are covered by a registry-independent claim-violation guard. Re-cut three times (#4493, #4501 closed). Merged 2026-11-09; deployed with R1-24 (see W27) |
 | W27 | R1-24 | #4507 `c8421370a` | T3: checkpoint sweeper, `prune-checkpoints` and authenticated storage tokens; deletes the plaintext-secrets copy the first R1 boot leaves, which ends the deploy hold after R1-23. Creates `core/app/offline.go` and `cmd/offline.go` ahead of R1-25's `OfflineCommands`. Re-cut onto main after R1-23 (#4500, #4502 and #4505 closed). Merged 2026-11-09. R1-23 and R1-24 deployed together 2026-11-09 03:13 EST at `c8421370a`: service active, NRestarts=0, pre-migration checkpoint taken, books#67 and books#68 applied, no errors |
+| W28 | R1-25 | #4522 `9c1bc411b` | T4: offline restore and reset. Merged 2026-11-09 15:17 EST, deployed 15:20, healthy. Supersedes #4510, #4516 and #4518 |
+| W28 | R1-25 follow-up | #4526 `46e2fee46` | SF-1 and N-1 to N-4 from the review. Merged 2026-11-09 16:14 EST; supersedes #4525; deployed with #4528 at 18:37. Not a plan row |
+| W29 | R1-26 | #4528 `7912f4a52` | rename `internal/database` to `internal/books/store` (import paths first, then the type-name strings and repo-relative paths). Merged 2026-11-09 18:35 EST, deployed, healthy |
+| W30 | R1-27 | #4531 `fde1867cd` | deploy and rollback tooling. Supersedes #4523, #4527 and #4530 (and the draft #4519). Merged 2026-11-09 19:20 EST, deployed, healthy. Owner action pending: move the non-`Environment` lines from `deploy/local.conf` to `host.conf` and install the root-owned rollback helpers per `docs/system/deploy-and-gpu-ops.md` |
+| W31 | R1-28 | #4532 `b571caa6a` | `unit-lifecycle` CI job (fake-migration and staged-restore cells, swap.lock state-directory rules). Supersedes #4524 (and the draft #4520). Merged 2026-11-09 19:57 EST, deployed, healthy |
+| W32 | R1-31 | #4533 | R1's executive summary (docs only). Supersedes #4529. Merged 2026-11-09 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -132,19 +138,19 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 ## Blockers
 
-None for agents. R0 complete (6/6). R1: 32 of 37 rows merged (R1-35, R1-01, R1-02, R1-11, R1-22, R1-12, R1-07, R1-10, R1-03, R1-32, R1-04, R1-09, R1-05, R1-08, R1-29, R1-36, R1-13, R1-14, R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06, R1-23, R1-24).
+None for agents. R0 complete (6/6). R1 complete (37/37 rows merged): the 32 listed through R1-24 plus R1-25, R1-26, R1-27, R1-28 and R1-31. The owner action from R1-27 (host.conf and the root-owned rollback helpers) is pending.
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
+All R1 rows are merged (37 of 37) as of 2026-11-09. Next is OWNER-03, the owner's R1 release cut: read P12 (disk headroom, because the first R1 boot takes a checkpoint), cut R1 with its release-note lines, deploy, optionally smoke-run, and clear `RELEASE_FREEZE`. Every F2 task and OWNER-04 depend on it. The owner also finishes the R1-27 action first (host.conf and the root-owned rollback helpers). In plain terms: the new storage, offline restore and the deploy and rollback tooling are in place and deployed; nothing users see has changed.
+
+The notes below are the earlier history of this section.
+
 W13 merged 2026-11-07: R1-14 (legacy mount and manifest). In progress in parallel: R1-15 (T4, composition root; its STOP on the measured 51–77 s production shutdown was answered by moving the HNSW snapshot export off the stop path and closing SSE streams before the drain), R1-20 (T4, storage engine, dark; review NOT MERGEABLE with 4 BLOCKERs, being fixed), R1-21 (T4, stacked on R1-20), R1-37 (T3, coretest harness) and R1-33 (T1, draft #4456, waits on R1-15 for its serve wire). Next after R1-15: R1-16, R1-17, R1-18, R1-34. In plain terms: the old web routes now run behind the new framework's router; nothing users see has changed.
 
-W14 to W27 merged 2026-11-08 and 2026-11-09: R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06, R1-23 and R1-24. In flight as of 2026-11-09 11:30 EST:
-- R1-25 (T4, offline restore and reset) is on round 7; its earlier PRs #4510, #4516 and #4518 are superseded.
-- R1-27 is #4519 (draft, stacked on R1-25), then R1-28 is #4520 (draft, stacked on R1-27).
-- R1-26 waits on R1-25.
-- R1-31 (executive summary) last.
+W14 to W27 merged 2026-11-08 and 2026-11-09: R1-37, R1-20, R1-15, R1-16, R1-33, R1-34, R1-21, R1-18, R1-17, R1-19, R1-30, R1-06, R1-23 and R1-24. R1-25, R1-26, R1-27, R1-28 and R1-31 then merged on 2026-11-09 (W28 to W32). As of 2026-11-09 11:30 EST they were in flight: R1-25 on round 7, R1-27 and R1-28 as stacked drafts, R1-26 waiting on R1-25, R1-31 last.
 
 The R1-15 follow-up (HNSW clean-stop marker) merged as #4512 `0aa7d519c` on 2026-11-09 at 07:40 EST and was deployed at 07:45; it supersedes #4496, #4506 and #4476, and ports the earlier work onto core storage. It is not a plan row, so the R1 count is unchanged. The deploy hold between R1-23 and R1-24 is over: both are merged and were deployed together (W27).
 
