@@ -1,2 +1,0 @@
-- [ ] **F8-02's brief re-verify expects no `RELEASE` in the Makefile, but `make rollback-restore` now names it** R1-27's `rollback-restore` refuses `RELEASE=<tag>` with "needs F8's updater fetch-release" (09 §9.2.1), so its re-verify 5 (`RELEASE` hits inside the `rollback-restore` recipe) now finds one. Update F8-02's re-verify step to expect that refusal line, and have F8-02 replace the refusal with the real fetch.
-  - Owner: F8-02 (or the coordinator before it dispatches).

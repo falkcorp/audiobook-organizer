@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.37 -->
+<!-- version: 10.78.38 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-09 -->
+<!-- last-edited: 2026-11-10 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,108 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **PLATFORM-CORE-R1-25-ABO-SWAP-BACK-FIXTURE** ABO's boot crash matrix
+      lists `swap.back.mark`, `swap.back.mv`, `swap.back.sidecars` and
+      `swap.journal.swapped_back` as unreached, because books' restore
+      stager opens the extracted store with this build's guard before it
+      stages, so no ABO-staged restore is refused after the swap. Add a
+      fixture that stages, through `crashmatrix.Stage` and not the stager,
+      an archive restore whose store this build refuses at open (core keys
+      without an install marker, as the `foreign-keys` fixture), drop the
+      four labels from `aboUnreachedLabels`, and the matrix then breaks
+      ABO's swap-back writers too (hello's matrix breaks them today).
+
+- [ ] **PLATFORM-CORE-R1-25-CHILD-PENDING-SWAP** The op runner's child
+      (`cmd/child_mode.go` `initializeChildStore`) opens through the
+      standalone opener with the state directory, so it refuses a pending
+      swap as well as an in-flight one. A pending intent is harmless to a
+      child whose parent is serving the same store (the swap runs only at
+      the next boot), so child ops started between a live restore's 202
+      and the exit 75 fail. Decide whether child mode should refuse only an
+      in-flight swap, and test it either way.
+
+- [ ] **PLATFORM-CORE-R1-25-RESET-PLAN-KEPT** From F4-05 the core reset
+      route stages a factory reset from the running app. It must set
+      `module.WithResetPlanKept` on the context it calls the reset hook's
+      `Plan` with, as the offline `storage reset` does
+      (`core/kernel/reset.go`). Without it `ResetPlanKept` reports false,
+      books' preflight counts every library entry, the kept ones included,
+      and the confirmed `--library-file-count` no longer equals what the
+      wipe removes. `WithResetPlanStorage` is not needed there: the running
+      module's `Plan` reads its own `Deps.Storage`
+      (`core/module/resetplan.go`, "Release R1 only" on both).
+
+- [ ] **Core: tell modules what P0a did, and drop books' swap-slot read** (R1-25 follow-up).
+      - **Why.** `books.Options` reads the swap slot before `app.New` (`swapVoidReason`,
+        `internal/books/options.go`) to decide whether this boot's pre-boot swap may replace the
+        store, and voids the HNSW clean-stop claim `Register` takes when it may. It reads before
+        P0a because P0a empties the slot whatever it does, and `module.Deps` carries nothing of
+        what P0a did. So it voids on a staged swap that P0a then rejects (one reconcile too
+        many), and a swap staged after the read is covered only by that stager's own marker
+        discard.
+      - **Fix.** A `module.Deps` field with the P0a outcome (`restoreswap.Outcome`: applied,
+        swapped back, rejected, nothing staged), which books' `Register` reads in place of the
+        slot. Cost: one core module API field, the kernel wiring from `runP0a` to `Register`, a
+        core test, the seams notes (`seams.d/R1-15.md` P0a row, `seams.d/R1-25.md`); then delete
+        `swapVoidReason` and `TestSwapVoidReason`, and point `TestSwapBootVoidsTheCleanStopClaim`
+        at the new field.
+
+- [ ] **PLATFORM-CORE-R1-25-RESET-SPEC-TESTS** Four rows of 05-storage
+      §5S.3.15's factory-reset table that R1-25 did not write under their
+      spec names (each needs fault injection in the reset swap):
+      `TestFactoryResetSetAsideFailureKeepsStore` (a rename failure before
+      `set_aside_started` keeps the live store and moves completed targets
+      back; core's `TestRenameUndoneWhenItsDestinationSyncFails` and
+      `TestResetResumeMovesAJournaledTargetAgain` cover parts),
+      `TestFactoryResetCrossDeviceTargets` (state directory and Open
+      Library store on other filesystems, or an injected EXDEV; core's
+      `TestSetAsideDestStaysOnOwnFilesystem` and
+      `TestStageRefusesUnrenamableTargets` cover the staging half),
+      `TestFactoryResetResumeAfterExpiryCompletes` (a crash after some
+      moves, then a boot after `expires_at` and by another binary, resumes
+      to `set_aside`), and `TestRollbackRefusesInflightReset` (the rollback
+      guard; R1-27's `make rollback-restore` owns it).
+
+- [ ] **Owner call: delete the restore extractor's snapshot keep-out machinery, now unused** (R1-25
+      follow-up; not done in R1-25 so a nine-round-reviewed mechanism is not removed unasked).
+      - **Why.** Since R1-25 every restore stages: `backup.ExtractStore` extracts into a new,
+        private directory in the swap's staging area and passes `extractArchive` no snapshot
+        directories (`snapshotDirs` nil). The keep-out code that compares each entry's physical
+        path with the HNSW snapshot directories by identity (`keepOutDir`, `statKeepOut`,
+        `statKeepOuts`, `holds`, `physicalPath`, `landsIn`, in `internal/backup/backup.go`) still
+        runs a walk per entry but can refuse nothing: no snapshot directory is ever passed, and no
+        symlink can exist in the private directory (tar link entries are skipped). The in-place
+        restore it protected (`PrepareRestoreIn`, `Extract`, `CheckPathsApart`,
+        `CheckSnapshotDirs`) was deleted in R1-25.
+      - **Cost of deleting it.** About 230 lines in `backup.go` and the `snapshotDirs` parameter;
+        the tests that drive it with snapshot directories (`TestExtractArchive_KeepsEntriesOutOfTheSnapshotDirs`,
+        `TestExtractArchive_ReadsTheSnapshotDirsAtEachEntry`, `TestStatKeepOuts`, most of
+        `restore_physical_path_test.go`, about 500 lines); `ErrUnresolvableSymlink` if nothing else
+        returns it; the R1-15 seams note's Restore paragraph. Keep `entryRefusal`, the scan,
+        `checkWithin`, `writeEntry` and the directory syncs, which ExtractStore relies on.
+      - **Cost of keeping it.** A per-entry walk on every restore, and a parameter every caller
+        passes nil.
+
+- [ ] **config: the state directory is never tightened to 0700, though `EnsureSecureStateDir`'s doc says it is** `EnsureSecureStateDir` (`internal/config/state_dir.go`) says it "also tightens" a directory systemd created 0755, and in the next sentence that `MkdirAll` "does NOT change its mode". The second is what the code does. `app.ResolveStateDir` (`core/app/app.go`) is the same. `deploy/audiobook-organizer.service` creates `/var/lib/audiobook-organizer` with a bare `sudo mkdir -p` (0755), and that directory is also the service's HOME and the database's parent.
+  - The swap lock (R1-25 review B2) does not rely on 0700. It refuses a state directory that group or others can write, and its lock file is 0600. The credentials in the directory are files with their own modes.
+  - Fix: decide whether a boot tightens an existing state directory it owns to 0700, or refuses one it cannot tighten. Fix the doc either way. Mind the database-directory fallback, where tightening would change a directory the user chose for the database. Update the deploy unit's mkdir to `install -d -m 0700 -o audiobook -g audiobook`.
+
+- [ ] **updater: a live restore can stage between the apply's last swap-slot check and its rename** `Updater.DownloadAndReplace` (`internal/updater/updater.go`) calls `checkSwapSlot` just before `swap`, but nothing holds the slot between the two. The updater runs only inside the serving process, which holds the swap lock from P0a until it exits, so an offline restore or reset cannot get in: its exclusive take refuses. The in-process live restore (books' `restoreStager`, staged from `RestoreBackup`) takes no lock against the updater. If its `CreateIntent` lands in that window, the new binary is renamed in under an intent that records the old binary's ID, and the next boot's P0a rejects the intent as another binary's. The same goes for the unattended apply in the maintenance-window op.
+  - Found in the R1-25 review (round 6).
+  - Fix: one in-process mutex for "writes the swap slot or swaps the binary". The updater holds it from its last `checkSwapSlot` through `swap`, and the stager holds it from its slot check through `CreateIntent`. Test: block the stager inside the section with a hook, start an apply, and expect the apply to refuse; then the reverse order, where the stager refuses or waits until the swap ends.
+
+- [ ] **F8-02's brief re-verify expects no `RELEASE` in the Makefile, but `make rollback-restore` now names it** R1-27's `rollback-restore` refuses `RELEASE=<tag>` with "needs F8's updater fetch-release" (09 §9.2.1), so its re-verify 5 (`RELEASE` hits inside the `rollback-restore` recipe) now finds one. Update F8-02's re-verify step to expect that refusal line, and have F8-02 replace the refusal with the real fetch.
+  - Owner: F8-02 (or the coordinator before it dispatches).
+
+- [ ] **Install the rollback helpers on the deploy host, then run `systemd-analyze verify` and `visudo -c` there** R1-27 moved every privileged rollback step into root-owned helpers (`deploy/rollback-helpers/`, installed to `/usr/local/libexec/audiobook-organizer/rollback/` with `/etc/audiobook-organizer/rollback.conf`); the install commands and the sudoers drop-in are in `docs/system/deploy-and-gpu-ops.md`, "Rollback helpers". The bundle includes `deploy/audiobook-organizer.service`, installed root-owned (0644) beside the helpers: `install-staged unit` copies that file, so a unit change reaches the host only when the bundle is reinstalled. Before the first deploy with the helpers, move every non-`Environment=` line of the host's `local.conf` (the `ExecStart=` reset and command line, `WorkingDirectory=`, `MemoryMax=`, `TimeoutStopSec=`) into `/etc/systemd/system/audiobook-organizer.service.d/host.conf`, written as root, and keep only `[Service]` and `Environment=` lines in `deploy/local.conf`: `install-staged local-conf` refuses anything else, and a `local.conf` written from the old example holds such settings. `install-staged unit` and `local-conf` also refuse, before copying anything, until `host.conf` exists (root-owned, mode 0644, not a symlink) and runs only the service user's `ExecStart=` (no other `Exec*=` line, no `+`/`!` prefix, no `PermissionsStartOnly=`/`AmbientCapabilities=`, no other `User=`/`Group=`); leave `TimeoutStopSec=` out of it unless raising the base unit's 60 s. The same rules now apply to every other drop-in systemd applies to the unit (any `*.conf` in `audiobook-organizer.service.d/`, `audiobook-.service.d/` or `service.d/` under `/etc`, `/run` or `/usr/lib/systemd/system`, and the same directories for each alias of the unit), so check those directories hold nothing that runs a second command or as root. The unit's main file is checked the same way wherever systemd finds it (`systemctl show -p FragmentPath`), so a stale package copy under `/usr/lib/systemd/system` must pass too. Lines are read as systemd joins them (a trailing odd run of backslashes continues the line), `ExecStart=` may carry only the `@`, `-` and `:` prefixes and one command (no `;` word), and `Type=oneshot` refuses. Set `stage_bin` and `stage_local_conf` in that config to the paths `Makefile.local` uploads to, and switch `Makefile.local`'s `deploy` and `deploy-debug` to the helper lines in `Makefile.local.example` (`install-staged binary|unit|local-conf`, `pprof on|off`, every `sudo` as `sudo -n`); the drop-in grants no `sudo cp` into `/etc/systemd/system`, which is root-equivalent. The rollbacks refuse until the helpers are installed, and so does a `Makefile.local` switched to those lines; the current one keeps working on the host's existing sudo rules, whose `cp` of the unit and of `local.conf` into `/etc/systemd/system` should be removed once it is switched; drop its `scp` of the unit too. R1-27 also added `RestartPreventExitStatus=78`, `TimeoutStopSec=60` and `KillMode=mixed` to `deploy/audiobook-organizer.service`; it was written on a Mac without systemd or visudo, so neither `systemd-analyze verify` nor `visudo -c` ran (R1-28's unit-lifecycle job covers the unit in CI).
+  - Owner: owner, at the next deploy-host change.
+
+- [ ] **Vet `./kernel/` with `-tags unitlifecycle` in core's `ci` target** 03 §3.5.1 item 4 says core's `ci` target vets `./kernel/` with the `unitlifecycle` tag so every PR compiles the fake-migration hook. R1-28 added the hook (`core/kernel/fakemigration_hook.go`) and the tag-set entry, but `core/Makefile` is R1-30's file in the same wave, so the one `go vet -tags unitlifecycle ./kernel/` line was left out. Until it lands only the `unit-lifecycle` job (when its triggers fire, and `core/kernel/**` is one) compiles the tagged build.
+  - Owner: whoever lands R1-30 (`core/Makefile`), or a follow-up row after it.
+
+- [ ] **No platform-core row owns five core identifiers 06's hello blocks need** `TestSpecGoBlocksCompile` (`core/examples/hello/specblocks_test.go`) pins what 06's hello blocks are still missing from core. Five pinned identifiers have no owning row: `module.Setting`, `module.Settings`, `module.SettingsSection`, `module.Manifest.Permissions` and `module.Manifest.Settings`. Assign each one to a row, or amend 06 so the hello blocks stop using it. Until then the hello blocks cannot compile or boot, whatever else lands. The row that adds an identifier also removes it from `helloMissing` in the same PR.
+  - Owner: coordinator (assign rows). Found by the F2-01 review (#4547).
 
 - [ ] **PLATFORM-CORE-F3-GATE-STATUS** When F3 moves the Basic gate into
       core's stage 8 and deletes the perimeter shim, check that a request the
