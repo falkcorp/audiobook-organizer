@@ -1,5 +1,5 @@
 // file: core/tasks/rc.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
 // last-edited: 2026-11-10
 
@@ -129,14 +129,17 @@ var (
 // which proof was missing (current rule, continue_in_place.go:31-41).
 var ErrContinueInPlace = errors.New("tasks: yielded before deadline; continue in place")
 
-// runHost is the executor's handle behind one RC (F2-03 implements it in
-// core/internal/executor; taskstest.FakeRun implements it for tests). Its
-// methods are exported so another package can implement it; the interface
-// itself is unexported so only NewRC accepts one. Every RC method delegates
-// to it, and RunItems/RunSeq/ForEach reach the run's CPU budget, pause gate,
-// ref-lock table, liveness and stand-down hold only through it, so the
-// executor implements behaviour here and never has to modify this package.
-type runHost interface { //nolint:interfacebloat // one run handle: every RC method delegates to it (05-tasks 5T.3.3), plus the loop hooks of 5T.3.2's table
+// RunHost is the executor's handle behind one RC (F2-03 implements it in
+// core/internal/executor; taskstest.FakeRun implements it for tests). It is
+// not an app-facing interface: an app never implements it. A test double
+// implements it by embedding taskstest.FakeRun and overriding the methods it
+// needs, because RunHost may grow methods in any release. Every RC method
+// delegates to it, and RunItems/RunSeq/ForEach reach the run's CPU budget,
+// pause gate, ref-lock table, liveness and stand-down hold only through it.
+// The executor's run behaviour lives behind it; F2-03 still adds, in this
+// package, the unexported runner closures the Task, Batch and Fixer
+// constructors store (seams.d/F2-01.md). Name coined by F2-01.
+type RunHost interface { //nolint:interfacebloat // one run handle: every RC method delegates to it (05-tasks 5T.3.3), plus the loop hooks of 5T.3.2's table
 	Context() context.Context
 	RunID() RunID
 	Kind() Kind
@@ -184,24 +187,24 @@ type runHost interface { //nolint:interfacebloat // one run handle: every RC met
 // ForEach and LockRefs can tell a ctx that descends from a run.
 type hostKey struct{}
 
-func hostFrom(ctx context.Context) runHost {
+func hostFrom(ctx context.Context) RunHost {
 	if ctx == nil {
 		return nil
 	}
-	h, _ := ctx.Value(hostKey{}).(runHost)
+	h, _ := ctx.Value(hostKey{}).(RunHost)
 	return h
 }
 
 // RC is one run's context: what a definition's body receives.
 type RC struct {
-	h   runHost
+	h   RunHost
 	ctx context.Context
 }
 
 // NewRC wraps the executor's run handle h. It is for core/internal/executor
 // and taskstest; an app never builds an RC. A nil h returns nil, which the
 // loops refuse with ErrNoRunContext. Name coined by F2-01.
-func NewRC(h runHost) *RC {
+func NewRC(h RunHost) *RC {
 	if h == nil {
 		return nil
 	}
@@ -275,7 +278,7 @@ func (rc *RC) Canceled() bool { return rc.ctx.Err() != nil }
 
 // Progress is a run's progress handle (rc.Progress()). A Batch or Fixer gets
 // its numbers from the runner and RunItems from its loop; a Task sets them.
-type Progress struct{ h runHost }
+type Progress struct{ h RunHost }
 
 // Set reports a Task's position.
 func (p *Progress) Set(done int64, total Total) { p.h.ReportProgress(done, total) }

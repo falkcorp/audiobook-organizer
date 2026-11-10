@@ -1,5 +1,5 @@
 // file: core/tasks/items_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -549,5 +550,231 @@ func TestItemRC_HostlessForEachHasNoRunServices(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// gateHost fails one loop gate with a plain error while the run is live.
+type gateHost struct {
+	*taskstest.FakeRun
+	locks, cpu error
+}
+
+func (h gateHost) LockRefs(ctx context.Context, refs ...entity.Ref) (func(), error) {
+	if h.locks != nil {
+		return nil, h.locks
+	}
+	return h.FakeRun.LockRefs(ctx, refs...)
+}
+
+func (h gateHost) AcquireCPU(ctx context.Context) (func(), error) {
+	if h.cpu != nil {
+		return nil, h.cpu
+	}
+	return h.FakeRun.AcquireCPU(ctx)
+}
+
+// TestRunItems_GateErrorFailsTheItem: a ref-lock or CPU-slot error on a live
+// run is an item failure that stops the loop in both error modes, never a
+// silent "not started" with a nil error.
+func TestRunItems_GateErrorFailsTheItem(t *testing.T) {
+	errTable := errors.New("ref-lock table offline")
+	refs := func(int) []entity.Ref { return []entity.Ref{tasks.ResID("gotham", "cases", "1")} }
+	for name, c := range map[string]struct {
+		host gateHost
+		par  tasks.Parallelism
+	}{
+		"LockRefs":   {gateHost{locks: errTable}, tasks.Sequential("one cell")},
+		"AcquireCPU": {gateHost{cpu: errTable}, tasks.CPU()},
+	} {
+		for _, mode := range []tasks.ErrorMode{tasks.FailFast, tasks.Collect} {
+			t.Run(name+"/"+strconv.Itoa(int(mode)), func(t *testing.T) {
+				c.host.FakeRun = taskstest.NewFakeRun(t.Context(), caseKind)
+				c.host.SetCap(1)
+				var ran atomic.Int64
+				res, err := tasks.RunItems(tasks.NewRC(c.host), c.par, []int{1, 2, 3},
+					func(*tasks.ItemRC, int) error { ran.Add(1); return nil },
+					tasks.ItemsOptions[int]{OnError: mode, ExclusiveRefs: refs})
+				ie := asItemsError(t, err)
+				if !errors.Is(err, errTable) || ie.FirstIndex != 0 || ie.Cause != nil {
+					t.Fatalf("ItemsError = %+v, want the gate error at item 0 and no Cause", ie)
+				}
+				if ran.Load() != 0 || res.Failed != 1 || res.NotStarted != 2 || res.Done != 0 {
+					t.Fatalf("ran %d, result %+v; want Failed 1, NotStarted 2", ran.Load(), res)
+				}
+			})
+		}
+	}
+}
+
+// cancelOnPause cancels the run while parked on the pause gate and still
+// returns nil, so only the second context check can stop the item.
+type cancelOnPause struct {
+	*taskstest.FakeRun
+	cancel context.CancelCauseFunc
+}
+
+func (h cancelOnPause) AwaitUnpaused(context.Context) error {
+	h.cancel(tasks.ErrCanceled)
+	return nil
+}
+
+func TestRunItems_SecondContextCheckBeforeFn(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	h := cancelOnPause{FakeRun: taskstest.NewFakeRun(ctx, caseKind), cancel: cancel}
+	var ran atomic.Int64
+	res, err := tasks.RunItems(tasks.NewRC(h), tasks.Fixed(4, "four detectives"), make([]int, 6),
+		func(*tasks.ItemRC, int) error { ran.Add(1); return nil })
+	if ran.Load() != 0 {
+		t.Fatalf("fn ran %d times after the run was canceled", ran.Load())
+	}
+	if res.NotStarted != 6 || res.Failed != 0 || res.Done != 0 {
+		t.Fatalf("result = %+v, want NotStarted 6", res)
+	}
+	if ie := asItemsError(t, err); ie.Cause != tasks.ErrCanceled || len(ie.Errs) != 0 {
+		t.Fatalf("ItemsError = %+v, want Cause ErrCanceled and no item error", ie)
+	}
+}
+
+// TestRunItems_CauseOnlyWhenStoppedEarly: a run canceled by its last item,
+// after every item started, did not stop the loop early: no error.
+func TestRunItems_CauseOnlyWhenStoppedEarly(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	run := taskstest.NewFakeRun(ctx, caseKind)
+	res, err := tasks.RunItems(run.RC(), tasks.Sequential("in order"), []int{0, 1, 2}, func(_ *tasks.ItemRC, i int) error {
+		if i == 2 {
+			cancel(tasks.ErrShutdown)
+		}
+		return nil
+	})
+	if err != nil || res.Done != 3 {
+		t.Fatalf("result %+v err %v, want Done 3 and no error", res, err)
+	}
+}
+
+// TestWatermark_ResumeWithProgressBase: the checkpoint is absolute
+// (ProgressBase + prefix) and a resumed RunItems or RunSeq skips exactly the
+// items of this slice it covers.
+func TestWatermark_ResumeWithProgressBase(t *testing.T) {
+	rogues := []string{"joker", "penguin", "riddler", "two-face", "scarecrow"}
+	failRiddler := func(_ *tasks.ItemRC, s string) error {
+		if s == "riddler" {
+			return errors.New("riddle unsolved")
+		}
+		return nil
+	}
+	for name, run := range map[string]func(*tasks.RC, func(*tasks.ItemRC, string) error) (tasks.ItemsResult, error){
+		"RunItems": func(rc *tasks.RC, fn func(*tasks.ItemRC, string) error) (tasks.ItemsResult, error) {
+			return tasks.RunItems(rc, tasks.Sequential("in order"), rogues, fn,
+				tasks.ItemsOptions[string]{Watermark: "w", CheckpointEvery: 1, ProgressBase: 100})
+		},
+		"RunSeq": func(rc *tasks.RC, fn func(*tasks.ItemRC, string) error) (tasks.ItemsResult, error) {
+			return tasks.RunSeq(rc, tasks.Sequential("in order"), slices.Values(rogues), tasks.Unknown(), fn,
+				tasks.ItemsOptions[string]{Watermark: "w", CheckpointEvery: 1, ProgressBase: 100, Key: func(s string) string { return s }})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := taskstest.NewFakeRun(t.Context(), caseKind)
+			if res, err := run(fake.RC(), failRiddler); err == nil || res.Watermark != 102 {
+				t.Fatalf("first attempt: watermark %d err %v, want 102 and an error", res.Watermark, err)
+			}
+			raw, _ := fake.CheckpointJSON("w")
+			if want := map[string]string{"RunItems": `{"n":102}`, "RunSeq": `{"n":102,"key":"penguin"}`}[name]; string(raw) != want {
+				t.Fatalf("checkpoint = %s, want %s", raw, want)
+			}
+			var seen []string
+			res, err := run(fake.RC(), func(_ *tasks.ItemRC, s string) error { seen = append(seen, s); return nil })
+			if err != nil || !slices.Equal(seen, rogues[2:]) || res.Watermark != 105 || res.Done != 5 {
+				t.Fatalf("resume saw %v, result %+v, err %v; want the last three, watermark 105, Done 5", seen, res, err)
+			}
+		})
+	}
+}
+
+// TestForEach_NestedCPUInheritsSlot: a CPU() ForEach inside a CPU() item runs
+// on the item's slot (one worker, no AcquireCPU) instead of deadlocking the
+// budget waiting for a second slot.
+func TestForEach_NestedCPUInheritsSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+		defer cancel()
+		run := taskstest.NewFakeRun(ctx, caseKind)
+		run.SetCPUSlots(2)
+		var peakInner atomic.Int64
+		res, err := tasks.RunItems(run.RC(), tasks.CPU(), make([]int, 4), func(ic *tasks.ItemRC, _ int) error {
+			var inFlight atomic.Int64
+			_, err := tasks.ForEach(ic.Context(), tasks.CPU(), make([]int, 3), func(context.Context, int) error {
+				n := inFlight.Add(1)
+				for p := peakInner.Load(); n > p && !peakInner.CompareAndSwap(p, n); p = peakInner.Load() {
+				}
+				time.Sleep(time.Millisecond)
+				inFlight.Add(-1)
+				return nil
+			})
+			return err
+		})
+		if err != nil || res.Done != 4 {
+			t.Fatalf("result %+v err %v, want Done 4 (a nested CPU loop deadlocked?)", res, err)
+		}
+		if acquires, peak := run.CPUStats(); acquires != 4 || peak > 2 {
+			t.Fatalf("CPU slots: %d acquires, peak %d; want 4 (outer items only), at most 2 at once", acquires, peak)
+		}
+		if peakInner.Load() != 1 {
+			t.Fatalf("a nested loop ran %d items at once on one inherited slot, want 1", peakInner.Load())
+		}
+	})
+}
+
+// TestRunItems_PanicBecomesItemError: a panic in fn, Label, Key or
+// ExclusiveRefs fails that item with the panic value and its stack; the
+// loop and its other items carry on.
+func TestRunItems_PanicBecomesItemError(t *testing.T) {
+	errGas := errors.New("laughing gas")
+	boom := func(i int) bool { return i == 1 }
+	for name, c := range map[string]struct {
+		fn   func(*tasks.ItemRC, int) error
+		opts tasks.ItemsOptions[int]
+	}{
+		"fn": {fn: func(_ *tasks.ItemRC, i int) error {
+			if boom(i) {
+				panic(errGas)
+			}
+			return nil
+		}},
+		"Label": {opts: tasks.ItemsOptions[int]{Label: func(i int) string {
+			if boom(i) {
+				panic(errGas)
+			}
+			return ""
+		}}},
+		"Key": {opts: tasks.ItemsOptions[int]{Watermark: "w", Key: func(i int) string {
+			if boom(i) {
+				panic(errGas)
+			}
+			return strconv.Itoa(i)
+		}}},
+		"ExclusiveRefs": {opts: tasks.ItemsOptions[int]{ExclusiveRefs: func(i int) []entity.Ref {
+			if boom(i) {
+				panic(errGas)
+			}
+			return nil
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fn := c.fn
+			if fn == nil {
+				fn = func(*tasks.ItemRC, int) error { return nil }
+			}
+			c.opts.OnError = tasks.Collect
+			res, err := tasks.RunItems(taskstest.NewFakeRun(t.Context(), caseKind).RC(), tasks.Sequential("in order"),
+				[]int{0, 1, 2}, fn, c.opts)
+			ie := asItemsError(t, err)
+			if !errors.Is(err, errGas) || ie.FirstIndex != 1 || !strings.Contains(ie.First.Error(), name+" panicked") ||
+				!strings.Contains(ie.First.Error(), "goroutine ") {
+				t.Fatalf("ItemsError = %v (index %d), want the %s panic with its stack at item 1", ie.First, ie.FirstIndex, name)
+			}
+			if res.Failed != 1 || res.Done != 2 {
+				t.Fatalf("result = %+v, want Failed 1, Done 2", res)
+			}
+		})
 	}
 }
