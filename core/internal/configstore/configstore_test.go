@@ -1,0 +1,313 @@
+// file: core/internal/configstore/configstore_test.go
+// version: 1.0.0
+// guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
+// last-edited: 2026-11-10
+
+package configstore
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/config/configtest"
+	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
+)
+
+// Owners of the test store besides c/config/: c/audit/ (the record shares the
+// batch) and a stand-in for c/secrets/ (F3-03 owns the real one).
+const (
+	auditOwner   storage.Owner = "core/audit"
+	secretsOwner storage.Owner = "core/secrets"
+)
+
+// env is a booted store with the config, audit and secrets keyspaces.
+type env struct {
+	db      *storage.DB
+	ks      storage.Keyspace
+	secKS   storage.Keyspace
+	store   *Store
+	audit   *audit.Store
+	stager  *stager
+	commit  *Committer
+	lookups map[config.Path]config.Path
+}
+
+// boot opens a fresh in-memory store as coretest does (coretest reaches the
+// kernel, which imports this package).
+func boot(t *testing.T) *env {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "main.pebble"),
+		Owners: []storage.OwnerSpec{
+			OwnerSpec(),
+			{Owner: auditOwner, Spec: storage.Spec{Keyspace: true}, Enabled: true},
+			{Owner: secretsOwner, Spec: storage.Spec{Keyspace: true, Serialized: []string{""}}, Enabled: true},
+		},
+		Build: "coretest+fixture", FreeSpaceMargin: 1, FS: storage.FSOf(vfs.NewMem()),
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatalf("boot: %v", errors.Join(err, o.Close()))
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	e := &env{db: db, lookups: map[config.Path]config.Path{}}
+	var ok bool
+	if e.ks, ok = db.Keyspace(Owner); !ok {
+		t.Fatal("no c/config/ keyspace")
+	}
+	if e.secKS, ok = db.Keyspace(secretsOwner); !ok {
+		t.Fatal("no secrets keyspace")
+	}
+	aks, ok := db.Keyspace(auditOwner)
+	if !ok {
+		t.Fatal("no audit keyspace")
+	}
+	if e.audit, err = audit.New(ctx, audit.Options{}, audit.Deps{Keyspace: aks, Seq: aks.Sequence("seq")}); err != nil {
+		t.Fatal(err)
+	}
+	e.store = New(e.ks)
+	e.stager = &stager{ks: e.secKS}
+	if e.commit, err = NewCommitter(CommitterOptions{Store: e.store, Audit: e.audit, Keys: e, Secrets: e.stager}); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// Lookup is the committer's KeyLookup: the section of every fixture key.
+func (e *env) Lookup(p config.Path) (config.KeyState, bool) {
+	for _, sec := range []config.Path{configtest.BatcavePath, configtest.WatchPath} {
+		if p == sec || len(p) > len(sec) && p[:len(sec)+1] == sec+"." {
+			return config.KeyState{Path: p, Section: sec}, true
+		}
+	}
+	return config.KeyState{}, false
+}
+
+// stager stands in for secrets.(*Store).Stage: it writes the secret's name
+// into its own keyspace, in the caller's batch, or fails.
+type stager struct {
+	ks   storage.Keyspace
+	fail error
+}
+
+func (s *stager) Stage(ctx context.Context, b *storage.Batch, w secrets.Write) error {
+	if s.fail != nil {
+		return s.fail
+	}
+	b.Bind(s.ks)
+	k := keys.Join(keys.Str(string(w.Name)))
+	if _, err := b.GetForUpdate(ctx, s.ks, k); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if w.Delete {
+		return b.In(s.ks).Delete(k)
+	}
+	return b.In(s.ks).Set(k, []byte("sealed"))
+}
+
+// harness is the suite's view of e.
+func (e *env) harness() configtest.Harness {
+	return configtest.Harness{
+		Store:     e.store,
+		Committer: e.commit,
+		Commit: func(ctx context.Context, stage func(ctx context.Context, b *storage.Batch) error) error {
+			return storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
+				b := e.ks.NewBatch()
+				defer func() { err = errors.Join(err, b.Close()) }()
+				if err := stage(ctx, b); err != nil {
+					return err
+				}
+				return b.Commit(ctx, storage.Sync)
+			})
+		},
+		Rows: e.rows,
+		Corrupt: func(ctx context.Context, p config.Path, raw []byte) (err error) {
+			b := e.ks.NewBatch()
+			defer func() { err = errors.Join(err, b.Close()) }()
+			if _, err := b.GetForUpdate(ctx, e.ks, RowKey(p)); err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+			if err := b.Set(RowKey(p), raw); err != nil {
+				return err
+			}
+			return b.Commit(ctx, storage.Sync)
+		},
+	}
+}
+
+// rows is every raw row of c/config/, by path.
+func (e *env) rows(ctx context.Context) (map[config.Path][]byte, error) {
+	out := map[config.Path][]byte{}
+	for kv, err := range e.ks.ScanPrefix(ctx, nil) {
+		if err != nil {
+			return nil, err
+		}
+		segs, err := keys.Split(kv.Key)
+		if err != nil || len(segs) != 2 {
+			return nil, errors.Join(errors.New("not a row key"), err)
+		}
+		out[config.Path(segs[1])] = append([]byte(nil), kv.Value...)
+	}
+	return out, nil
+}
+
+// TestNativeOverrideStore_RoundTrip (05-config §1.11): the native store over
+// c/config/ passes configtest.OverrideStoreSuite (set, unset and reload of
+// scalar, list, map-valued and restart keys; one row per set key).
+func TestNativeOverrideStore_RoundTrip(t *testing.T) {
+	configtest.OverrideStoreSuite(t, func(t *testing.T) configtest.Harness { return boot(t).harness() })
+}
+
+// TestNativeOverrideStore_RowFormat pins the row: key ("v", path), value the
+// envelope {value, gen, at, by}.
+func TestNativeOverrideStore_RowFormat(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	h := e.harness()
+	at := time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC)
+	ov := config.Override{Path: "core.batcave.level", Value: json.RawMessage(`"warn"`), Gen: 3, At: at, By: "alfred"}
+	if err := h.Commit(ctx, func(ctx context.Context, b *storage.Batch) error {
+		return e.store.Stage(ctx, b, []config.Override{ov}, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := e.ks.Get(ctx, keys.Join(keys.Str("v"), keys.Str("core.batcave.level")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"value":"warn","gen":3,"at":"2026-11-10T08:00:00Z","by":"alfred"}`; string(raw) != want {
+		t.Errorf("row = %s, want %s", raw, want)
+	}
+}
+
+// TestNativeOverrideStore_StageNeedsExpect: a blind write to c/config/ fails
+// (the keyspace is Serialized), so Stage's GetForUpdate is what lets it
+// commit.
+func TestNativeOverrideStore_StageNeedsExpect(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	b := e.ks.NewBatch()
+	if err := b.Set(RowKey("core.batcave.level"), []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	err := b.Commit(ctx, storage.Sync)
+	if !errors.Is(err, storage.ErrBlindWrite) {
+		t.Fatalf("blind write committed (%v): c/config/ must be Serialized", err)
+	}
+}
+
+// TestApply_SecretAndOverrideOneBatch (05-config §1.11, the committer half):
+// Commit.Set, Commit.Secrets and the core.settings.update record land in one
+// batch: all of them, or (when the secret stage fails) none of them.
+func TestApply_SecretAndOverrideOneBatch(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	cm := config.Commit{
+		Set:     []config.Override{{Path: "core.batcave.level", Value: json.RawMessage(`"warn"`), Gen: 1, By: "alfred"}},
+		Unset:   []config.Path{"core.batcave.gadget.count"},
+		Secrets: []secrets.Write{{Name: "core.batcave.api_key", Value: secrets.NewValue("wayne-tech"), By: "alfred"}},
+		Gen:     1,
+		Boot:    []config.Path{"core.batcave.mode"},
+	}
+	e.stager.fail = errors.New("the vault is sealed")
+	if err := e.commit.Commit(ctx, cm); err == nil {
+		t.Fatal("Commit succeeded with a failing secret stage")
+	}
+	if rows, err := e.rows(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("after a failed commit: rows %v (%v), want none", rows, err)
+	}
+	if recs := records(t, e); len(recs) != 0 {
+		t.Fatalf("after a failed commit: %d audit records, want none", len(recs))
+	}
+
+	e.stager.fail = nil
+	if err := e.commit.Commit(ctx, cm); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := e.rows(ctx)
+	if err != nil || len(rows) != 1 || rows["core.batcave.level"] == nil {
+		t.Fatalf("rows %v (%v), want the one set key", rows, err)
+	}
+	if v, err := e.secKS.Get(ctx, keys.Join(keys.Str("core.batcave.api_key"))); err != nil || string(v) != "sealed" {
+		t.Errorf("secret row = %q, %v; want it staged in the same commit", v, err)
+	}
+	recs := records(t, e)
+	if len(recs) != 1 {
+		t.Fatalf("%d audit records, want 1", len(recs))
+	}
+	r := recs[0]
+	if r.Action != "core.settings.update" || r.Outcome != audit.Success || r.Actor.UserID != "alfred" {
+		t.Errorf("record = %s %s by %q", r.Action, r.Outcome, r.Actor.UserID)
+	}
+	b, err := json.Marshal(r.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"changed":["core.batcave.api_key","core.batcave.gadget.count","core.batcave.level","core.batcave.mode"],"generation":1,"sections":["core.batcave"]}`
+	if string(b) != want {
+		t.Errorf("details = %s, want %s", b, want)
+	}
+	if strings.Contains(string(b), "wayne-tech") || strings.Contains(string(b), "warn") {
+		t.Errorf("the audit record carries a value: %s", b)
+	}
+}
+
+// TestCommitter_RefusesSecretsWithoutStager: before F3-03 opens the secrets
+// store, a commit with a secret write is refused, never half-applied.
+func TestCommitter_RefusesSecretsWithoutStager(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	c, err := NewCommitter(CommitterOptions{Store: e.store, Audit: e.audit, Keys: e})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := config.Commit{
+		Set:     []config.Override{{Path: "core.batcave.level", Value: json.RawMessage(`"warn"`)}},
+		Secrets: []secrets.Write{{Name: "core.batcave.api_key", Value: secrets.NewValue("x")}},
+	}
+	if err := c.Commit(ctx, cm); err == nil {
+		t.Fatal("a secret write committed without a secrets store")
+	}
+	if rows, err := e.rows(ctx); err != nil || len(rows) != 0 {
+		t.Errorf("rows %v (%v), want none", rows, err)
+	}
+	for _, o := range []CommitterOptions{{Audit: e.audit, Keys: e}, {Store: e.store, Keys: e}, {Store: e.store, Audit: e.audit}, {Store: e.store, Audit: e.audit, Keys: e, Attempts: -1}} {
+		if _, err := NewCommitter(o); err == nil {
+			t.Errorf("NewCommitter(%+v) succeeded", o)
+		}
+	}
+}
+
+func records(t *testing.T, e *env) []audit.Record {
+	t.Helper()
+	var out []audit.Record
+	for r, err := range e.audit.Query(context.Background(), audit.Filter{Limit: audit.MaxQueryLimit}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
