@@ -1,5 +1,5 @@
 // file: core/audit/store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1a9c44-2d5b-4f08-b3a6-91d0c8e5f2a7
 // last-edited: 2026-11-10
 
@@ -132,12 +132,16 @@ func TestAudit_SeqUniqueAcrossCrash(t *testing.T) {
 			for _, r := range all(t, s, Filter{}) {
 				issued = append(issued, r.Seq)
 			}
-			// Allocate more ids that never commit: the crash loses them.
+			// Allocate more ids that never commit: the crash loses them, and no
+			// later boot may hand one out again.
+			var lost []uint64
 			for range 3 {
 				b := e.ks.NewBatch()
-				if _, err := e.seq.NextIn(ctx, b); err != nil {
+				id, err := e.seq.NextIn(ctx, b)
+				if err != nil {
 					t.Fatal(err)
 				}
+				lost = append(lost, id)
 				_ = b.Close()
 			}
 			clone := fs.CrashClone(vfs.CrashCloneCfg{})
@@ -162,6 +166,11 @@ func TestAudit_SeqUniqueAcrossCrash(t *testing.T) {
 			for _, id := range issued {
 				if !seen[id] {
 					t.Errorf("record %d written before the crash is gone", id)
+				}
+			}
+			for _, id := range lost {
+				if seen[id] {
+					t.Errorf("seq %d was allocated before the crash and never committed, yet a later record carries it", id)
 				}
 			}
 		})
