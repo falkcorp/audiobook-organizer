@@ -1,5 +1,5 @@
 // file: core/tasks/definition.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 91c4b2c9-bbf5-484e-b81c-2622f4951d42
 // last-edited: 2026-11-10
 
@@ -162,8 +162,42 @@ type BatchSpec[P, T, R any] struct {
 	ExclusiveRefs func(T) []entity.Ref // many refs per item: overlapping items never run at once (5T.3.4)
 	ChunkSize     int                  // 0 = 256
 	ItemTimeout   time.Duration        // clock starts after the pause gate and ref locks
-	OnItemError   ErrorMode            // the zero value is FailFast; the Batch runner (F2-03) applies Collect (count failed, continue; v3 Continue) when it is unset, so a Batch cannot ask for FailFast yet
+	OnItemError   BatchErrorPolicy     // zero = BatchContinue (count failed, continue; v3 Continue); BatchStop stops dispatch
 	Label         func(T) string       // pure function of the item; runs in workers
+}
+
+// BatchErrorPolicy is what an item error does to a Batch run. Its zero value
+// is BatchContinue, the v3 default, so a Batch that says nothing keeps going;
+// BatchStop must be stated. It is a type of its own because ErrorMode's zero
+// value is FailFast, and a Batch could not otherwise tell "unset" from an
+// explicit FailFast.
+type BatchErrorPolicy uint8
+
+const (
+	BatchContinue BatchErrorPolicy = iota // count the item failed and go on (ErrorMode Collect)
+	BatchStop                             // stop dispatching on the first error (ErrorMode FailFast)
+)
+
+// String names the policy ("continue", "stop"), or "unknown".
+func (p BatchErrorPolicy) String() string {
+	switch p {
+	case BatchContinue:
+		return "continue"
+	case BatchStop:
+		return "stop"
+	default:
+		return "unknown"
+	}
+}
+
+// itemsMode maps the policy onto the item loop's ErrorMode. The Batch runner
+// F2-03 adds to this package drives its items through the RunItems loop and
+// passes this as ItemsOptions.OnError.
+func (p BatchErrorPolicy) itemsMode() ErrorMode {
+	if p == BatchStop {
+		return FailFast
+	}
+	return Collect
 }
 
 // DefaultChunkSize is BatchSpec.ChunkSize when it is zero. Name coined by F2-01.
@@ -229,7 +263,7 @@ func Batch[P, T, R any](kind Kind, s BatchSpec[P, T, R]) Definition {
 	if s.ItemTimeout < 0 {
 		d.problem("ItemTimeout %s is negative", s.ItemTimeout)
 	}
-	if s.OnItemError > Collect {
+	if s.OnItemError > BatchStop {
 		d.problem("unknown OnItemError %d", s.OnItemError)
 	}
 	return d

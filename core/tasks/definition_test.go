@@ -1,5 +1,5 @@
 // file: core/tasks/definition_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1173dc91-1e44-4449-bd9f-f6ef42138906
 // last-edited: 2026-11-10
 
@@ -217,6 +217,28 @@ func TestSchedule_ModeAndBuilders(t *testing.T) {
 	}
 	if p := writerTask(tasks.Every(0).Live()); !strings.Contains(p, "positive") {
 		t.Fatalf("Every(0) accepted: %q", p)
+	}
+}
+
+// TestBatchErrorPolicy_ZeroContinueExplicitStop: an unset OnItemError is
+// BatchContinue (the v3 default), and both explicit values build cleanly.
+func TestBatchErrorPolicy_ZeroContinueExplicitStop(t *testing.T) {
+	var spec tasks.BatchSpec[struct{}, int, struct{}]
+	if spec.OnItemError != tasks.BatchContinue || tasks.BatchContinue.String() != "continue" ||
+		tasks.BatchStop.String() != "stop" || tasks.BatchErrorPolicy(9).String() != "unknown" {
+		t.Fatalf("zero OnItemError = %s, want continue", spec.OnItemError)
+	}
+	for _, p := range []tasks.BatchErrorPolicy{0, tasks.BatchContinue, tasks.BatchStop} {
+		d := tasks.Batch("gotham.cases.sweep", tasks.BatchSpec[struct{}, int, struct{}]{
+			Common:      validCommon(),
+			Source:      func(*tasks.RC, struct{}) (tasks.Source[int], error) { return tasks.Source[int]{}, nil },
+			Item:        func(*tasks.ItemRC, struct{}, int) error { return nil },
+			Parallelism: tasks.Sequential("one case at a time"),
+			OnItemError: p,
+		})
+		if text := problemText(d); text != "" {
+			t.Fatalf("OnItemError %s: %q", p, text)
+		}
 	}
 }
 
