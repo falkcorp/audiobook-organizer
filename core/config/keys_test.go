@@ -1,5 +1,5 @@
 // file: core/config/keys_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f224e583-1d6b-4802-b4f3-62ff97c8cc3e
 // last-edited: 2026-11-10
 
@@ -65,6 +65,38 @@ type nestedDeep struct {
 	Teams map[string][]*oidcProvider `json:"teams"`
 }
 
+// unexportedLead is embedded, unexported, in a list element: encoding/json
+// still promotes its fields, so its tag is inside the list's value.
+type unexportedLead struct {
+	Issuer string `json:"issuer" protect:"owner"`
+}
+type nestedEmbeddedUnexported struct {
+	Teams []struct {
+		unexportedLead
+	} `json:"teams"`
+}
+
+// squad holds a provider two struct levels below the list.
+type squad struct {
+	Lead oidcProvider `json:"lead"`
+}
+type nestedTwoDeep struct {
+	Squads []squad `json:"squads"`
+}
+
+// badge is a struct map key that encodes itself as text; its field's tag is
+// still inside the map key's value.
+type badge struct {
+	Number string `json:"number" protect:"owner"`
+}
+
+func (b badge) MarshalText() ([]byte, error)     { return []byte(b.Number), nil }
+func (b *badge) UnmarshalText(text []byte) error { b.Number = string(text); return nil }
+
+type nestedMapKey struct {
+	ByBadge map[badge]string `json:"by_badge"`
+}
+
 type taggedSlice struct {
 	Providers []oidcProvider `json:"providers" protect:"owner"`
 }
@@ -93,6 +125,10 @@ func TestNestedTag_StricterThanKeyRefused(t *testing.T) {
 		{"self-encoding struct", config.Define("core.gotham.auth", nestedInSelfEncoding{}), "Combination"},
 		{"reload inside a list", config.Define("core.gotham.auth", nestedReload{}), "Hours"},
 		{"map of slices of pointers", config.Define("core.gotham.auth", nestedDeep{}), "Issuer"},
+		// T4 review MINOR-9 (surviving mutants M03 and M05) and the map-key NIT.
+		{"embedded unexported struct in a list element", config.Define("core.gotham.auth", nestedEmbeddedUnexported{}), "Issuer"},
+		{"tag two struct levels below a list", config.Define("core.gotham.auth", nestedTwoDeep{}), "Issuer"},
+		{"struct map key", config.Define("core.gotham.auth", nestedMapKey{ByBadge: map[badge]string{}}), "Number"},
 	}
 	for _, c := range refused {
 		t.Run(c.name, func(t *testing.T) {
