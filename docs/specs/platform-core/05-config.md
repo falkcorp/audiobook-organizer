@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.9 -->
+<!-- version: 1.13.10 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -394,8 +394,12 @@ type Importer interface {
 
 // Committer is implemented by the kernel (core's core/internal/configstore). Commit opens ONE storage batch and
 // stages into it: OverrideStore.Stage for c.Set and c.Unset, secrets.(*Store).Stage for each of c.Secrets, and the
-// audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values; actor =
-// Override.By). It retries with storage.RetryOnConflict, each attempt a fresh batch. config never imports audit (L4).
+// audit record core.settings.update (05-rbac §7.1: section and changed key names, never secret values). The record's
+// actor is the request's audit actor on ctx, whole (method, credential, client address), when its UserID is c.By, and
+// {UserID: c.By} when ctx carries none; a ctx actor naming someone else, or an Override.By or secrets.Write.By that is
+// not c.By, refuses the commit before anything is staged. c.By is set on every commit, so one that only unsets keys or
+// only changes boot keys still names its writer. It retries with storage.RetryOnConflict, each attempt a fresh batch.
+// config never imports audit (L4).
 // audit.Store and the action table (core.settings.update among its rows) land dark in F2, the foundation PRs, so
 // the record has its store from the config flip F3 on (IMPL-3).
 type Committer interface {
@@ -415,6 +419,8 @@ type Commit struct {
 	Unset   []Path
 	Secrets []secrets.Write // staged into the same batch via secrets.(*Store).Stage
 	Gen     uint64
+	Boot    []Path // boot-record keys this Apply changed: written to config.boot.json, named in the audit record
+	By      string // Actor.Subject of the Apply: the audit actor; every Override.By and secrets.Write.By equals it
 }
 
 // Patch is the API write unit. Set values are JSON; for a secret key the JSON string is the
