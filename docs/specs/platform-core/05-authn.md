@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.8 -->
+<!-- version: 1.13.9 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # 05 — Authentication (`core/auth`)
 
@@ -979,8 +979,9 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
   `owner_email`, `cf_access_team_domain`, `cf_access_aud`, `enable_auth`, `oauth_allowed_emails`),
   because a second admin or a stolen admin session could otherwise repoint Access at a team it
   controls and mint the owner's assertion. Their successors are all `ProtectOwner` (05-config): books'
-  `modules.books.identity.{owner_email, cf_access_team_domain, cf_access_aud}`, `core.auth.mode`, the
-  `allowed_emails` and `allowed_domains` of every `core.auth.oidc.providers[]` entry — plus
+  `modules.books.identity.{owner_email, cf_access_team_domain, cf_access_aud}`, `core.auth.mode`,
+  `core.auth.oidc.providers` as a whole (every field of every entry, not only its `allowed_emails`
+  and `allowed_domains`: the list is one key, §8) — plus
   `core.auth.owner.required`, which would otherwise let a non-owner admin drop the owner gate of
   restore, factory reset and user merge. The protection is active while an `OwnerVerifier` extension
   is configured and an owner identity is set (HEAD's "once `owner_email` is set") — the same
@@ -1434,7 +1435,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.temp_login.ttl` | duration | 15m | yes | admin |
 | `core.auth.schedules.session_prune` / `core.auth.schedules.onetime_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes (re-read every poll) | none |
 | `core.auth.oidc.redirect_base_url` | URL | — | yes | admin |
-| `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}`; `id` is `[a-z][a-z0-9_]{0,47}` and neither `providers` nor `redirect_base_url` | `[]` | yes (provider set rebuilt) | admin; `allowed_emails` / `allowed_domains`: owner (SEC3-6) |
+| `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}`; `id` is `[a-z][a-z0-9_]{0,47}` and neither `providers` nor `redirect_base_url` | `[]` | yes (provider set rebuilt) | owner (SEC3-6): the list is one key and config protects whole keys (05-config §1.3.6), so every entry field is owner, not only `allowed_emails` / `allowed_domains`; an admin who could repoint an entry's `issuer` or `client_id` while its `allowed_emails` name the owner could mint the owner's identity |
 | `core.auth.oidc.<id>.client_secret` | secret (`secrets.Ref`), one per provider entry, named by its `id` (ABO: `core.auth.oidc.github.client_secret`, `core.auth.oidc.google.client_secret`) | — | yes | admin |
 | `core.auth.owner.required` | bool | derived: true iff an OwnerVerifier is configured and an owner identity is set (§4.8, SEC4-14) | no | owner (SEC3-6) |
 
@@ -1497,7 +1498,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestReplacedStore_RunsPostRestoreHook` / `TestReplacedStore_TruncatedJournalKeysNeedConfirmation` | store file-copied back to an older generation (no staged restore): the next boot re-applies the verified tail and runs the hook with `rc.Revocations == nil` — every active or disabled key `needs_confirmation`, every epoch bumped — also when the journal was truncated after the archive and verifies cleanly; same generation with the head behind (a crash after `Append`) re-applies the tail only, no hook (DATA3-8, SEC3-10, DATA4-7, SEC4-6) |
 | `TestRestore_PreCutoverArchiveMigratesFirst` | (ABO, with 05-backup) a staged restore of an archive the R0 binary wrote: the restore boot runs the identity cutover at P4 before the hook, then the hook over native records; no session or invite of the archive authenticates |
 | `TestInviteAcceptRechecksCanAssign` | an invite whose creator can no longer `CanAssign` its role, or whose creator is deleted, is refused on accept (SEC3-2) |
-| `TestOwnerTrustRootKeysAreOwnerProtected` | port of HEAD's owner-trust-root test: with an owner set, a non-owner admin session cannot change `core.auth.mode`, a provider's `allowed_emails`/`allowed_domains`, `core.auth.owner.required` or the three `modules.books.identity.*` keys (SEC3-6) |
+| `TestOwnerTrustRootKeysAreOwnerProtected` | port of HEAD's owner-trust-root test: with an owner set, a non-owner admin session cannot change `core.auth.mode`, any field of a `core.auth.oidc.providers` entry (`issuer` and `client_id` as well as `allowed_emails`/`allowed_domains`), `core.auth.owner.required` or the three `modules.books.identity.*` keys (SEC3-6) |
 | `TestBootWrites_RunInP4d` | `_system` seeding, the bootstrap mint and the read-only key happen after the checkpoint, in P4d step 4; P5 and the store constructor write nothing; on every intermediate `main` before the identity flip, books' start hook still seeds roles and mints a token (DATA3-18, COR4-13, DATA4-10, COR6-3) |
 | `TestRestore_PostArchivePasswordChangeNotReverted` / `TestRevocationCommittedAfterCheckpointReapplied` | a password changed after the archive → `password_reset_required`, old password refused; a revocation journaled before and committed after the checkpoint is re-applied (SEC2-11, DATA2-7) |
 | `TestStage12_ExtensionPermsIgnored` / `TestModuleAuthMethod_CannotBeInteractive` | an authenticator's assertion cannot raise its checker; a module compat method declared interactive or with credential/owner rights → `ErrMethodSpec` (SEC2-16) |
