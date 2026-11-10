@@ -1,7 +1,7 @@
 # file: Dockerfile.build-cgo
-# version: 1.2.8
+# version: 1.2.9
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-11-09
+# last-edited: 2026-11-10
 #
 # Builds a statically-linked CGO binary with native TagLib for Linux amd64/arm64.
 # Used by CI to produce downloadable release binaries.
@@ -57,7 +57,7 @@ RUN set -ex \
 
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/
-RUN go mod download && go mod verify
+RUN for i in 1 2 3 4; do go mod download && break; [ "$i" = 4 ] && { echo "go mod download failed after 4 attempts" >&2; exit 1; }; sleep $((i*5)); done && go mod verify
 
 COPY . .
 
