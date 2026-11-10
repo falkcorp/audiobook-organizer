@@ -1,5 +1,5 @@
 // file: core/audit/async.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9cae4d73-00cd-4cab-8d23-e3d19b224b56
 // last-edited: 2026-11-10
 
@@ -8,6 +8,8 @@ package audit
 import (
 	"context"
 	"time"
+
+	"github.com/falkcorp/mediacore/entity"
 )
 
 // drainBudget bounds how long Stop lets the writer drain the queue (05-rbac
@@ -136,20 +138,23 @@ func (s *Store) run(startCtx context.Context) {
 	}
 }
 
-// foldKey is what makes two denials identical. 05-rbac §7.3 names "same
-// actor, route, permission, outcome": the key is those four, with the actor
-// as user, credential and address (so anonymous callers are told apart) and
-// the action beside them (a login denial and a role denial never fold). It
-// does not hold Target or Reason: §7.3 does not name them, so a run of
-// denials of one route that differ only by target is one record, carrying the
-// first one's target. See seams.d/F2-07.md.
+// foldKey is what makes two denials identical: 05-rbac §7.3's actor, route,
+// permission, outcome, target and reason, with the actor as user, credential
+// and address (so anonymous callers are told apart) and the action beside
+// them (a login denial and a role denial never fold). Target is in the key
+// because a route is a pattern: without it a caller walking many targets
+// through one route inside the window would show only the first.
 type foldKey struct {
-	action, userID, credential, addr, route, permission string
-	outcome                                             Outcome
+	action, userID, credential, addr, route, permission, reason string
+	target                                                      entity.Ref
+	outcome                                                     Outcome
 }
 
 func foldKeyOf(r Record) foldKey {
-	return foldKey{r.Action, r.Actor.UserID, r.Actor.CredentialID, r.Actor.ClientAddr, r.Route, r.Permission, r.Outcome}
+	return foldKey{
+		action: r.Action, userID: r.Actor.UserID, credential: r.Actor.CredentialID, addr: r.Actor.ClientAddr,
+		route: r.Route, permission: r.Permission, reason: r.Reason, target: r.Target, outcome: r.Outcome,
+	}
 }
 
 // fold is a run of identical denials held until its window ends.

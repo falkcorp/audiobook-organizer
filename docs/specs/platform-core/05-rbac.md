@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.7 -->
+<!-- version: 1.13.8 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # 05 — Authorization (`core/rbac`) and audit (`core/audit`)
 
@@ -1170,8 +1170,11 @@ as tampering.
 
 Denials and login failures go through `Emit` → bounded channel (`core.audit.async_buffer`, 4096) →
 one writer goroutine that batches up to 256 records or 100 ms. Identical denials (same actor,
-route, permission, outcome) within `core.audit.coalesce_window` (1 min) are folded into one record
-with `Coalesced=n`. Full queue → drop + `mediacore_audit_dropped_total` (fail-open: availability
+route, permission, outcome, target and reason) within `core.audit.coalesce_window` (1 min) are
+folded into one record with `Coalesced=n`; the target is in the key because a route is a pattern,
+so without it a caller walking many targets inside the window would show only the first one. The
+open folds are bounded by `core.audit.async_buffer`: at the cap the oldest fold is written early,
+as it stands. Full queue → drop + `mediacore_audit_dropped_total` (fail-open: availability
 under a credential-stuffing burst beats completeness; the throttle and access log still see it).
 
 ### 7.4 Integrity (no hash chain)

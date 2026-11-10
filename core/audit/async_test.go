@@ -1,5 +1,5 @@
 // file: core/audit/async_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4f8a1d7-6b32-4e95-8a0d-5f7e3b9c1d28
 // last-edited: 2026-11-10
 
@@ -426,52 +426,75 @@ func TestAudit_OpenFoldsAreBounded(t *testing.T) {
 	})
 }
 
-// TestAudit_FoldKeyIsTheSpecs pins 05-rbac §7.3: denials fold on actor, route,
-// permission and outcome, so two that differ by any of those are two records.
-// Target and Reason are not part of the key (the spec does not name them): a
-// run that differs only by them is one record, the first one's.
-func TestAudit_FoldKeyIsTheSpecs(t *testing.T) {
+// TestAudit_FoldKey (05-rbac §7.3): denials fold on actor, route, permission,
+// outcome, target and reason, so two that differ by any one of them are two
+// records, and identical denials still fold. A route is a pattern, so without
+// the target a caller walking many targets through one route would show only
+// the first.
+func TestAudit_FoldKey(t *testing.T) {
 	e := newEnv(t)
-	synctest.Test(t, func(t *testing.T) {
-		ctx := context.Background()
-		sk := &memSink{}
-		s := sinkStore(t, e, Options{}, sk)
-		if err := s.Start(ctx); err != nil {
-			t.Fatal(err)
-		}
-		base := denial("POST /api/core/v1/roles/{id}")
-		variants := map[string]func(Event) Event{
-			"credential": func(e Event) Event { e.Actor.CredentialID = "sess_arkham"; return e },
-			"user":       func(e Event) Event { e.Actor.UserID = "harvey_dent"; return e },
-			"permission": func(e Event) Event { e.Permission = "core.role.delete"; return e },
-			"route":      func(e Event) Event { e.Route = "GET /api/core/v1/roles"; return e },
-			"action":     func(e Event) Event { e.Action = "core.permission.deny"; return e },
-		}
-		s.Emit(ctx, base)
-		for _, mutate := range variants {
-			s.Emit(ctx, mutate(base))
-		}
-		robin := base
-		robin.Target, robin.Reason = entity.Ref{Module: "core", Kind: "role", ID: "robin"}, "dominance_required"
-		s.Emit(ctx, robin) // folds into base: same actor, route, permission, outcome
-		if err := s.Stop(ctx); err != nil {
-			t.Fatal(err)
-		}
-		got := sk.records()
-		if len(got) != 1+len(variants) {
-			t.Fatalf("%d records, want %d: every variant its own, the target-only one folded", len(got), 1+len(variants))
-		}
-		var folded int
-		for _, r := range got {
-			if r.Coalesced == 2 {
-				folded++
-				if r.Target != (entity.Ref{}) || r.Reason != "scope_escalation" {
-					t.Errorf("the fold carries %+v / %q, want the first denial's (no target, scope_escalation)", r.Target, r.Reason)
+	robin := entity.Ref{Module: "core", Kind: "role", ID: "robin"}
+	cases := map[string]func(Event) Event{
+		"credential":  func(e Event) Event { e.Actor.CredentialID = "sess_arkham"; return e },
+		"user":        func(e Event) Event { e.Actor.UserID = "harvey_dent"; return e },
+		"address":     func(e Event) Event { e.Actor.ClientAddr = "192.0.2.77"; return e },
+		"permission":  func(e Event) Event { e.Permission = "core.role.delete"; return e },
+		"route":       func(e Event) Event { e.Route = "GET /api/core/v1/roles"; return e },
+		"action":      func(e Event) Event { e.Action = "core.permission.deny"; return e },
+		"reason":      func(e Event) Event { e.Reason = "dominance_required"; return e },
+		"target":      func(e Event) Event { e.Target = robin; return e },
+		"target kind": func(e Event) Event { e.Target = entity.Ref{Module: "core", Kind: "user", ID: "robin"}; return e },
+		"target id":   func(e Event) Event { e.Target = entity.Ref{Module: "core", Kind: "role", ID: "nightwing"}; return e },
+	}
+	for name, mutate := range cases {
+		t.Run("differs by "+name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				sk := &memSink{}
+				s := sinkStore(t, e, Options{}, sk)
+				if err := s.Start(ctx); err != nil {
+					t.Fatal(err)
 				}
+				base := denial("POST /api/core/v1/roles/{id}")
+				base.Target = entity.Ref{Module: "core", Kind: "role", ID: "oracle"}
+				s.Emit(ctx, base)
+				s.Emit(ctx, mutate(base))
+				if err := s.Stop(ctx); err != nil {
+					t.Fatal(err)
+				}
+				got := sk.records()
+				if len(got) != 2 {
+					t.Fatalf("%d records, want 2: the denials differ by %s", len(got), name)
+				}
+				for _, r := range got {
+					if r.Coalesced != 0 {
+						t.Errorf("record %+v is a fold, want two lone denials", r)
+					}
+				}
+			})
+		})
+	}
+
+	t.Run("identical denials fold", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.Background()
+			sk := &memSink{}
+			s := sinkStore(t, e, Options{}, sk)
+			if err := s.Start(ctx); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if folded != 1 {
-			t.Errorf("%d folds of two, want 1", folded)
-		}
+			ev := denial("POST /api/core/v1/roles/{id}")
+			ev.Target = robin
+			for range 3 {
+				s.Emit(ctx, ev)
+			}
+			if err := s.Stop(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := sk.records()
+			if len(got) != 1 || got[0].Coalesced != 3 || got[0].Target != robin || got[0].Reason != "scope_escalation" {
+				t.Errorf("records = %+v, want one record, Coalesced=3, target robin, reason scope_escalation", got)
+			}
+		})
 	})
 }
