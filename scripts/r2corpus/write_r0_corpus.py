@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -698,6 +698,36 @@ def run_step(ctx: Ctx, step: Any) -> None:
 # ------------------------------------------------------------------- hooks
 
 
+CANCEL_ATTEMPTS = 8
+
+
+def _start_and_cancel_scan(ctx: Ctx) -> None:
+    """Start a scan and DELETE it before it finishes, retrying on a lost race.
+
+    On a fast host the fixture scan can finish before the DELETE lands, and R0
+    answers a cancel of a finished run with 404 ("operation not found"). Each
+    lost race leaves one more completed scan run in the store, which is a normal
+    row of the same family; the attempt that wins records op_canceled.
+    """
+    assert ctx.client is not None
+    body = {"def_id": "library.scan",
+            "params": {"folder_path": ctx.ids["import_dir"], "force_update": True}}
+    last = ""
+    for _ in range(CANCEL_ATTEMPTS):
+        r = ctx.client.request("POST", "/api/v1/operations/v2", body, auth="admin")
+        if r.status not in (200, 201, 202):
+            raise CorpusError(f"POST /api/v1/operations/v2 -> {r.status}: {json.dumps(r.body)[:600]}")
+        op_id = dig(r.body, "op_id")
+        d = ctx.client.request("DELETE", f"/api/v1/operations/v2/{op_id}", auth="admin")
+        if d.status in (200, 202, 204):
+            ctx.ids["op_canceled"] = op_id
+            return
+        last = f"{d.status}: {json.dumps(d.body)[:300]}"
+        if d.status not in (404, 409):
+            raise CorpusError(f"DELETE /api/v1/operations/v2/{op_id} -> {last}")
+    raise CorpusError(f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries (last {last})")
+
+
 def hook_bootstrap(ctx: Ctx) -> None:
     """First admin: R0's own emergency path (the bootstrap token exchange).
 
@@ -1189,11 +1219,8 @@ CASES: tuple[Case, ...] = (
         "M4",
         "a run started and canceled through DELETE /operations/v2/:id",
         (
-            Call("POST", "/api/v1/operations/v2",
-                 {"def_id": "library.scan", "params": {"folder_path": "${import_dir}",
-                                                       "force_update": True}},
-                 save=(("op_canceled", "op_id"),)),
-            Call("DELETE", "/api/v1/operations/v2/${op_canceled}", expect=(200, 202, 204, 409)),
+            Hook("start a library.scan and cancel it while it is still in flight",
+                 _start_and_cancel_scan),
             _done("op_canceled"),
         ),  # fmt: skip
     ),
