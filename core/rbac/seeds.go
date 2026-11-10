@@ -132,44 +132,35 @@ type seedDelta struct {
 	withdrawn []Permission // no longer effective
 }
 
-// onlyConfining reports whether every scope perms reaches is Confining; an
-// empty set qualifies. A stored seed role in that state may hold a Confining
-// scope today, or did until a release withdrew it, so the merge treats it as
-// confined: a non-Confining addition waits for an admin (see
-// restrictedAddition). Counting the empty set keeps that hold in place on the
-// boots after the withdrawal, so the merge stays idempotent.
-func onlyConfining(cat *Catalog, perms []Permission) bool {
-	if GrantsAdmin(perms) {
+// confinedForMerge reports whether the merge treats a stored seed role as
+// confined: its effective set is Confined (05-rbac §4.10), or it is empty
+// and holds a pending scope that no flag restricts, which only the
+// confinement rule below can have held. The second case is the role a
+// release emptied by withdrawing its last Confining scope while its new
+// scopes wait: without it, the next boot would see an empty, unconfined role
+// and apply them, and the merge would be neither safe nor idempotent.
+func confinedForMerge(cat *Catalog, cur *Role, old []Permission) bool {
+	if Confined(cat, old) {
+		return true
+	}
+	if len(old) > 0 {
 		return false
 	}
-	for _, p := range perms {
-		for _, c := range cat.Expand(p) {
-			if spec, _ := cat.Lookup(c); !spec.Confining {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// restrictedAddition reports whether adding p to a role that already exists
-// must wait for an admin's acceptance (§4.8, SEC-25): p is or reaches a
-// Sensitive, AuthRequired or Confining scope or a *:settings.manage /
-// *:integrations.manage, or the role is confined (onlyConfining) and p is
-// not a concrete Confining scope, which would end the confinement. The last
-// rule is F4-01's: §4.9's ErrConfiningSeed keeps a release from declaring
-// such a seed, and this keeps a stored role from crossing over when a
-// release replaces a confined seed with an unconfined one.
-func restrictedAddition(cat *Catalog, confined bool, p Permission) bool {
-	exp := cat.Expand(p)
-	if len(exp) == 0 {
-		return true // nothing to judge it by: hold it
-	}
-	if confined {
-		spec, ok := cat.Lookup(p)
-		if !ok || !spec.Confining {
+	for _, p := range cur.PendingSeed {
+		if !flagRestricted(cat, p) {
 			return true
 		}
+	}
+	return false
+}
+
+// flagRestricted reports whether p is or reaches a Sensitive, AuthRequired or
+// Confining scope or a *:settings.manage / *:integrations.manage (§4.8), or
+// reaches nothing the catalog holds (nothing to judge it by).
+func flagRestricted(cat *Catalog, p Permission) bool {
+	exp := cat.Expand(p)
+	if len(exp) == 0 {
+		return true
 	}
 	for _, c := range exp {
 		spec, _ := cat.Lookup(c)
@@ -178,6 +169,23 @@ func restrictedAddition(cat *Catalog, confined bool, p Permission) bool {
 		}
 	}
 	return false
+}
+
+// restrictedAddition reports whether adding p to a role that already exists
+// must wait for an admin's acceptance (§4.8, SEC-25): p is flagRestricted, or
+// the role is confined (confinedForMerge) and p is not a concrete Confining
+// scope, which would end the confinement. The last rule is F4-01's: §4.9's
+// ErrConfiningSeed keeps a release from declaring such a seed, and this
+// keeps a stored role from crossing over when a release replaces a confined
+// seed with an unconfined one.
+func restrictedAddition(cat *Catalog, confined bool, p Permission) bool {
+	if confined {
+		spec, ok := cat.Lookup(p)
+		if !ok || !spec.Confining {
+			return true
+		}
+	}
+	return flagRestricted(cat, p)
 }
 
 // mergeSeed computes a seed role's stored state after the merge (§4.8). cur
@@ -203,7 +211,7 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 	if def.locked {
 		next = slices.Clone(def.perms)
 	} else {
-		confined := onlyConfining(cat, old)
+		confined := confinedForMerge(cat, cur, old)
 		for _, p := range minus(def.perms, old) {
 			if restrictedAddition(cat, confined, p) {
 				pending = append(pending, p)
