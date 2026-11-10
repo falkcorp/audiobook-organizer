@@ -125,7 +125,7 @@ def recorded_request_headers(auth: str, extra: dict[str, str] | None) -> dict[st
         if k.lower() in REQUEST_HEADERS_TO_KEEP:
             hdrs[k.lower()] = v
     if auth.startswith("key:"):
-        hdrs["x-api-key"] = placeholder(auth[4:])
+        hdrs["authorization"] = f"Bearer {placeholder(auth[4:])}"
     elif auth.startswith("abs:"):
         hdrs["authorization"] = f"Bearer {REDACTED}"
     return hdrs

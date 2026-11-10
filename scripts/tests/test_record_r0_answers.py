@@ -75,14 +75,19 @@ class CommittedAnswersTest(unittest.TestCase):
         for a in answers():
             data = json.loads((REPO_ROOT / a["file"]).read_text(encoding="utf-8"))
             for ex in data["exchanges"]:
-                key = ex["request"]["headers"].get("x-api-key")
-                if key is not None:
-                    seen = True
-                    self.assertRegex(key, r"^<api-key:[a-z0-9-]+>$")
                 bearer = ex["request"]["headers"].get("authorization")
-                if bearer is not None:
-                    self.assertEqual(bearer, "Bearer <redacted>")
+                if bearer is None:
+                    continue
+                self.assertRegex(bearer, r"^Bearer (<api-key:[a-z0-9-]+>|<redacted>)$")
+                seen = seen or bearer.startswith("Bearer <api-key:")
         self.assertTrue(seen, "no answer request uses the recorder's API key")
+
+    def test_api_key_requests_were_answered(self):
+        for a in answers():
+            data = json.loads((REPO_ROOT / a["file"]).read_text(encoding="utf-8"))
+            for ex in data["exchanges"]:
+                if ex["request"]["headers"].get("authorization", "").startswith("Bearer <api-key:"):
+                    self.assertNotEqual(ex["response"]["status"], 401, ex["request"]["path"])
 
     def test_answers_cover_the_search_query_list(self):
         search = next(a for a in answers() if a["name"] == "search")
@@ -113,7 +118,8 @@ class RedactTest(unittest.TestCase):
 
     def test_request_headers(self):
         self.assertEqual(
-            r.recorded_request_headers("key:r2-answers", None)["x-api-key"], "<api-key:r2-answers>"
+            r.recorded_request_headers("key:r2-answers", None)["authorization"],
+            "Bearer <api-key:r2-answers>",
         )
         self.assertEqual(
             r.recorded_request_headers("abs:robin", None)["authorization"], "Bearer <redacted>"
