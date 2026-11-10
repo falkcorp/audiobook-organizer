@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -60,26 +60,40 @@ func TestApply_RefusesLocked(t *testing.T) {
 // TestApply_RefusesProtected: each protection class refuses an actor below
 // it with *ProtectedError naming the class; ProtectOperator refuses everyone.
 func TestApply_RefusesProtected(t *testing.T) {
+	// Every class refuses an Unset exactly as it refuses a Set: removing a
+	// stored value changes the key as much as writing one.
 	notInteractive := admin()
 	notInteractive.Interactive = false
 	cases := []struct {
-		name string
-		a    config.Actor
-		key  config.Path
-		val  string
-		need config.Protection
+		name  string
+		a     config.Actor
+		key   config.Path
+		val   string
+		need  config.Protection
+		unset bool // unset a stored value instead of setting val (T4 review MINOR-6)
 	}{
-		{"interactive key, non-interactive actor", notInteractive, kSignal, `"spotlight"`, config.ProtectInteractive},
-		{"admin key, no core:admin", manager(), kPath, `"/cave"`, config.ProtectAdmin},
-		{"admin key, core:admin but not interactive", notInteractive, kPath, `"/cave"`, config.ProtectAdmin},
-		{"owner key, no core:admin", manager(), kOwner, `"bruce@example.com"`, config.ProtectOwner},
-		{"operator key, admin", admin(), kVault, `"arkham"`, config.ProtectOperator},
+		{"interactive key, non-interactive actor", notInteractive, kSignal, `"spotlight"`, config.ProtectInteractive, false},
+		{"admin key, no core:admin", manager(), kPath, `"/cave"`, config.ProtectAdmin, false},
+		{"admin key, core:admin but not interactive", notInteractive, kPath, `"/cave"`, config.ProtectAdmin, false},
+		{"owner key, no core:admin", manager(), kOwner, `"bruce@example.com"`, config.ProtectOwner, false},
+		{"operator key, admin", admin(), kVault, `"arkham"`, config.ProtectOperator, false},
+		{"unset interactive key, non-interactive actor", notInteractive, kSignal, `"spotlight"`, config.ProtectInteractive, true},
+		{"unset admin key, no core:admin", manager(), kPath, `"/cave"`, config.ProtectAdmin, true},
+		{"unset owner key, no core:admin", manager(), kOwner, `"bruce@example.com"`, config.ProtectOwner, true},
+		{"unset operator key, admin", admin(), kVault, `"arkham"`, config.ProtectOperator, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := started(t, rigOpts{})
+			ro := rigOpts{}
+			set := map[config.Path]string{c.key: c.val}
+			var unset []config.Path
+			if c.unset {
+				// A stored value to remove, so a skipped check would delete it.
+				ro.rows, set, unset = map[config.Path]string{c.key: c.val}, nil, []config.Path{c.key}
+			}
+			r := started(t, ro)
 			before := r.state()
-			_, err := r.apply(c.a, map[config.Path]string{c.key: c.val})
+			_, err := r.apply(c.a, set, unset...)
 			var pe *config.ProtectedError
 			if !errors.As(err, &pe) || !errors.Is(err, config.ErrProtected) || pe.Path != c.key || pe.Need != c.need {
 				t.Fatalf("err = %v, want *ProtectedError{%s, %s}", err, c.key, c.need)
