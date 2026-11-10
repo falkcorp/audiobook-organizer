@@ -1,5 +1,5 @@
 // file: core/tasks/perms.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9cf11d04-c704-493a-9c9a-568cf39ef46a
 // last-edited: 2026-11-10
 
@@ -28,9 +28,9 @@ type Permissions struct {
 // Approval says a Live run needs a person's recorded decision first.
 type Approval struct {
 	PlanRequired bool          // Live start must name a Preview run (plan_ref) of the same kind
-	MaxPlanAge   time.Duration // 0 = 7 days (pkg/ops/approval.go:29-30)
+	MaxPlanAge   time.Duration // 0 = 7 days (the v3 ops package's approval.go:29-30)
 }
 
 // DefaultMaxPlanAge is Approval.MaxPlanAge when it is zero. Name coined by F2-01
-// (v3 kept the same constant, pkg/ops/approval.go:30).
+// (v3 kept the same constant, the v3 ops package's approval.go:30).
 const DefaultMaxPlanAge = 7 * 24 * time.Hour

@@ -1,5 +1,5 @@
 // file: core/tasks/stores.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e87dda23-11e8-4a65-9769-3ac16d0b3c05
 // last-edited: 2026-11-10
 
@@ -171,7 +171,7 @@ type PauseStore interface {
 // StandDown is the persisted marker of one live stand-down hold (5T.3.7). It
 // exists only so that the next boot can tell that a holder died mid-work:
 // the resume sweep then leaves the runs it quiesced interrupted_quiesced for
-// that boot (HEAD's boot consult, internal/operations/registry/resume.go:45-60).
+// that boot (HEAD's boot consult, the v2 registry's resume.go:45-60).
 type StandDown struct {
 	Key      Key
 	Holder   RunID

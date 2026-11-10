@@ -1,5 +1,5 @@
 // file: core/tasks/definition.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c4b2c9-bbf5-484e-b81c-2622f4951d42
 // last-edited: 2026-11-10
 
@@ -60,7 +60,7 @@ const MaxTimeout = 24 * time.Hour
 
 // DedupePolicy decides whether a start folds into an existing run of the same
 // kind instead of inserting a new one: HEAD's DedupeQueuedRuns,
-// DedupeSameActorOnly and MergeQueuedParams (internal/operations/registry/
+// DedupeSameActorOnly and MergeQueuedParams (the v2 registry's
 // types.go:99-125). The zero value is HEAD's default: a start folds into a
 // queued or running run of the kind whose params are byte-identical. A start
 // that folds inserts nothing and returns the existing run's RunRef.
@@ -100,7 +100,7 @@ type Debounce struct {
 	MaxWait time.Duration // 0 = DefaultDebounceMaxWait; never below Window
 }
 
-// The v2 defaults (internal/operations/registry/types.go:234,239). Names coined by F2-01.
+// The v2 defaults (the v2 registry's types.go:234,239). Names coined by F2-01.
 const (
 	DefaultDebounceWindow  = 5 * time.Second
 	DefaultDebounceMaxWait = 60 * time.Second

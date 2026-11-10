@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/conformance.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e791d16-82f5-4c80-8314-22f8b1820dab
 // last-edited: 2026-11-10
 
@@ -39,7 +39,7 @@ const (
 // An empty Help is logged, not failed (archtest warns on it).
 //
 // This is the static half of the re-implementation of
-// pkg/ops/opstest/conformance.go (04 §8.6). Its runtime assertions (preview
+// the v3 opstest package's conformance.go (04 §8.6). Its runtime assertions (preview
 // writes nothing, no write after the fence, crash/resume at least once,
 // partition order, progress monotone, idempotent items) need the executor and
 // join this function with it (F2-03).

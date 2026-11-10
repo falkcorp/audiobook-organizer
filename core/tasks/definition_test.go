@@ -1,5 +1,5 @@
 // file: core/tasks/definition_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1173dc91-1e44-4449-bd9f-f6ef42138906
 // last-edited: 2026-11-10
 
@@ -224,7 +224,7 @@ func TestConstructors_NeverPanicAndCollectProblems(t *testing.T) {
 	task := tasks.Task("", tasks.TaskSpec[int, int]{})
 	batch := tasks.Batch("x", tasks.BatchSpec[int, int, int]{ChunkSize: -1, ItemTimeout: -1, OnItemError: 9,
 		PartitionBy: func(int) string { return "" }, ExclusiveRefs: func(int) []tasks.Resource { return nil }})
-	fixer := tasks.Fixer("gotham.cases.fix", tasks.FixerSpec[int, int]{Common: tasks.Common{Effects: tasks.ReadOnly()}})
+	fixer := tasks.Fixer("gotham.cases.fix", tasks.FixerSpec[int, int]{Effects: tasks.ReadOnly()})
 	for _, c := range []struct {
 		d    tasks.Definition
 		want []string
@@ -245,7 +245,7 @@ func TestConstructors_NeverPanicAndCollectProblems(t *testing.T) {
 	if ps := tasks.Problems(nil); len(ps) != 1 {
 		t.Fatalf("Problems(nil) = %v", ps)
 	}
-	if problemText(fixer) != problemText(tasks.Fixer("gotham.cases.fix", tasks.FixerSpec[int, int]{Common: tasks.Common{Effects: tasks.ReadOnly()}})) {
+	if problemText(fixer) != problemText(tasks.Fixer("gotham.cases.fix", tasks.FixerSpec[int, int]{Effects: tasks.ReadOnly()})) {
 		t.Fatal("problem order is not stable")
 	}
 }
