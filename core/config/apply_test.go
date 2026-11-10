@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -766,4 +766,95 @@ func TestMapEntryID_InvalidIsUnknown(t *testing.T) {
 			t.Errorf("row %s: unknown %v, quarantined %v; want it reported as unknown", p, rep.Unknown, rep.Quarantined[p])
 		}
 	}
+}
+
+const (
+	lanternSection config.Path = "core.lantern"
+	lanternMode    config.Path = "core.lantern.mode"
+	lanternRange   config.Path = "core.lantern.range"
+)
+
+// lantern is a boot-key section with a cross-field Validator, so a boot
+// record can hold values that each pass their schema and fail together.
+type lantern struct {
+	Mode  string `json:"mode" reload:"boot"`
+	Range int    `json:"range" reload:"boot"`
+}
+
+func (l *lantern) Validate() error {
+	if l.Mode == "off" && l.Range > 0 {
+		return &config.FieldError{Path: lanternRange, Err: errors.New("a lantern that is off has no range")}
+	}
+	return nil
+}
+
+// TestApply_QuarantinedValueIsNeverANoOp (05-config §1.4 step 6): Apply of a
+// quarantined key's exact stored bytes is not skipped as unchanged. The value
+// is written and validated again: when its section now passes, it is stored
+// and the quarantine is cleared; when it still fails, Apply refuses with
+// ErrInvalid and the key stays quarantined. Apply never returns nil while the
+// key stays quarantined. Both the override rows and the boot record.
+func TestApply_QuarantinedValueIsNeverANoOp(t *testing.T) {
+	t.Run("override rows", func(t *testing.T) {
+		r := newRig(t, rigOpts{
+			o:    config.Options{Flags: map[config.Path]string{kMax: "5"}},
+			rows: map[config.Path]string{kMin: `8`, kVillains: `["bane"]`},
+		})
+		if rep := r.start(); rep.Quarantined[kMin] == nil || rep.Quarantined[kVillains] == nil {
+			t.Fatalf("report = %+v, want min and villains quarantined", rep)
+		}
+		// min=8 still fails max=5: refused, nothing written, still quarantined.
+		before := r.state()
+		if _, err := r.apply(admin(), map[config.Path]string{kMin: `8`}); !errors.Is(err, config.ErrInvalid) {
+			t.Errorf("Apply of the quarantined min = %v, want ErrInvalid", err)
+		}
+		refused(t, r, before, 0)
+		if ks, _ := r.st.Lookup(kMin); ks.Quarantined == nil {
+			t.Error("min lost its quarantine on a refused Apply")
+		}
+		// villains passes on its own: stored, quarantine cleared, effective.
+		if _, err := r.apply(admin(), map[config.Path]string{kVillains: `["bane"]`}); err != nil {
+			t.Fatalf("Apply of the quarantined villains = %v", err)
+		}
+		if r.cm.Calls() != 1 {
+			t.Errorf("committer called %d times, want 1: the same bytes must be written again", r.cm.Calls())
+		}
+		ks, _ := r.st.Lookup(kVillains)
+		if ks.Quarantined != nil || ks.Source != config.SourceOverride || !slices.Equal(r.watch.Get().Villains, []string{"bane"}) {
+			t.Errorf("villains: KeyState %+v, effective %v; want the override live and unquarantined", ks, r.watch.Get().Villains)
+		}
+	})
+	t.Run("boot record", func(t *testing.T) {
+		r := newRig(t, rigOpts{bootRecord: `{"format":"mediacore-boot/1","gen":1,"values":{"core.lantern.mode":"off","core.lantern.range":3}}`})
+		if _, err := config.Register(r.st.Registry(), config.Define(lanternSection, lantern{})); err != nil {
+			t.Fatal(err)
+		}
+		r.start()
+		for _, p := range []config.Path{lanternMode, lanternRange} {
+			if ks, _ := r.st.Lookup(p); ks.Quarantined == nil {
+				t.Fatalf("%s: not quarantined at boot", p)
+			}
+		}
+		// range=3 passes on its own (mode is quarantined): the record is
+		// rewritten and the quarantine cleared.
+		if _, err := r.apply(admin(), map[config.Path]string{lanternRange: `3`}); err != nil {
+			t.Fatalf("Apply of the quarantined range = %v", err)
+		}
+		if r.cm.Calls() != 1 {
+			t.Errorf("committer called %d times, want 1: the same bytes must be written again", r.cm.Calls())
+		}
+		if ks, _ := r.st.Lookup(lanternRange); ks.Quarantined != nil {
+			t.Errorf("range is still quarantined: %v", ks.Quarantined)
+		}
+		// mode=off now fails beside range=3: refused, still quarantined.
+		if _, err := r.apply(admin(), map[config.Path]string{lanternMode: `"off"`}); !errors.Is(err, config.ErrInvalid) {
+			t.Errorf("Apply of the quarantined mode = %v, want ErrInvalid", err)
+		}
+		if ks, _ := r.st.Lookup(lanternMode); ks.Quarantined == nil {
+			t.Error("mode lost its quarantine on a refused Apply")
+		}
+		if r.cm.Calls() != 1 {
+			t.Errorf("committer called %d times after the refusal, want 1", r.cm.Calls())
+		}
+	})
 }
