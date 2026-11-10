@@ -1541,7 +1541,8 @@
    "internal/books/testdata/r2corpus/answers/overlay/",
    "internal/books/testdata/r2corpus/manifest.json",
    "scripts/r2corpus/record_r0_answers.py",
-   "scripts/tests/test_build_overlay.py"
+   "scripts/tests/test_build_overlay.py",
+   "scripts/tests/test_write_r0_corpus.py"
   ],
   "spec": "09 §9.3 item 1 (overlay cases); 05-rbac §6.3, §12 (custom role rows); 05-config §1.12.2 stage 2; 05-authn §11 (identity rows stop the upgrade)",
   "notes": "Tier: hand-built corrupt and edge rows, each labelled; the blocker corpus must refuse. Owns gate tests: the hand-built overlay and the preflight's blocking-row and unfinished-merge corpus."

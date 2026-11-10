@@ -1,5 +1,5 @@
 # file: scripts/tests/test_write_r0_corpus.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: e61bb4fe-2238-459c-be02-94efbf991c39
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/write_r0_corpus.py (F2-12).
@@ -102,8 +102,10 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(next(iter(manifest)), "_header", "_header must be the first key")
         self.assertEqual(manifest["_header"]["file"], f"{w.CORPUS_REL}/manifest.json")
         self.assertEqual(manifest["r0_tag"], w.read_r0_tag())
-        self.assertEqual(manifest["overlay"], [])
-        self.assertEqual(manifest["blockers"], [])
+        # Stage 2 (F2-13, build_overlay.py) fills overlay and blockers;
+        # scripts/tests/test_build_overlay.py checks their contents.
+        self.assertIsInstance(manifest["overlay"], list)
+        self.assertIsInstance(manifest["blockers"], list)
         self.assertIn(w.STAGE1_REL, manifest["stores"])
         gaps = {g["family"] for g in manifest["not_writable_by_r0_api"]}
         self.assertIn("oauthid:", gaps)
