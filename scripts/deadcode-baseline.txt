@@ -100,10 +100,12 @@ core/internal/configstore.RowKey
 core/internal/configstore.Store.Keyspace
 core/internal/configstore.Store.Load
 core/internal/configstore.Store.Stage
+core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
 core/kernel.bootConfig
 core/kernel.configBoot.HealthTokens
 core/kernel.configBoot.attachConfig
+core/kernel.configBoot.bootRoot
 core/kernel.configBoot.buildConfigStore
 core/kernel.configBoot.checkModules
 core/kernel.configBoot.checkStoragePath
@@ -111,6 +113,7 @@ core/kernel.configBoot.configMetrics
 core/kernel.configBoot.loadConfig
 core/kernel.configOwnerSpec
 core/kernel.operatorString
+core/kernel.operatorValueString
 core/kernel.pathOf
 internal/metadata.BookFileHashOptions
 internal/metadata.NewAudibleClientWithBaseURL
