@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.67.13
+// version: 4.68.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -398,6 +398,72 @@ type lifecycleRun struct {
 	// afterListenRan is set by afterListen; StopHook skips what only a
 	// served run started.
 	afterListenRan atomic.Bool
+	// afterGate orders afterListen against the stop: see afterListenGate.
+	afterGate afterListenGate
+}
+
+// afterListenGate orders the post-listen start (afterListen) against the
+// stop. afterListen runs on its own goroutine, concurrently with serving, and
+// it writes what the stop reads or waits on: it assigns s.scheduler, adds to
+// life.backgroundWG (the scheduler's Start, the ticker, the watcher and the
+// session cleanup all go through it) and reads config.AppConfig. A stop that
+// started while it was still running therefore raced it: StopHook's
+// backgroundWG.Wait overlapped an Add (the sync.WaitGroup misuse the race
+// detector reports as a write in stopWithin against a read in afterListen),
+// and a caller that mutated the config once the stop returned raced
+// afterListen's read of it.
+//
+// The kernel does not order the two on its own: it starts Serve on a
+// goroutine and may begin the stop before that goroutine ran, and the
+// listener's drain budget can end while afterListen is still working. The
+// gate closes both holes. begin is called by Serve before it starts
+// afterListen and refuses once the stop has sealed the gate, so a stop that
+// got there first means afterListen never runs. seal is called by the stop
+// (R1Listener.Shutdown, then StopHook) and returns only once an afterListen
+// that did begin has returned, or when ctx ends first. The zero value is
+// ready to use.
+type afterListenGate struct {
+	mu      sync.Mutex
+	sealed  bool
+	running chan struct{} // non-nil once begun; closed when afterListen returned
+}
+
+// begin reports whether afterListen may run. When it may, the returned
+// function must be called exactly once, after afterListen returned.
+func (g *afterListenGate) begin() (finish func(), ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.sealed || g.running != nil {
+		return nil, false
+	}
+	done := make(chan struct{})
+	g.running = done
+	return func() { close(done) }, true
+}
+
+// seal forbids a later afterListen and waits for one already running. It
+// reports whether none is still running: false means ctx ended first and the
+// caller must not assume afterListen's writes are finished. It is safe to
+// call more than once and from several goroutines.
+func (g *afterListenGate) seal(ctx context.Context) bool {
+	g.mu.Lock()
+	g.sealed = true
+	done := g.running
+	g.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // Start runs the server's whole lifecycle without the kernel: StartHook, the
@@ -889,6 +955,18 @@ func (s *Server) StopHook(ctx context.Context) error {
 	defer s.markStopped()
 	var abandoned []string
 
+	// First, before any step reads what afterListen writes: forbid a post-
+	// listen start that has not begun, and wait for one that has (the kernel's
+	// listener drain already did, within its own share, so this is normally
+	// instant; it is the wait that counts when that share ended first). A
+	// post-listen start still running at the budget is reported, and the wait
+	// on its goroutines below is skipped, not raced.
+	afterListenFinished := s.life.afterGate.seal(ctx)
+	if !afterListenFinished {
+		lifecycleLog.Warn("The post-listen start is still running at the shutdown budget; stopping around it")
+		abandoned = append(abandoned, "post-listen start")
+	}
+
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
 	// pinning this Server and its stores.
 	s.unregisterPebbleMetricsSources()
@@ -1071,8 +1149,12 @@ func (s *Server) StopHook(ctx context.Context) error {
 
 	// The scheduler, ticker, snapshotter, watcher and session goroutines
 	// returned on shutdown (closed before the drain); wait for any task the
-	// scheduler was still running, with what is left of the budget.
-	if !stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() }) {
+	// scheduler was still running, with what is left of the budget. Not
+	// while afterListen is still running (afterListenFinished): it adds to
+	// backgroundWG, and a Wait that overlaps an Add is a WaitGroup misuse.
+	if !afterListenFinished {
+		abandoned = append(abandoned, "scheduler tasks (the post-listen start was still running)")
+	} else if !stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() }) {
 		abandoned = append(abandoned, "scheduler tasks")
 	}
 
@@ -1216,7 +1298,6 @@ type R1Listener struct {
 	ln        net.Listener
 	tls       bool
 	cfg       ServerConfig
-	served    atomic.Bool
 	afterDone chan struct{} // closed when afterListen has run (Serve starts it)
 }
 
@@ -1403,11 +1484,15 @@ func (l *R1Listener) Addr() net.Addr { return l.ln.Addr() }
 // starts HTTP/3, when configured, and runs the post-listen start
 // (afterListen) concurrently, as HEAD did once its listener was bound.
 func (l *R1Listener) Serve() error {
-	l.served.Store(true)
-	go func() {
-		defer close(l.afterDone)
-		l.s.afterListen()
-	}()
+	// begin before the goroutine, not inside it: a stop that sealed the gate
+	// first means afterListen never starts (afterListenGate).
+	if finish, ok := l.s.life.afterGate.begin(); ok {
+		go func() {
+			defer close(l.afterDone)
+			defer finish()
+			l.s.afterListen()
+		}()
+	}
 	return l.serveListeners()
 }
 
@@ -1445,12 +1530,10 @@ func (l *R1Listener) serveListeners() error {
 // main server and the redirect.
 func (l *R1Listener) Shutdown(ctx context.Context) error {
 	s := l.s
-	if l.served.Load() {
-		select {
-		case <-l.afterDone:
-		case <-ctx.Done():
-		}
-	}
+	// Seal the gate even when Serve has not started yet: the kernel runs Serve
+	// on its own goroutine and may stop before it ran, and a Serve that begins
+	// afterListen after this point would race the whole stop.
+	s.life.afterGate.seal(ctx)
 	s.beforeDrain()
 	lifecycleLog.Info("Stopping HTTP servers...")
 	if s.http3Server != nil {

@@ -1,0 +1,3 @@
+### Fixed
+
+- Server stop no longer races the post-listen start. The kernel runs the listener's `Serve` on its own goroutine and can begin the stop before it ran, or end the listener drain while `afterListen` is still starting the scheduler, ticker, watchers and session cleanup, so `StopHook`'s wait on the background WaitGroup overlapped those adds and a caller that changed config after the stop raced `afterListen`'s read of it (the flaky `TestRestoreOfflineArchive_R1` in the `-race` shard). A gate now seals the post-listen start at the first stop step: a start that has not begun never runs, and one that has is waited for, within the shutdown budget, before `StopHook` reads or waits on anything it writes.
