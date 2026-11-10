@@ -127,16 +127,16 @@
             "accessToken": "<redacted>",
             "bookmarks": [
               {
-                "createdAt": 1794308649836,
-                "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "createdAt": 1794310418655,
+                "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "time": 0.15,
                 "title": "The Bane confrontation"
               }
             ],
-            "createdAt": 1794308624154,
+            "createdAt": 1794310392309,
             "email": null,
             "hasOpenIDLink": false,
-            "id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+            "id": "01M72KQJFNXWXQMGSX75S0JC6H",
             "isActive": true,
             "isLocked": false,
             "itemTagsSelected": [],
@@ -151,15 +151,15 @@
                 "episodeId": null,
                 "finishedAt": null,
                 "hideFromContinueListening": false,
-                "id": "01M72J1KRTCH7P4C4Q69CPMR3J-0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "isFinished": false,
-                "lastUpdate": 1794308649823,
-                "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-                "mediaItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "lastUpdate": 1794310418641,
+                "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "mediaItemType": "book",
                 "progress": 0,
-                "startedAt": 1794308649823,
-                "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+                "startedAt": 1794310418641,
+                "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
               }
             ],
             "permissions": {
@@ -202,16 +202,16 @@
         "body": {
           "bookmarks": [
             {
-              "createdAt": 1794308649836,
-              "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "createdAt": 1794310418655,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "time": 0.15,
               "title": "The Bane confrontation"
             }
           ],
-          "createdAt": 1794308624154,
+          "createdAt": 1794310392309,
           "email": null,
           "hasOpenIDLink": false,
-          "id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+          "id": "01M72KQJFNXWXQMGSX75S0JC6H",
           "isActive": true,
           "isLocked": false,
           "itemTagsSelected": [],
@@ -226,15 +226,15 @@
               "episodeId": null,
               "finishedAt": null,
               "hideFromContinueListening": false,
-              "id": "01M72J1KRTCH7P4C4Q69CPMR3J-0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "isFinished": false,
-              "lastUpdate": 1794308649823,
-              "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-              "mediaItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "lastUpdate": 1794310418641,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "mediaItemType": "book",
               "progress": 0,
-              "startedAt": 1794308649823,
-              "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+              "startedAt": 1794310418641,
+              "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
             }
           ],
           "permissions": {
@@ -281,15 +281,15 @@
               "episodeId": null,
               "finishedAt": null,
               "hideFromContinueListening": false,
-              "id": "01M72J1KRTCH7P4C4Q69CPMR3J-0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "isFinished": false,
-              "lastUpdate": 1794308649823,
-              "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-              "mediaItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "lastUpdate": 1794310418641,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "mediaItemType": "book",
               "progress": 0,
-              "startedAt": 1794308649823,
-              "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+              "startedAt": 1794310418641,
+              "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
             }
           ]
         },
@@ -317,15 +317,15 @@
           "page": 0,
           "sessions": [
             {
-              "createdAt": 1794308649535,
+              "createdAt": 1794310418315,
               "current": false,
               "deviceInfo": {
                 "clientName": "r2corpus",
                 "deviceId": "robin-device-01"
               },
-              "id": "01M72J2CMY0ES10CHFSMD23GY3",
+              "id": "01M72KRC05EMS0XYT8Y81RVETY",
               "ipAddress": "127.0.0.1",
-              "updatedAt": 1794308649535,
+              "updatedAt": 1794310418315,
               "userAgent": "r2corpus-writer/1.0"
             }
           ],
@@ -422,12 +422,12 @@
           "page": 0,
           "results": [
             {
-              "addedAt": 1794308636973,
-              "birthtimeMs": 1794308636973,
-              "ctimeMs": 1794308636976,
+              "addedAt": 1794310405615,
+              "birthtimeMs": 1794310405615,
+              "ctimeMs": 1794310405618,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
-              "ino": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+              "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+              "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -435,7 +435,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -466,21 +466,21 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308636976,
+              "mtimeMs": 1794310405618,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
               "relPath": "Alfred Pennyworth/The Long Halloween",
               "size": 1405,
-              "updatedAt": 1794308636976
+              "updatedAt": 1794310405618
             },
             {
-              "addedAt": 1794308637032,
-              "birthtimeMs": 1794308637032,
-              "ctimeMs": 1794308637035,
+              "addedAt": 1794310405655,
+              "birthtimeMs": 1794310405655,
+              "ctimeMs": 1794310405660,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
-              "ino": "6425cd72-070f-4698-bc4b-22068639a6c1",
+              "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+              "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -488,7 +488,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -519,21 +519,21 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308637035,
+              "mtimeMs": 1794310405660,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
               "relPath": "Barbara Gordon/Year One",
               "size": 876,
-              "updatedAt": 1794308637035
+              "updatedAt": 1794310405660
             },
             {
-              "addedAt": 1794308637072,
-              "birthtimeMs": 1794308637072,
-              "ctimeMs": 1794308637075,
+              "addedAt": 1794310405690,
+              "birthtimeMs": 1794310405690,
+              "ctimeMs": 1794310405693,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-              "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -541,7 +541,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -572,21 +572,21 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308637075,
+              "mtimeMs": 1794310405693,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
               "relPath": "Lucius Fox/Knightfall",
               "size": 876,
-              "updatedAt": 1794308637075
+              "updatedAt": 1794310405693
             },
             {
-              "addedAt": 1794308637111,
-              "birthtimeMs": 1794308637111,
-              "ctimeMs": 1794308637114,
+              "addedAt": 1794310405721,
+              "birthtimeMs": 1794310405721,
+              "ctimeMs": 1794310405724,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
-              "ino": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+              "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+              "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -594,7 +594,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -625,21 +625,21 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308637114,
+              "mtimeMs": 1794310405724,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
               "relPath": "Selina Kyle/Hush",
               "size": 9490,
-              "updatedAt": 1794308637114
+              "updatedAt": 1794310405724
             },
             {
-              "addedAt": 1794308637139,
-              "birthtimeMs": 1794308637139,
-              "ctimeMs": 1794308637142,
+              "addedAt": 1794310405750,
+              "birthtimeMs": 1794310405750,
+              "ctimeMs": 1794310405765,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
-              "ino": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+              "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+              "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -647,7 +647,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -678,21 +678,21 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308637142,
+              "mtimeMs": 1794310405765,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
               "relPath": "Leslie Thompkins/The Killing Joke",
               "size": 876,
-              "updatedAt": 1794308637142
+              "updatedAt": 1794310405765
             },
             {
-              "addedAt": 1794308637173,
-              "birthtimeMs": 1794308637173,
-              "ctimeMs": 1794308637176,
+              "addedAt": 1794310405804,
+              "birthtimeMs": 1794310405804,
+              "ctimeMs": 1794310405806,
               "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-              "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
-              "ino": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+              "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+              "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
               "isFile": false,
               "isInvalid": false,
               "isMissing": false,
@@ -700,7 +700,7 @@
               "media": {
                 "coverPath": null,
                 "duration": 0,
-                "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
                 "metadata": {
                   "abridged": false,
                   "asin": null,
@@ -731,13 +731,13 @@
                 "tags": []
               },
               "mediaType": "book",
-              "mtimeMs": 1794308637176,
+              "mtimeMs": 1794310405806,
               "numFiles": 0,
               "oldLibraryItemId": null,
               "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
               "relPath": "Harvey Bullock/Dark Victory",
               "size": 876,
-              "updatedAt": 1794308637176
+              "updatedAt": 1794310405806
             }
           ],
           "sortDesc": false,
@@ -765,12 +765,12 @@
           {
             "entities": [
               {
-                "addedAt": 1794308637173,
-                "birthtimeMs": 1794308637173,
-                "ctimeMs": 1794308637176,
+                "addedAt": 1794310405804,
+                "birthtimeMs": 1794310405804,
+                "ctimeMs": 1794310405806,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
-                "ino": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -778,7 +778,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+                  "id": "ec3518cf-720b-4525-be55-d78489fedec9",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -809,21 +809,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637176,
+                "mtimeMs": 1794310405806,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
                 "relPath": "Harvey Bullock/Dark Victory",
                 "size": 876,
-                "updatedAt": 1794308637176
+                "updatedAt": 1794310405806
               },
               {
-                "addedAt": 1794308637139,
-                "birthtimeMs": 1794308637139,
-                "ctimeMs": 1794308637142,
+                "addedAt": 1794310405750,
+                "birthtimeMs": 1794310405750,
+                "ctimeMs": 1794310405765,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
-                "ino": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -831,7 +831,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+                  "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -862,21 +862,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637142,
+                "mtimeMs": 1794310405765,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
                 "relPath": "Leslie Thompkins/The Killing Joke",
                 "size": 876,
-                "updatedAt": 1794308637142
+                "updatedAt": 1794310405765
               },
               {
-                "addedAt": 1794308637111,
-                "birthtimeMs": 1794308637111,
-                "ctimeMs": 1794308637114,
+                "addedAt": 1794310405721,
+                "birthtimeMs": 1794310405721,
+                "ctimeMs": 1794310405724,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
-                "ino": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -884,7 +884,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+                  "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -915,21 +915,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637114,
+                "mtimeMs": 1794310405724,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
                 "relPath": "Selina Kyle/Hush",
                 "size": 9490,
-                "updatedAt": 1794308637114
+                "updatedAt": 1794310405724
               },
               {
-                "addedAt": 1794308637072,
-                "birthtimeMs": 1794308637072,
-                "ctimeMs": 1794308637075,
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-                "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -937,7 +937,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -968,21 +968,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637075,
+                "mtimeMs": 1794310405693,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
                 "relPath": "Lucius Fox/Knightfall",
                 "size": 876,
-                "updatedAt": 1794308637075
+                "updatedAt": 1794310405693
               },
               {
-                "addedAt": 1794308637032,
-                "birthtimeMs": 1794308637032,
-                "ctimeMs": 1794308637035,
+                "addedAt": 1794310405655,
+                "birthtimeMs": 1794310405655,
+                "ctimeMs": 1794310405660,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
-                "ino": "6425cd72-070f-4698-bc4b-22068639a6c1",
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -990,7 +990,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
+                  "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1021,21 +1021,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637035,
+                "mtimeMs": 1794310405660,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
                 "relPath": "Barbara Gordon/Year One",
                 "size": 876,
-                "updatedAt": 1794308637035
+                "updatedAt": 1794310405660
               },
               {
-                "addedAt": 1794308636973,
-                "birthtimeMs": 1794308636973,
-                "ctimeMs": 1794308636976,
+                "addedAt": 1794310405615,
+                "birthtimeMs": 1794310405615,
+                "ctimeMs": 1794310405618,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
-                "ino": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1043,7 +1043,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+                  "id": "236162d1-766a-42ab-b59a-e9484179b99b",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1074,13 +1074,13 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308636976,
+                "mtimeMs": 1794310405618,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
                 "relPath": "Alfred Pennyworth/The Long Halloween",
                 "size": 1405,
-                "updatedAt": 1794308636976
+                "updatedAt": 1794310405618
               }
             ],
             "id": "recently-added",
@@ -1092,12 +1092,12 @@
           {
             "entities": [
               {
-                "addedAt": 1794308636973,
-                "birthtimeMs": 1794308636973,
-                "ctimeMs": 1794308636976,
+                "addedAt": 1794310405615,
+                "birthtimeMs": 1794310405615,
+                "ctimeMs": 1794310405618,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
-                "ino": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+                "id": "236162d1-766a-42ab-b59a-e9484179b99b",
+                "ino": "236162d1-766a-42ab-b59a-e9484179b99b",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1105,7 +1105,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "189a9b8b-74b8-4bab-90df-a196f91ebfd6",
+                  "id": "236162d1-766a-42ab-b59a-e9484179b99b",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1136,21 +1136,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308636976,
+                "mtimeMs": 1794310405618,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween",
                 "relPath": "Alfred Pennyworth/The Long Halloween",
                 "size": 1405,
-                "updatedAt": 1794308636976
+                "updatedAt": 1794310405618
               },
               {
-                "addedAt": 1794308637032,
-                "birthtimeMs": 1794308637032,
-                "ctimeMs": 1794308637035,
+                "addedAt": 1794310405655,
+                "birthtimeMs": 1794310405655,
+                "ctimeMs": 1794310405660,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
-                "ino": "6425cd72-070f-4698-bc4b-22068639a6c1",
+                "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
+                "ino": "d50ad894-a9ce-435f-adaa-b2352722daeb",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1158,7 +1158,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "6425cd72-070f-4698-bc4b-22068639a6c1",
+                  "id": "d50ad894-a9ce-435f-adaa-b2352722daeb",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1189,21 +1189,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637035,
+                "mtimeMs": 1794310405660,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One",
                 "relPath": "Barbara Gordon/Year One",
                 "size": 876,
-                "updatedAt": 1794308637035
+                "updatedAt": 1794310405660
               },
               {
-                "addedAt": 1794308637072,
-                "birthtimeMs": 1794308637072,
-                "ctimeMs": 1794308637075,
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-                "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1211,7 +1211,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1242,21 +1242,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637075,
+                "mtimeMs": 1794310405693,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
                 "relPath": "Lucius Fox/Knightfall",
                 "size": 876,
-                "updatedAt": 1794308637075
+                "updatedAt": 1794310405693
               },
               {
-                "addedAt": 1794308637111,
-                "birthtimeMs": 1794308637111,
-                "ctimeMs": 1794308637114,
+                "addedAt": 1794310405721,
+                "birthtimeMs": 1794310405721,
+                "ctimeMs": 1794310405724,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
-                "ino": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+                "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
+                "ino": "f5262be9-1204-4fe4-9f52-0d4139651411",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1264,7 +1264,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "f0a6bd51-505d-406c-9e4c-cab549ae33bf",
+                  "id": "f5262be9-1204-4fe4-9f52-0d4139651411",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1295,21 +1295,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637114,
+                "mtimeMs": 1794310405724,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush",
                 "relPath": "Selina Kyle/Hush",
                 "size": 9490,
-                "updatedAt": 1794308637114
+                "updatedAt": 1794310405724
               },
               {
-                "addedAt": 1794308637139,
-                "birthtimeMs": 1794308637139,
-                "ctimeMs": 1794308637142,
+                "addedAt": 1794310405750,
+                "birthtimeMs": 1794310405750,
+                "ctimeMs": 1794310405765,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
-                "ino": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+                "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
+                "ino": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1317,7 +1317,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "8a24b879-cc2c-4489-b493-49fd263a5d50",
+                  "id": "1737bf1c-0e18-4f28-80b8-05c52da3856b",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1348,21 +1348,21 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637142,
+                "mtimeMs": 1794310405765,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke",
                 "relPath": "Leslie Thompkins/The Killing Joke",
                 "size": 876,
-                "updatedAt": 1794308637142
+                "updatedAt": 1794310405765
               },
               {
-                "addedAt": 1794308637173,
-                "birthtimeMs": 1794308637173,
-                "ctimeMs": 1794308637176,
+                "addedAt": 1794310405804,
+                "birthtimeMs": 1794310405804,
+                "ctimeMs": 1794310405806,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
-                "ino": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+                "id": "ec3518cf-720b-4525-be55-d78489fedec9",
+                "ino": "ec3518cf-720b-4525-be55-d78489fedec9",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
@@ -1370,7 +1370,7 @@
                 "media": {
                   "coverPath": null,
                   "duration": 0,
-                  "id": "46fd5321-ef4a-43c1-8026-287d81689cc9",
+                  "id": "ec3518cf-720b-4525-be55-d78489fedec9",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1401,13 +1401,13 @@
                   "tags": []
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637176,
+                "mtimeMs": 1794310405806,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory",
                 "relPath": "Harvey Bullock/Dark Victory",
                 "size": 876,
-                "updatedAt": 1794308637176
+                "updatedAt": 1794310405806
               }
             ],
             "id": "discover",
@@ -1509,16 +1509,16 @@
           "book": [
             {
               "libraryItem": {
-                "addedAt": 1794308637072,
-                "birthtimeMs": 1794308637072,
-                "ctimeMs": 1794308637075,
+                "addedAt": 1794310405690,
+                "birthtimeMs": 1794310405690,
+                "ctimeMs": 1794310405693,
                 "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-                "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-                "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                 "isFile": false,
                 "isInvalid": false,
                 "isMissing": false,
-                "lastScan": 1794308637075,
+                "lastScan": 1794310405693,
                 "libraryFiles": [],
                 "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
                 "media": {
@@ -1527,8 +1527,8 @@
                   "coverPath": null,
                   "duration": 0,
                   "ebookFile": null,
-                  "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-                  "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+                  "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+                  "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
                   "metadata": {
                     "abridged": false,
                     "asin": null,
@@ -1560,14 +1560,14 @@
                   "tracks": null
                 },
                 "mediaType": "book",
-                "mtimeMs": 1794308637075,
+                "mtimeMs": 1794310405693,
                 "numFiles": 0,
                 "oldLibraryItemId": null,
                 "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
                 "relPath": "Lucius Fox/Knightfall",
                 "scanVersion": "2.36.0",
                 "size": 876,
-                "updatedAt": 1794308637075
+                "updatedAt": 1794310405693
               }
             }
           ],
@@ -1625,20 +1625,20 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "GET",
-        "path": "/api/items/0317cacb-761f-472e-a0ec-a88128ea44ae?expanded=1&include=progress"
+        "path": "/api/items/37809ad2-89cf-4c45-9e37-f08a6405f4f2?expanded=1&include=progress"
       },
       "response": {
         "body": {
-          "addedAt": 1794308637072,
-          "birthtimeMs": 1794308637072,
-          "ctimeMs": 1794308637075,
+          "addedAt": 1794310405690,
+          "birthtimeMs": 1794310405690,
+          "ctimeMs": 1794310405693,
           "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-          "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-          "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+          "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
           "isFile": false,
           "isInvalid": false,
           "isMissing": false,
-          "lastScan": 1794308637075,
+          "lastScan": 1794310405693,
           "libraryFiles": [],
           "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
           "media": {
@@ -1647,8 +1647,8 @@
             "coverPath": null,
             "duration": 0,
             "ebookFile": null,
-            "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-            "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+            "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
             "metadata": {
               "abridged": false,
               "asin": null,
@@ -1680,14 +1680,14 @@
             "tracks": null
           },
           "mediaType": "book",
-          "mtimeMs": 1794308637075,
+          "mtimeMs": 1794310405693,
           "numFiles": 0,
           "oldLibraryItemId": null,
           "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
           "relPath": "Lucius Fox/Knightfall",
           "scanVersion": "2.36.0",
           "size": 876,
-          "updatedAt": 1794308637075,
+          "updatedAt": 1794310405693,
           "userMediaProgress": {
             "currentTime": 0,
             "duration": 0,
@@ -1696,15 +1696,15 @@
             "episodeId": null,
             "finishedAt": null,
             "hideFromContinueListening": false,
-            "id": "01M72J1KRTCH7P4C4Q69CPMR3J-0317cacb-761f-472e-a0ec-a88128ea44ae",
+            "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
             "isFinished": false,
-            "lastUpdate": 1794308649823,
-            "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-            "mediaItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+            "lastUpdate": 1794310418641,
+            "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
             "mediaItemType": "book",
             "progress": 0,
-            "startedAt": 1794308649823,
-            "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+            "startedAt": 1794310418641,
+            "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
           }
         },
         "headers": {
@@ -1722,7 +1722,7 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "GET",
-        "path": "/api/me/progress/0317cacb-761f-472e-a0ec-a88128ea44ae"
+        "path": "/api/me/progress/37809ad2-89cf-4c45-9e37-f08a6405f4f2"
       },
       "response": {
         "body": {
@@ -1733,15 +1733,15 @@
           "episodeId": null,
           "finishedAt": null,
           "hideFromContinueListening": false,
-          "id": "01M72J1KRTCH7P4C4Q69CPMR3J-0317cacb-761f-472e-a0ec-a88128ea44ae",
+          "id": "01M72KQJFNXWXQMGSX75S0JC6H-37809ad2-89cf-4c45-9e37-f08a6405f4f2",
           "isFinished": false,
-          "lastUpdate": 1794308649823,
-          "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-          "mediaItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+          "lastUpdate": 1794310418641,
+          "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+          "mediaItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
           "mediaItemType": "book",
           "progress": 0,
-          "startedAt": 1794308649823,
-          "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+          "startedAt": 1794310418641,
+          "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
         },
         "headers": {
           "content-type": "application/json; charset=utf-8"
@@ -1758,14 +1758,14 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "GET",
-        "path": "/api/me/bookmarks/0317cacb-761f-472e-a0ec-a88128ea44ae"
+        "path": "/api/me/bookmarks/37809ad2-89cf-4c45-9e37-f08a6405f4f2"
       },
       "response": {
         "body": {
           "bookmarks": [
             {
-              "createdAt": 1794308649836,
-              "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "createdAt": 1794310418655,
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "time": 0.15,
               "title": "The Bane confrontation"
             }
@@ -1793,16 +1793,16 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "POST",
-        "path": "/api/items/0317cacb-761f-472e-a0ec-a88128ea44ae/play"
+        "path": "/api/items/37809ad2-89cf-4c45-9e37-f08a6405f4f2/play"
       },
       "response": {
         "body": {
-          "bookId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+          "bookId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
           "chapters": [],
           "coverPath": null,
           "currentTime": 0,
-          "date": "2026-11-10",
-          "dayOfWeek": "Tuesday",
+          "date": "<volatile>",
+          "dayOfWeek": "<volatile>",
           "deviceInfo": {
             "clientName": "r2corpus-recorder",
             "clientVersion": "2.36.0",
@@ -1814,7 +1814,7 @@
             "manufacturer": "",
             "model": "",
             "sdkVersion": "",
-            "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+            "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
           },
           "displayAuthor": "",
           "displayTitle": "Knightfall",
@@ -1823,16 +1823,16 @@
           "id": "<volatile>",
           "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
           "libraryItem": {
-            "addedAt": 1794308637072,
-            "birthtimeMs": 1794308637072,
-            "ctimeMs": 1794308637075,
+            "addedAt": 1794310405690,
+            "birthtimeMs": 1794310405690,
+            "ctimeMs": 1794310405693,
             "folderId": "b5e3a5b2-a76e-471f-b18b-f0lder00d1r",
-            "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-            "ino": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+            "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+            "ino": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
             "isFile": false,
             "isInvalid": false,
             "isMissing": false,
-            "lastScan": 1794308637075,
+            "lastScan": 1794310405693,
             "libraryFiles": [],
             "libraryId": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
             "media": {
@@ -1841,8 +1841,8 @@
               "coverPath": null,
               "duration": 0,
               "ebookFile": null,
-              "id": "0317cacb-761f-472e-a0ec-a88128ea44ae",
-              "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+              "id": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
+              "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
               "metadata": {
                 "abridged": false,
                 "asin": null,
@@ -1874,16 +1874,16 @@
               "tracks": null
             },
             "mediaType": "book",
-            "mtimeMs": 1794308637075,
+            "mtimeMs": 1794310405693,
             "numFiles": 0,
             "oldLibraryItemId": null,
             "path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall",
             "relPath": "Lucius Fox/Knightfall",
             "scanVersion": "2.36.0",
             "size": 876,
-            "updatedAt": 1794308637075
+            "updatedAt": 1794310405693
           },
-          "libraryItemId": "0317cacb-761f-472e-a0ec-a88128ea44ae",
+          "libraryItemId": "37809ad2-89cf-4c45-9e37-f08a6405f4f2",
           "mediaMetadata": {
             "abridged": false,
             "asin": null,
@@ -1915,7 +1915,7 @@
           "startedAt": "<volatile>",
           "timeListening": 0,
           "updatedAt": "<volatile>",
-          "userId": "01M72J1KRTCH7P4C4Q69CPMR3J"
+          "userId": "01M72KQJFNXWXQMGSX75S0JC6H"
         },
         "headers": {
           "content-type": "application/json; charset=utf-8"
@@ -1936,7 +1936,7 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "POST",
-        "path": "/api/session/37767037-2db4-4ce3-9ae7-07959e1b8656/sync"
+        "path": "/api/session/<volatile>/sync"
       },
       "response": {
         "body": {
@@ -1957,7 +1957,7 @@
           "user-agent": "r2corpus-recorder/1.0"
         },
         "method": "POST",
-        "path": "/api/session/37767037-2db4-4ce3-9ae7-07959e1b8656/close"
+        "path": "/api/session/<volatile>/close"
       },
       "response": {
         "body": {

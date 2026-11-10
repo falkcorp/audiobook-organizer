@@ -7,11 +7,14 @@
   },
   "r0_tag": "v0.223.0",
   "r0_binary_sha256": "6f33d9dd7e41c2e43c3aa80342ed2c5b940df749ae6fdd6773bce9053837dc6f",
-  "written_at": "2026-11-10T11:04:19Z",
+  "written_at": "2026-11-10T11:33:49Z",
   "lapses": {
-    "api_keys": "2027-11-10T11:04:19Z",
-    "invites": "2036-11-07T11:04:19Z",
-    "why": "R0 caps an API key at 365 days; every fixture key and invite gets the longest life R0 allows, and a replay after a lapse sees expired rows"
+    "api_keys": "2027-11-10T11:33:49Z",
+    "invites": "2036-11-07T11:33:49Z",
+    "abs_sessions": "2036-11-07T11:33:49Z",
+    "web_sessions": "2026-11-17T11:33:49Z",
+    "answers_valid_until": "2027-11-10T11:33:49Z",
+    "why": "R0 caps an API key at 365 days; keys, invites and ABS sessions get the longest life R0 allows, and a replay after answers_valid_until sees expired rows. Web sessions keep R0's fixed 7-day remember-me TTL; no answer reads them"
   },
   "credentials": "every credential in this corpus is a generated fixture value (invariant 2); API keys in answer files are <api-key:NAME> placeholders",
   "boot": {
@@ -47,7 +50,8 @@
       "DELUGE_WEB_PASSWORD": "fixture-deluge-password-oracle",
       "ABS_API_ENABLED": "true",
       "ABS_AUTH_MODES": "jwt",
-      "ABS_JWT_SECRET": "fixture-abs-jwt-secret-for-the-r2-corpus-only-0001"
+      "ABS_JWT_SECRET": "fixture-abs-jwt-secret-for-the-r2-corpus-only-0001",
+      "ABS_REFRESH_TOKEN_TTL": "87600h"
     },
     "files": {
       "/tmp/r2corpus/home/.audiobook-organizer.yaml": {
@@ -248,13 +252,13 @@
     "internal/books/testdata/r2corpus/stage1": [
       {
         "path": "db/audiobooks.pebble/000014.log",
-        "size": 806429,
-        "sha256": "3df24a6a286f472e96c4a3219b0e485a294faa9190a158c394f1616cb82a60a6"
+        "size": 806420,
+        "sha256": "cffeb8845ca7ba15672263002074ec72f06d86ebdbc3aba18fb265d1aebb0c91"
       },
       {
         "path": "db/audiobooks.pebble/000016.sst",
-        "size": 407301,
-        "sha256": "3a997629bcab2eaeda0ffcc95066f6d1cc5e0fd4f9e759c644c5ecc04baf9706"
+        "size": 407311,
+        "sha256": "2a1cee81bad7d9dd050392600fb1d79cde5d751d1774f99b1067c5d92cf07bf0"
       },
       {
         "path": "db/audiobooks.pebble/LOCK",
@@ -264,12 +268,12 @@
       {
         "path": "db/audiobooks.pebble/MANIFEST-000008",
         "size": 174,
-        "sha256": "8846f7371ee69fc1c02434509f1ab980e26937ee0933ac1141c71960eabe81bb"
+        "sha256": "46f879b9001ef0de9d37d66dd1b9ffc36e756b4ceefa1572935aceb551a9cac9"
       },
       {
         "path": "db/audiobooks.pebble/MANIFEST-000013",
         "size": 426,
-        "sha256": "9ac860d1c4b87fb4e640d6b5b5c4941163348f9307ea6ac6b8d5585d7b8fd2de"
+        "sha256": "9171b0e03d668784f6041d11c98641c54eb74f74c337238916924ec7f9e02a6c"
       },
       {
         "path": "db/audiobooks.pebble/OPTIONS-000015",
@@ -302,14 +306,14 @@
         "sha256": "6e47169208d1b28483a0654246537f68ad90852725e92cad5852561b9ab086b8"
       },
       {
-        "path": "db/library.bleve/store/00000000006c.zap",
-        "size": 46689,
-        "sha256": "895d096ce446a5e35c162e4c90476ccd607eb9e74e2a82a18a1a4c6370547417"
+        "path": "db/library.bleve/store/000000000063.zap",
+        "size": 46913,
+        "sha256": "3ce0fbd8fd273d6f3b01b51ccc2961f1184b06125f30c9066b47a66639d2bb2b"
       },
       {
         "path": "db/library.bleve/store/root.bolt",
-        "size": 131072,
-        "sha256": "0cad0eea2615798b1acf720d4fc6b8d43d9c9eed2cf0553e362b93961d20dca1"
+        "size": 262144,
+        "sha256": "9750fe043eb9c1f38e1af2821235c721edf268af85dc46cfe7483c55a542cd0b"
       },
       {
         "path": "db/library.bleve.mapping",
@@ -323,8 +327,8 @@
       },
       {
         "path": "db/logs/audiobook-organizer-2026-11-10.log",
-        "size": 214628,
-        "sha256": "cb60032ba0162d7c161753bd240e7359d193eccb6fab7d56e415486b51584a9a"
+        "size": 214122,
+        "sha256": "d2f8c4a9f4b1e20c78bf89e34021c73860edb02012360cc00f13667e2ef3d420"
       },
       {
         "path": "import/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
@@ -404,7 +408,7 @@
       {
         "path": "state/.encryption_key",
         "size": 32,
-        "sha256": "13f479739f5e635dd0e808c0fe2427d48188c7e4a5deb687c82d7387a17a0306"
+        "sha256": "c349325968f2f71f4bacb0d0267b051dee226d93c3aeac87e09507883f783800"
       }
     ]
   },
@@ -458,30 +462,23 @@
     {
       "answer": "search",
       "request": "GET /api/v1/audiobooks?*",
-      "path": "data.items[*].updated_at",
+      "path": "data.items[?file_path^=\"/tmp/r2corpus/stage1/import/\"].updated_at",
       "action": "normalize",
-      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root, stamping the books it touches with the boot's clock"
+      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root (a scan without force_update leaves root_dir out), stamping the import root's books with the boot's clock"
     },
     {
       "answer": "search",
       "request": "GET /api/v1/audiobooks?*",
-      "path": "data.items[*].last_scan_mtime",
+      "path": "data.items[?file_path^=\"/tmp/r2corpus/stage1/import/\"].last_scan_mtime",
       "action": "normalize",
-      "why": "the boot-time rescan stores each file's mtime, which a checkout sets"
+      "why": "the boot-time rescan stores each import-root file's mtime, which a checkout sets"
     },
     {
       "answer": "library",
       "request": "GET /api/v1/audiobooks?*",
-      "path": "data.items[*].updated_at",
+      "path": "data.items[?file_path^=\"/tmp/r2corpus/stage1/import/\"].updated_at",
       "action": "normalize",
-      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root, stamping the books it touches with the boot's clock"
-    },
-    {
-      "answer": "library",
-      "request": "GET /api/v1/audiobooks?*",
-      "path": "data.items[*].last_scan_mtime",
-      "action": "normalize",
-      "why": "the boot-time rescan stores each file's mtime, which a checkout sets"
+      "why": "the corpus' queued library scan runs at every boot (runs.standdown) and rescans the import root (a scan without force_update leaves root_dir out), stamping the import root's books with the boot's clock"
     },
     {
       "answer": "identity",
@@ -573,6 +570,36 @@
       "path": "updatedAt",
       "action": "normalize",
       "why": "the time the recorder opened the playback session"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "date",
+      "action": "normalize",
+      "why": "the session's start date (abs/play.go: s.StartedAt at request time)"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/items/*/play",
+      "path": "dayOfWeek",
+      "action": "normalize",
+      "why": "the session's start weekday (abs/play.go: s.StartedAt at request time)"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/session/*/sync",
+      "target": "request.path",
+      "path": "",
+      "action": "mask",
+      "why": "the playback session ID the recorder's /play just minted"
+    },
+    {
+      "answer": "abs",
+      "request": "POST /api/session/*/close",
+      "target": "request.path",
+      "path": "",
+      "action": "mask",
+      "why": "the playback session ID the recorder's /play just minted"
     }
   ]
 }

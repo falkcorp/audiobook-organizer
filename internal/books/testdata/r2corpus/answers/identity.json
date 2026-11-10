@@ -17,85 +17,85 @@
             "count": 7,
             "users": [
               {
-                "created_at": "2026-11-10T11:03:43.04183639Z",
+                "created_at": "2026-11-10T11:33:10.797541296Z",
                 "email": "_system@local",
-                "id": "01M72J1JP15F82F6EX5Q3YCERA",
+                "id": "01M72KQH0DNEW356YZS9YA1EVD",
                 "merged_into_user_id": "",
                 "roles": null,
                 "status": "system",
-                "updated_at": "2026-11-10T11:03:43.04183639Z",
+                "updated_at": "2026-11-10T11:33:10.797541296Z",
                 "username": "_system"
               },
               {
-                "created_at": "2026-11-10T11:03:43.670434728Z",
+                "created_at": "2026-11-10T11:33:11.732395684Z",
                 "email": "",
-                "id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "id": "01M72KQHXM3TJDMDBTC8G90416",
                 "merged_into_user_id": "",
                 "roles": [
                   "admin"
                 ],
                 "status": "active",
-                "updated_at": "2026-11-10T11:03:43.940117133Z",
+                "updated_at": "2026-11-10T11:33:12.043411726Z",
                 "username": "admin"
               },
               {
-                "created_at": "2026-11-10T11:03:44.154357961Z",
+                "created_at": "2026-11-10T11:33:12.309518046Z",
                 "email": "",
-                "id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+                "id": "01M72KQJFNXWXQMGSX75S0JC6H",
                 "merged_into_user_id": "",
                 "roles": [
                   "editor"
                 ],
                 "status": "active",
-                "updated_at": "2026-11-10T11:03:44.154357961Z",
+                "updated_at": "2026-11-10T11:33:12.309518046Z",
                 "username": "dick.grayson"
               },
               {
-                "created_at": "2026-11-10T11:03:44.22789126Z",
+                "created_at": "2026-11-10T11:33:12.387367718Z",
                 "email": "",
-                "id": "01M72J1KV3MYARNBFQ5GD1WYYG",
+                "id": "01M72KQJJ3QTYQ3XCF5F2Y7GS3",
                 "merged_into_user_id": "",
                 "roles": [
                   "viewer"
                 ],
                 "status": "active",
-                "updated_at": "2026-11-10T11:03:44.22789126Z",
+                "updated_at": "2026-11-10T11:33:12.387367718Z",
                 "username": "barbara.gordon"
               },
               {
-                "created_at": "2026-11-10T11:03:44.295012761Z",
+                "created_at": "2026-11-10T11:33:12.463159712Z",
                 "email": "",
-                "id": "01M72J1KX71219J36BZ0G58JC3",
+                "id": "01M72KQJMFZN800720GC9GP2CY",
                 "merged_into_user_id": "",
                 "roles": [
                   "admin"
                 ],
                 "status": "active",
-                "updated_at": "2026-11-10T11:03:44.295012761Z",
+                "updated_at": "2026-11-10T11:33:12.463159712Z",
                 "username": "lucius.fox"
               },
               {
-                "created_at": "2026-11-10T11:03:44.366942411Z",
+                "created_at": "2026-11-10T11:33:12.558766564Z",
                 "email": "",
-                "id": "01M72J1KZENEGX53C4HRJAEFZC",
+                "id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
                 "merged_into_user_id": "",
                 "roles": [
                   "fp-worker"
                 ],
                 "status": "active",
-                "updated_at": "2026-11-10T11:03:44.366942411Z",
+                "updated_at": "2026-11-10T11:33:12.558766564Z",
                 "username": "fp.worker"
               },
               {
-                "created_at": "2026-11-10T11:03:44.433923874Z",
+                "created_at": "2026-11-10T11:33:12.634251104Z",
                 "email": "",
-                "id": "01M72J1M1HT8VE853CYZVBVZ3S",
+                "id": "01M72KQJST31AAZEP9E25SE8MN",
                 "merged_into_user_id": "",
                 "roles": [
                   "viewer"
                 ],
                 "status": "locked",
-                "updated_at": "2026-11-10T11:03:44.447846456Z",
+                "updated_at": "2026-11-10T11:33:12.765316672Z",
                 "username": "jason.todd"
               }
             ]
@@ -123,51 +123,51 @@
           "data": {
             "accepted": [
               {
-                "accepted_at": "2026-11-10T11:03:44.433923874Z",
-                "accepted_user_id": "01M72J1M1HT8VE853CYZVBVZ3S",
+                "accepted_at": "2026-11-10T11:33:12.634251104Z",
+                "accepted_user_id": "01M72KQJST31AAZEP9E25SE8MN",
                 "email": "redhood@example.com",
                 "email_binding": "not_emailed",
-                "guest_policy_at": "2026-11-10T11:03:44.434527018Z",
+                "guest_policy_at": "2026-11-10T11:33:12.750252894Z",
                 "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
                 "guest_policy_status": "skipped",
                 "username": "jason.todd"
               },
               {
-                "accepted_at": "2026-11-10T11:03:44.366942411Z",
-                "accepted_user_id": "01M72J1KZENEGX53C4HRJAEFZC",
+                "accepted_at": "2026-11-10T11:33:12.558766564Z",
+                "accepted_user_id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
                 "email": "worker@example.com",
                 "email_binding": "not_emailed",
-                "guest_policy_at": "2026-11-10T11:03:44.367387375Z",
+                "guest_policy_at": "2026-11-10T11:33:12.559173331Z",
                 "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
                 "guest_policy_status": "skipped",
                 "username": "fp.worker"
               },
               {
-                "accepted_at": "2026-11-10T11:03:44.295012761Z",
-                "accepted_user_id": "01M72J1KX71219J36BZ0G58JC3",
+                "accepted_at": "2026-11-10T11:33:12.463159712Z",
+                "accepted_user_id": "01M72KQJMFZN800720GC9GP2CY",
                 "email": "lucius@example.com",
                 "email_binding": "not_emailed",
-                "guest_policy_at": "2026-11-10T11:03:44.295563345Z",
+                "guest_policy_at": "2026-11-10T11:33:12.47139542Z",
                 "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
                 "guest_policy_status": "skipped",
                 "username": "lucius.fox"
               },
               {
-                "accepted_at": "2026-11-10T11:03:44.22789126Z",
-                "accepted_user_id": "01M72J1KV3MYARNBFQ5GD1WYYG",
+                "accepted_at": "2026-11-10T11:33:12.387367718Z",
+                "accepted_user_id": "01M72KQJJ3QTYQ3XCF5F2Y7GS3",
                 "email": "batgirl@example.com",
                 "email_binding": "not_emailed",
-                "guest_policy_at": "2026-11-10T11:03:44.228337086Z",
+                "guest_policy_at": "2026-11-10T11:33:12.387799037Z",
                 "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
                 "guest_policy_status": "skipped",
                 "username": "barbara.gordon"
               },
               {
-                "accepted_at": "2026-11-10T11:03:44.154357961Z",
-                "accepted_user_id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+                "accepted_at": "2026-11-10T11:33:12.309518046Z",
+                "accepted_user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
                 "email": "robin@example.com",
                 "email_binding": "not_emailed",
-                "guest_policy_at": "2026-11-10T11:03:44.154825499Z",
+                "guest_policy_at": "2026-11-10T11:33:12.309900602Z",
                 "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
                 "guest_policy_status": "skipped",
                 "username": "dick.grayson"
@@ -177,11 +177,11 @@
             "guest_policy_sync_configured": false,
             "invites": [
               {
-                "created_at": "2026-11-10T11:03:44.460751226Z",
-                "created_by_user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "created_at": "2026-11-10T11:33:12.779676764Z",
+                "created_by_user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "email": "tim@example.com",
-                "expires_at": "2036-11-07T11:03:44.460750024Z",
-                "id": "a7c2ea9e3d4f0630dcdf9da33a205bbe",
+                "expires_at": "2036-11-07T11:33:12.779675572Z",
+                "id": "e3251484af3fd2b4d27af28f652aa68f",
                 "role_id": "viewer",
                 "username": "tim.drake"
               }
@@ -212,15 +212,15 @@
           "data": {
             "api_keys": [
               {
-                "created_at": "2026-11-10T11:03:43.671392274Z",
+                "created_at": "2026-11-10T11:33:11.750518644Z",
                 "days_since_last_use": "<volatile>",
                 "description": "Generated via bootstrap token exchange",
-                "expires_at": "2026-11-10T19:03:43.67138965Z",
-                "id": "01M72J1K9QGHGASTJEVJ2FAH2V",
-                "identifier": "abk_6f9cdf9b",
+                "expires_at": "2026-11-10T19:33:11.750514959Z",
+                "id": "01M72KQHY609X3XA43201NNBN5",
+                "identifier": "abk_af414140",
                 "name": "bootstrap-admin",
                 "never_used": true,
-                "revoked_at": "2026-11-10T11:03:44.02278811Z",
+                "revoked_at": "2026-11-10T11:33:12.136282697Z",
                 "scopes": [
                   "library.view",
                   "library.edit_metadata",
@@ -238,16 +238,16 @@
                 ],
                 "status": "revoked",
                 "use_count": 0,
-                "user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "username": "admin"
               },
               {
-                "created_at": "2026-11-10T11:03:54.639857302Z",
+                "created_at": "2026-11-10T11:33:12.982913569Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.639852735Z",
-                "id": "01M72J1Y0FKZW4PWPQ3HWMDJH0",
-                "identifier": "abk_593f7732",
+                "expires_at": "2027-11-10T11:33:12.982910284Z",
+                "id": "01M72KQK4PT3EY30BZCQ9W6CMT",
+                "identifier": "abk_ec136681",
                 "name": "scoped-view",
                 "never_used": true,
                 "scopes": [
@@ -255,31 +255,31 @@
                 ],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "username": "admin"
               },
               {
-                "created_at": "2026-11-10T11:03:54.653318615Z",
+                "created_at": "2026-11-10T11:33:23.0111112Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.653316071Z",
-                "id": "01M72J1Y0XFHQ6G3WVHAG58YNE",
-                "identifier": "abk_a51ac3fe",
+                "expires_at": "2027-11-10T11:33:23.011107364Z",
+                "id": "01M72KQWY3JTKBCXKZD6EWMCC1",
+                "identifier": "abk_10c5cf66",
                 "name": "empty-scope",
                 "never_used": true,
                 "scopes": [],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "username": "admin"
               },
               {
-                "created_at": "2026-11-10T11:03:54.665083113Z",
+                "created_at": "2026-11-10T11:33:23.104934773Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.665081461Z",
-                "id": "01M72J1Y19FCYW99K3FHJGFGEX",
-                "identifier": "abk_50db2377",
+                "expires_at": "2027-11-10T11:33:23.104931098Z",
+                "id": "01M72KQX1060J3V6FFS7YM43QV",
+                "identifier": "abk_a9336f2e",
                 "name": "every-atom",
                 "never_used": true,
                 "scopes": [
@@ -299,16 +299,16 @@
                 ],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "username": "admin"
               },
               {
-                "created_at": "2026-11-10T11:03:54.676816724Z",
+                "created_at": "2026-11-10T11:33:23.125603951Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.67681454Z",
-                "id": "01M72J1Y1MDF7WZWAEA8YZYB7J",
-                "identifier": "abk_08dbe7b7",
+                "expires_at": "2027-11-10T11:33:23.125601086Z",
+                "id": "01M72KQX1NYDQT302YXVR0GJ1V",
+                "identifier": "abk_cfb3e8ce",
                 "name": "admin-owned-for-robin",
                 "never_used": true,
                 "scopes": [
@@ -317,16 +317,16 @@
                 ],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+                "user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
                 "username": "dick.grayson"
               },
               {
-                "created_at": "2026-11-10T11:03:54.688715455Z",
+                "created_at": "2026-11-10T11:33:23.14171191Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.688713532Z",
-                "id": "01M72J1Y20ZFG3JHDDT2GP9TF7",
-                "identifier": "abk_883da5e2",
+                "expires_at": "2027-11-10T11:33:23.141708916Z",
+                "id": "01M72KQX25547VWRSM74HTTRYW",
+                "identifier": "abk_c7dfd9ae",
                 "name": "fp-worker-key",
                 "never_used": true,
                 "scopes": [
@@ -334,16 +334,16 @@
                 ],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1KZENEGX53C4HRJAEFZC",
+                "user_id": "01M72KQJQEJ61RCZ4EQ9C64QJN",
                 "username": "fp.worker"
               },
               {
-                "created_at": "2026-11-10T11:03:54.700851274Z",
+                "created_at": "2026-11-10T11:33:23.156189258Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.700849482Z",
-                "id": "01M72J1Y2C901DJBWDXEF3JZRV",
-                "identifier": "abk_56b15a60",
+                "expires_at": "2027-11-10T11:33:23.156186905Z",
+                "id": "01M72KQX2ME6QB882QEJSDSH3H",
+                "identifier": "abk_fe51f34d",
                 "name": "editor-own-key",
                 "never_used": true,
                 "scopes": [
@@ -351,25 +351,25 @@
                 ],
                 "status": "active",
                 "use_count": 0,
-                "user_id": "01M72J1KRTCH7P4C4Q69CPMR3J",
+                "user_id": "01M72KQJFNXWXQMGSX75S0JC6H",
                 "username": "dick.grayson"
               },
               {
-                "created_at": "2026-11-10T11:03:54.71283227Z",
+                "created_at": "2026-11-10T11:33:23.170612451Z",
                 "days_since_last_use": "<volatile>",
                 "description": "",
-                "expires_at": "2027-11-10T11:03:54.712829937Z",
-                "id": "01M72J1Y2RQSVZ4YVSRGFYR2C8",
-                "identifier": "abk_237b4944",
+                "expires_at": "2027-11-10T11:33:23.170609927Z",
+                "id": "01M72KQX32CT6B9GCB26X5QSBT",
+                "identifier": "abk_2e41bdb4",
                 "name": "revoked-key",
                 "never_used": true,
-                "revoked_at": "2026-11-10T11:03:54.724884945Z",
+                "revoked_at": "2026-11-10T11:33:23.243831212Z",
                 "scopes": [
                   "library.view"
                 ],
                 "status": "revoked",
                 "use_count": 0,
-                "user_id": "01M72J1K9PKV12MJ1NM7NKSXBJ",
+                "user_id": "01M72KQHXM3TJDMDBTC8G90416",
                 "username": "admin"
               }
             ],
