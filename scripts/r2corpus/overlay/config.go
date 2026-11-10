@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/config.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a3f1e6b-2d48-4c07-b5e1-6f8d0c3a7b29
 // last-edited: 2026-11-10
 
@@ -8,16 +8,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
-
-// blobFieldKey names one field of the settings blob in a case's key list:
-// the row is setting:config_blob and the field is after the '#'.
-func blobFieldKey(field string) string { return "setting:config_blob#" + field }
 
 // setBlobField rewrites one field of the stored settings blob through HEAD's
 // own writer of the row (SetSetting("config_blob", ..., "json", false), as
@@ -45,19 +42,32 @@ func (w *writer) setBlobField(field string, value any) {
 // writeCorruptSettingsSecret replaces one of HEAD's four encrypted rows with a
 // record whose ciphertext the key does not decrypt (a corrupt secret row; the
 // record itself decodes, because an undecodable setting: row stops R0's boot,
-// settings.go collectSettings).
+// settings.go collectSettings). It is basic_auth_password, not one of the
+// three API keys: stage 1's gap-fill config.yaml holds the OpenAI, Google
+// Books and Hardcover keys, and R0's boot re-encrypts those rows from it, so
+// R0's answer on the overlay would still show the secret set. The gap-fill
+// file does not name basic_auth_password, so R0's answer and the manifest
+// agree that the secret is unreadable.
 func writeCorruptSettingsSecret(w *writer, label string) {
-	w.setJSON("setting:openai_api_key", database.Setting{
-		Key: "openai_api_key", Value: "bm90LWEtdmFsaWQtY2lwaGVydGV4dC1mb3ItYXJraGFt", Type: "string", IsSecret: true,
+	w.setUndecryptable("basic_auth_password")
+}
+
+// setUndecryptable stores secret setting name as a well-formed record whose
+// value is base64 of bytes that are not an AES-GCM ciphertext under the
+// store's key (settings.go EncryptValue: base64(nonce || sealed)).
+func (w *writer) setUndecryptable(name string) {
+	key := "setting:" + name
+	w.setJSON(key, database.Setting{
+		Key: name, Value: base64.StdEncoding.EncodeToString([]byte("not-a-valid-ciphertext-for-arkham")),
+		Type: "string", IsSecret: true,
 	})
-	w.record(label, "setting:openai_api_key")
+	w.corrupt = append(w.corrupt, key)
 }
 
 // writeBlobFieldUnmapped adds a field no rename-table row names (HEAD never
 // had it); R0's decode drops it silently.
 func writeBlobFieldUnmapped(w *writer, label string) {
 	w.setBlobField("batcomputer_uplink_mode", "encrypted-relay")
-	w.record(label, blobFieldKey("batcomputer_uplink_mode"))
 }
 
 // ── M5: system log ─────────────────────────────────────────────────────────
@@ -66,7 +76,6 @@ func writeCorruptSyslog(w *writer, label string) {
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	key := "syslog:" + at + ":r2corpus-overlay"
 	w.setTorn(key, `{"id":0,"source":"r2corpus-overlay","level":"info","message":"Arkham Asylum breakout`)
-	w.record(label, key)
 }
 
 // ── M6: integrations, import roots, AI jobs ────────────────────────────────
@@ -98,7 +107,6 @@ func writeIntegrationFieldInvalid(w *writer, label string) {
 		"require_gpu": false,
 	})
 	w.setBlobField("ai_endpoints", rows)
-	w.record(label, blobFieldKey("ai_endpoints"))
 }
 
 // writeCorruptImportRoot is an import root that does not decode. Its path is
@@ -109,13 +117,11 @@ func writeIntegrationFieldInvalid(w *writer, label string) {
 func writeCorruptImportRoot(w *writer, label string) {
 	key := "import_path:9"
 	w.setTorn(key, `{"id":9,"path":"`+storeRoot+`/import/Selina Kyle","name":"Selina Kyle intake`)
-	w.record(label, key)
 }
 
 func writeCorruptAIJob(w *writer, label string) {
 	key := "aijob:" + newID()
 	w.setTorn(key, `{"id":"`+key[len("aijob:"):]+`","type":"dedup_review","status":"submit`)
-	w.record(label, key)
 }
 
 // aiJobStates are the AI jobs the overlay writes, one per status (HEAD's
@@ -128,10 +134,12 @@ var aiJobStates = []struct{ label, status string }{
 }
 
 func writeAIJob(w *writer, label string) {
+	found := false
 	for _, s := range aiJobStates {
 		if s.label != label {
 			continue
 		}
+		found = true
 		id := newID()
 		created := time.Now().UTC().Add(-2 * time.Hour)
 		job := database.AIJob{
@@ -151,9 +159,10 @@ func writeAIJob(w *writer, label string) {
 		case "failed":
 			must(w.db.MarkAIJobFailed(id, "batch expired before it ran"), "fail ai job")
 		}
-		w.record(label, "aijob:"+id, "aijob_payload:"+id)
 		if s.status == "submitted" || s.status == "completed_with_errors" {
-			w.record(label, "aijob_batch:"+batch)
 		}
+	}
+	if !found {
+		must(fmt.Errorf("no table entry for case %s", label), "case table")
 	}
 }

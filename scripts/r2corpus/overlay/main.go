@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/main.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e6c1d-8a2f-4e37-9c41-7d2f0a9b6e18
 // last-edited: 2026-11-10
 
@@ -28,17 +28,23 @@
 //	overlay -store <copy of stage1> -corpus blocker -case <label> -report <file.json>
 //
 // The report lists every case written and the keys it wrote, which the driver
-// records in manifest.json.
+// records in manifest.json. A case's keys are not written down by hand: the
+// program iterates the whole store before and after each case and records
+// every key the case added or changed (and, separately, any it removed), so
+// the list holds every row HEAD's writers touched (indexes, counters, audit
+// rows) and nothing else. A change to the settings blob is recorded per field
+// as setting:config_blob#<field>.
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -60,27 +66,134 @@ const (
 )
 
 type caseReport struct {
-	Case string   `json:"case"`
+	Case string `json:"case"`
+	// Keys are the keys the case added or changed, sorted.
 	Keys []string `json:"keys"`
+	// Removed are the keys the case deleted, sorted (usually none).
+	Removed []string `json:"removed,omitempty"`
+	// Corrupt are the keys the case wrote a value under that is meant not to
+	// decode (setTorn) or not to decrypt (setUndecryptable).
+	Corrupt []string `json:"corrupt,omitempty"`
 }
 
 type writer struct {
 	db      *database.PebbleStore
-	reports map[string]*caseReport
-	order   []string
+	reports []caseReport
+	// corrupt collects the current case's deliberately broken keys.
+	corrupt []string
 }
 
 func newID() string { return ulid.Make().String() }
 
-// record notes that case label wrote keys.
-func (w *writer) record(label string, keys ...string) {
-	r, ok := w.reports[label]
-	if !ok {
-		r = &caseReport{Case: label}
-		w.reports[label] = r
-		w.order = append(w.order, label)
+// storeState is every key of the store with a digest of its value, plus the
+// settings blob's top-level fields (to name a blob change by field).
+type storeState struct {
+	rows map[string][32]byte
+	blob map[string]json.RawMessage
+}
+
+// blobKey is the settings blob's row (internal/config/persistence.go saves the
+// whole config there through SetSetting("config_blob", ...)).
+const blobKey = "setting:config_blob"
+
+func (w *writer) state() storeState {
+	pairs, err := w.db.ScanPrefix("")
+	must(err, "iterate the store")
+	st := storeState{rows: make(map[string][32]byte, len(pairs))}
+	for _, kv := range pairs {
+		st.rows[kv.Key] = sha256.Sum256(kv.Value)
+		if kv.Key == blobKey {
+			var row database.Setting
+			must(json.Unmarshal(kv.Value, &row), "decode "+blobKey)
+			must(json.Unmarshal([]byte(row.Value), &st.blob), "decode the settings blob")
+		}
 	}
-	r.Keys = append(r.Keys, keys...)
+	return st
+}
+
+// diff is what changed from before to after: keys added or changed, keys
+// removed. A changed settings blob is reported as its changed fields.
+func diff(before, after storeState) (changed, removed []string) {
+	for k, v := range after.rows {
+		if old, ok := before.rows[k]; ok && old == v {
+			continue
+		}
+		if k == blobKey {
+			changed = append(changed, blobFieldChanges(before.blob, after.blob)...)
+			continue
+		}
+		changed = append(changed, k)
+	}
+	for k := range before.rows {
+		if _, ok := after.rows[k]; !ok {
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(changed)
+	sort.Strings(removed)
+	return changed, removed
+}
+
+func blobFieldChanges(before, after map[string]json.RawMessage) []string {
+	var out []string
+	for f, v := range after {
+		if old, ok := before[f]; !ok || !bytes.Equal(old, v) {
+			out = append(out, blobKey+"#"+f)
+		}
+	}
+	for f := range before {
+		if _, ok := after[f]; !ok {
+			out = append(out, blobKey+"#"+f)
+		}
+	}
+	if len(out) == 0 {
+		// The row changed but no field did (a re-encode): name the row.
+		out = append(out, blobKey)
+	}
+	return out
+}
+
+// quiesce waits until two whole-store iterations 250 ms apart agree, so a
+// write the store started on its own at open (a cache reconcile, a warmup) is
+// not counted against the first case.
+func (w *writer) quiesce() storeState {
+	prev := w.state()
+	for range 40 {
+		time.Sleep(250 * time.Millisecond)
+		cur := w.state()
+		if sameState(prev, cur) {
+			return cur
+		}
+		prev = cur
+	}
+	must(fmt.Errorf("the store kept changing on its own for 10 s"), "quiesce")
+	return prev
+}
+
+func sameState(a, b storeState) bool {
+	if len(a.rows) != len(b.rows) {
+		return false
+	}
+	for k, v := range a.rows {
+		if b.rows[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// run writes one case and records what it changed.
+func (w *writer) run(label string, write func(w *writer, label string)) {
+	before := w.state()
+	w.corrupt = nil
+	write(w, label)
+	after := w.state()
+	changed, removed := diff(before, after)
+	if len(changed) == 0 {
+		must(fmt.Errorf("case %s changed no key", label), "write case")
+	}
+	sort.Strings(w.corrupt)
+	w.reports = append(w.reports, caseReport{Case: label, Keys: changed, Removed: removed, Corrupt: w.corrupt})
 }
 
 // setJSON encodes v (a type of the tag's own packages) and writes it raw.
@@ -93,25 +206,7 @@ func (w *writer) setJSON(key string, v any) {
 // setTorn writes a torn value under key: the first part of a JSON object.
 func (w *writer) setTorn(key, prefix string) {
 	must(w.db.SetRaw(key, []byte(prefix+tornSuffix)), "write torn "+key)
-}
-
-// checkKeysPresent fails when a key a case recorded is not in the store, so
-// the manifest never names a row that is not there. A settings-blob field key
-// (setting:config_blob#<field>) is checked by its row.
-func (w *writer) checkKeysPresent() {
-	for _, l := range w.order {
-		for _, k := range w.reports[l].Keys {
-			row := k
-			if i := strings.IndexByte(k, '#'); i >= 0 {
-				row = k[:i]
-			}
-			v, err := w.db.GetRaw(row)
-			must(err, "read back "+row)
-			if v == nil {
-				must(fmt.Errorf("case %s recorded %s, which is not in the store", l, k), "read back")
-			}
-		}
-	}
+	w.corrupt = append(w.corrupt, key)
 }
 
 func must(err error, what string) {
@@ -156,36 +251,35 @@ func main() {
 	}
 	db, err := database.NewPebbleStore(dbPath)
 	must(err, "open "+dbPath)
-	w := &writer{db: db, reports: map[string]*caseReport{}}
+	w := &writer{db: db}
+	w.quiesce()
 
 	switch *corpus {
 	case "overlay":
 		for _, c := range overlayCases {
-			c.write(w, c.label)
+			w.run(c.label, c.write)
 		}
 	case "blocker":
-		found := false
 		for _, c := range blockerCases {
 			if c.label == *label || c.store == *label {
-				c.write(w, c.label)
-				found = true
+				w.run(c.label, c.write)
 			}
 		}
-		if !found {
+		if len(w.reports) == 0 {
 			must(fmt.Errorf("no blocker case or store %q", *label), "usage")
 		}
 	default:
 		must(fmt.Errorf("-corpus must be overlay or blocker, not %q", *corpus), "usage")
 	}
-	w.checkKeysPresent()
+	// Nothing may change once the last case is written: a write the store
+	// makes on its own would have been counted against some case.
+	last := w.state()
+	if !sameState(last, w.quiesce()) {
+		must(fmt.Errorf("the store changed after the last case"), "verify")
+	}
 	must(db.Close(), "close store")
 
-	out := make([]caseReport, 0, len(w.order))
-	for _, l := range w.order {
-		r := w.reports[l]
-		sort.Strings(r.Keys)
-		out = append(out, *r)
-	}
+	out := w.reports
 	data, err := json.MarshalIndent(out, "", "  ")
 	must(err, "encode report")
 	must(os.WriteFile(*reportPath, append(data, '\n'), 0o644), "write report")

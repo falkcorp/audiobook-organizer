@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/overlay/build_overlay.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: c9c6a0fe-e62d-4811-a358-f201bb02e188
 # last-edited: 2026-11-10
 """Build R2's fixture corpus, stage 2: the labelled overlay and the blocker corpus (F2-13).
@@ -137,7 +137,8 @@ _REFUSE = (
 CASES: tuple[Case, ...] = (
     # ── M2: settings and secrets ──
     _o("corrupt-settings-secret", "M2", "setting: (encrypted secret row)", "setting:", QUARANTINED,
-       "a setting record whose ciphertext HEAD's key does not decrypt: the ciphertext is quarantined "
+       "the basic_auth_password setting record with a value HEAD's key does not decrypt (the gap-fill "
+       "config.yaml does not name it, so R0's own answer shows it unset): the ciphertext is quarantined "
        "sealed with the keyring, an unreadable marker is written under the secret's name, health raises "
        "secrets_undecryptable and Settings shows it must be re-entered; the step completes",
        "05-config §1.12.2 (HEAD's key); " + _Q_STORAGE),
@@ -331,20 +332,65 @@ def blocker_stores() -> list[str]:
     return out
 
 
-def manifest_entry(c: Case, keys: list[str]) -> dict[str, Any]:
-    return {
+# What an imported case becomes, machine-readable (the expected text says the
+# same in words): M4's target state per 05-tasks §5T.8.3's table, and M3's
+# status per 05-authn §11 / 09 §9.2.3 (HEAD's predicates trim and lower-case;
+# an empty user status is active; a key with revoked_at is revoked).
+IMPORTED_AS: dict[str, dict[str, str]] = {
+    "run-running": {"state": "interrupted"},
+    "run-stopping-shutdown": {"state": "interrupted"},
+    "run-stopping-user": {"state": "canceled"},
+    "run-stopping-quiesce": {"state": "interrupted_quiesced"},
+    "run-stopping-timeout": {"state": "timed_out"},
+    "run-stopping-watchdog": {"state": "failed", "reason": "watchdog"},
+    "run-interrupted-crash": {"state": "interrupted"},
+    "run-interrupted-quiesced": {"state": "interrupted_quiesced"},
+    "run-queued-deps": {"state": "waiting_deps"},
+    "run-dropped": {"state": "interrupted_dropped"},
+    "run-awaiting-decision": {"state": "awaiting_decision"},
+    "run-interrupted-apply-rowmarks": {"state": "interrupted"},
+    "status-edge-user-padded-active": {"status": "active"},
+    "status-edge-user-upper-disabled": {"status": "disabled"},
+    "status-edge-user-empty": {"status": "active"},
+    "status-edge-user-padded-inactive": {"status": "disabled"},
+    "status-edge-user-unknown": {"status": "disabled"},
+    "status-edge-key-padded-active": {"status": "active"},
+    "status-edge-key-upper-inactive": {"status": "disabled"},
+    "status-edge-key-empty": {"status": "active"},
+    "status-edge-key-padded-revoked": {"status": "revoked"},
+    "status-edge-key-active-revoked-at": {"status": "revoked"},
+    "status-edge-key-unknown": {"status": "disabled"},
+    "status-edge-key-no-expiry": {"status": "active"},
+}
+
+# Notes on overlay answers whose `changed` flag needs reading with care.
+ANSWER_NOTES: dict[str, str] = {
+    "search": "changed is an artifact of stage 1's committed answer, not of an overlay row: the query "
+    "^The answers 4 books here (the corpus' two 'The ...' titles in import/ and library/) and 0 in "
+    "stage 1's answer, recorded seconds after boot while R0 rebuilt its search index "
+    "(seams.d/F2-13.md)",
+}
+
+
+def manifest_entry(c: Case, written: dict[str, Any]) -> dict[str, Any]:
+    entry: dict[str, Any] = {
         "case": c.label,
         "label": c.label,
         "family": c.family,
         "step": c.step,
         "key_prefix": c.key_prefix,
-        "keys": keys,
+        "keys": written["keys"],
+        "removed_keys": written["removed"],
+        "corrupt_keys": written["corrupt"],
         "outcome": c.outcome,
         "reported": c.reported,
         "expected": c.expected,
         "spec": c.spec,
         "store": c.store_rel(),
     }
+    if c.label in IMPORTED_AS:
+        entry["imported_as"] = IMPORTED_AS[c.label]
+    return entry
 
 
 # ── building and running the program at the tag ────────────────────────────
@@ -383,8 +429,8 @@ def program_cases(binary: pathlib.Path) -> tuple[list[str], list[str]]:
 
 def write_store(
     binary: pathlib.Path, dest: pathlib.Path, args: list[str], report: pathlib.Path
-) -> dict[str, list[str]]:
-    """Copy stage 1 to dest, run the program on it, return {case: keys}."""
+) -> dict[str, dict[str, list[str]]]:
+    """Copy stage 1 to dest, run the program on it, return {case: {keys, removed, corrupt}}."""
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -394,11 +440,15 @@ def write_store(
     for r in json.loads(report.read_text(encoding="utf-8")):
         if not r["keys"]:
             raise w.CorpusError(f"case {r['case']} wrote no key")
-        out[r["case"]] = r["keys"]
+        out[r["case"]] = {
+            "keys": r["keys"],
+            "removed": r.get("removed") or [],
+            "corrupt": r.get("corrupt") or [],
+        }
     return out
 
 
-def check_written(store: str, want: list[str], got: dict[str, list[str]]) -> None:
+def check_written(store: str, want: list[str], got: dict[str, Any]) -> None:
     if list(got) != want:
         raise w.CorpusError(f"{store}: the program wrote {list(got)}, CASES says {want}")
 
@@ -462,7 +512,7 @@ def build(args: argparse.Namespace) -> int:
         if prog_blockers != [c.label for c in blocker_cases()]:
             raise w.CorpusError(f"the program's blocker cases {prog_blockers} are not CASES'")
 
-        written: dict[str, list[str]] = {}
+        written: dict[str, dict[str, list[str]]] = {}
         got = write_store(binary, OVERLAY_DIR, ["-corpus", "overlay"], scratch / "overlay.json")
         check_written(OVERLAY_REL, [c.label for c in overlay_cases()], got)
         written.update(got)
@@ -503,10 +553,13 @@ def build(args: argparse.Namespace) -> int:
             "writes nothing",
             NOT_BLOCKING: "read by the preflight and let through; converted by its step",
         },
-        "keys": "every key the case wrote (primary rows and the indexes the writer kept with them); "
-        "setting:config_blob#<field> names one field of the settings blob. A run's opv2 mirror row "
-        "(opv2:op:<id>, written in the same batch as opv3:run:<id> by the tag's InsertRunV3 and "
-        "TransitionRunV3) is not listed",
+        "keys": "every key the case added or changed, found by iterating the whole store before and "
+        "after the case (so the writers' indexes, counters, audit rows and shared rows such as "
+        "opv3:meta:counts are included); a change to the settings blob is named per field as "
+        "setting:config_blob#<field>. removed_keys: keys the case deleted. corrupt_keys: the keys "
+        "whose value the case wrote not to decode (a torn JSON value) or not to decrypt",
+        "imported_as": "the machine-readable result of an imported case: state (M4, 05-tasks "
+        "§5T.8.3) or status (M3, 05-authn §11)",
     }  # fmt: skip
 
     if not args.no_answers:
@@ -521,6 +574,7 @@ def build(args: argparse.Namespace) -> int:
                     "file": (answers_dir / f"{name}.json").relative_to(w.REPO_ROOT).as_posix(),
                     "what": what.get(name, ""),
                     "changed": changed[name],
+                    **({"note": ANSWER_NOTES[name]} if name in ANSWER_NOTES else {}),
                 }
                 for name in changed
             ]
