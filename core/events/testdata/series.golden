@@ -1,0 +1,15 @@
+# file: core/events/testdata/series.golden
+# version: 1.0.0
+# guid: 11a945a9-639d-474b-8c93-f4b2b0ca0e75
+# last-edited: 2026-11-10
+#
+# The mediacore.events scope's bus series (05-events §5E.10, 05-metrics §6
+# item 5): family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestEventsMetrics_SeriesGolden. The outbox families of §5E.10 are F6-01's.
+mediacore_events_delivered_total	counter	subscriber,topic
+mediacore_events_dropped_total	counter	reason,subscriber,topic
+mediacore_events_handler_panics_total	counter	subscriber
+mediacore_events_handler_seconds	histogram	subscriber
+mediacore_events_publish_rejected_total	counter	topic
+mediacore_events_published_total	counter	topic
+mediacore_events_queue_depth	gauge	subscriber
