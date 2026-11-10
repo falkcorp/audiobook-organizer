@@ -1,5 +1,5 @@
 // file: core/tasks/surface_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2039e3f6-7680-4be3-9f26-2eb2f69e2519
 // last-edited: 2026-11-10
 
@@ -137,8 +137,8 @@ func TestEnums_StringsAndModeRequest(t *testing.T) {
 	if m, ok := tasks.ModeRequestLive.Mode(); !ok || m != tasks.ModeLive {
 		t.Fatal("ModeRequestLive")
 	}
-	if _, ok := tasks.ModeUnset.Mode(); ok {
-		t.Fatal("ModeUnset resolved")
+	if _, ok := tasks.ModeRequestUnset.Mode(); ok {
+		t.Fatal("ModeRequestUnset resolved")
 	}
 	for o, want := range map[tasks.SourceOrder]string{tasks.Snapshot: "snapshot", tasks.AppendOnly: "append_only", tasks.Unordered: "unordered", 0: "unset"} {
 		if o.String() != want {
