@@ -107,6 +107,11 @@ internal/plugins/itunes.loggerWrapper.Warn
 internal/plugins/itunes.loggerWrapper.With
 internal/querygrammar.PatternSlotAcquisitions
 internal/repairs.GuardBooks
+core/kernel.auditMetrics
+core/kernel.auditOwnerSpec
+core/kernel.buildAudit
+core/kernel.startAudit
+core/kernel.stopAudit
 internal/repairs.GuardBooksFor
 internal/repairs.guardBooks
 internal/scanner.EnqueueAIParseWired
