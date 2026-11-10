@@ -94,14 +94,16 @@ func (r *Router) fixedBases() []string {
 }
 
 // isFixedRoute reports a native core route registered on a CoreFixedGroup (or
-// a Sub or Version of one): its pattern lies under a fixed base. A CoreGroup
-// route never does, because a fixed base inside /api/core/ is refused. bases is
-// fixedBases().
-func isFixedRoute(e *routeEntry, bases []string) bool {
+// a Sub or Version of one): its pattern is a fixed base or lies under one. A
+// CoreGroup route never does, because a fixed base inside /api/core/ is
+// refused. r.mu is held.
+func (r *Router) isFixedRoute(e *routeEntry) bool {
 	if e.info.Owner != "core" || e.info.Kind != RouteKindNative {
 		return false
 	}
-	return slices.ContainsFunc(bases, func(b string) bool { return strings.HasPrefix(e.info.Pattern, b+"/") })
+	return slices.ContainsFunc(r.fixedBases(), func(b string) bool {
+		return e.info.Pattern == b || strings.HasPrefix(e.info.Pattern, b+"/")
+	})
 }
 
 // routeKey is a route's "METHOD pattern", the form CoreExactPatterns lists.
@@ -109,10 +111,10 @@ func routeKey(e *routeEntry) string { return e.info.Method + " " + e.info.Patter
 
 // isCoreExact reports a fixed-group route that is an entry of
 // CoreExactPatterns(): the one kind of core route Build lets sit inside
-// another owner's claim, and therefore the one the shadow check skips. bases
-// is fixedBases().
-func isCoreExact(e *routeEntry, bases []string) bool {
-	return isFixedRoute(e, bases) && slices.Contains(CoreExactPatterns(), routeKey(e))
+// another owner's claim, and therefore the one the shadow check skips. r.mu is
+// held.
+func (r *Router) isCoreExact(e *routeEntry) bool {
+	return r.isFixedRoute(e) && slices.Contains(CoreExactPatterns(), routeKey(e))
 }
 
 // checkCoreFixed is Build's refusal of 05-http-api §3.5 and §4.9: a
@@ -122,17 +124,16 @@ func isCoreExact(e *routeEntry, bases []string) bool {
 // the entry, so a router with no fixed-group route accepts and refuses exactly
 // what it did before CoreFixedGroup existed. r.mu is held.
 func (r *Router) checkCoreFixed() []error {
-	bases := r.fixedBases()
-	if len(bases) == 0 {
+	if len(r.fixedBases()) == 0 {
 		return nil
 	}
 	var errs []error
 	var served []muxPat
 	for _, e := range r.routes {
-		if !isFixedRoute(e, bases) {
+		if !r.isFixedRoute(e) {
 			continue
 		}
-		if !isCoreExact(e, bases) {
+		if !r.isCoreExact(e) {
 			errs = append(errs, fmt.Errorf("%w: %s is a CoreFixedGroup route outside CoreExactPatterns() (%s)",
 				ErrPrefixCollision, describe(e.info), strings.Join(CoreExactPatterns(), ", ")))
 			continue
