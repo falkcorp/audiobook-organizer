@@ -217,7 +217,7 @@ func TestBasicGate_HEADExemptRules(t *testing.T) {
 		{http.MethodGet, "/api/v1/items/42", true},
 		{http.MethodHead, "/api/v1/items/42", false}, // gin has no HEAD route there
 		{http.MethodGet, "/api/v1/items/42/cover", false},
-		{http.MethodGet, "/api/v1/libraries/42/items", true},    // a member of the generalised pattern
+		{http.MethodGet, "/api/v1/libraries/42/items", true},     // a member of the generalised pattern
 		{http.MethodGet, "/api/v1/libraries/recent/books", true}, // the kept route of the set
 		{http.MethodGet, "/api/v1/libraries/42/batmobiles", false},
 		{http.MethodGet, "/api/v1/libraries/a%2Fb/items", false}, // gin routes the decoded path
@@ -225,6 +225,10 @@ func TestBasicGate_HEADExemptRules(t *testing.T) {
 		{http.MethodGet, "/api/v1/items/../cases/1", false},
 		{http.MethodGet, "/api/v1/items/%2e%2e/cases/1", false},
 		{http.MethodGet, "/api/v1/items/42/..", false},
+		// An unclean path goes to the "/" owner, whose asset rule then
+		// applies to the path as sent, as HEAD's did, even when its clean
+		// form is a native route.
+		{http.MethodGet, "/batcave/../build.js", true},
 		// HEAD's asset rule on the "/" owner: the fallback and the mount's routes.
 		{http.MethodGet, "/assets/cowl-3f2a.js", true},
 		{http.MethodGet, "/assets/batarang", true},
@@ -486,7 +490,7 @@ func TestBasicGate_EmptyPasswordRefuses(t *testing.T) {
 		var logs bytes.Buffer
 		rep := &lastReport{}
 		g := mustGate(t, BasicGateOptions{Settings: settingsOf(enabled, s.username), Password: pw, Health: rep,
-			Log: slog.New(slog.NewTextHandler(&logs, nil))}, exempt)
+			Log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}, exempt)
 		// The startup check (F3-07 calls it at start).
 		noPassword := g.checkPosture(context.Background())
 		effective := pw.v.Reveal()
@@ -597,6 +601,13 @@ func TestBasicGate_PostureTransitions(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "Wayne-Manor") {
 		t.Fatalf("the log carries the password: %q", logs.String())
+	}
+
+	// A resolver that errs is refused even if it also hands back bytes.
+	pw.set(secrets.NewValue("Wayne-Manor"), errTestKeyUnavailable)
+	enabled = true
+	if !refused(t, basicRequest(g.wrap(http.NotFoundHandler()), http.MethodGet, "/batcave", ":Wayne-Manor")) {
+		t.Fatal("resolver error with a value: request admitted")
 	}
 
 	// No reporter and no logger: the gate still decides.
