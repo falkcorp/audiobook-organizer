@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
 // last-edited: 2026-11-10
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/secrets"
 )
 
 // leaf is one declared key of a section, as the tests see it.
@@ -34,9 +35,11 @@ const mapKeyPlaceholder = "<id>"
 
 // sectionLeaves walks the section's type and returns its keys. The convention
 // (names coined by F2-09): a struct field with a json name is a segment; a
-// struct recurses; any other type is one key, a map and a list included
-// (05-config §1.3.6). The one exception is a section whose type is itself a
-// map, whose entries' own keys sit under mapKeyPlaceholder.
+// struct recurses, except secrets.Ref, which is one key (the config field
+// type of a secret, 05-config §2.3; F3-03); any other type is one key, a map
+// and a list included (05-config §1.3.6). The one exception is a section
+// whose type is itself a map, whose entries' own keys sit under
+// mapKeyPlaceholder.
 func sectionLeaves(t *testing.T, sec any) (config.Path, []leaf) {
 	t.Helper()
 	v := reflect.ValueOf(sec)
@@ -53,6 +56,8 @@ func sectionLeaves(t *testing.T, sec any) (config.Path, []leaf) {
 func walkType(t *testing.T, path string, typ reflect.Type, reload config.Reload, protect config.Protection, schema string, root bool, out *[]leaf) {
 	t.Helper()
 	switch {
+	case typ == reflect.TypeFor[secrets.Ref]():
+		*out = append(*out, leaf{path, typ, reload, protect, schema, false})
 	case typ.Kind() == reflect.Struct:
 		for f := range typ.Fields() {
 			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -119,14 +124,13 @@ func allLeaves(t *testing.T) map[string]leaf {
 }
 
 // excluded reports the keys this row leaves to later rows, by type and prefix
-// (so F2-04's and F3-03's additions keep the test green without editing it): a
-// schedule configuration type, the core.tasks.windows keys, a secret type.
+// (so F2-04's additions keep the test green without editing it): a schedule
+// configuration type, the core.tasks.windows keys. F3-03's secret key
+// core.http.basic_gate.password is an owner key (ownerKeys); the OIDC client
+// secret is not declared (TestCoreSections_NoLaterRowsKeys).
 func excluded(l leaf) bool {
 	typ := l.typ
 	if typ.Name() == "ScheduleConfig" && strings.HasSuffix(typ.PkgPath(), "/tasks") {
-		return true
-	}
-	if typ.Name() == "Ref" && strings.HasSuffix(typ.PkgPath(), "/secrets") {
 		return true
 	}
 	return strings.HasPrefix(l.path, "core.tasks.windows.") || l.path == "core.tasks.windows"
@@ -135,9 +139,10 @@ func excluded(l leaf) bool {
 // ownerKeys is the full list of this row's key paths, transcribed from the
 // owners' key tables (each table is named). A table row naming several keys
 // ("a / b") is several paths. Left out: every row typed as a schedule
-// configuration, the core.tasks.windows rows, the two secret rows, the "(phase
-// 2)" rows of 05-download and 05-indexer. core.shutdown.budget (05-health and
-// 06 §6.8) and core.library.mappings (05-download and 05-library) appear once.
+// configuration, the core.tasks.windows rows, the OIDC client-secret row (a
+// secret inside a list entry; F3-03's seams), the "(phase 2)" rows of
+// 05-download and 05-indexer. core.shutdown.budget (05-health and 06 §6.8)
+// and core.library.mappings (05-download and 05-library) appear once.
 var ownerKeys = []string{
 	// 05-ai §7
 	"core.ai.cooldown_base", "core.ai.cooldown_max", "core.ai.quota_cooldown", "core.ai.deadline_failovers",
@@ -184,6 +189,7 @@ var ownerKeys = []string{
 	"core.http.cors.allowed_origins", "core.http.body.json_max_bytes", "core.http.body.upload_max_bytes",
 	"core.http.rate_limit.enabled", "core.http.rate_limit.per_minute", "core.http.rate_limit.burst",
 	"core.http.rate_limit.max_clients", "core.http.basic_gate.enabled", "core.http.basic_gate.username",
+	"core.http.basic_gate.password",
 	"core.http.openapi.public", "core.http.read_header_timeout", "core.http.idle_timeout",
 	// 05-library §5L.7 (core.library.mappings is also 05-download §7's row)
 	"core.library.roots", "core.library.mappings", "core.library.protected_paths",
@@ -332,15 +338,38 @@ func TestCoreSections_NoOverlap(t *testing.T) {
 }
 
 // TestCoreSections_NoLaterRowsKeys is a test name coined by F2-09: nothing the
-// brief leaves to F2-04, F3-02 and F3-03 is declared here.
+// brief leaves to F2-04 and F3-02 is declared here, and of F3-03's two secret
+// keys only core.http.basic_gate.password is (the OIDC client secret sits in
+// a list entry, which config refuses for a secrets.Ref).
 func TestCoreSections_NoLaterRowsKeys(t *testing.T) {
 	for p, l := range allLeaves(t) {
 		if excluded(l) {
 			t.Errorf("key %s belongs to a later row", p)
 		}
-		if strings.Contains(p, ".schedules.") || strings.Contains(p, ".client_secret") || strings.HasSuffix(p, "basic_gate.password") {
+		if strings.Contains(p, ".schedules.") || strings.Contains(p, ".client_secret") {
 			t.Errorf("key %s belongs to a later row", p)
 		}
+	}
+}
+
+// TestCoreSections_SecretKeys (a test name coined by F3-03; 05-config §2.2,
+// 05-http-api §10): core.http.basic_gate.password is the one secrets.Ref key,
+// live and ProtectAdmin; no other key, and no key inside a list or map type,
+// is a secret.
+func TestCoreSections_SecretKeys(t *testing.T) {
+	refType := reflect.TypeFor[secrets.Ref]()
+	var refs []string
+	for p, l := range allLeaves(t) {
+		if l.typ == refType {
+			refs = append(refs, p)
+		}
+	}
+	if !slices.Equal(refs, []string{"core.http.basic_gate.password"}) {
+		t.Fatalf("secret keys %v, want only core.http.basic_gate.password", refs)
+	}
+	l := allLeaves(t)["core.http.basic_gate.password"]
+	if l.reload != config.ReloadLive || l.protect != config.ProtectAdmin {
+		t.Fatalf("core.http.basic_gate.password: reload %d protect %d, want live and ProtectAdmin", l.reload, l.protect)
 	}
 }
 
@@ -403,6 +432,7 @@ func TestCoreSections_ReloadAndProtection(t *testing.T) {
 		"core.library.roots":                 {config.ReloadLive, config.ProtectAdmin},
 		"core.http.trusted_proxies":          {config.ReloadLive, config.ProtectAdmin},
 		"core.http.basic_gate.enabled":       {config.ReloadLive, config.ProtectAdmin},
+		"core.http.basic_gate.password":      {config.ReloadLive, config.ProtectAdmin},
 		"core.log.file.path":                 {config.ReloadRestart, config.ProtectAdmin},
 		"core.log.file.max_files":            {config.ReloadRestart, config.ProtectNone},
 		"core.log.journal.enabled":           {config.ReloadRestart, config.ProtectNone},
