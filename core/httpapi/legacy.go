@@ -1,5 +1,5 @@
 // file: core/httpapi/legacy.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8bdc5e36-9eb7-41f3-9bef-2c0c9e0c68c5
 // last-edited: 2026-11-10
 
@@ -498,7 +498,11 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 		first := reg.members[0].route
 		spec := httpmw.RouteSpec{Pattern: reg.pat.path(), Policy: mountPolicy(m, first.NoCompress),
 			Class: rateClassName(first.RateClass), MaxBody: -1}
-		if err := register(mux, reg.pat.String(), r.legacyHandler(reg.pat.String(), reg.admits, m.Handler, spec)); err != nil {
+		// Stage 8's facts ride on the registered handler (basicGateRoutes):
+		// a pattern dropped by the dedup above or by a refusal is never
+		// registered, so it carries no facts.
+		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, m.Handler, spec), facts: legacyGateFacts(reg, m)}
+		if err := register(mux, reg.pat.String(), h); err != nil {
 			errs = append(errs, err)
 		}
 		for _, mem := range reg.members {

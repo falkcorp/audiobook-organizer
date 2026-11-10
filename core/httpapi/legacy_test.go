@@ -1,7 +1,7 @@
 // file: core/httpapi/legacy_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e2bad0d9-b859-4674-9232-a674448cef1f
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -19,7 +19,8 @@ import (
 
 // fakeGin stands in for a gin engine (core never imports gin, N7): it routes
 // on the decoded r.URL.Path with gin's tree rule (a static segment before a
-// parameter at the same depth), runs the post-match check through
+// parameter at the same depth; a final "*name" takes the rest of the path,
+// empty included, but never the path without its "/"), runs the post-match check through
 // LegacyMatchAgrees first, as ABO's first gin middleware does (a request it
 // routes nowhere skips the check and gets its NoRoute answer, 418 here), and
 // records which route's handler ran.
@@ -47,11 +48,15 @@ func (g *fakeGin) match(method, path string) string {
 			continue
 		}
 		segs := strings.Split(strings.TrimPrefix(r.path, "/"), "/")
-		if len(segs) != len(want) {
+		catchAll := strings.HasPrefix(segs[len(segs)-1], "*")
+		if len(segs) != len(want) && (!catchAll || len(want) < len(segs)) {
 			continue
 		}
 		ok := true
 		for i, s := range segs {
+			if strings.HasPrefix(s, "*") {
+				break
+			}
 			if !strings.HasPrefix(s, ":") && s != want[i] {
 				ok = false
 				break
@@ -71,13 +76,18 @@ func (g *fakeGin) match(method, path string) string {
 // parameter, the static one wins.
 func ginBefore(a, b []string) bool {
 	for i := range a {
-		as, bs := !strings.HasPrefix(a[i], ":"), !strings.HasPrefix(b[i], ":")
+		if i >= len(b) {
+			return false
+		}
+		as, bs := !isGinParam(a[i]), !isGinParam(b[i])
 		if as != bs {
 			return as
 		}
 	}
 	return false
 }
+
+func isGinParam(s string) bool { return strings.HasPrefix(s, ":") || strings.HasPrefix(s, "*") }
 
 func (g *fakeGin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	full := g.match(r.Method, r.URL.Path)
@@ -544,6 +554,21 @@ func TestDispatch_TrailingSlashPatternNoRedirect(t *testing.T) {
 	}
 	if rec := serve(lh, http.MethodGet, "/api/v1/cases/penguin/", ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"GET /api/v1/cases/:id/"}) {
 		t.Fatalf("legacy GET with the slash = %d %q", rec.Code, rec.Body.String())
+	}
+
+	// A rest wildcard matches the empty rest, so ServeMux 307s GET
+	// /api/v1/files to "GET /api/v1/files/{path...}"; gin routes no member
+	// there either, so it is the legacy 404 too.
+	g = newFakeGin("GET /api/v1/files/*path")
+	lh = mustBuild(t, gcpdRouter(t, g, gothamRoute(http.MethodGet, "/api/v1/files/*path")))
+	rec = serve(lh, http.MethodGet, "/api/v1/files", "")
+	if rec.Code != http.StatusNotFound || rec.Body.String() != legacyNotFound || rec.Header().Get("Location") != "" {
+		t.Fatalf("legacy GET without the slash before a wildcard = %d %q Location %q, want the legacy 404", rec.Code, rec.Body.String(), rec.Header().Get("Location"))
+	}
+	for _, p := range []string{"/api/v1/files/", "/api/v1/files/joker/cards"} {
+		if rec := serve(lh, http.MethodGet, p, ""); rec.Code != http.StatusOK || !slices.Equal(g.took(), []string{"GET /api/v1/files/*path"}) {
+			t.Fatalf("legacy GET %s = %d %q", p, rec.Code, rec.Body.String())
+		}
 	}
 }
 
