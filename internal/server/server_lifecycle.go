@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.68.0
+// version: 4.69.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-10
 
@@ -20,7 +20,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -395,59 +394,122 @@ type lifecycleRun struct {
 	closeShutdown sync.Once
 	backgroundWG  sync.WaitGroup
 	watchers      *watcher.Supervisor
-	// afterListenRan is set by afterListen; StopHook skips what only a
-	// served run started.
-	afterListenRan atomic.Bool
+	// autoScanEnabled and autoScanDebounce are config.AppConfig's auto-scan
+	// settings as StartHook read them. afterListen runs concurrently with
+	// serving, and after a stop that ran out of budget it may still be
+	// running: reading the process-global config there is a race against
+	// whatever reconfigures the process next, so it reads these instead.
+	autoScanEnabled  bool
+	autoScanDebounce time.Duration
 	// afterGate orders afterListen against the stop: see afterListenGate.
 	afterGate afterListenGate
 }
 
 // afterListenGate orders the post-listen start (afterListen) against the
 // stop. afterListen runs on its own goroutine, concurrently with serving, and
-// it writes what the stop reads or waits on: it assigns s.scheduler, adds to
-// life.backgroundWG (the scheduler's Start, the ticker, the watcher and the
-// session cleanup all go through it) and reads config.AppConfig. A stop that
-// started while it was still running therefore raced it: StopHook's
-// backgroundWG.Wait overlapped an Add (the sync.WaitGroup misuse the race
-// detector reports as a write in stopWithin against a read in afterListen),
-// and a caller that mutated the config once the stop returned raced
-// afterListen's read of it.
+// it writes what the stop reads or waits on: it assigns s.scheduler and
+// life.watchers, and adds to life.backgroundWG and s.bgWG (the scheduler's
+// Start, the ticker, the watcher, the session cleanup and the backfills all go
+// through them). A stop that began while it was still running therefore raced
+// it: StopHook's backgroundWG.Wait overlapped an Add (the sync.WaitGroup
+// misuse the race detector reports as a write in stopWithin against a read in
+// afterListen).
 //
 // The kernel does not order the two on its own: it starts Serve on a
 // goroutine and may begin the stop before that goroutine ran, and the
 // listener's drain budget can end while afterListen is still working. The
-// gate closes both holes. begin is called by Serve before it starts
-// afterListen and refuses once the stop has sealed the gate, so a stop that
-// got there first means afterListen never runs. seal is called by the stop
-// (R1Listener.Shutdown, then StopHook) and returns only once an afterListen
-// that did begin has returned, or when ctx ends first. The zero value is
-// ready to use.
+// gate closes both holes:
+//
+//   - begin is called by Serve before it starts afterListen and refuses once
+//     the stop has sealed the gate, so a stop that got there first means
+//     afterListen never runs.
+//   - seal is called by the stop (R1Listener.Shutdown, then StopHook). It
+//     forbids a later begin, tells a running afterListen to stop early
+//     (stopCh, which afterListen checks between its steps), and waits for it,
+//     or for ctx.
+//   - done is closed when afterListen returned. It is the happens-before edge
+//     for everything afterListen wrote: the stop reads those fields, and waits
+//     on the WaitGroups it adds to, only after done. A stop whose seal ran out
+//     of budget does not skip those steps, it runs them behind done (see
+//     StopHook), so an afterListen that outlives the stop never races them.
+//
+// The zero value is ready to use.
 type afterListenGate struct {
 	mu      sync.Mutex
 	sealed  bool
+	stop    chan struct{} // closed by the first seal; lazily made
 	running chan struct{} // non-nil once begun; closed when afterListen returned
+}
+
+// closedChan is what done returns when afterListen never began.
+var closedChan = func() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}()
+
+// beginResult is why begin refused, or that it did not.
+type beginResult int
+
+const (
+	beginOK      beginResult = iota
+	beginSealed              // a stop got there first
+	beginAlready             // afterListen was already begun on this run
+)
+
+// stopLocked returns the stop channel; g.mu must be held.
+func (g *afterListenGate) stopLocked() chan struct{} {
+	if g.stop == nil {
+		g.stop = make(chan struct{})
+	}
+	return g.stop
 }
 
 // begin reports whether afterListen may run. When it may, the returned
 // function must be called exactly once, after afterListen returned.
-func (g *afterListenGate) begin() (finish func(), ok bool) {
+func (g *afterListenGate) begin() (finish func(), res beginResult) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.sealed || g.running != nil {
-		return nil, false
+	switch {
+	case g.sealed:
+		return nil, beginSealed
+	case g.running != nil:
+		return nil, beginAlready
 	}
 	done := make(chan struct{})
 	g.running = done
-	return func() { close(done) }, true
+	return func() { close(done) }, beginOK
 }
 
-// seal forbids a later afterListen and waits for one already running. It
-// reports whether none is still running: false means ctx ended first and the
-// caller must not assume afterListen's writes are finished. It is safe to
-// call more than once and from several goroutines.
+// stopCh is closed once a stop has sealed the gate: afterListen returns at its
+// next step boundary when it is.
+func (g *afterListenGate) stopCh() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.stopLocked()
+}
+
+// done is closed when afterListen has returned, or is already closed when it
+// never began. Call it after seal: before, a begin could still follow.
+func (g *afterListenGate) done() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running == nil {
+		return closedChan
+	}
+	return g.running
+}
+
+// seal forbids a later afterListen, tells a running one to stop early, and
+// waits for it. It reports whether none is still running: false means ctx
+// ended first and afterListen's writes are not finished (done tells when they
+// are). It is safe to call more than once and from several goroutines.
 func (g *afterListenGate) seal(ctx context.Context) bool {
 	g.mu.Lock()
-	g.sealed = true
+	if !g.sealed {
+		g.sealed = true
+		close(g.stopLocked())
+	}
 	done := g.running
 	g.mu.Unlock()
 	if done == nil {
@@ -519,7 +581,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 	// A listener that stopped serving is the run's failure (HEAD exited the
 	// process with status 1 there); the stop still runs first.
-	return errors.Join(serveErr, s.StopHook(context.Background()))
+	// The old wait was HEAD's own, unbounded; a stop that wedges would hang
+	// the process, so it gets the same 30 s the drain has.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+	return errors.Join(serveErr, s.StopHook(stopCtx))
 }
 
 // listenOptionsFor is the listener address and TLS files of cfg, the values
@@ -547,6 +613,11 @@ func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 	cfg.StartupSteps = steps
 	s.life.cfg = cfg
 	s.life.shutdown = make(chan struct{})
+	s.life.autoScanEnabled = config.AppConfig.AutoScanEnabled
+	s.life.autoScanDebounce = 5 * time.Second
+	if config.AppConfig.AutoScanDebounceSeconds > 0 {
+		s.life.autoScanDebounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
+	}
 	logBasicGateAtStartup()
 
 	// Refuse to serve with a hole in the operations registry, before touching
@@ -629,10 +700,23 @@ func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 // afterListen is HEAD's Start after the main listener bound: R1Listener.Serve
 // runs it once, concurrently with serving, as HEAD ran these steps while its
 // serve goroutine accepted connections.
+//
+// It returns at the next step boundary once a stop has sealed s.life.afterGate
+// (stopping), and the file-op recovery honours the same signal, so a stop never
+// waits for the remaining steps of a start it is about to undo. Every step it
+// skips is one the stop was about to tear down.
 func (s *Server) afterListen() {
-	s.life.afterListenRan.Store(true)
 	shutdown := s.life.shutdown
 	backgroundWG := &s.life.backgroundWG
+	stopCh := s.life.afterGate.stopCh()
+	stopping := func() bool {
+		select {
+		case <-stopCh:
+			return true
+		default:
+			return false
+		}
+	}
 
 	// READY=1 and the serving STATUS= are the kernel's (start step 8, once
 	// the listener is up), not the server's: until R1-16 this was the
@@ -648,34 +732,55 @@ func (s *Server) afterListen() {
 	if s.activityService != nil {
 		s.activityService.StartDeferredFlush()
 	}
+	if stopping() {
+		return
+	}
 
 	s.seedRolesAndTokens()
+	if stopping() {
+		return
+	}
 
 	// One-time: re-order every cached candidate row that holds an
 	// owner-rejected candidate, so it leaves slot 0 (owner_rejected_rerank.go).
 	// Background, bgWG-tracked; marker-gated, so it runs until it succeeds once.
 	s.startOwnerRejectedRerank()
+	if stopping() {
+		return
+	}
 
 	// Operations interrupted by a previous shutdown/crash are resumed by the
 	// operations registry: Registry.Start runs resumeAfterStartup, which reads
 	// ListResumableOperationsV2 and applies each def's declared ResumePolicy.
 
 	// Recover interrupted file I/O operations (cover embed, tag write, rename)
-	RecoverInterruptedFileOps(s.fileIOPool)
+	RecoverInterruptedFileOps(s.fileIOPool, stopCh)
+	if stopping() {
+		return
+	}
 
 	// Interrupted metadata candidate fetches are resumed by the operations
 	// registry (metadata.candidate-fetch declares ResumePolicy=ResumeRestart).
 
 	s.startBackfills()
+	if stopping() {
+		return
+	}
 
 	// File removals a purge pass journaled and never finished are carried out
 	// once, in the background (purge_replay_boot.go).
 	s.startPurgeJournalReplay()
+	if stopping() {
+		return
+	}
 
 	// The HNSW snapshot is written in the background whenever the graph
 	// changed, so a stop that has no budget left for it still finds a recent
 	// snapshot on disk (R1-15; hnsw_snapshot.go).
 	s.startHNSWSnapshotter()
+	if stopping() {
+		return
+	}
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
 	s.scheduler = scheduler.NewTaskScheduler(s.schedulerDeps())
@@ -686,6 +791,9 @@ func (s *Server) afterListen() {
 		lifecycleLog.Warn("ops.Schedule registration: %v", err)
 	}
 	s.scheduler.Start(shutdown, backgroundWG)
+	if stopping() {
+		return
+	}
 
 	// Heartbeat: push periodic system.status events via SSE (every 5s) while running
 	ticker := time.NewTicker(5 * time.Second)
@@ -739,6 +847,9 @@ func (s *Server) afterListen() {
 	backgroundWG.Go(func() {
 		s.runCacheStatsSnapshotter(shutdown)
 	})
+	if stopping() {
+		return
+	}
 
 	// Start auto-scan file watchers if enabled. ONE watcher per enabled
 	// import path, supervised by watcher.Supervisor, which re-reads the
@@ -749,11 +860,8 @@ func (s *Server) afterListen() {
 	// fsnotify does not see writes made by remote NFS/SMB clients and can
 	// exhaust the inotify watch limit on a large tree, so it must never be
 	// the only discovery mechanism.
-	if config.AppConfig.AutoScanEnabled && s.Ops() != nil {
-		debounce := 5 * time.Second
-		if config.AppConfig.AutoScanDebounceSeconds > 0 {
-			debounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
-		}
+	if s.life.autoScanEnabled && s.Ops() != nil {
+		debounce := s.life.autoScanDebounce
 		watchLog := logger.NewWithActivityLog("auto-scan", s.storeForWiring())
 		// The same callback is reused across watchers because each watcher
 		// invokes it with its own root path, so the scan target is correct
@@ -947,23 +1055,44 @@ func stopWithin(ctx context.Context, d, reserve time.Duration, step string, fn f
 // own 5s cap and the plugins' Shutdown(ctx) are not clamped here. It closes
 // Stopped on return.
 //
+// Its first step seals the post-listen start (afterListenGate): a start that
+// has not begun never will, and one running is told to stop at its next step
+// and waited for, for at most afterListenSealWait, with afterListenSealReserve
+// left for the steps after it (the largest reserve below is the ops registry's
+// 8 s, so the ladder still never increases). A start that outlives that share
+// is reported as abandoned, and every step that reads what it writes, or
+// waits on the WaitGroups it adds to (the watchers, bgWG, backgroundWG), runs
+// only after the gate's done channel closes: inline when the seal finished,
+// otherwise behind that channel, off StopHook's path, so StopHook neither
+// races the start nor waits on it past its share.
+//
 // The HNSW clean-stop marker is its last step, written only when every step
 // before it finished (markHNSWCleanStop): abandoned collects each step that
 // was left running at its share, or failed in a way that can leave its work
 // running.
 func (s *Server) StopHook(ctx context.Context) error {
 	defer s.markStopped()
-	var abandoned []string
+	s.stopSteps(ctx)
+	return nil
+}
+
+// stopSteps is StopHook's body. It returns the steps it left running or that
+// failed in a way that can leave their work running (the list the HNSW
+// clean-stop marker is withheld for), which tests read.
+func (s *Server) stopSteps(ctx context.Context) (abandoned []string) {
 
 	// First, before any step reads what afterListen writes: forbid a post-
 	// listen start that has not begun, and wait for one that has (the kernel's
 	// listener drain already did, within its own share, so this is normally
-	// instant; it is the wait that counts when that share ended first). A
-	// post-listen start still running at the budget is reported, and the wait
-	// on its goroutines below is skipped, not raced.
-	afterListenFinished := s.life.afterGate.seal(ctx)
+	// instant; it is the wait that counts when that share ended first). The
+	// wait has its own share of the budget, not all of it: a start wedged in a
+	// step must not leave every later step with none.
+	sealCtx, sealCancel := context.WithTimeout(context.WithoutCancel(ctx), afterListenSealShare(ctx))
+	afterListenFinished := s.life.afterGate.seal(sealCtx)
+	sealCancel()
+	afterListenDone := s.life.afterGate.done()
 	if !afterListenFinished {
-		lifecycleLog.Warn("The post-listen start is still running at the shutdown budget; stopping around it")
+		lifecycleLog.Warn("The post-listen start is still running at its share of the shutdown budget; stopping around it")
 		abandoned = append(abandoned, "post-listen start")
 	}
 
@@ -1009,6 +1138,9 @@ func (s *Server) StopHook(ctx context.Context) error {
 	s.closeIndexQueue()
 	bgDone := make(chan struct{})
 	go func() {
+		// After the post-listen start: it adds to bgWG (the backfills, the
+		// HNSW snapshotter), and a Wait that overlaps an Add is a misuse.
+		<-afterListenDone
 		s.bgWG.Wait()
 		close(bgDone)
 	}()
@@ -1102,12 +1234,26 @@ func (s *Server) StopHook(ctx context.Context) error {
 	// Stop every file watcher (one per import path). The supervisor goroutine
 	// has already returned via shutdown; this only tears down the live
 	// watchers it left running.
-	if ws := s.life.watchers; ws != nil {
-		stopped := len(ws.WatchedPaths())
-		ws.StopAll()
-		if stopped > 0 {
-			slog.Info("File watchers stopped", "fileWatchers_count", stopped)
+	// life.watchers is afterListen's: read only once it returned. When it is
+	// still running at its share of the budget, the watchers are stopped by a
+	// goroutine that waits for it, so StopHook neither reads the field early
+	// nor leaves them running.
+	stopWatchers := func() {
+		if ws := s.life.watchers; ws != nil {
+			stopped := len(ws.WatchedPaths())
+			ws.StopAll()
+			if stopped > 0 {
+				slog.Info("File watchers stopped", "fileWatchers_count", stopped)
+			}
 		}
+	}
+	if afterListenFinished {
+		stopWatchers()
+	} else {
+		go func() {
+			<-afterListenDone
+			stopWatchers()
+		}()
 	}
 
 	// Persist the HNSW snapshot when the budget leaves room for it (before
@@ -1149,19 +1295,20 @@ func (s *Server) StopHook(ctx context.Context) error {
 
 	// The scheduler, ticker, snapshotter, watcher and session goroutines
 	// returned on shutdown (closed before the drain); wait for any task the
-	// scheduler was still running, with what is left of the budget. Not
-	// while afterListen is still running (afterListenFinished): it adds to
-	// backgroundWG, and a Wait that overlaps an Add is a WaitGroup misuse.
-	if !afterListenFinished {
-		abandoned = append(abandoned, "scheduler tasks (the post-listen start was still running)")
-	} else if !stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() { s.life.backgroundWG.Wait() }) {
+	// scheduler was still running, with what is left of the budget. The wait
+	// starts behind afterListenDone: afterListen adds to backgroundWG, all of
+	// its Adds come before done, and a Wait that overlaps an Add is a misuse.
+	if !stopWithin(ctx, 30*time.Second, 0, "scheduler tasks", func() {
+		<-afterListenDone
+		s.life.backgroundWG.Wait()
+	}) {
 		abandoned = append(abandoned, "scheduler tasks")
 	}
 
 	// Last, so no step this stop waits for runs after it.
 	s.markHNSWCleanStop(abandoned)
 	slog.Info("Server exited")
-	return nil
+	return abandoned
 }
 
 // updateSearchIndexMetrics pushes the search index's own document count to
@@ -1486,12 +1633,19 @@ func (l *R1Listener) Addr() net.Addr { return l.ln.Addr() }
 func (l *R1Listener) Serve() error {
 	// begin before the goroutine, not inside it: a stop that sealed the gate
 	// first means afterListen never starts (afterListenGate).
-	if finish, ok := l.s.life.afterGate.begin(); ok {
+	switch finish, res := l.s.life.afterGate.begin(); res {
+	case beginOK:
 		go func() {
 			defer close(l.afterDone)
 			defer finish()
 			l.s.afterListen()
 		}()
+	case beginAlready:
+		// A second Serve on one run: afterListen has run (or is running) once
+		// already, and must not run twice.
+		lifecycleLog.Warn("Serve called again: the post-listen start was already begun on this run, not starting it twice")
+	case beginSealed:
+		// The stop got there first; nothing to start.
 	}
 	return l.serveListeners()
 }
@@ -1548,6 +1702,21 @@ func (l *R1Listener) Shutdown(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// afterListenSealWait is the longest StopHook waits for a post-listen start
+// that was running when the stop began, and afterListenSealReserve what it
+// leaves for the steps after it: not below the largest reserve in StopHook's
+// ladder (the ops registry's 8 s), so the reserves never increase down the
+// order.
+const (
+	afterListenSealWait    = 10 * time.Second
+	afterListenSealReserve = 10 * time.Second
+)
+
+// afterListenSealShare is StopHook's wait on the post-listen start within ctx.
+func afterListenSealShare(ctx context.Context) time.Duration {
+	return budgeted(ctx, afterListenSealWait, afterListenSealReserve)
 }
 
 // hnswSnapshotInterval is how often the background snapshotter writes the

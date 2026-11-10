@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.12.2
+// version: 2.13.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-18
+// last-edited: 2026-11-10
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -146,6 +146,15 @@ func (p *FileIOPool) Submit(bookID string, fn func()) bool {
 // SubmitTyped queues a file I/O job with a specific operation type. Its result
 // is Submit's: false when the job was dropped without running.
 func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
+	return p.submitTyped(nil, bookID, opType, fn)
+}
+
+// submitTyped is SubmitTyped with a way out of the backpressure wait: when
+// stop (nil never fires) closes while the job waits for an overflow slot, the
+// job is dropped and false returned. The pending_file_op row tryQueue
+// persisted stays, so the next start replays it, as for a job dropped by a
+// stopped pool.
+func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn func()) bool {
 	// The book has file work queued: a library scan treats it as busy until
 	// the job has run (scanlock.MarkPending), so it cannot read the book's old
 	// tags between the caller's database write and this job's tag write. The
@@ -171,7 +180,13 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
 	// for that while holding submitMu would make Stop's write-lock acquisition
 	// wait for it too, and Stop's 30-second budget only wraps wg.Wait() — it
 	// would be blown before the timer ever started.
-	p.overflow <- struct{}{}
+	select {
+	case p.overflow <- struct{}{}:
+	case <-stop:
+		clearPending()
+		lifecycleLog.Warn("file I/O submit abandoned at stop, the pending row stays for the next start: book %s (op %s)", logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(opType))
+		return false
+	}
 
 	p.submitMu.RLock()
 	defer p.submitMu.RUnlock()
@@ -289,9 +304,11 @@ func (p *FileIOPool) Stop() {
 }
 
 // RecoverInterruptedFileOps re-queues any interrupted file I/O jobs.
-// Called from the server startup sequence after services are ready.
-func RecoverInterruptedFileOps(pool *FileIOPool) {
-	recoverInterruptedFileOps(pool)
+// Called from the server startup sequence after services are ready. stop (nil
+// never fires) ends the replay between jobs and frees a job waiting for an
+// overflow slot; the rows not re-queued stay on disk for the next start.
+func RecoverInterruptedFileOps(pool *FileIOPool, stop <-chan struct{}) {
+	recoverInterruptedFileOps(pool, stop)
 }
 
 // --- Persistent tracking via PebbleDB ---
@@ -345,7 +362,7 @@ func (p *FileIOPool) removePendingFileOp(bookID, opType string) {
 // when the server last shut down (or crashed). Uses the pool's
 // configured store rather than database.GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 3a).
-func recoverInterruptedFileOps(pool *FileIOPool) {
+func recoverInterruptedFileOps(pool *FileIOPool, stop <-chan struct{}) {
 	if pool == nil || pool.store == nil {
 		return
 	}
@@ -359,6 +376,14 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 	slog.Info("recovering interrupted file I/O operations", "keys_count", len(keys))
 
 	for _, kv := range keys {
+		// A stop ends the replay between jobs: the rows not yet re-queued stay
+		// on disk and are replayed by the next start.
+		select {
+		case <-stop:
+			lifecycleLog.Info("recovery of interrupted file I/O operations ended early by a stop; the rest replay at the next start")
+			return
+		default:
+		}
 		var job FileIOJob
 		if err := json.Unmarshal(kv.Value, &job); err != nil {
 			_ = store.DeleteRaw(kv.Key)
@@ -395,7 +420,7 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 		opType := job.OpType
 		slog.Info("re-queuing file I/O for book (type, started)", "bookID", bookID, "opType", opType, "value2", job.CreatedAt.Format(time.RFC3339))
 		if pool != nil {
-			pool.SubmitTyped(bookID, opType, func() { fn(bookID) })
+			pool.submitTyped(stop, bookID, opType, func() { fn(bookID) })
 		}
 	}
 }
