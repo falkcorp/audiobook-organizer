@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.9 -->
+<!-- version: 1.13.10 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -1435,7 +1435,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.temp_login.ttl` | duration | 15m | yes | admin |
 | `core.auth.schedules.session_prune` / `core.auth.schedules.onetime_prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes (re-read every poll) | none |
 | `core.auth.oidc.redirect_base_url` | URL | — | yes | admin |
-| `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}`; `id` is `[a-z][a-z0-9_]{0,47}` and neither `providers` nor `redirect_base_url` | `[]` | yes (provider set rebuilt) | owner (SEC3-6): the list is one key and config protects whole keys (05-config §1.3.6), so every entry field is owner, not only `allowed_emails` / `allowed_domains`; an admin who could repoint an entry's `issuer` or `client_id` while its `allowed_emails` name the owner could mint the owner's identity |
+| `core.auth.oidc.providers[]` | list `{id, kind (oidc/github), issuer, client_id, scopes, allowed_emails, allowed_domains, default_role, link_existing_by_email}`; `id` is `[a-z][a-z0-9_]{0,47}` and neither `providers` nor `redirect_base_url` | `[]` | yes (provider set rebuilt) | owner (SEC3-6): the list is one key and config protects whole keys (05-config §1.3.1, §1.3.7), so every entry field is owner, not only `allowed_emails` / `allowed_domains`; an admin who could repoint an entry's `issuer` or `client_id` while its `allowed_emails` name the owner could mint the owner's identity |
 | `core.auth.oidc.<id>.client_secret` | secret (`secrets.Ref`), one per provider entry, named by its `id` (ABO: `core.auth.oidc.github.client_secret`, `core.auth.oidc.google.client_secret`) | — | yes | admin |
 | `core.auth.owner.required` | bool | derived: true iff an OwnerVerifier is configured and an owner identity is set (§4.8, SEC4-14) | no | owner (SEC3-6) |
 
