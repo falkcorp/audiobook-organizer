@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.15.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -207,7 +207,7 @@ type BatchSpec[P, T, R any] struct {
 	ExclusiveRefs func(T) []entity.Ref       // many refs per item: overlapping items never run at once (5T.3.4)
 	ChunkSize     int                        // 0 = 256
 	ItemTimeout   time.Duration              // clock starts after the pause gate and ref locks
-	OnItemError   ErrorMode                  // the zero value is FailFast; the Batch runner applies Collect (count failed, continue; v3 Continue) when it is unset, so a Batch cannot ask for FailFast yet
+	OnItemError   BatchErrorPolicy           // zero = BatchContinue (count failed, continue; v3 Continue); BatchStop stops dispatch
 	Label         func(T) string             // pure function of the item; runs in workers
 }
 
@@ -355,6 +355,16 @@ type ErrorMode uint8
 const (
 	FailFast ErrorMode = iota // stop dispatching on the first error
 	Collect                   // run every item
+)
+
+// BatchErrorPolicy is BatchSpec.OnItemError. Its own type because ErrorMode's
+// zero value is FailFast and a Batch defaults to continuing (v3 Continue):
+// "unset" must mean Continue and Stop must be stated.
+type BatchErrorPolicy uint8
+
+const (
+	BatchContinue BatchErrorPolicy = iota // count the item failed and go on (ErrorMode Collect)
+	BatchStop                             // stop dispatching on the first error (ErrorMode FailFast)
 )
 
 type ItemsResult struct {
