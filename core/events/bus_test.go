@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"runtime"
 	"slices"
 	"strings"
@@ -671,5 +673,177 @@ func TestOnRaw_EncodeDropLogsNoPayload(t *testing.T) {
 	}
 	if strings.Contains(out, sentinel) || strings.Contains(out, "ALFRED") {
 		t.Errorf("the payload value reached the log:\n%s", out)
+	}
+}
+
+// TestKeyFilter_SlowOrPanickingNeverBlocksPublish: a KeyFilter runs on its
+// subscription's goroutine under the handler's recover, so a filter that
+// blocks never holds up Publish, a filter that panics never breaks it (the
+// panic is counted and the subscription keeps running), and other
+// subscribers of the topic are delivered to either way.
+func TestKeyFilter_SlowOrPanickingNeverBlocksPublish(t *testing.T) {
+	p, sc := provider(t)
+	b := newBus(t, events.BusOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Metrics: sc})
+	release := make(chan struct{})
+	slowEntered := make(chan struct{}, 1)
+	slow := events.KeyFilter(func(string) bool {
+		select {
+		case slowEntered <- struct{}{}:
+		default:
+		}
+		<-release
+		return true
+	})
+	panicky := events.KeyFilter(func(k string) bool {
+		if k == "joker" {
+			panic("the filter broke")
+		}
+		return true
+	})
+	survivor, healthy := newRecorder[Sighting](), newRecorder[Sighting]()
+	must(t, b.Subscribe("gotham",
+		events.On(escaped(), "gotham.slow", func(context.Context, events.Envelope[Sighting]) {}, slow),
+		events.On(escaped(), "gotham.panicky", survivor.handle, panicky),
+		events.On(escaped(), "gotham.healthy", healthy.handle),
+	))
+	b.Freeze()
+	must(t, b.Open())
+	closeBus(t, b)
+	t.Cleanup(func() { close(release) }) // cleanups run last-in first: release, then Close
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i, k := range []string{"joker", "penguin", "riddler"} {
+			events.Publish(b.Scope("gotham"), context.Background(), escaped(), k, Sighting{Villain: k, Block: i})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Publish blocked on a slow or panicking KeyFilter")
+	}
+	<-slowEntered // the slow filter is running, on its own goroutine
+	healthy.wait(t, 3)
+	survivor.wait(t, 2) // joker skipped by the panic; penguin and riddler delivered
+	if got := survivor.envelopes(); got[0].Key != "penguin" || got[1].Key != "riddler" {
+		t.Errorf("after the filter panic the subscription received %+v", got)
+	}
+	if n := sample(t, p, "mediacore_events_handler_panics_total", map[string]string{"subscriber": "gotham.panicky"}); n != 1 {
+		t.Errorf("filter panics counted = %v, want 1", n)
+	}
+}
+
+// TestBus_CoalesceCloseDeliversNewestLast: an event taken while Close drains
+// replaces its key's held event instead of overtaking it, so the last
+// delivery for a key is its newest event.
+func TestBus_CoalesceCloseDeliversNewestLast(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newBus(t, events.BusOptions{})
+		release := make(chan struct{})
+		var mu sync.Mutex
+		var joker []int
+		must(t, b.Subscribe("gotham", events.On(escaped(), "gotham.latest", func(_ context.Context, e events.Envelope[Sighting]) {
+			if e.Key == "" {
+				<-release // an uncoalesced event holds the goroutine
+				return
+			}
+			mu.Lock()
+			joker = append(joker, e.Payload.Block)
+			mu.Unlock()
+		}, events.Coalesce(time.Hour))))
+		b.Freeze()
+		must(t, b.Open())
+		pub := b.Scope("gotham")
+		events.Publish(pub, context.Background(), escaped(), "joker", Sighting{Block: 1})
+		synctest.Wait() // block 1 is held for its window
+		events.Publish(pub, context.Background(), escaped(), "", Sighting{})
+		synctest.Wait() // the handler is blocked
+		events.Publish(pub, context.Background(), escaped(), "joker", Sighting{Block: 2})
+		closed := make(chan error, 1)
+		go func() { closed <- b.Close(context.Background()) }()
+		synctest.Wait() // Close began; block 2 is queued
+		close(release)
+		must(t, <-closed)
+		mu.Lock()
+		defer mu.Unlock()
+		if len(joker) != 1 || joker[0] != 2 {
+			t.Errorf("joker deliveries = %v, want [2] (the newest, never an older one after it)", joker)
+		}
+	})
+}
+
+// TestBus_CloseNilMeansNoLaterHandler: publishers race Close under -race; once
+// Close returns nil, no handler starts.
+func TestBus_CloseNilMeansNoLaterHandler(t *testing.T) {
+	for range 20 {
+		b := newBus(t, events.BusOptions{})
+		var closedNil atomic.Bool
+		var late atomic.Int32
+		must(t, b.Subscribe("gotham", events.On(escaped(), "gotham.race", func(context.Context, events.Envelope[Sighting]) {
+			if closedNil.Load() {
+				late.Add(1)
+			}
+		}, events.QueueSize(8))))
+		b.Freeze()
+		must(t, b.Open())
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() {
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						events.Publish(b.Scope("gotham"), context.Background(), escaped(), "", Sighting{})
+					}
+				}
+			})
+		}
+		time.Sleep(time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		err := b.Close(ctx)
+		cancel()
+		if err == nil {
+			closedNil.Store(true)
+		}
+		time.Sleep(5 * time.Millisecond)
+		close(stop)
+		wg.Wait()
+		if n := late.Load(); n != 0 {
+			t.Fatalf("%d handler(s) started after Close returned nil", n)
+		}
+	}
+}
+
+// TestPublish_RawEncodedOnPublisher: the JSON form is made inside Publish, so
+// a publisher that changes its payload after Publish returns neither races
+// the raw subscriber (-race) nor changes what it receives.
+func TestPublish_RawEncodedOnPublisher(t *testing.T) {
+	b, err := events.NewBus(events.BusOptions{})
+	must(t, err)
+	// A hand-built entry carries no payload type, so a map publishes.
+	must(t, b.Declare("gotham", events.TopicSpec{Name: "gotham.villain.escaped.v1", Permission: rbac.Need("gotham:view")}))
+	got := make(chan string, 1)
+	release := make(chan struct{})
+	must(t, b.Subscribe("wayne", events.OnRaw("gotham.villain.escaped.v1", "wayne.watch", func(_ context.Context, e events.RawEnvelope) {
+		<-release
+		got <- string(e.Payload)
+	})))
+	b.Freeze()
+	must(t, b.Open())
+	closeBus(t, b)
+	payload := map[string]string{"villain": "joker"}
+	events.Publish(b.Scope("gotham"), context.Background(), events.NewTopic[map[string]string]("gotham.villain.escaped.v1"), "joker", payload)
+	payload["villain"] = "penguin" // the publisher reuses its map
+	close(release)
+	select {
+	case p := <-got:
+		if p != `{"villain":"joker"}` {
+			t.Errorf("raw payload = %s, want the value at Publish", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no delivery")
 	}
 }

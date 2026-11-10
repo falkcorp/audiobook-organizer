@@ -163,7 +163,9 @@ type event struct {
 	time                           time.Time
 	payload                        any
 
-	rawOnce  sync.Once
+	// raw and rawCause are set by encode on the publisher's goroutine, before
+	// the event is queued (the enqueue's mutex publishes them to every
+	// subscriber goroutine), and only read after.
 	raw      json.RawMessage
 	rawCause string // why the JSON form is unavailable: causeMarshal or causeSchema; "" when it is
 }
@@ -179,27 +181,29 @@ const (
 	causePayloadType = "payload_type" // a typed subscriber of another type (an entry without a known payload type)
 )
 
-// json is the payload's JSON form, encoded and validated against the declared
-// schema once per publish, on the first raw subscriber's goroutine; when it
-// is unavailable, cause says why.
-func (ev *event) json() (raw json.RawMessage, cause string) {
-	ev.rawOnce.Do(func() {
-		b, err := json.Marshal(ev.payload)
-		if err != nil {
-			ev.rawCause = causeMarshal
+// encode makes the payload's JSON form and validates it against the declared
+// schema: once per publish, only when the topic has a raw subscriber
+// (topicState.hasRaw), and on the publisher's goroutine, inside Publish. A
+// subscriber goroutine encoding later would race a publisher that changes a
+// payload (a map, a slice, a pointer's target) after Publish returns.
+func (ev *event) encode() {
+	b, err := json.Marshal(ev.payload)
+	if err != nil {
+		ev.rawCause = causeMarshal
+		return
+	}
+	if rs := ev.topic.resolved; rs != nil {
+		var inst any
+		if json.Unmarshal(b, &inst) != nil || rs.Validate(inst) != nil {
+			ev.rawCause = causeSchema
 			return
 		}
-		if rs := ev.topic.resolved; rs != nil {
-			var inst any
-			if json.Unmarshal(b, &inst) != nil || rs.Validate(inst) != nil {
-				ev.rawCause = causeSchema
-				return
-			}
-		}
-		ev.raw = b
-	})
-	return ev.raw, ev.rawCause
+	}
+	ev.raw = b
 }
+
+// json is the JSON form encode made; when it is unavailable, cause says why.
+func (ev *event) json() (raw json.RawMessage, cause string) { return ev.raw, ev.rawCause }
 
 func (b *Bus) publish(ctx context.Context, owner, name string, typ reflect.Type, key string, payload any) {
 	st := b.frozen.Load()
@@ -233,10 +237,13 @@ func (b *Bus) publish(ctx context.Context, owner, name string, typ reflect.Type,
 	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
 		ev.traceID = sc.TraceID().String()
 	}
+	if ts.hasRaw {
+		ev.encode()
+	}
+	// No subscriber code runs here: KeyFilter runs on the subscriber's
+	// goroutine (sub.skip), so a slow or panicking filter never blocks or
+	// breaks Publish.
 	for _, s := range ts.subs {
-		if s.cfg.keyFilter != nil && !s.cfg.keyFilter(key) {
-			continue
-		}
 		s.enqueue(ev)
 	}
 }
@@ -280,8 +287,10 @@ func (b *Bus) Open() error {
 // the handlers' context and drops and counts what is left (reason "closed").
 // 06 §6.5.2 calls it after the executor drain, with min(core.events.close_drain,
 // the remaining shutdown budget). It returns an error naming the
-// subscriptions still inside a handler when the budget ran out; those
-// goroutines exit when their handler returns. Idempotent. Kernel-only.
+// subscriptions whose goroutine had not exited when the budget ran out: one
+// still in a handler, or about to enter one, may still run it, and exits when
+// it returns. A nil return means every subscription goroutine has exited, so
+// no handler runs after it. Idempotent. Kernel-only.
 func (b *Bus) Close(ctx context.Context) error {
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
@@ -313,16 +322,19 @@ func (b *Bus) Close(ctx context.Context) error {
 		return nil
 	default:
 	}
+	// The report reads which goroutines are still running, not which are
+	// inside a handler: a goroutine between taking an event and calling its
+	// handler is not in one yet, and would start it after a nil return.
 	var busy []string
 	for _, s := range subs {
-		if s.inHandler.Load() {
+		if !s.exited.Load() {
 			busy = append(busy, s.name)
 		}
 	}
 	if len(busy) == 0 {
 		return nil
 	}
-	return fmt.Errorf("events: close: %s still in a handler after the drain budget: %w",
+	return fmt.Errorf("events: close: %s still running (in or entering a handler) after the drain budget: %w",
 		strings.Join(busy, ", "), errors.Join(ErrClosed, context.Cause(ctx)))
 }
 
