@@ -67,6 +67,9 @@ internal/itunes.ComputeLibraryIdentity
 internal/itunes.ContractVerdict.Error
 internal/itunes.ConvertTrack
 internal/itunes.DeriveEncodingTable
+core/kernel.coreSections
+core/kernel.dur
+core/kernel.hashWorkersDefault
 internal/itunes.DiffMsdhInventory
 internal/itunes.EncodeLocation
 internal/itunes.ErrLibraryModified.Error
