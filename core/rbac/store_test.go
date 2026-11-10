@@ -1,5 +1,5 @@
 // file: core/rbac/store_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2a7d4e19-6f3b-4c80-b5e2-8d1c9f4a7b63
 // last-edited: 2026-11-10
 
@@ -56,7 +56,7 @@ func TestImporter_RejectsBrokenRole(t *testing.T) {
 		"seed origin":         {Name: "custom.alfred", Origin: rbac.OriginSeed, SeedPermissions: perms("gotham:patrol")},
 		"seed bookkeeping":    {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:patrol"), PendingSeed: perms("gotham:signal")},
 		"locked":              {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:patrol"), Locked: true},
-		"confined flag":       {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:relay.worker"), Confined: true},
+		"SeedConfined flag":   {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:relay.worker"), SeedConfined: true},
 		"unknown scope":       {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:patrol", "gotham:ghost")},
 		"malformed scope":     {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:Patrol")},
 		"core admin":          {Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("core:admin")},

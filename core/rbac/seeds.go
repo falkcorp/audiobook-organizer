@@ -1,5 +1,5 @@
 // file: core/rbac/seeds.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c4e81f27-3a9d-4b6c-8f15-0d7a2e9b4c63
 // last-edited: 2026-11-10
 
@@ -29,7 +29,7 @@ type seedDef struct {
 	description string
 	perms       []Permission // sorted, de-duplicated
 	locked      bool         // admin: outside the merge
-	confining   bool         // this release's seed is confining: sets Role.Confined
+	confining   bool         // this release's seed is confining: sets Role.SeedConfined
 }
 
 // adminSeed is the locked admin role. It is outside the merge and always
@@ -61,7 +61,7 @@ func adminSeed() seedDef {
 //     only DefaultGrants, which never carry a Confining scope
 //     (ErrRestrictedGrant), so it is Confined only if the RoleSeed is.
 //     Such a role's seedDef is confining, and the merge stores that in
-//     Role.Confined, where it stays after the release that set it.
+//     Role.SeedConfined, where it stays after the release that set it.
 //
 // Core's own seeds for editor and viewer (core:self, core:tasks.view,
 // core:system.status, core:metrics.read) are the DefaultGrants of
@@ -179,13 +179,13 @@ func reachesNonConfining(cat *Catalog, ps []Permission) bool {
 // restrictedAddition reports whether adding p to a role that already exists
 // must wait for an admin's acceptance (§4.8, SEC-25): p is flagRestricted
 // (which already holds every Confining addition, §4.8's restricted list), or
-// the role is confined (Role.Confined) and p is not a concrete Confining
-// scope, which would end the confinement. The last rule is F4-01's: §4.9's
-// ErrConfiningSeed keeps a release from declaring such a seed, and this
-// keeps a stored role from crossing over when a later release replaces,
-// empties or reclassifies a confined seed.
-func restrictedAddition(cat *Catalog, confined bool, p Permission) bool {
-	if confined {
+// the role carries Role.SeedConfined and p is not a concrete Confining
+// scope. The last rule is F4-01's: §4.9's ErrConfiningSeed keeps a release
+// from declaring such a seed, and this keeps a role a release seeded as
+// confining from taking a plain addition unaccepted when a later release
+// replaces, empties or reclassifies its seed.
+func restrictedAddition(cat *Catalog, seedConfined bool, p Permission) bool {
+	if seedConfined {
 		spec, ok := cat.Lookup(p)
 		if !ok || !spec.Confining {
 			return true
@@ -198,16 +198,16 @@ func restrictedAddition(cat *Catalog, confined bool, p Permission) bool {
 // is the stored role, nil when absent. It reports whether anything changed;
 // an unchanged role is not written. A stored role under a seed name that is
 // not a seed role (other than admin, which is always rewritten) is refused:
-// the merge would otherwise take over an operator's role. Role.Confined is
-// cur's flag or'd with def.confining (admin: always false); the decision
+// the merge would otherwise take over an operator's role. Role.SeedConfined
+// is cur's flag or'd with def.confining (admin: always false); the decision
 // reads that flag, never the current permissions against the current
-// catalog, so it cannot be argued away by a release.
+// catalog, so a release cannot argue it away.
 func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seedDelta, bool, error) {
 	if cur == nil {
 		r := &Role{
 			Name: def.name, Title: def.title, Description: def.description, Origin: OriginSeed,
 			SeedPermissions: slices.Clone(def.perms), SeedDigest: seedDigest(def.perms),
-			Locked: def.locked, Confined: def.confining, CreatedAt: now, UpdatedAt: now, Version: 1,
+			Locked: def.locked, SeedConfined: def.confining, CreatedAt: now, UpdatedAt: now, Version: 1,
 		}
 		return r, seedDelta{created: true, added: slices.Clone(def.perms)}, true, nil
 	}
@@ -217,15 +217,15 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 	old := normalize(cur.Permissions())
 	var next []Permission
 	var pending []Permission
-	// confined is the stored flag, sticky: a confining release sets it and
-	// only AcceptSeed clears it (Role.Confined). The admin role is never
-	// confined.
-	confined := !def.locked && (cur.Confined || def.confining)
+	// seedConfined is the stored flag, sticky: a confining release sets it
+	// and only AcceptSeed clears it (Role.SeedConfined). The admin role is
+	// never flagged.
+	seedConfined := !def.locked && (cur.SeedConfined || def.confining)
 	if def.locked {
 		next = slices.Clone(def.perms)
 	} else {
 		for _, p := range minus(def.perms, old) {
-			if restrictedAddition(cat, confined, p) {
+			if restrictedAddition(cat, seedConfined, p) {
 				pending = append(pending, p)
 			}
 		}
@@ -233,7 +233,7 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 		next = minus(def.perms, pending)
 	}
 	delta := seedDelta{added: minus(next, old), held: pending, withdrawn: minus(old, next)}
-	same := cur.Origin == OriginSeed && cur.Locked == def.locked && cur.Confined == confined &&
+	same := cur.Origin == OriginSeed && cur.Locked == def.locked && cur.SeedConfined == seedConfined &&
 		slices.Equal(normalize(cur.SeedPermissions), next) &&
 		slices.Equal(normalize(cur.PendingSeed), pending) &&
 		cur.SeedDigest == seedDigest(next) &&
@@ -243,7 +243,7 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 		return cur, delta, false, nil
 	}
 	r := cur.clone()
-	r.Title, r.Description, r.Origin, r.Locked, r.Confined = def.title, def.description, OriginSeed, def.locked, confined
+	r.Title, r.Description, r.Origin, r.Locked, r.SeedConfined = def.title, def.description, OriginSeed, def.locked, seedConfined
 	r.SeedPermissions, r.PendingSeed, r.SeedDigest = next, pending, seedDigest(next)
 	if def.locked {
 		r.Added = nil
@@ -320,8 +320,11 @@ func (s *Service) CommitSeeds(ctx context.Context) error {
 // answers ErrLockedRole, a custom role or a seed role with nothing pending
 // ErrNoPendingSeed. The actor must hold every permission of the resulting
 // set, as UpdateRole requires. Accepting a scope that reaches a declared
-// non-Confining scope clears Role.Confined: an administrator chose to end the
-// role's confinement. Accepting only Confining scopes keeps it.
+// non-Confining scope clears Role.SeedConfined: an administrator chose to
+// let plain additions land. Accepting only Confining scopes keeps it. The
+// flag is decided on what was accepted, never on the resulting set: after a
+// release flipped the worker scope to non-Confining, accepting a Confining
+// addition keeps the flag even though the set now reaches a plain scope.
 func (s *Service) AcceptSeed(ctx context.Context, actor Checker, id RoleName, ifVersion int64) (*Role, error) {
 	st, err := s.frozen()
 	if err != nil {
@@ -351,7 +354,7 @@ func (s *Service) AcceptSeed(ctx context.Context, actor Checker, id RoleName, if
 		}
 		next := cur.clone()
 		next.SeedPermissions, next.SeedDigest, next.PendingSeed = perms, seedDigest(perms), nil
-		next.Confined = cur.Confined && !reachesNonConfining(st.cat, accepted)
+		next.SeedConfined = cur.SeedConfined && !reachesNonConfining(st.cat, accepted)
 		next.UpdatedAt = s.now().UTC()
 		next.Version = cur.Version + 1
 		if err := s.deps.Store.PutRole(b, next); err != nil {
