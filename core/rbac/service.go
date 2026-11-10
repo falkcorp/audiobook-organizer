@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"iter"
 	"log/slog"
 	"maps"
@@ -1196,10 +1195,14 @@ func newCheckerCache(size int) *checkerCache {
 	return c
 }
 
+// shard picks key's shard by its 32-bit FNV-1a hash.
 func (c *checkerCache) shard(key string) *cacheShard {
-	h := fnv.New32a()
-	h.Write([]byte(key)) //nolint:errcheck // hash.Hash.Write never returns an error
-	return &c.shards[h.Sum32()%cacheShards]
+	h := uint32(2166136261)
+	for i := 0; i < len(key); i++ {
+		h ^= uint32(key[i])
+		h *= 16777619
+	}
+	return &c.shards[h%cacheShards]
 }
 
 func (c *checkerCache) get(key string) (Checker, bool) {
