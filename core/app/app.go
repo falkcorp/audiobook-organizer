@@ -1,7 +1,7 @@
 // file: core/app/app.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 // Package app is core's composition root (06 §6.4.5, 03 §3.3 row app): an
 // app's main builds Options and its modules and calls New, then Run. Signal
@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/kernel"
@@ -240,14 +241,19 @@ func ExtendStart(step string) {
 }
 
 // ResolveStateDir returns the state directory for opts by 05-config §1.7's
-// pre-boot rule: an explicit <EnvPrefix>_CORE_PATHS_STATE_DIR is used as
-// given and never falls back; otherwise Options.StateDir, created 0700;
-// otherwise, when that cannot be created, the directory of an absolute
-// <EnvPrefix>_CORE_STORAGE_PATH, with HEAD's warning; otherwise an error. An
-// app that touches state files before or outside New calls it instead of a
-// resolver of its own (OPS4-8). The flag layer and the operator file's
-// core.storage.path arrive with config (F3); in R1 the app passes its
-// state-directory default as Options.StateDir (05-config §1.7).
+// pre-boot rule, which is config.ResolveStateDir: core's kernel and ABO's
+// internal/config call the same function, so the three cannot drift. An
+// explicit <EnvPrefix>_CORE_PATHS_STATE_DIR is trimmed, cleaned, created 0700
+// and never falls back; a blank one is unset. Otherwise Options.StateDir is
+// created 0700. When that cannot be created, the directory of an absolute
+// <EnvPrefix>_CORE_STORAGE_PATH is used if it can be created, with HEAD's
+// warning. Otherwise the error names the variable that chooses a directory,
+// and the directory that could not be used is returned with it, as
+// config.ResolveStateDir returns it. An app that touches state files before
+// or outside New calls it instead of a resolver of its own (OPS4-8). The flag
+// layer and the operator file's core.storage.path arrive with config (F3); in
+// R1 the app passes its state-directory default as Options.StateDir
+// (05-config §1.7).
 func ResolveStateDir(opts Options) (string, error) {
 	prefix, err := envPrefix(opts)
 	if err != nil {
@@ -258,10 +264,21 @@ func ResolveStateDir(opts Options) (string, error) {
 		env = os.Environ()
 	}
 	stateVar, dbVar := prefix+"_CORE_PATHS_STATE_DIR", prefix+"_CORE_STORAGE_PATH"
-	dir, fellBack, err := resolveStateDir(lookupEnv(env, stateVar), opts.StateDir, lookupEnv(env, dbVar),
+	explicit, dbPath := lookupEnv(env, stateVar), lookupEnv(env, dbVar)
+	dir, fellBack, err := config.ResolveStateDir(explicit, opts.StateDir, dbPath,
 		func(d string) error { return os.MkdirAll(d, 0o700) })
 	if err != nil {
-		return "", fmt.Errorf("%w; set %s to a directory that can be created", err, stateVar)
+		// config.ResolveStateDir treats a blank explicit value as unset, so
+		// the branch trims too.
+		if strings.TrimSpace(explicit) != "" {
+			return dir, fmt.Errorf("app: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
+		}
+		what := fmt.Sprintf("the default state directory %q cannot be created", dir)
+		if opts.StateDir == "" {
+			what = "the app declares no default state directory"
+		}
+		return dir, fmt.Errorf("app: %s (%w), and %s %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
+			what, err, dbVar, dbPath, stateVar)
 	}
 	if fellBack {
 		logger := opts.Logger
@@ -272,29 +289,6 @@ func ResolveStateDir(opts Options) (string, error) {
 			"default", opts.StateDir, "using", dir, "choose_with", stateVar)
 	}
 	return dir, nil
-}
-
-// resolveStateDir is 05-config §1.7's rule as a pure function of its inputs
-// (config.ResolveStateDir's signature, 05-config §1.3.3, which replaces it
-// when config lands): explicit is the env value ("" if unset), def the
-// compiled default, dbPath core.storage.path, mkdir the MkdirAll(dir, 0o700).
-func resolveStateDir(explicit, def, dbPath string, mkdir func(string) error) (dir string, fellBack bool, err error) {
-	if explicit != "" {
-		if err := mkdir(explicit); err != nil {
-			return "", false, fmt.Errorf("app: explicit state directory %q cannot be used: %w", explicit, err)
-		}
-		return explicit, false, nil
-	}
-	defErr := errors.New("no default state directory")
-	if def != "" {
-		if defErr = mkdir(def); defErr == nil {
-			return def, false, nil
-		}
-	}
-	if filepath.IsAbs(dbPath) {
-		return filepath.Dir(dbPath), true, nil
-	}
-	return "", false, fmt.Errorf("app: default state directory %q: %v, and core.storage.path %q is not an absolute path to fall back beside", def, defErr, dbPath)
 }
 
 // lookupEnv returns name's value in env (KEY=value entries; the last wins, as
