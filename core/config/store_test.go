@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -590,10 +590,7 @@ func TestConfigFileHasSecrets_Redacted(t *testing.T) {
 
 func keysJSON(t *testing.T, st *config.Store) string {
 	t.Helper()
-	all := map[config.Path]config.KeyState{}
-	for p, ks := range st.Keys() {
-		all[p] = ks
-	}
+	all := maps.Collect(st.Keys())
 	return mustJSON(t, all)
 }
 
@@ -609,10 +606,7 @@ func TestPassthrough_NotOwnedNotWritable(t *testing.T) {
 		env:  map[config.Path]string{ptAPIKey: `"sk-gotham"`, ptBaseURL: `"https://ai.example.com"`},
 		rows: map[config.Path]string{ptBaseURL: `"https://joker.example.com"`},
 	})
-	got := map[config.Path]config.OperatorValue{}
-	for p, v := range r.st.PassthroughValues() {
-		got[p] = v
-	}
+	got := maps.Collect(r.st.PassthroughValues())
 	want := map[config.Path]config.OperatorValue{
 		ptAPIKey:                       {Value: json.RawMessage(`"sk-gotham"`), Src: config.SourceEnv, By: "env OPENAI_API_KEY"},
 		ptBaseURL:                      {Value: json.RawMessage(`"https://ai.example.com"`), Src: config.SourceEnv, By: "env GOTHAM_INTEGRATIONS_AI_OPENAI_BASE_URL"},
