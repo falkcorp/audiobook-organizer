@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -362,6 +362,12 @@ func (s *Store) classifyBoot() {
 	} else {
 		delete(s.health, healthUnknownBootRecord)
 	}
+	// A value that does not decode is ignored like a quarantined override
+	// (05-config §1.5): kept in the record, never silently.
+	if _, raised := s.health[healthBootRecordQuarantined]; !raised && len(s.bootQuar) > 0 {
+		s.health[healthBootRecordQuarantined] = fmt.Sprintf("%d boot-record values ignored", len(s.bootQuar))
+		s.log.Warn("config: boot-record values do not decode; they are kept and ignored", "keys", slices.Sorted(maps.Keys(s.bootQuar)))
+	}
 	s.bootAtLoad = maps.Clone(s.bootVals)
 }
 
@@ -694,6 +700,11 @@ func (s *Store) reindex() {
 			}
 			if c.k.secret {
 				ks.Effective = nil
+				// The build ran before refreshSecrets read the Meta, so the
+				// secret's source is read now, not from the build.
+				if !ks.Source.operator() {
+					ks.Source = s.secretSource(p)
+				}
 				m := s.secretMeta[p]
 				if m == nil {
 					m = &secrets.Meta{Name: secrets.Name(p)}
