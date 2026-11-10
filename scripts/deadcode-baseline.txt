@@ -1,4 +1,3 @@
-core/kernel.declareCoreCatalog
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
 internal/ai.modelLabelSet.setConfigured
@@ -133,3 +132,4 @@ internal/transcribe.resetInFlightState
 internal/undo.HandOffCrownedValue
 internal/undo.TagWriteField
 internal/util.ExtractBoolField
+core/kernel.declareCoreCatalog
