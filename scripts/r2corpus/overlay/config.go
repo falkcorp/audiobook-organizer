@@ -40,16 +40,6 @@ func (w *writer) setBlobField(field string, value any) {
 	must(w.db.SetSetting("config_blob", string(out), "json", false), "write config_blob")
 }
 
-// blobHasField reports whether the stored blob already names field.
-func (w *writer) blobHasField(field string) bool {
-	row, err := w.db.GetSetting("config_blob")
-	must(err, "read config_blob")
-	var blob map[string]json.RawMessage
-	must(json.Unmarshal([]byte(row.Value), &blob), "decode config_blob")
-	_, ok := blob[field]
-	return ok
-}
-
 // ── M2: settings ───────────────────────────────────────────────────────────
 
 // writeCorruptSettingsSecret replaces one of HEAD's four encrypted rows with a
@@ -81,24 +71,44 @@ func writeCorruptSyslog(w *writer, label string) {
 
 // ── M6: integrations, import roots, AI jobs ────────────────────────────────
 
-// writeIntegrationFieldInvalid stores an integration instance field that is
-// not a URL (the Deluge instance's web URL), keeping its JSON type. No
+// writeIntegrationFieldInvalid adds an AI endpoint row (a native ai/<id>
+// instance after M6, 05-metadata M1.10) whose URL does not parse. No
 // integration field can be undecodable while R0 still boots: the blob is
-// type-checked as a whole (persistence.go:1074) and R0's validator refuses a
-// value it does not accept (an unknown backup_compression stops the boot), so
-// M6's undecodable rows are the import root and the AI job below. M6 keeps an
-// instance with invalid settings and reports it (05-metadata M1.10).
+// type-checked as a whole (persistence.go:1074), every plugin setting is a
+// string, and R0's validator refuses a value it does not accept (an unknown
+// backup_compression stops the boot), so M6's undecodable rows are the import
+// root and the AI job below. HEAD validates ai_endpoints only on a PUT that
+// carries them (ai_endpoints.go validateAIEndpoints), so the stored row boots;
+// M6 keeps the instance and reports it misconfigured. The row is not the
+// Deluge URL because DELUGE_WEB_URL is env-locked in the corpus' boot, which
+// would mask the stored value in R0's answers.
 func writeIntegrationFieldInvalid(w *writer, label string) {
-	if !w.blobHasField("deluge_web_url") {
-		must(fmt.Errorf("stage 1's blob has no deluge_web_url"), label)
+	row, err := w.db.GetSetting("config_blob")
+	must(err, "read config_blob")
+	var blob map[string]json.RawMessage
+	must(json.Unmarshal([]byte(row.Value), &blob), "decode config_blob")
+	var rows []map[string]any
+	if raw, ok := blob["ai_endpoints"]; ok && string(raw) != "null" {
+		must(json.Unmarshal(raw, &rows), "decode ai_endpoints")
 	}
-	w.setBlobField("deluge_web_url", "deluge.invalid:not-a-port/::")
-	w.record(label, blobFieldKey("deluge_web_url"))
+	rows = append(rows, map[string]any{
+		"id": "oracle-relay", "label": "Oracle relay (Clocktower)", "protocol": "openai_compat",
+		"url": "http://oracle.invalid:not-a-port/v1", "chat_model": "clocktower-7b", "embed_model": "",
+		"priority": 50, "concurrency": 1, "enabled": true, "capabilities": []string{"llm.filename_parse"},
+		"require_gpu": false,
+	})
+	w.setBlobField("ai_endpoints", rows)
+	w.record(label, blobFieldKey("ai_endpoints"))
 }
 
+// writeCorruptImportRoot is an import root that does not decode. Its path is
+// a directory of stage 1's import root holding a book (Hush), so books rows
+// reference it by path prefix (HEAD's CountBooksByPathPrefix) as 05-storage's
+// TestCutoverQuarantinedParentKeepsReferencingRows needs, while R0, which
+// skips the undecodable row, still reaches the book through import_path:1.
 func writeCorruptImportRoot(w *writer, label string) {
 	key := "import_path:9"
-	w.setTorn(key, `{"id":9,"path":"`+storeRoot+`/arkham","name":"Arkham Intake`)
+	w.setTorn(key, `{"id":9,"path":"`+storeRoot+`/import/Selina Kyle","name":"Selina Kyle intake`)
 	w.record(label, key)
 }
 
