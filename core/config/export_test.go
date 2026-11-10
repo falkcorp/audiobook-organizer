@@ -1,5 +1,5 @@
 // file: core/config/export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d2bf2cbd-335b-424b-854c-53a0c4529b22
 // last-edited: 2026-11-10
 
@@ -24,14 +24,20 @@ type TestSource struct {
 // read returns the values q can place, as F3-02's sources do: a registered
 // struct key, an entry under a map section, or a passthrough path. A path no
 // registered section owns yet is skipped (a module key at Boot, before its
-// section registers) unless Unfiltered, which hands it to the store to refuse.
+// section registers) unless Unfiltered, which hands it to the store to refuse,
+// or unless q.want names it.
 func (t *TestSource) read(q sourceQuery) ([]sourced, error) {
 	out := make([]sourced, 0, len(t.Vals))
 	for _, p := range slices.Sorted(maps.Keys(t.Vals)) {
-		if q.want != nil && !q.want[p] {
-			continue
-		}
-		if !t.Unfiltered && !placeable(q, p) {
+		// A wanted path (Store.Operator) is returned even when no section
+		// owns it yet: step 0 reads core.paths.state_dir before core.paths
+		// registers.
+		switch {
+		case q.want != nil:
+			if !q.want[p] {
+				continue
+			}
+		case !t.Unfiltered && !placeable(q, p):
 			continue
 		}
 		out = append(out, sourced{path: p, raw: t.Vals[p], by: t.By(p)})

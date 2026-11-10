@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -749,5 +749,33 @@ func TestSensitiveValueNeverInErrors(t *testing.T) {
 	// A key that is not sensitive keeps the validator's detail.
 	if _, err := r.apply(admin(), map[config.Path]string{kLevel: `"loud"`}); err == nil || !strings.Contains(err.Error(), "loud") {
 		t.Errorf("a plain key's error lost its detail: %v", err)
+	}
+}
+
+// TestOperator_ReadsPreBootKeysBeforeRegistration (05-config §1.7 step 0):
+// Store.Operator reads core.paths.state_dir from env or flags before
+// core.paths registers, so the kernel can resolve the state directory
+// first; a file value is reported with its layer for the kernel to refuse.
+func TestOperator_ReadsPreBootKeysBeforeRegistration(t *testing.T) {
+	cases := []struct {
+		ro   rigOpts
+		want config.OperatorValue
+	}{
+		{rigOpts{env: map[config.Path]string{stateDir: `"/srv/gotham"`}},
+			config.OperatorValue{Value: json.RawMessage(`"/srv/gotham"`), Src: config.SourceEnv, By: "env GOTHAM_CORE_PATHS_STATE_DIR"}},
+		{rigOpts{env: map[config.Path]string{stateDir: `"/srv/gotham"`}, o: config.Options{Flags: map[config.Path]string{stateDir: "/opt/gotham"}}},
+			config.OperatorValue{Value: json.RawMessage(`"/opt/gotham"`), Src: config.SourceFlag, By: "flag core.paths.state_dir"}},
+		{rigOpts{file: map[config.Path]string{stateDir: `"/srv/gotham"`}},
+			config.OperatorValue{Value: json.RawMessage(`"/srv/gotham"`), Src: config.SourceFile, By: "file gotham.yaml"}},
+	}
+	for _, c := range cases {
+		r := newRig(t, c.ro) // no core.paths section registered
+		v, ok, err := r.st.Operator(stateDir)
+		if err != nil || !ok || mustJSON(t, v) != mustJSON(t, c.want) {
+			t.Errorf("Operator(%s) = %s, %v, %v; want %s", stateDir, mustJSON(t, v), ok, err, mustJSON(t, c.want))
+		}
+	}
+	if _, ok, err := newRig(t, rigOpts{}).st.Operator(stateDir); ok || err != nil {
+		t.Errorf("unset: ok %v, err %v", ok, err)
 	}
 }
