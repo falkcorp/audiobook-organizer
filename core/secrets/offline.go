@@ -1,5 +1,5 @@
 // file: core/secrets/offline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
 // last-edited: 2026-11-10
 
@@ -96,11 +96,16 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("secrets: open the directory of --out: %w", err)
 	}
-	defer func() { _ = outRoot.Close() }()
-	if err := checkExportTarget(stateDir, keyFile, recordName, outRoot, base, abs); err != nil {
-		return ExportResult{}, err
+	err = checkExportTarget(stateDir, keyFile, recordName, outRoot, base, abs)
+	if err == nil {
+		err = writeFileAtomic(outRoot, base, raw)
 	}
-	if err := writeFileAtomic(outRoot, base, raw); err != nil {
+	// A failed close fails the export before its record is written, so the
+	// health warning stays raised; a re-run may overwrite the 0600 copy.
+	if cerr := outRoot.Close(); cerr != nil {
+		err = errors.Join(err, fmt.Errorf("secrets: close the directory of --out: %w", cerr))
+	}
+	if err != nil {
 		return ExportResult{}, err
 	}
 	ids := make([]string, 0, len(f.Keys))
