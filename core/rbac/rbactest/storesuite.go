@@ -1,5 +1,5 @@
 // file: core/rbac/rbactest/storesuite.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7e5c1d-94b2-4f68-8d0e-2b6f1a9c7e43
 // last-edited: 2026-11-10
 
@@ -412,6 +412,7 @@ func brokenImports() map[string]*rbac.Role {
 		"no permission":          ok("custom.alfred"),
 		"core admin":             ok("custom.alfred", "gotham:patrol", rbac.CoreAdmin),
 		"core wildcard":          ok("custom.alfred", "core:*"),
+		"core admin wildcard":    ok("custom.alfred", "core:admin.*"),
 		"seed permissions":       withSeed,
 		"locked":                 locked,
 		"pending seed":           pending,

@@ -1,5 +1,5 @@
 // file: core/rbac/service_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b9e2d17-8c5a-4f63-a1d0-6e3f7b2c8d95
 // last-edited: 2026-11-10
 
@@ -596,6 +596,22 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 		errIs(t, "narrowing an admin role without Holders", err, rbac.ErrLastAdmin)
 		if _, err := f.svc.UpdateRole(ctx, f.admin(), "custom.wayne", rbac.RoleInput{Title: "Wayne", Permissions: perms("core:admin", "gotham:patrol")}, wayne.Version); err != nil {
 			t.Errorf("an edit that keeps core:admin needs no holders: %v", err)
+		}
+	})
+
+	// Review MAJOR-A: an action wildcard over core:admin grants it, so the
+	// rule must see it (GrantsAdmin is Covers(p, core:admin)).
+	t.Run("admin granted by core:admin.*", func(t *testing.T) {
+		f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+		wayne := f.mustCreate("custom.wayne", "core:admin.*")
+		f.users.put(t, "bruce", userRec{Roles: []rbac.RoleName{"custom.wayne"}, Active: true})
+		f.users.put(t, "alfred", userRec{Roles: []rbac.RoleName{rbac.RoleAdmin}, Active: false})
+		_, err := f.svc.UpdateRole(ctx, f.admin(), "custom.wayne", rbac.RoleInput{Permissions: perms("core:self")}, wayne.Version)
+		errIs(t, "narrowing core:admin.* with only an inactive admin left", err, rbac.ErrLastAdmin)
+		f.unchanged("custom.wayne", wayne.Version)
+		f.users.put(t, "alfred", userRec{Roles: []rbac.RoleName{rbac.RoleAdmin}, Active: true})
+		if _, err := f.svc.UpdateRole(ctx, f.admin(), "custom.wayne", rbac.RoleInput{Permissions: perms("core:self")}, wayne.Version); err != nil {
+			t.Errorf("narrowing core:admin.* with an active admin left: %v", err)
 		}
 	})
 
