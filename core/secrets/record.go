@@ -1,5 +1,5 @@
 // file: core/secrets/record.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0283d1b3-ef8d-4434-91ba-fe49f9ce7a85
 // last-edited: 2026-11-10
 
@@ -173,6 +173,9 @@ type storeMeta struct {
 	AppID         string    `json:"app_id"`
 	KeyringFormat string    `json:"keyring_format"`
 	Created       time.Time `json:"created"`
+	// MaxKeyID is the highest key number ("k3" and "d3" are 3) of any
+	// keyring an Open loaded, so a regenerated keyring numbers past it.
+	MaxKeyID int `json:"max_key_id,omitempty"`
 }
 
 // decodeStoreMeta decodes c/secrets/meta (unknown fields allowed: a later

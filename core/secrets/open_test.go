@@ -1,5 +1,5 @@
 // file: core/secrets/open_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
 // last-edited: 2026-11-10
 
@@ -195,6 +195,7 @@ func TestOpen_MissingKeyringWithRecordsRefuses(t *testing.T) {
 // TestOpen_RegenKeepsOrphans (05-config §2.9): with allow_key_regen, Open
 // generates new keys under new IDs and keeps every record: they read as
 // ErrKeyUnavailable until the old keyring is put back, which restores them.
+// Only c/secrets/meta changes: its max_key_id rises to the new keys' number.
 func TestOpen_RegenKeepsOrphans(t *testing.T) {
 	e := newEnv(t)
 	s := e.open(t, nil)
@@ -218,9 +219,12 @@ func TestOpen_RegenKeepsOrphans(t *testing.T) {
 		t.Fatalf("regen changed the row count: %d -> %d", len(before), len(after))
 	}
 	for k, v := range before {
-		if after[k] != v {
+		if k != string(metaKey()) && after[k] != v {
 			t.Fatal("regen rewrote a record")
 		}
+	}
+	if m, err := decodeStoreMeta([]byte(after[string(metaKey())])); err != nil || m.MaxKeyID != 2 || m.AppID != "gotham" {
+		t.Fatalf("c/secrets/meta after regen = %+v, %v; want max_key_id 2", m, err)
 	}
 	for _, n := range []Name{nameGate, nameModule} {
 		if _, m, err := r.Get(context.Background(), n); !errors.Is(err, ErrKeyUnavailable) || !errors.Is(m.Err, ErrKeyUnavailable) || !m.Set {

@@ -1,5 +1,5 @@
 // file: core/secrets/keyring.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 019b2e61-2abe-476e-9ba0-b5fe3f908bb0
 // last-edited: 2026-11-10
 
@@ -102,6 +102,44 @@ type keyringKey struct {
 	// RetireAfter is set on a verify-status derive key only: past it,
 	// RetireUnused may retire the key for the process.
 	RetireAfter *time.Time `json:"retire_after,omitempty"`
+}
+
+// The keyring and its keys hold key material in unexported fields, which fmt
+// prints raw (it cannot call keyMaterial's methods through them), so every
+// formatting path of both prints [REDACTED].
+
+// String prints [REDACTED].
+func (*keyring) String() string { return "secrets.keyring(" + redacted + ")" }
+
+// GoString prints [REDACTED].
+func (r *keyring) GoString() string { return r.String() }
+
+// Format prints [REDACTED] for every verb.
+func (r *keyring) Format(f fmt.State, _ rune) { writeRedacted(f, r.String()) }
+
+// LogValue renders as [REDACTED] in slog.
+func (r *keyring) LogValue() slog.Value { return slog.StringValue(r.String()) }
+
+// String prints the key's ID, use and status, never its material.
+func (k *ringKey) String() string {
+	return "secrets.key(" + k.ID + " " + k.Use + " " + k.Status + " " + redacted + ")"
+}
+
+// GoString is String.
+func (k *ringKey) GoString() string { return k.String() }
+
+// Format prints String for every verb.
+func (k *ringKey) Format(f fmt.State, _ rune) { writeRedacted(f, k.String()) }
+
+// LogValue renders the key without its material.
+func (k *ringKey) LogValue() slog.Value { return k.keyringKey.LogValue() }
+
+// writeRedacted writes s to a fmt.State. A short write has nowhere to be
+// reported: fmt's Formatter contract returns nothing, and s holds no secret.
+func writeRedacted(f fmt.State, s string) {
+	if _, err := io.WriteString(f, s); err != nil {
+		return
+	}
 }
 
 // LogValue renders a key without its material: slog's JSON handler would
@@ -286,12 +324,31 @@ func writeKeyring(root *os.Root, name string, f *keyringFile) error {
 	return writeFileAtomic(root, name, append(data, '\n'))
 }
 
-// writeFileAtomic writes data to name under root: a new temporary file
-// created 0600 beside it, written and fsynced, renamed over name, then the
+// writeKeyringNew writes f to name, which must not exist: a first or
+// regenerated keyring never replaces one that appeared meanwhile.
+func writeKeyringNew(root *os.Root, name string, f *keyringFile) error {
+	if err := f.validate(); err != nil {
+		return fmt.Errorf("secrets: refusing to write an invalid keyring: %w", err)
+	}
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return fmt.Errorf("secrets: encode the keyring: %w", err)
+	}
+	return writeFile(root, name, append(data, '\n'), true)
+}
+
+// writeFileAtomic writes data to name under root, replacing it.
+func writeFileAtomic(root *os.Root, name string, data []byte) error {
+	return writeFile(root, name, data, false)
+}
+
+// writeFile writes data to name under root: a new temporary file created
+// 0600 beside it, written and fsynced, then renamed over name (replace) or
+// hard-linked to name, which fails when name exists (no replace), then the
 // directory fsynced. A directory the path needs is created 0700. Only the
-// temporary file this call created is ever removed (when a step before the
-// rename fails).
-func writeFileAtomic(root *os.Root, name string, data []byte) (err error) {
+// temporary file this call created is ever removed: when a step before the
+// rename fails, and after the link.
+func writeFile(root *os.Root, name string, data []byte, noReplace bool) (err error) {
 	dir := filepath.Dir(name)
 	if dir != "." {
 		if err := root.MkdirAll(dir, keyringDirMode); err != nil {
@@ -323,6 +380,21 @@ func writeFileAtomic(root *os.Root, name string, data []byte) (err error) {
 	}
 	if err := fh.Close(); err != nil {
 		return fmt.Errorf("secrets: close %s: %w", tmp, err)
+	}
+	if noReplace {
+		lerr := root.Link(tmp, name)
+		switch {
+		case lerr == nil:
+			// The defer removes the temporary name; name keeps the inode.
+			return syncDir(root, dir)
+		case errors.Is(lerr, fs.ErrExist):
+			return fmt.Errorf("secrets: create %s: it appeared meanwhile and is never replaced: %w", name, lerr)
+		}
+		// A filesystem without hard links: check, then rename. The window
+		// is the caller's: Open runs under the store lock.
+		if _, serr := root.Lstat(name); !errors.Is(serr, fs.ErrNotExist) {
+			return fmt.Errorf("secrets: create %s: it appeared meanwhile and is never replaced (link: %v)", name, lerr)
+		}
 	}
 	if err := root.Rename(tmp, name); err != nil {
 		return fmt.Errorf("secrets: rename %s to %s: %w", tmp, name, err)
@@ -373,6 +445,15 @@ func newKeyringFile(n int, installID string, now time.Time) (*keyringFile, error
 		return nil, err
 	}
 	return &keyringFile{Format: keyringFormat, InstallID: installID, Keys: []keyringKey{k, d}}, nil
+}
+
+// maxIDNumber is the highest key number in f (0 for none).
+func (f *keyringFile) maxIDNumber() int {
+	n := 0
+	for _, k := range f.Keys {
+		n = max(n, idNumber(k.ID))
+	}
+	return n
 }
 
 // idNumber is the decimal suffix of a key ID ("k12" -> 12), 0 without one.
