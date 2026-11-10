@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.30.1
+// version: 1.31.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -47,6 +47,7 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/gin-gonic/gin"
@@ -200,6 +201,33 @@ type PostureToken struct {
 func (h *Handler) WithPostureTokens(f func() []PostureToken) *Handler {
 	h.postureTokens = f
 	return h
+}
+
+// HealthPostureTokens is the registry's token route into WithPostureTokens
+// (05-health §5H.3.1, §5H.10 F2): every component of r whose current
+// Result.Reason is non-empty contributes that Reason, with the component's ID
+// as its Subject. A provider handed to WithPostureTokens (or to
+// Server.SetPostureTokens) appends this to its own tokens, so the registry's
+// tokens (F3's storage_quarantine on core.storage, secrets_undecryptable and
+// secrets_keyring_not_exported on core.secrets) reach the authenticated
+// `degraded` field of GET /system/status through the path R1's
+// storage_checkpoint_* tokens take, and never /health: none is in
+// unauthenticatedToken's set, and /health reads no posture token. Detail is
+// not copied, because it is free text that needs 05-logging's redaction
+// first (F8). A nil registry yields none. The caller that holds the registry
+// is F2-16's boot; until then no registry exists in the running server and
+// nothing calls this.
+func HealthPostureTokens(r *health.Registry) []PostureToken {
+	if r == nil {
+		return nil
+	}
+	var out []PostureToken
+	for _, c := range r.Snapshot().Components {
+		if c.Result.Reason != "" {
+			out = append(out, PostureToken{Token: c.Result.Reason, Subject: string(c.ID)})
+		}
+	}
+	return out
 }
 
 // WithANNSnapshotDivergence installs fn, which marks the live HNSW vector

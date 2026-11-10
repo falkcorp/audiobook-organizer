@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/health_tokens_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 06a9de9e-cc8c-4b3d-ae81-fafb45892f6f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package system
 
@@ -29,6 +29,7 @@ import (
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -49,7 +50,7 @@ var unauthenticatedTokenGolden = []string{
 type tokenRaise struct {
 	store       SystemStore
 	getDegraded func() DegradedSource
-	posture     func() []PostureToken // R1: the storage_checkpoint_* tokens
+	posture     func() []PostureToken // R1: the storage_checkpoint_* tokens; F2: and the registry's
 }
 
 // tokenCell is one release's row of the golden test.
@@ -127,6 +128,52 @@ var tokenCells = []tokenCell{
 		},
 		everyTokenAuthenticated: true,
 	},
+	f2Cell("F2 (core.storage: storage_quarantine; core.secrets: secrets_undecryptable)",
+		map[health.ComponentID]string{"core.storage": "storage_quarantine", "core.secrets": "secrets_undecryptable"}),
+	f2Cell("F2 (core.secrets: secrets_keyring_not_exported)",
+		map[health.ComponentID]string{"core.secrets": "secrets_keyring_not_exported"}),
+}
+
+// f2Cell is one F2 row: the kernel's two components (core/kernel/health.go
+// registers them with these settings) with the Reasons in raise reported on
+// them. A component holds one Reason at a time, so the two secrets tokens are
+// two cells, each raised on core.secrets. Every cell also raises the R0 and R1
+// tokens, so a /health that stopped filtering would show a posture token, and
+// the registry's tokens ride the provider R1-24's checkpoint tokens ride.
+func f2Cell(name string, raise map[health.ComponentID]string) tokenCell {
+	want := []string{DegradedAutoUpdatePaused, DegradedStorageCheckpointMode}
+	for _, reason := range raise {
+		want = append(want, reason)
+	}
+	return tokenCell{
+		name: name,
+		raise: func(t *testing.T) tokenRaise {
+			m := systemmocks.NewMockSystemStore(t)
+			m.EXPECT().CountAuthors().Return(1, nil).Maybe()
+			config.AppConfig.AutoUpdate.Enabled = true
+			reg := health.NewRegistry()
+			for _, id := range []health.ComponentID{"core.storage", "core.secrets"} {
+				rep, err := reg.Register(health.Check{ID: id, Critical: id == "core.storage", Readiness: id == "core.storage"})
+				require.NoError(t, err)
+				if reason, ok := raise[id]; ok {
+					rep.Report(health.Result{Status: health.StatusDegraded, Reason: reason, Detail: "gotham/archive"})
+				}
+			}
+			src := fixedTokens{"search_index", servermiddleware.BasicGateNoPasswordToken}
+			return tokenRaise{
+				store:       warmingTokenStore{m},
+				getDegraded: func() DegradedSource { return src },
+				posture: func() []PostureToken {
+					return append(
+						[]PostureToken{{Token: DegradedStorageCheckpointMode, Subject: "/batcave/.mediacore-checkpoints/x"}},
+						HealthPostureTokens(reg)...)
+				},
+			}
+		},
+		wantPublic:              []string{"memdb_warming", "search_index", "basic_gate_no_password"},
+		wantAuthenticatedOnly:   want,
+		everyTokenAuthenticated: true,
+	}
 }
 
 // degradedOf serves one GET through handler and returns data.degraded.
@@ -258,4 +305,52 @@ func TestSystemStatus_PostureTokenDetails(t *testing.T) {
 	assert.True(t, got[0].DeleteAfter.Equal(due))
 	assert.Equal(t, int64(3600), got[1].AgeSeconds)
 	assert.Empty(t, details(nil))
+}
+
+// TestHealthPostureTokens: the registry's route into the posture provider.
+// A component with a Reason contributes it with its ID as the Subject, one
+// without contributes nothing, Detail is not copied, a nil registry yields
+// none, and the tokens reach degraded_details of GET /system/status.
+func TestHealthPostureTokens(t *testing.T) {
+	assert.Empty(t, HealthPostureTokens(nil))
+
+	reg := health.NewRegistry()
+	assert.Empty(t, HealthPostureTokens(reg))
+	storage, err := reg.Register(health.Check{ID: "core.storage", Critical: true, Readiness: true})
+	require.NoError(t, err)
+	secrets, err := reg.Register(health.Check{ID: "core.secrets"})
+	require.NoError(t, err)
+	secrets.Report(health.Result{Status: health.StatusUp})
+	assert.Empty(t, HealthPostureTokens(reg), "an Up component with no Reason raises nothing")
+
+	storage.Report(health.Result{Status: health.StatusDegraded, Reason: "storage_quarantine", Detail: "gotham/quarantine/2"})
+	got := HealthPostureTokens(reg)
+	require.Equal(t, []PostureToken{{Token: "storage_quarantine", Subject: "core.storage"}}, got)
+
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.AutoUpdate.Enabled = false
+	m := systemmocks.NewMockSystemStore(t)
+	m.EXPECT().CountAuthors().Return(1, nil).Maybe()
+	h := statusHandler(t, tokenRaise{store: m, posture: func() []PostureToken { return HealthPostureTokens(reg) }})
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/system/status", h.GetSystemStatus)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/system/status", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.NotContains(t, w.Body.String(), "gotham/quarantine", "Detail must not reach the response before F8's redaction")
+	var resp struct {
+		Data struct {
+			Degraded        []string       `json:"degraded"`
+			DegradedDetails []PostureToken `json:"degraded_details"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, []string{"storage_quarantine"}, resp.Data.Degraded)
+	assert.Equal(t, got, resp.Data.DegradedDetails)
+
+	// The Reason clears when the component reports Up again.
+	storage.Report(health.Result{Status: health.StatusUp})
+	assert.Empty(t, HealthPostureTokens(reg))
 }
