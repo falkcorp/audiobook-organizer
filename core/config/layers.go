@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/mediacore/secrets"
 )
 
 // The operator layers (05-config §1.3.5): file, env and flags, lowest to
@@ -341,10 +343,14 @@ func (s *Store) resolve(c ckey, v view) keyVal {
 // secretSource is a secret key's Source when no operator layer supplies it:
 // SourceOverride when the secrets store holds it, else SourceDefault.
 func (s *Store) secretSource(p Path) Source {
-	if m := s.secretMeta[p]; m != nil && m.Set {
-		return SourceOverride
+	m := s.secretMeta[p]
+	switch {
+	case m == nil || !m.Set:
+		return SourceDefault
+	case m.Source == secrets.SourceEnv:
+		return SourceEnv
 	}
-	return SourceDefault
+	return SourceOverride
 }
 
 // entryIDs lists a map section's entries: the declared default's IDs and

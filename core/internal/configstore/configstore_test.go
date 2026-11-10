@@ -1,5 +1,5 @@
 // file: core/internal/configstore/configstore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
 // last-edited: 2026-11-10
 
@@ -297,6 +297,94 @@ func TestCommitter_RefusesSecretsWithoutStager(t *testing.T) {
 		if _, err := NewCommitter(o); err == nil {
 			t.Errorf("NewCommitter(%+v) succeeded", o)
 		}
+	}
+}
+
+// TestImporter_StagesOnlyValidNonDefault (05-config §1.11): Importer.Stage
+// writes a c/config/ row into the caller's batch for a valid non-default
+// value, nothing for a default value, ErrUnknownKey for an unregistered or
+// passthrough path, ErrInvalid for a secret, ProtectOperator or boot key,
+// *FieldError for a bad value; nothing commits until the caller commits.
+func TestImporter_StagesOnlyValidNonDefault(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	st, err := config.NewStore(config.Options{AppID: "gotham", Passthrough: func(p config.Path) bool {
+		return strings.HasPrefix(string(p), "integrations.")
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(ctx); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if _, err := config.Register(st.Registry(), configtest.BatcaveSection()); err != nil {
+		t.Fatal(err)
+	}
+	imp := st.Importer()
+	if err := imp.Stage(e.ks.NewBatch(), "core.batcave.level", json.RawMessage(`"warn"`), "importer"); err == nil {
+		t.Fatal("the Importer staged before Load")
+	}
+	if err := st.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := imp.Stage(e.ks.NewBatch(), "core.batcave.level", json.RawMessage(`"warn"`), "importer"); err == nil {
+		t.Fatal("the Importer staged with no override store handed over")
+	}
+	st.SetImportTarget(e.store)
+
+	b := e.ks.NewBatch()
+	defer func() {
+		if err := b.Close(); err != nil {
+			t.Errorf("close the batch: %v", err)
+		}
+	}()
+	refusals := []struct {
+		p    config.Path
+		v    string
+		want error
+	}{
+		{"core.batcave.utility_belt", `"x"`, config.ErrUnknownKey},
+		{"integrations.ai.openai.base_url", `"x"`, config.ErrUnknownKey},
+		{"core.batcave.api_key", `"wayne-tech"`, config.ErrInvalid},
+		{"core.batcave.vault", `"arkham"`, config.ErrInvalid},
+		{"core.batcave.mode", `"day"`, config.ErrInvalid},
+	}
+	for _, r := range refusals {
+		if err := imp.Stage(b, r.p, json.RawMessage(r.v), "importer"); !errors.Is(err, r.want) {
+			t.Errorf("Stage %s: err = %v, want %v", r.p, err, r.want)
+		}
+	}
+	var fe *config.FieldError
+	if err := imp.Stage(b, "core.batcave.workers", json.RawMessage(`0`), "importer"); !errors.As(err, &fe) || fe.Path != "core.batcave.workers" {
+		t.Errorf("a bad value: err = %v, want *FieldError on core.batcave.workers", err)
+	}
+	if err := imp.Stage(b, "core.batcave.gadget.count", json.RawMessage(`3`), "importer"); err != nil {
+		t.Errorf("a default value: %v", err)
+	}
+	if err := imp.Stage(b, "core.batcave.level", json.RawMessage(`"warn"`), "importer"); err != nil {
+		t.Fatalf("a valid non-default value: %v", err)
+	}
+	if def, err := imp.Default("core.batcave.level"); err != nil || string(def) != `"info"` {
+		t.Errorf("Default = %s, %v; want \"info\"", def, err)
+	}
+	if rows, err := e.rows(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("before the caller commits: rows %v (%v), want none", rows, err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := e.rows(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows %v (%v), want only core.batcave.level", rows, err)
+	}
+	var env struct {
+		Value json.RawMessage `json:"value"`
+		By    string          `json:"by"`
+	}
+	if err := json.Unmarshal(rows["core.batcave.level"], &env); err != nil || string(env.Value) != `"warn"` || env.By != "importer" {
+		t.Errorf("row = %s (%v)", rows["core.batcave.level"], err)
 	}
 }
 
