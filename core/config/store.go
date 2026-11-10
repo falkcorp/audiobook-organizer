@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -66,6 +66,8 @@ type Store struct {
 	bootAtLoad  map[Path]json.RawMessage // bootVals as Load saw them: what boot keys are effective with
 	bootQuar    map[Path]error
 	bootUnknown []Path
+	bootIgnored map[Path]string // usable boot values an operator layer locks -> lock reason
+	bootLogged  map[Path]bool   // bootIgnored keys already logged this boot
 
 	db         map[Path]Override        // every stored row (current)
 	dbVals     map[Path]json.RawMessage // usable DB values (current)
@@ -134,7 +136,7 @@ func NewStore(o Options) (*Store, error) {
 		o: o, prefix: prefix, log: o.Logger, now: o.Now,
 		envNames: map[string]Path{}, op: map[Path]opValue{}, ptVals: map[Path]OperatorValue{},
 		boot: map[Path]json.RawMessage{}, bootVals: map[Path]json.RawMessage{}, bootAtLoad: map[Path]json.RawMessage{},
-		bootQuar: map[Path]error{}, db: map[Path]Override{}, dbVals: map[Path]json.RawMessage{},
+		bootQuar: map[Path]error{}, bootIgnored: map[Path]string{}, bootLogged: map[Path]bool{}, db: map[Path]Override{}, dbVals: map[Path]json.RawMessage{},
 		dbAtAttach: map[Path]json.RawMessage{}, quar: map[Path]error{}, secretMeta: map[Path]*secrets.Meta{},
 		health: map[string]string{}, resolver: o.Secrets, met: newStoreMetrics(),
 	}
@@ -337,10 +339,14 @@ func (s *Store) readBootRecord() error {
 }
 
 // classifyBoot splits the boot record into usable boot values and unknown
-// entries (retained, reported like unknown override rows).
+// entries (retained, reported like unknown override rows). A usable value of
+// a key an operator layer sets is shadowed, as a stored row is (05-config
+// §1.3.5): it is kept in the record, listed for AttachReport.Ignored and
+// logged once per boot naming the key and the lock.
 func (s *Store) classifyBoot() {
 	s.bootVals = map[Path]json.RawMessage{}
 	s.bootUnknown = nil
+	s.bootIgnored = map[Path]string{}
 	for _, p := range slices.Sorted(maps.Keys(s.boot)) {
 		c, ok := s.keyFor(p)
 		switch {
@@ -356,6 +362,14 @@ func (s *Store) classifyBoot() {
 			continue
 		}
 		s.bootVals[p] = v
+		if op, locked := s.op[p]; locked {
+			s.bootIgnored[p] = op.by
+			if !s.bootLogged[p] {
+				s.bootLogged[p] = true
+				s.log.Warn("config: a boot-record value is ignored because an operator layer sets the key",
+					"key", p, "locked_by", op.by)
+			}
+		}
 	}
 	if len(s.bootUnknown) > 0 {
 		s.health[healthUnknownBootRecord] = fmt.Sprintf("%d boot-record keys this binary does not declare", len(s.bootUnknown))
@@ -543,7 +557,7 @@ func (s *Store) SetSecrets(r secrets.Resolver) {
 func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (AttachReport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rep := AttachReport{Quarantined: map[Path]error{}, Ignored: map[Path]string{}, FailClosed: map[Path]string{}}
+	rep := AttachReport{Quarantined: map[Path]error{}, Ignored: maps.Clone(s.bootIgnored), FailClosed: map[Path]string{}}
 	switch {
 	case s.closed:
 		return rep, errClosed
