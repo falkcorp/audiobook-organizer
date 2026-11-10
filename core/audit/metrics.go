@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -79,9 +80,7 @@ func (c *counters) snapshotRecords() map[recordKey]uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make(map[recordKey]uint64, len(c.records))
-	for k, v := range c.records {
-		out[k] = v
-	}
+	maps.Copy(out, c.records)
 	return out
 }
 
