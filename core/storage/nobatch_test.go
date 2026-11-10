@@ -1,9 +1,12 @@
 // file: core/storage/nobatch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ddd8f03c-fb5c-414a-914c-dbc940716950
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
-package storage
+// An external test package: archtest imports rbac, which imports storage
+// (rbac.Store takes a *storage.Batch, 05-rbac §3.4), so an in-package test of
+// storage that imports archtest would close an import cycle.
+package storage_test
 
 import (
 	"os"

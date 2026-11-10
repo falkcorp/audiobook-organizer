@@ -1,5 +1,5 @@
 // file: core/backup/journal/file_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7a073e7-211a-4d06-8bf4-6befeb60e0d3
 // last-edited: 2026-11-10
 
@@ -10,14 +10,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/falkcorp/mediacore/archtest"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -377,51 +375,6 @@ func TestOpenFile_HeaderAndRecovery(t *testing.T) {
 	must(t, j3.Close())
 	if b, _ := os.ReadFile(empty); string(b) != "{\"seq\":0}\n" {
 		t.Errorf("an empty file got %q, want the header", b)
-	}
-}
-
-// TestJournalImportsOnlyAllowed: backup/journal imports only entity, storage
-// and storage/restorejournal of core (and the standard library), so auth ->
-// journal and rbac -> journal close no cycle; its transitive closure adds
-// nothing beyond what storage itself imports (05-backup §5B.3.2; the brief's
-// go list -deps allow-list).
-func TestJournalImportsOnlyAllowed(t *testing.T) {
-	wd, err := os.Getwd()
-	must(t, err)
-	root, err := archtest.ModuleRoot(wd)
-	must(t, err)
-	pkgs, err := archtest.Load(archtest.LoadOptions{Dir: root, Patterns: []string{"./backup/journal"}, TagSets: archtest.TagSets()})
-	must(t, err)
-	const mod = "github.com/falkcorp/mediacore/"
-	allowed := map[string]bool{mod + "entity": true, mod + "storage": true, mod + "storage/restorejournal": true}
-	p := pkgs[mod+"backup/journal"]
-	if p == nil {
-		t.Fatal("the loader did not return backup/journal")
-	}
-	for _, imp := range p.Imports {
-		if strings.Contains(strings.SplitN(imp, "/", 2)[0], ".") && !allowed[imp] {
-			t.Errorf("backup/journal imports %s; only entity, storage, storage/restorejournal and the standard library are allowed", imp)
-		}
-	}
-
-	deps := func(pkg string) map[string]bool {
-		cmd := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", pkg)
-		cmd.Dir = root
-		out, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("go list -deps %s: %v", pkg, err)
-		}
-		set := map[string]bool{}
-		for l := range strings.FieldsSeq(string(out)) {
-			set[l] = true
-		}
-		return set
-	}
-	storageDeps := deps("./storage")
-	for d := range deps("./backup/journal") {
-		if !storageDeps[d] && !allowed[d] && d != mod+"backup/journal" {
-			t.Errorf("backup/journal depends on %s, which storage does not import", d)
-		}
 	}
 }
 

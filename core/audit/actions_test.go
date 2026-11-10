@@ -1,9 +1,12 @@
 // file: core/audit/actions_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f93b6a2-8c4d-4e17-a5d9-3e2b7c1f4a60
 // last-edited: 2026-11-10
 
-package audit
+// An external test package: archtest imports rbac, which imports audit
+// (rbac.Deps.Audit is an audit.Logger, 05-rbac §3.4), so an in-package test
+// of audit that imports archtest would close an import cycle.
+package audit_test
 
 import (
 	"go/ast"
@@ -19,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/archtest"
+	"github.com/falkcorp/mediacore/audit"
 )
 
 // coreActionGrammar is 05-rbac §7.1's grammar, written out here and not
@@ -33,7 +37,7 @@ func coreActionGrammar() *regexp.Regexp {
 // agrees with the spec's regexp.
 func TestAuditAction_Grammar(t *testing.T) {
 	re := coreActionGrammar()
-	table := CoreActions()
+	table := audit.CoreActions()
 	if len(table) != 64 {
 		t.Errorf("CoreActions has %d actions, want the 64 of §7.1", len(table))
 	}
@@ -44,7 +48,7 @@ func TestAuditAction_Grammar(t *testing.T) {
 		t.Error("CoreActions repeats an action")
 	}
 	for _, a := range table {
-		if !re.MatchString(a) || !ValidAction(a) {
+		if !re.MatchString(a) || !audit.ValidAction(a) {
 			t.Errorf("table action %q breaks the grammar", a)
 		}
 		if !strings.HasPrefix(a, "core.") {
@@ -53,7 +57,7 @@ func TestAuditAction_Grammar(t *testing.T) {
 	}
 	// The table is a copy: a caller cannot change it.
 	table[0] = "mutated"
-	if CoreActions()[0] == "mutated" {
+	if audit.CoreActions()[0] == "mutated" {
 		t.Error("CoreActions returns its backing array")
 	}
 
@@ -72,7 +76,7 @@ func TestAuditAction_Grammar(t *testing.T) {
 		if !re.MatchString(lit.action) {
 			t.Errorf("%s: Event action %q breaks the grammar", lit.pos, lit.action)
 		}
-		if strings.HasPrefix(lit.action, "core.") && !slices.Contains(CoreActions(), lit.action) {
+		if strings.HasPrefix(lit.action, "core.") && !slices.Contains(audit.CoreActions(), lit.action) {
 			t.Errorf("%s: Event action %q is a core action missing from §7.1's table", lit.pos, lit.action)
 		}
 	}
@@ -85,7 +89,7 @@ func TestAuditAction_Grammar(t *testing.T) {
 		"core.auth.": false, "core..login": false, "1core.auth.login": false, "core.auth.log-in": false,
 		"core.auth.login ": false, "core.auth.lôgin": false, "_core.auth.login": false,
 	} {
-		if got := ValidAction(s); got != want || re.MatchString(s) != want {
+		if got := audit.ValidAction(s); got != want || re.MatchString(s) != want {
 			t.Errorf("ValidAction(%q) = %v, regexp %v, want %v", s, got, re.MatchString(s), want)
 		}
 	}
