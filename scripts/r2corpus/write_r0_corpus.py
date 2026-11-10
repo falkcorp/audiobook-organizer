@@ -538,7 +538,8 @@ class Client:
             hdrs["Content-Type"] = "application/json"
         jar = None
         if auth.startswith("key:"):
-            hdrs["X-API-Key"] = self.keys[auth[4:]]
+            # R0 reads an abk_ key from "Authorization: Bearer" (middleware/auth.go).
+            hdrs["Authorization"] = f"Bearer {self.keys[auth[4:]]}"
         elif auth.startswith("abs:"):
             hdrs["Authorization"] = f"Bearer {self.bearers[auth[4:]]}"
         elif auth != "none":
@@ -1257,6 +1258,9 @@ CASES: tuple[Case, ...] = (
         "M5",
         "a book dropped into the watched import root: the auto-scan watcher logs to syslog:",
         (
+            # The watcher supervisor reads the import roots at boot and every 5
+            # minutes (internal/watcher/supervisor.go), so a restart arms it.
+            hook_restart("the watcher picks up the import root at boot"),
             Hook("drop No Man's Land into the import root", hook_drop_late_book),
             Poll("/api/v1/system/activity-log?limit=5", lambda b: _syslog_rows(b) > 0,
                  "a system activity-log row exists", timeout=180.0),
@@ -1423,7 +1427,8 @@ def check_native_binary(binary: pathlib.Path, allow_foreign: bool) -> None:
     )
 
 
-def dry_run(out=sys.stdout) -> list[str]:
+def dry_run(out: Any = None) -> list[str]:
+    out = out if out is not None else sys.stdout
     layout = Layout(pathlib.Path(DEFAULT_WORKDIR))
     ctx = Ctx(client=None, proc=None, layout=layout, dry=True)
     run_cases(ctx)
