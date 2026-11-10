@@ -1,5 +1,5 @@
 // file: core/rbac/catalog.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 239479e1-c77a-4506-ae57-ad37fc75cc21
 // last-edited: 2026-11-10
 
@@ -249,23 +249,15 @@ func (c *Catalog) Expand(p Permission) []Permission {
 	if err != nil {
 		return nil
 	}
-	var match func(Permission) bool
-	switch {
-	case !pat.IsWildcard():
+	if !pat.IsWildcard() {
 		if _, ok := c.specs[pat]; ok {
 			return []Permission{pat}
 		}
 		return nil
-	case strings.HasSuffix(string(pat), ":*"):
-		match = func(s Permission) bool { return s.Namespace() == pat.Namespace() }
-	default: // "<ns>:<action>.*"
-		match = func(s Permission) bool {
-			return s.Namespace() == pat.Namespace() && s.Action() == pat.Action()
-		}
 	}
 	var out []Permission
 	for _, name := range c.order {
-		if match(name) {
+		if Covers(pat, name) {
 			out = append(out, name)
 		}
 	}

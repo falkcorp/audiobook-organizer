@@ -2027,6 +2027,7 @@
    "core/rbac/store.go",
    "core/rbac/service.go",
    "core/rbac/seeds.go",
+   "core/rbac/catalog.go",
    "core/rbac/rbactest/",
    "core/internal/rbacstore/",
    "core/rbac/export_test.go",

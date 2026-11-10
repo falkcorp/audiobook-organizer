@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-10
 
@@ -231,9 +231,10 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 //     quarantines a role with no known atom, §6.3);
 //   - a malformed pattern or a scope the catalog does not hold (and every
 //     import when the store has no catalog);
-//   - core:admin or core:*: the cutover maps a role holding every atom to the
-//     union of §6.1's rows, never core:admin (SEC-12), so an import naming it
-//     is a broken mapping, not an admin role;
+//   - any pattern that covers core:admin (core:admin, core:* or core:admin.*,
+//     rbac.GrantsAdmin): the cutover maps a role holding every atom to the
+//     union of §6.1's rows, never core:admin (SEC-12), so an import granting
+//     it is a broken mapping, not an admin role;
 //   - a role that is already stored.
 func (s *Store) ImportRole(b *storage.Batch, r *rbac.Role) error {
 	if b == nil {

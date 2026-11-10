@@ -1,5 +1,5 @@
 // file: core/rbac/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b8f4d2e-61c7-4a95-8e3b-7d2c5a19f640
 // last-edited: 2026-11-10
 
@@ -179,11 +179,39 @@ func CheckRolePermissions(cat *Catalog, perms []Permission) error {
 	return errors.Join(errs...)
 }
 
-// GrantsAdmin reports whether a pattern set grants core:admin: it names
-// core:admin itself or the core namespace wildcard that covers it.
+// Covers reports whether the role pattern covers the concrete scope: the
+// matching rule of 05-rbac §4.2 without a catalog. A concrete pattern covers
+// itself, "<ns>:*" covers every scope of ns, and "<ns>:<action>.*" covers the
+// bare action and every sub of it. A malformed pattern or scope covers
+// nothing and is covered by nothing. Catalog.Expand and GrantsAdmin use this
+// one predicate, and the compiled checker (F4-09) must use it too, so none of
+// them can disagree about what a pattern grants.
+func Covers(pattern, scope Permission) bool {
+	pat, err := ParsePattern(string(pattern))
+	if err != nil {
+		return false
+	}
+	s, err := ParsePermission(string(scope))
+	if err != nil {
+		return false
+	}
+	switch {
+	case !pat.IsWildcard():
+		return pat == s
+	case strings.HasSuffix(string(pat), ":*"):
+		return s.Namespace() == pat.Namespace()
+	default: // "<ns>:<action>.*"
+		return s.Namespace() == pat.Namespace() && s.Action() == pat.Action()
+	}
+}
+
+// GrantsAdmin reports whether a pattern set grants core:admin: some pattern
+// Covers it (core:admin, core:* or core:admin.*). The last-admin rule, the
+// importer's SEC-12 refusal and Confined all use it; auth's last-admin rule
+// (F4-02) and authz (F4-09) must too.
 func GrantsAdmin(perms []Permission) bool {
 	for _, p := range perms {
-		if p == CoreAdmin || p == "core:*" {
+		if Covers(p, CoreAdmin) {
 			return true
 		}
 	}

@@ -1,5 +1,5 @@
 // file: core/rbac/compile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3f1a64-2e7b-4c95-b6a0-9f4e2c7d1b58
 // last-edited: 2026-11-10
 
@@ -474,6 +474,7 @@ func TestConfined_AdminNeverConfined(t *testing.T) {
 		for _, ps := range [][]rbac.Permission{
 			perms("core:admin", "books:fingerprint.worker"),
 			perms("core:*", "books:fingerprint.worker"),
+			perms("core:admin.*", "books:fingerprint.worker"),
 			nil,
 		} {
 			if rbac.Confined(cat, ps) {
