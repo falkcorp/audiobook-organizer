@@ -218,8 +218,7 @@ func (validating) Validate() error { return &FieldError{Path: "core.x", Err: err
 
 func TestValidatorInterface(t *testing.T) {
 	var v Validator = validating{}
-	var fe *FieldError
-	if !errors.As(v.Validate(), &fe) {
+	if _, ok := errors.AsType[*FieldError](v.Validate()); !ok {
 		t.Error("Validator result is not a FieldError")
 	}
 }
