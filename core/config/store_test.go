@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -608,8 +608,8 @@ func TestPassthrough_NotOwnedNotWritable(t *testing.T) {
 	})
 	got := maps.Collect(r.st.PassthroughValues())
 	want := map[config.Path]config.OperatorValue{
-		ptAPIKey:                       {Value: json.RawMessage(`"sk-gotham"`), Src: config.SourceEnv, By: "env WAYNE_API_KEY"},
-		ptBaseURL:                      {Value: json.RawMessage(`"https://ai.example.com"`), Src: config.SourceEnv, By: "env GOTHAM_INTEGRATIONS_AI_WAYNE_BASE_URL"},
+		ptAPIKey:                      {Value: json.RawMessage(`"sk-gotham"`), Src: config.SourceEnv, By: "env WAYNE_API_KEY"},
+		ptBaseURL:                     {Value: json.RawMessage(`"https://ai.example.com"`), Src: config.SourceEnv, By: "env GOTHAM_INTEGRATIONS_AI_WAYNE_BASE_URL"},
 		"integrations.ai.wayne.model": {Value: json.RawMessage(`"batcomputer"`), Src: config.SourceFlag, By: "flag integrations.ai.wayne.model"},
 	}
 	if mustJSON(t, got) != mustJSON(t, want) {
