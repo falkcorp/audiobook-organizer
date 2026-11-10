@@ -1,0 +1,431 @@
+{
+  "_header": {
+    "file": "internal/books/testdata/r2corpus/manifest.json",
+    "version": "1.0.0",
+    "guid": "d808d644-1404-4e9f-b549-f20bbbb939bd",
+    "last-edited": "2026-11-10"
+  },
+  "r0_tag": "v0.223.0",
+  "r0_binary_sha256": "6f33d9dd7e41c2e43c3aa80342ed2c5b940df749ae6fdd6773bce9053837dc6f",
+  "written_at": "2026-11-10T10:07:51Z",
+  "credentials": "every credential in this corpus is a generated fixture value (invariant 2); API keys in answer files are <api-key:NAME> placeholders",
+  "boot": {
+    "workdir": "/tmp/r2corpus",
+    "cwd": "/tmp/r2corpus/stage1/db",
+    "argv": [
+      "<r0-binary>",
+      "serve",
+      "--config",
+      "/tmp/r2corpus/home/.audiobook-organizer.yaml",
+      "--db",
+      "/tmp/r2corpus/stage1/db/audiobooks.pebble",
+      "--dir",
+      "/tmp/r2corpus/stage1/library",
+      "--playlists",
+      "/tmp/r2corpus/stage1/playlists",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18484",
+      "--workers",
+      "2"
+    ],
+    "env": {
+      "HOME": "/tmp/r2corpus/home",
+      "ABK_STATE_DIR": "/tmp/r2corpus/stage1/state",
+      "TZ": "UTC",
+      "ACOUSTID_API_KEY": "fixture-acoustid-key-lucius",
+      "SCHEDULED_LIBRARY_SCAN_ON_STARTUP": "false",
+      "SCHEDULED_DEDUP_REFRESH_INTERVAL": "720",
+      "MAINTENANCE_WINDOW_START": "2",
+      "DELUGE_WEB_URL": "http://deluge.invalid:8112",
+      "DELUGE_WEB_PASSWORD": "fixture-deluge-password-oracle",
+      "ABS_API_ENABLED": "true",
+      "ABS_AUTH_MODES": "jwt",
+      "ABS_JWT_SECRET": "fixture-abs-jwt-secret-for-the-r2-corpus-only-0001"
+    },
+    "files": {
+      "/tmp/r2corpus/home/.audiobook-organizer.yaml": {
+        "log_level": "info",
+        "concurrent_scans": 2,
+        "scan_on_startup": false,
+        "auto_update_enabled": false,
+        "write_startup_readonly_key": false
+      },
+      "/tmp/r2corpus/stage1/db/config.yaml": {
+        "hardcover_api_token": "fixture-hardcover-token-oracle",
+        "enable_ai_parsing": false
+      }
+    },
+    "container_hostname": "r2corpus"
+  },
+  "stage1": [
+    {
+      "case": "admin.bootstrap",
+      "family": "user, apikey, setting:bootstrap_*",
+      "step": "M3",
+      "how": "bootstrap token exchange: first admin `admin` + an all-scope admin-owned key",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "users.invited",
+      "family": "user, invite, session",
+      "step": "M3",
+      "how": "invites for every seeded role, accepted (each sets a session)",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "users.disabled",
+      "family": "user (status inactive)",
+      "step": "M3",
+      "how": "deactivate one viewer",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "invites.open",
+      "family": "invite",
+      "step": "M3",
+      "how": "an invite left open and one revoked",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "sessions.web",
+      "family": "session",
+      "step": "M3",
+      "how": "web logins (remember_me) for several users",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "apikeys.variants",
+      "family": "apikey, idx:apikey",
+      "step": "M3",
+      "how": "scoped, empty-scope, every-atom, admin-owned-for-another-user, fp-worker keys",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "config.stored",
+      "family": "setting:config_blob, setting:<secret> (encrypted)",
+      "step": "M2",
+      "how": "PUT /api/v1/config: plain keys of every class and the four IsSecret secrets",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "config.layers",
+      "family": "config.yaml (gap-fill), env, viper YAML",
+      "step": "M2",
+      "how": "operator layers: gap-fill config.yaml beside the store, env per layer, viper YAML",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "integrations.blob",
+      "family": "setting:config_blob (integration fields), webhook plugin settings",
+      "step": "M6",
+      "how": "integration fields and the webhook plugin through PUT /api/v1/config, then a restart",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "import.roots",
+      "family": "importpath, book, book_file, author, ... (the library)",
+      "step": "M6",
+      "how": "an import root added through the API; its auto-scan imports the fixture library",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "books.organized",
+      "family": "book, book_file (organized copies under root_dir), undo journal",
+      "step": "books",
+      "how": "every imported book organized into root_dir (copy strategy); ABS serves root_dir",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "tasks.schedules",
+      "family": "setting: scheduler task config, maintenance window",
+      "step": "M4",
+      "how": "task schedules edited through the task routes; maintenance window config",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "runs.succeeded",
+      "family": "opv2:run (succeeded), op history",
+      "step": "M4",
+      "how": "a library scan run that succeeds (takes the scan stand-down while it runs)",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "runs.failed",
+      "family": "opv2:run (failed)",
+      "step": "M4",
+      "how": "a library scan of a missing folder (fails)",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "runs.canceled",
+      "family": "opv2:run (canceled)",
+      "step": "M4",
+      "how": "a run started and canceled through DELETE /operations/v2/:id",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "runs.task",
+      "family": "opv2:run (scheduled task run), task last_run clock",
+      "step": "M4",
+      "how": "a scheduled task run on demand through POST /tasks/:name/run",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "books.playlists",
+      "family": "playlist",
+      "step": "books",
+      "how": "a static playlist with two books and a smart playlist",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "books.reading",
+      "family": "user book state (status overrides)",
+      "step": "books",
+      "how": "reading status set through the web API for two users",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "books.abs",
+      "family": "abs_sess:, ABS progress, bookmarks, playback sessions",
+      "step": "books",
+      "how": "ABS logins, a play/sync/close session, progress and a bookmark through the ABS API",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "syslog.normal",
+      "family": "syslog:, book (auto-scanned), opv2:run (library.scan from the watcher)",
+      "step": "M5",
+      "how": "a book dropped into the watched import root: the auto-scan watcher logs to syslog:",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    },
+    {
+      "case": "runs.paused",
+      "family": "operations pause marker",
+      "step": "M4",
+      "how": "the executor paused through POST /operations/pause and left paused at the stop",
+      "store": "internal/books/testdata/r2corpus/stage1"
+    }
+  ],
+  "not_writable_by_r0_api": [
+    {
+      "family": "oauthid:",
+      "step": "M3",
+      "why": "OAuth identities are created only by an SSO sign-in against an external provider"
+    },
+    {
+      "family": "inviteallow:",
+      "step": "M3",
+      "why": "the invite allow-list is written only when an invite delivered by email is consumed"
+    },
+    {
+      "family": "aijob*",
+      "step": "M6",
+      "why": "AI jobs are created only through the OpenAI Batch API (no fake endpoint in R0)"
+    },
+    {
+      "family": "opv2:run (running, stopping, queued)",
+      "step": "M4",
+      "why": "a clean stop drains or interrupts open runs; F2-13 writes these states"
+    }
+  ],
+  "overlay": [],
+  "blockers": [],
+  "stores": {
+    "internal/books/testdata/r2corpus/stage1": [
+      {
+        "path": "db/audiobooks.pebble/000014.log",
+        "size": 728056,
+        "sha256": "8edd150f4b3363966ef2e71d0236d3886f365d6b9fc2ffaaeccef09005e6c92c"
+      },
+      {
+        "path": "db/audiobooks.pebble/000016.sst",
+        "size": 507205,
+        "sha256": "5f5f5251bb9eec2721f5e0bedc87fe0c3448b6336285eb5769d23266fbe0330d"
+      },
+      {
+        "path": "db/audiobooks.pebble/LOCK",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "db/audiobooks.pebble/MANIFEST-000008",
+        "size": 174,
+        "sha256": "7753a61ee0529c64764184a37a35b9778992d37d9e0ca71695819663672b0c63"
+      },
+      {
+        "path": "db/audiobooks.pebble/MANIFEST-000013",
+        "size": 426,
+        "sha256": "e5f9ea30fc13cd7847ddede446b1616832e7013f8c5d5746b1e9d964e65eb13f"
+      },
+      {
+        "path": "db/audiobooks.pebble/OPTIONS-000015",
+        "size": 2782,
+        "sha256": "0e2f5d23768e27a13f3e030e307122063c5dee2c64a5cb9fd8b6b14871235f9b"
+      },
+      {
+        "path": "db/audiobooks.pebble/marker.format-version.000012.024",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "db/audiobooks.pebble/marker.manifest.000003.MANIFEST-000013",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "db/audiobooks.pebble.storage-format",
+        "size": 2,
+        "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+      },
+      {
+        "path": "db/config.yaml",
+        "size": 536,
+        "sha256": "2f676d61d7c4498a655453bd0175ef647b1b2782a8dee5684273114b08bfc5b4"
+      },
+      {
+        "path": "db/library.bleve/index_meta.json",
+        "size": 104,
+        "sha256": "6e47169208d1b28483a0654246537f68ad90852725e92cad5852561b9ab086b8"
+      },
+      {
+        "path": "db/library.bleve/store/000000000093.zap",
+        "size": 46789,
+        "sha256": "ea386793141a2eea65cedcc14b9339a944a0b537d82b530179c71aeec2f768ce"
+      },
+      {
+        "path": "db/library.bleve/store/root.bolt",
+        "size": 262144,
+        "sha256": "1d6ed8e0f072631cc9572d609a441d4f189288bbedeaa390f1f9586bb705fac8"
+      },
+      {
+        "path": "db/library.bleve.mapping",
+        "size": 2,
+        "sha256": "7de1555df0c2700329e815b93b32c571c3ea54dc967b89e81ab73b9972b72d1d"
+      },
+      {
+        "path": "db/library.bleve.rebuilding",
+        "size": 2,
+        "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+      },
+      {
+        "path": "db/logs/audiobook-organizer-2026-11-10.log",
+        "size": 222893,
+        "sha256": "756044ee4c6e972028518017f6648d977cae25ce704e94adb29054ef77d548e5"
+      },
+      {
+        "path": "import/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
+        "size": 1405,
+        "sha256": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13"
+      },
+      {
+        "path": "import/Barbara Gordon/Year One/Year One.mp3",
+        "size": 876,
+        "sha256": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93"
+      },
+      {
+        "path": "import/Harvey Bullock/Dark Victory/Dark Victory.mp3",
+        "size": 876,
+        "sha256": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8"
+      },
+      {
+        "path": "import/Leslie Thompkins/The Killing Joke/The Killing Joke.mp3",
+        "size": 876,
+        "sha256": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158"
+      },
+      {
+        "path": "import/Lucius Fox/Knightfall/Knightfall - Part 01.mp3",
+        "size": 876,
+        "sha256": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff"
+      },
+      {
+        "path": "import/Lucius Fox/Knightfall/Knightfall - Part 02.mp3",
+        "size": 876,
+        "sha256": "31dae90177550c7b628ed648117e804c0a8b451ae5e8819e0c039b5799606fc5"
+      },
+      {
+        "path": "import/Lucius Fox/Knightfall/Knightfall - Part 03.mp3",
+        "size": 876,
+        "sha256": "0a0a63c6563a7d5761bb8c700bcd5ac82f2978bc814b6ae79c02487cf487f031"
+      },
+      {
+        "path": "import/Renee Montoya/No Man's Land/No Man's Land.mp3",
+        "size": 876,
+        "sha256": "fa4b53dd3ef9d3b23173735603a9506fe18838bb1068015e5f2ebc18303cd02e"
+      },
+      {
+        "path": "import/Selina Kyle/Hush/Hush.flac",
+        "size": 9490,
+        "sha256": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87"
+      },
+      {
+        "path": "library/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
+        "size": 1405,
+        "sha256": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13"
+      },
+      {
+        "path": "library/Barbara Gordon/Year One/Year One.mp3",
+        "size": 876,
+        "sha256": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93"
+      },
+      {
+        "path": "library/Harvey Bullock/Dark Victory/Dark Victory.mp3",
+        "size": 876,
+        "sha256": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8"
+      },
+      {
+        "path": "library/Leslie Thompkins/The Killing Joke/The Killing Joke.mp3",
+        "size": 876,
+        "sha256": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158"
+      },
+      {
+        "path": "library/Lucius Fox/Knightfall/Knightfall.mp3",
+        "size": 876,
+        "sha256": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff"
+      },
+      {
+        "path": "library/Selina Kyle/Hush/Hush.flac",
+        "size": 9490,
+        "sha256": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87"
+      },
+      {
+        "path": "state/.encryption_key",
+        "size": 32,
+        "sha256": "c8fe06328424f912b21ea4e36563a8bcc2d852208393305c4f76aa5abd3a9f63"
+      }
+    ]
+  },
+  "answers": [
+    {
+      "name": "effective_config",
+      "file": "internal/books/testdata/r2corpus/answers/effective_config.json",
+      "what": "R0's own view of every config key: GET /api/v1/config (stored, YAML and env layers applied; env_locked and setting_locks name the operator layers)"
+    },
+    {
+      "name": "schedules",
+      "file": "internal/books/testdata/r2corpus/answers/schedules.json",
+      "what": "R0's task listing, maintenance-window status and executor pause state"
+    },
+    {
+      "name": "search",
+      "file": "internal/books/testdata/r2corpus/answers/search.json",
+      "what": "GET /api/v1/audiobooks?search= over a fixed query list (the search oracle)"
+    },
+    {
+      "name": "abs",
+      "file": "internal/books/testdata/r2corpus/answers/abs.json",
+      "what": "the ABS conformance requests of scripts/abs_capture_fixtures.py on the corpus"
+    },
+    {
+      "name": "identity",
+      "file": "internal/books/testdata/r2corpus/answers/identity.json",
+      "what": "users, invites and API keys as R0 lists them (input of the M3 checks)"
+    },
+    {
+      "name": "library",
+      "file": "internal/books/testdata/r2corpus/answers/library.json",
+      "what": "books, playlists and recent runs as R0 lists them"
+    }
+  ]
+}

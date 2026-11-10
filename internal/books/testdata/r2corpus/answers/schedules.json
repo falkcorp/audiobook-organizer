@@ -1,0 +1,469 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/tasks"
+      },
+      "response": {
+        "body": {
+          "data": [
+            {
+              "category": "library",
+              "description": "Scan library for new/changed audiobooks (incremental by default, use force_update for full rescan)",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "library_scan",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "library",
+              "description": "Weekly full library sweep \u2014 re-reads and re-hashes every file. The interval is how often it CHECKS whether a sweep is due; the gap between sweeps is scheduled.library_scan_full.period_hours (default 168h).",
+              "enabled": true,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "library_scan_full",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "library",
+              "description": "Organize audiobooks into folder structure",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "library_organize",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Walk library + import-path trees to refresh on-disk size cache",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "library_size_refresh",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "library",
+              "description": "Transcode audiobooks to target format",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "transcode",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Refresh author & series dedup cache",
+              "enabled": true,
+              "interval_minutes": 720,
+              "is_running": false,
+              "name": "dedup_refresh",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Dry-run gold-label refinement chain: rebuild-gold-labels \u2192 calibrate-composite (report only; applies are operator-gated)",
+              "enabled": false,
+              "interval_minutes": 10080,
+              "is_running": false,
+              "name": "label_refinement",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Run LLM review on ambiguous dedup candidates",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "dedup_llm_review",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Merge duplicate series and delete orphans",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "series_prune",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Strip title/position contamination from series names and run write-back + organize for affected books",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "series_normalize",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Fill missing ASINs and audiobook ISBNs from Audible (metafetch.asin-backfill, live)",
+              "enabled": true,
+              "interval_minutes": 360,
+              "is_running": false,
+              "name": "asin_backfill",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Fetch metadata candidates for books never fetched or whose candidates were invalidated (metadata.candidate-fetch, fetch only)",
+              "enabled": true,
+              "interval_minutes": 360,
+              "is_running": false,
+              "name": "candidate_fetch",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Advance the identification of books a writer marked dirty (identification.advance, fetch only)",
+              "enabled": false,
+              "interval_minutes": 5,
+              "is_running": false,
+              "name": "identification_advance",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Re-evaluate dynamic collections whose query has a relative date (collections.refresh-relative-dynamic)",
+              "enabled": true,
+              "interval_minutes": 60,
+              "is_running": false,
+              "name": "collections_refresh",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "List every Audible title by each library author into the author catalog (catalog.harvest-authors, live)",
+              "enabled": false,
+              "interval_minutes": 360,
+              "is_running": false,
+              "name": "catalog_harvest",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Generate raw AcoustID fingerprints for files that have none (disabled by default)",
+              "enabled": false,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "acoustid_backfill",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Remove orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "last_run": "2026-11-10T10:07:52Z",
+              "name": "temp_file_cleanup",
+              "run_in_maintenance_window": true,
+              "run_on_startup": true
+            },
+            {
+              "category": "maintenance",
+              "description": "Remove stale transcode temp files (older than 2h) under every import path",
+              "enabled": true,
+              "interval_minutes": 60,
+              "is_running": false,
+              "last_run": "2026-11-10T10:07:52Z",
+              "name": "transcode_temp_cleanup",
+              "run_in_maintenance_window": false,
+              "run_on_startup": true
+            },
+            {
+              "category": "maintenance",
+              "description": "Purge trashed book versions past their 14-day TTL",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "trash_cleanup",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Remove old per-run op reports from the library's .reports directory (newest 3 per kind and anything under 14 days are kept)",
+              "enabled": true,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "reports_prune",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Replace metadata from lower-ranked sources (Open Library, Google Books, Wikipedia) with a higher-ranked source's (Hardcover, Audible) when its match passes the bulk-apply gate; user-locked fields are kept",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "metadata_upgrade",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Find & split composite author names",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "author_split_scan",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Optimize database (VACUUM/compact)",
+              "enabled": false,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "db_optimize",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Look up un-queried fingerprints on acoustid.org (rate-limited, bounded)",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "acoustid_online_lookup",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Remove old .bak-* backup files past retention",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "cleanup_old_backups",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Purge soft-deleted books past retention",
+              "enabled": true,
+              "interval_minutes": 360,
+              "is_running": false,
+              "last_run": "2026-11-10T10:07:52Z",
+              "name": "purge_deleted",
+              "run_in_maintenance_window": true,
+              "run_on_startup": true
+            },
+            {
+              "category": "maintenance",
+              "description": "Resolve author tombstone chains (A\u2192B\u2192C becomes A\u2192C)",
+              "enabled": true,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "tombstone_cleanup",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Report book_file rows whose hash drifted with no tag-write on record (report-only)",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "file_integrity_check",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Report book_file rows whose book no longer exists (report-only, never deletes)",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "orphan_book_files_cleanup",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Resolve real authors for production company entries",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "resolve_production_authors",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Re-fetch metadata for incomplete books",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "metadata_refresh",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Find books with missing files and match to untracked files on disk",
+              "enabled": false,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "reconcile_scan",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Run AI author dedup via Batch API (50% cheaper, up to 24h)",
+              "enabled": false,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "ai_dedup_batch",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Poll OpenAI for completed batch jobs",
+              "enabled": false,
+              "interval_minutes": 5,
+              "is_running": false,
+              "name": "batch_poller",
+              "run_in_maintenance_window": false,
+              "run_on_startup": true
+            },
+            {
+              "category": "maintenance",
+              "description": "Prune system logs and legacy operation logs older than the retention period (never undo history)",
+              "enabled": true,
+              "interval_minutes": 10080,
+              "is_running": false,
+              "name": "purge_old_logs",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Summarize old change entries and prune old debug entries from activity log",
+              "enabled": true,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "cleanup_activity_log",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "daily_at": "00:10",
+              "description": "Compact activity entries from before today into daily digests",
+              "enabled": true,
+              "interval_minutes": 0,
+              "is_running": false,
+              "name": "nightly_activity_compaction",
+              "run_in_maintenance_window": false,
+              "run_on_startup": false
+            },
+            {
+              "category": "maintenance",
+              "description": "Delete AI result-journal (whisper) entries older than the retention window",
+              "enabled": true,
+              "interval_minutes": 1440,
+              "is_running": false,
+              "name": "ai_journal_prune",
+              "run_in_maintenance_window": true,
+              "run_on_startup": false
+            }
+          ]
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/maintenance-window/status"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "currently_running": false,
+            "enabled": true,
+            "last_run_date": "",
+            "next_run_estimate": "2026-11-11T02:00:00Z",
+            "window_end": 5,
+            "window_start": 2
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/operations/pause"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "paused": true,
+            "reason": "r2corpus: paused executor",
+            "running_not_pausable": null,
+            "running_pausable": null,
+            "since": "2026-11-10T10:07:51.364853964Z",
+            "waiting": 0
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "schedules",
+  "r0_tag": "v0.223.0",
+  "what": "R0's task listing, maintenance-window status and executor pause state"
+}
