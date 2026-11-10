@@ -1,0 +1,6 @@
+# file: ci/r0_release.txt
+# version: 1.0.0
+# guid: 7d0bd097-ec80-4849-a0d1-b4900914429d
+# last-edited: 2026-11-10
+# The R0 release (09 §9.3 item 1): the tag whose release binary wrote R2's fixture corpus. One tag line; lines starting with '#' are comments.
+v0.223.0
