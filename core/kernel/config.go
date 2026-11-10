@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-10
 
@@ -109,14 +109,7 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
 		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
 		Logger: log, Now: in.Now, OwnerSet: in.OwnerSet,
-		BootRecordRoot: func(dir string) (*os.Root, error) {
-			// Boot hands back core.paths.state_dir as the layers resolve it;
-			// it must be the directory chosen below, or two resolvers disagree.
-			if got := filepath.Clean(strings.TrimSpace(dir)); got != cb.stateDir {
-				return nil, fmt.Errorf("kernel: config: Boot resolved the state directory %q, the pre-boot resolver %q", got, cb.stateDir)
-			}
-			return os.OpenRoot(cb.stateDir)
-		},
+		BootRecordRoot: cb.bootRoot,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: config store: %w", err)
@@ -163,12 +156,13 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		if strings.TrimSpace(explicit) != "" {
 			return nil, fmt.Errorf("kernel: config: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
 		}
-		what := fmt.Sprintf("the default state directory %q cannot be created", dir)
-		if in.StateDirDefault == "" {
-			what = "the app declares no default state directory"
+		// With no default, config's error already says so; it is not repeated.
+		what := fmt.Errorf("the default state directory %q cannot be created (%w)", dir, err)
+		if strings.TrimSpace(in.StateDirDefault) == "" {
+			what = err
 		}
-		return nil, fmt.Errorf("kernel: config: %s (%w), and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
-			what, err, cb.dbPath, stateVar)
+		return nil, fmt.Errorf("kernel: config: %w, and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
+			what, cb.dbPath, stateVar)
 	}
 	cb.stateDir, cb.fellBack = dir, fellBack
 	if fellBack {
@@ -208,6 +202,17 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 	return cb, nil
 }
 
+// bootRoot is Options.BootRecordRoot. Boot hands back core.paths.state_dir
+// as the layers resolve it; it must be the directory step 0 chose, or two
+// resolvers disagree about where state lives and the boot record would land
+// in a third place.
+func (cb *configBoot) bootRoot(dir string) (*os.Root, error) {
+	if got := filepath.Clean(strings.TrimSpace(dir)); got != cb.stateDir {
+		return nil, fmt.Errorf("kernel: config: Boot resolved the state directory %q, the pre-boot resolver %q", got, cb.stateDir)
+	}
+	return os.OpenRoot(cb.stateDir)
+}
+
 // pathOf is a config.Section's path, whatever its type parameter.
 func pathOf(sec any) config.Path {
 	if p, ok := sec.(interface{ Path() config.Path }); ok {
@@ -225,6 +230,13 @@ func operatorString(st *config.Store, p config.Path) (string, error) {
 	if !ok {
 		return "", nil
 	}
+	return operatorValueString(p, v)
+}
+
+// operatorValueString decodes one operator value of a string key. A
+// core.paths.state_dir from the operator file is refused: the state directory
+// is resolved before any config file is read (05-config §1.7).
+func operatorValueString(p config.Path, v config.OperatorValue) (string, error) {
 	if p == stateDirKey && v.Src == config.SourceFile {
 		return "", fmt.Errorf("kernel: config: %s sets %s: it is a pre-boot key, read from the environment and flags only (05-config §1.7)", v.By, p)
 	}

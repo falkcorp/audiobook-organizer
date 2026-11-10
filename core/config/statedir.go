@@ -1,5 +1,5 @@
 // file: core/config/statedir.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f2db35a-2887-406b-8e92-baa5f1f3a3a3
 // last-edited: 2026-11-10
 
@@ -24,7 +24,10 @@ func errNoStateDirDefault() error {
 //  1. explicit (the env or flag value; blank is unset) is trimmed and
 //     cleaned; when set it is created with mkdir and NEVER falls back: its
 //     error is returned with the directory, so the caller names it;
-//  2. otherwise def (app.Options.StateDir) is created with mkdir;
+//  2. otherwise def (app.Options.StateDir), trimmed and cleaned like an
+//     explicit value (an app's default need not be in Clean form, and the
+//     kernel compares the directory it opens with this result), is created
+//     with mkdir; a blank def is no default;
 //  3. when def cannot be created, the directory of dbPath (core.storage.path
 //     from the pre-boot layers, trimmed) is the fallback, only when it is
 //     absolute and mkdir creates it; fellBack reports it, and the caller
@@ -44,7 +47,8 @@ func ResolveStateDir(explicit, def, dbPath string, mkdir func(string) error) (di
 		return dir, false, nil
 	}
 	defErr := errNoStateDirDefault()
-	if def != "" {
+	if def = strings.TrimSpace(def); def != "" {
+		def = filepath.Clean(def)
 		if defErr = mkdir(def); defErr == nil {
 			return def, false, nil
 		}
