@@ -1,5 +1,5 @@
 // file: core/config/path.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 47cb7370-51cc-4bc5-8993-13977e2120c1
 // last-edited: 2026-11-10
 
@@ -7,7 +7,6 @@ package config
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -22,8 +21,28 @@ type Path string
 
 const pathSep = "."
 
-// segmentRE is the grammar of one path segment (05-config §1.3.6).
-var segmentRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
+// maxSegmentLen is the longest path segment: one leading letter plus 47 more.
+const maxSegmentLen = 48
+
+// validSegment reports whether seg matches [a-z][a-z0-9_]{0,47}
+// (05-config §1.3.6). It is hand-written rather than a package-level
+// regexp.MustCompile because core forbids package-level mutable variables
+// (03 R5).
+func validSegment(seg string) bool {
+	if seg == "" || len(seg) > maxSegmentLen {
+		return false
+	}
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '_'):
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Validate reports whether p is a path of the grammar above. It names the
 // first offending segment.
@@ -36,7 +55,7 @@ func (p Path) Validate() error {
 		return fmt.Errorf("config: path %q: first segment %q must be \"core\" or \"modules\"", string(p), segs[0])
 	}
 	for _, seg := range segs {
-		if !segmentRE.MatchString(seg) {
+		if !validSegment(seg) {
 			return fmt.Errorf("config: path %q: segment %q does not match [a-z][a-z0-9_]{0,47}", string(p), seg)
 		}
 	}
