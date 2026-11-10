@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -20,6 +20,13 @@ schedules, search results and ABS responses (reach is F4-07's). This script:
 
 Secrets never reach an answer file: an API key's secret becomes
 ``<api-key:NAME>``, every other credential (ABS tokens, passwords) ``<redacted>``.
+
+What a replay cannot reproduce is taken out and listed in ``manifest.json``'s
+``volatile_fields`` (format coined here): values R0 computes from the clock
+(``"<volatile>"`` in the answer) and the recorder's own artefacts (its API key
+row, its ABS login session), which are dropped. The recorder waits for the
+runs R0 dispatches at boot to finish before it sends its first request, and
+sends its ABS playback requests last so no answer reads its own progress.
 """
 
 from __future__ import annotations
@@ -27,7 +34,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import pathlib
+import re
 import shutil
 import sys
 import time
@@ -54,7 +63,12 @@ w = _load_writer()
 
 ANSWER_KEY = "r2-answers"  # the fixture name of the recorder's own key
 REDACTED = "<redacted>"
-REQUEST_HEADERS_TO_KEEP = ("accept", "content-type", "user-agent", "prefer")
+VOLATILE = "<volatile>"
+RECORDER_UA = "r2corpus-recorder/1.0"
+RECORDER_DEVICE = {"clientName": "r2corpus-recorder", "deviceId": "recorder-001"}
+# x-return-tokens is kept: it changes the ABS /login response (the tokens are in
+# the body only when it is set), so a replay must send it too.
+REQUEST_HEADERS_TO_KEEP = ("accept", "content-type", "user-agent", "prefer", "x-return-tokens")
 RESPONSE_HEADERS_TO_KEEP = ("content-type", "accept-ranges", "etag", "cache-control")
 SECRET_KEYS = frozenset(
     {
@@ -86,6 +100,152 @@ SEARCH_QUERIES = (
 
 # ABS identities the writer created (users accepted through invites).
 ABS_USER = "dick.grayson"
+
+# What a replay cannot reproduce (manifest.json "volatile_fields"). Found by
+# recording the same corpus twice, 70 s apart, and diffing the answers, plus the
+# fields R0 computes from the clock at day granularity (a 70 s diff cannot show
+# them). "normalize" writes "<volatile>" in place of the value; "drop" removes
+# the matched list element (the recorder's own artefacts). Paths: dotted keys,
+# [*] every element, [?field==JSON] the elements whose field equals JSON.
+# Stored timestamps (created_at, a key's expires_at, the pause marker's since,
+# ABS item times) come from the store and are NOT volatile: a replay on a copy
+# of the store reads the same values.
+VOLATILE_FIELDS: tuple[dict[str, str], ...] = (
+    {"answer": "schedules", "request": "GET /api/v1/tasks",
+     "path": "data[?run_on_startup==true].last_run", "action": "normalize",
+     "why": "a run_on_startup task runs at every boot, so its last run is the boot's clock"},
+    {"answer": "schedules", "request": "GET /api/v1/maintenance-window/status",
+     "path": "data.next_run_estimate", "action": "normalize",
+     "why": "the next window start computed from the current date"},
+    {"answer": "search", "request": "GET /api/v1/audiobooks?*",
+     "path": "data.items[*].updated_at", "action": "normalize",
+     "why": "the corpus' queued library scan runs at every boot (runs.standdown) and "
+            "rescans the import root, stamping the books it touches with the boot's clock"},
+    {"answer": "search", "request": "GET /api/v1/audiobooks?*",
+     "path": "data.items[*].last_scan_mtime", "action": "normalize",
+     "why": "the boot-time rescan stores each file's mtime, which a checkout sets"},
+    {"answer": "library", "request": "GET /api/v1/audiobooks?*",
+     "path": "data.items[*].updated_at", "action": "normalize",
+     "why": "the corpus' queued library scan runs at every boot (runs.standdown) and "
+            "rescans the import root, stamping the books it touches with the boot's clock"},
+    {"answer": "library", "request": "GET /api/v1/audiobooks?*",
+     "path": "data.items[*].last_scan_mtime", "action": "normalize",
+     "why": "the boot-time rescan stores each file's mtime, which a checkout sets"},
+    {"answer": "identity", "request": "GET /api/v1/auth/api-keys?all=true",
+     "path": "data.api_keys[?name==\"r2-answers\"]", "action": "drop",
+     "why": "the recorder's own key, minted on the copy by the bootstrap exchange"},
+    {"answer": "identity", "request": "GET /api/v1/auth/api-keys?all=true",
+     "path": "data.count", "action": "normalize",
+     "why": "counts the recorder's own key"},
+    {"answer": "identity", "request": "GET /api/v1/auth/api-keys?all=true",
+     "path": "data.api_keys[*].days_since_last_use", "action": "normalize",
+     "why": "days between the key's stored last use and the current date"},
+    {"answer": "abs", "request": "GET /api/me/sessions",
+     "path": "sessions[?current==true]", "action": "drop",
+     "why": "the recorder's own ABS login session (the one making the request)"},
+    {"answer": "abs", "request": "GET /api/me/sessions",
+     "path": "total", "action": "normalize",
+     "why": "counts the recorder's own ABS login session"},
+    {"answer": "abs", "request": "GET /api/libraries",
+     "path": "libraries[*].createdAt", "action": "normalize",
+     "why": "R0's ABS library view stamps the request time, not a stored time"},
+    {"answer": "abs", "request": "GET /api/libraries",
+     "path": "libraries[*].lastScan", "action": "normalize",
+     "why": "R0's ABS library view stamps the request time, not a stored time"},
+    {"answer": "abs", "request": "GET /api/libraries",
+     "path": "libraries[*].lastUpdate", "action": "normalize",
+     "why": "R0's ABS library view stamps the request time, not a stored time"},
+    {"answer": "abs", "request": "GET /api/libraries",
+     "path": "libraries[*].folders[*].addedAt", "action": "normalize",
+     "why": "R0's ABS library view stamps the request time, not a stored time"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "id", "action": "normalize",
+     "why": "the playback session the recorder opens gets a fresh ID"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "deviceInfo.id", "action": "normalize",
+     "why": "the playback session the recorder opens gets a fresh ID"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "startedAt", "action": "normalize",
+     "why": "the time the recorder opened the playback session"},
+    {"answer": "abs", "request": "POST /api/items/*/play",
+     "path": "updatedAt", "action": "normalize",
+     "why": "the time the recorder opened the playback session"},
+)  # fmt: skip
+
+# A drop rule must match: if the recorder's artefact is not found, the rule (or
+# the recorder) is stale and the answer would hold the artefact undetected.
+_PATH_TOKEN = re.compile(r"\.?([A-Za-z0-9_]+)|\[\*\]|\[\?([A-Za-z0-9_]+)==(.+?)\]")
+
+
+def parse_path(path: str) -> list[tuple[str, Any]]:
+    """Tokens of a volatile-field path: ("key", k), ("all", None), ("where", (k, v))."""
+    out: list[tuple[str, Any]] = []
+    pos = 0
+    while pos < len(path):
+        m = _PATH_TOKEN.match(path, pos)
+        if not m:
+            raise ValueError(f"bad volatile-field path {path!r} at {pos}")
+        if m.group(1):
+            out.append(("key", m.group(1)))
+        elif m.group(2):
+            out.append(("where", (m.group(2), json.loads(m.group(3)))))
+        else:
+            out.append(("all", None))
+        pos = m.end()
+    return out
+
+
+def apply_rule(body: Any, tokens: list[tuple[str, Any]], action: str) -> int:
+    """Normalize or drop what the tokens match in body (in place); returns hits."""
+    if not tokens:
+        return 0
+    (kind, arg), rest = tokens[0], tokens[1:]
+    hits = 0
+    if kind == "key":
+        if not isinstance(body, dict) or arg not in body:
+            return 0
+        if rest:
+            return apply_rule(body[arg], rest, action)
+        if action == "drop":
+            del body[arg]
+        else:
+            body[arg] = VOLATILE
+        return 1
+    if not isinstance(body, list):
+        return 0
+    if kind == "all":
+        idx = list(range(len(body)))
+    else:
+        field, want = arg
+        idx = [i for i, e in enumerate(body) if isinstance(e, dict) and e.get(field) == want]
+    if rest:
+        return sum(apply_rule(body[i], rest, action) for i in idx)
+    for i in reversed(idx):
+        if action == "drop":
+            del body[i]
+        else:
+            body[i] = VOLATILE
+        hits += 1
+    return hits
+
+
+def _request_matches(pattern: str, method: str, path: str) -> bool:
+    want_method, want_path = pattern.split(" ", 1)
+    regex = "^" + re.escape(want_path).replace(r"\*", "[^/?]+") + "$"
+    return method == want_method and re.match(regex, path) is not None
+
+
+def normalize_answers(files: dict[str, dict[str, Any]]) -> None:
+    """Apply VOLATILE_FIELDS to the recorded responses; a drop rule must hit."""
+    for rule in VOLATILE_FIELDS:
+        tokens = parse_path(rule["path"])
+        hits = 0
+        for ex in files[rule["answer"]]["exchanges"]:
+            req = ex["request"]
+            if _request_matches(rule["request"], req["method"], req["path"]):
+                hits += apply_rule(ex["response"]["body"], tokens, rule["action"])
+        if rule["action"] == "drop" and hits == 0:
+            raise w.CorpusError(f"volatile-field drop rule matched nothing: {rule}")
 
 
 def placeholder(name: str) -> str:
@@ -120,7 +280,7 @@ def _sub_keys(s: str, keys: dict[str, str]) -> str:
 
 
 def recorded_request_headers(auth: str, extra: dict[str, str] | None) -> dict[str, str]:
-    hdrs = {"accept": "application/json", "user-agent": "r2corpus-recorder/1.0"}
+    hdrs = {"accept": "application/json", "user-agent": RECORDER_UA}
     for k, v in (extra or {}).items():
         if k.lower() in REQUEST_HEADERS_TO_KEEP:
             hdrs[k.lower()] = v
@@ -180,7 +340,9 @@ ANSWERS = (
     ("search", "GET /api/v1/audiobooks?search= over a fixed query list (the search oracle)"),
     ("abs", "the ABS conformance requests of scripts/abs_capture_fixtures.py on the corpus"),
     ("identity", "users, invites and API keys as R0 lists them (input of the M3 checks)"),
-    ("library", "books, playlists and recent runs as R0 lists them"),
+    ("library", "books, playlists and import roots as R0 lists them. No run listing: "
+     "booting the copy re-queues and dispatches the corpus' quiesced and queued scans, "
+     "so runs listed on the copy are boot-time transitions under fresh run IDs"),
 )  # fmt: skip
 
 
@@ -221,7 +383,7 @@ def record_abs(rec: Recorder, client: Any) -> None:
     rec.start(a, dict(ANSWERS)[a])
     for path in ("/ping", "/status"):
         rec.send(a, "GET", path, auth="none")
-    login_body = {"username": ABS_USER, "password": w.OTHER_PASSWORD}
+    login_body = {"username": ABS_USER, "password": w.OTHER_PASSWORD, "deviceInfo": RECORDER_DEVICE}
     r = rec.send(a, "POST", "/login", login_body, auth="none", headers={"x-return-tokens": "true"})
     user = (r.body or {}).get("user", {}) if isinstance(r.body, dict) else {}
     token = user.get("accessToken") or user.get("token")
@@ -257,18 +419,44 @@ def record_abs(rec: Recorder, client: Any) -> None:
     rec.send(a, "GET", f"/api/items/{item_id}?expanded=1&include=progress", auth=auth)
     rec.send(a, "GET", f"/api/me/progress/{item_id}", auth=auth)
     rec.send(a, "GET", f"/api/me/bookmarks/{item_id}", auth=auth)
-    play_body = {
-        "deviceInfo": {"clientName": "r2corpus-recorder", "deviceId": "recorder-001"},
-        "mediaPlayer": "unknown",
-        "forceDirectPlay": True,
-    }
+    # Last, so no recorded answer reads the recorder's own progress or session.
+    play_body = {"deviceInfo": RECORDER_DEVICE, "mediaPlayer": "unknown", "forceDirectPlay": True}
     play = rec.send(a, "POST", f"/api/items/{item_id}/play", play_body, auth=auth)
-    if play.status == 200 and isinstance(play.body, dict) and play.body.get("id"):
-        sid = play.body["id"]
-        sync = {"currentTime": 0.1, "timeListened": 0.1, "duration": 0.3}
-        rec.send(a, "POST", f"/api/session/{sid}/sync", sync, auth=auth)
-        rec.send(a, "POST", f"/api/session/{sid}/close", None, auth=auth)
-    rec.send(a, "GET", "/api/me", auth=auth)
+    if play.status != 200 or not isinstance(play.body, dict) or not play.body.get("id"):
+        raise w.CorpusError(f"ABS play on the copy failed: {play.status}")
+    sid = play.body["id"]
+    sync = {"currentTime": 0.1, "timeListened": 0.1, "duration": 0.3}
+    rec.send(a, "POST", f"/api/session/{sid}/sync", sync, auth=auth)
+    rec.send(a, "POST", f"/api/session/{sid}/close", None, auth=auth)
+
+
+# Run states that are not finished (operations v3 view and v2 status names).
+_ACTIVE_STATES = frozenset({"queued", "pending", "claimed", "running", "stopping", "cancelling"})
+
+
+def wait_for_boot_runs(client: Any, auth: str, timeout: float = 300.0) -> list[dict[str, Any]]:
+    """Wait until no run is active; returns the runs as listed then.
+
+    Booting the copy re-queues the corpus' quiesced scan (the resume sweep) and
+    dispatches its queued scan, and run_on_startup tasks run; an answer recorded
+    while they run would race them. Settled = two listings 2 s apart agree and
+    neither shows an active run.
+    """
+    deadline = time.monotonic() + timeout
+    prev = None
+    while True:
+        r = client.request("GET", "/api/v3/ops/runs?limit=200", auth=auth)
+        if r.status != 200 or not isinstance(r.body, dict):
+            raise w.CorpusError(f"GET /api/v3/ops/runs on the copy -> {r.status}")
+        runs = r.body.get("items") or []
+        snap = sorted((str(x.get("id")), str(x.get("state"))) for x in runs)
+        active = [s for s in snap if s[1] in _ACTIVE_STATES]
+        if not active and snap == prev:
+            return runs
+        if time.monotonic() > deadline:
+            raise w.CorpusError(f"boot-time runs did not settle: {active}")
+        prev = snap
+        time.sleep(2.0)
 
 
 def mint_answer_key(ctx: Any) -> None:
@@ -289,6 +477,21 @@ def mint_answer_key(ctx: Any) -> None:
     if r.status != 200:
         raise w.CorpusError(f"bootstrap on the copy -> {r.status}: {r.body}")
     ctx.client.keys[ANSWER_KEY] = r.body["data"]["api_key"]
+
+
+def touch_like_a_checkout(root: pathlib.Path) -> None:
+    """Give every copied file a fresh mtime, as a git checkout of the corpus does.
+
+    A replay boots on a checkout, where no file keeps the mtime it had when the
+    writer ran; copytree keeps them. The corpus' queued library scan runs at
+    every boot and reads file mtimes into book rows, so recording on preserved
+    mtimes would hide fields a replay cannot reproduce. With fresh mtimes those
+    fields differ between two recordings, which is how VOLATILE_FIELDS finds them.
+    """
+    now = time.time()
+    for p in root.rglob("*"):
+        if p.is_file() and not p.is_symlink():
+            os.utime(p, (now, now))
 
 
 def scan_answers(answers_dir: pathlib.Path) -> list[str]:
@@ -322,18 +525,23 @@ def record(args: argparse.Namespace) -> int:
     if layout.workdir.exists():
         shutil.rmtree(layout.workdir)
     shutil.copytree(corpus_store, layout.store)  # a copy: the committed bytes stay
+    touch_like_a_checkout(layout.store)
     layout.home.mkdir(parents=True, exist_ok=True)
     layout.viper_yaml.write_text(w._yaml_dump(w.VIPER_YAML), encoding="utf-8")
 
+    w.check_outside_maintenance_window()
     proc = w.R0Process(binary, layout, args.port, docker=args.docker)
-    ctx = w.Ctx(client=w.Client(proc.base), proc=proc, layout=layout)
+    ctx = w.Ctx(client=w.Client(proc.base, user_agent=RECORDER_UA), proc=proc, layout=layout)
     rec = Recorder(ctx.client)
     proc.start()
     try:
         mint_answer_key(ctx)
+        settled = wait_for_boot_runs(ctx.client, f"key:{ANSWER_KEY}")
+        print(f"boot-time runs settled ({len(settled)} runs listed)")
         record_all(rec, ctx.client)
     finally:
         proc.stop()
+    normalize_answers(rec.files)
 
     if answers_dir.exists():
         shutil.rmtree(answers_dir)
@@ -355,6 +563,7 @@ def record(args: argparse.Namespace) -> int:
     if bad:
         raise w.CorpusError(f"an API key secret reached an answer file: {bad}")
     manifest["answers"] = entries
+    manifest["volatile_fields"] = [dict(r) for r in VOLATILE_FIELDS]
     if answers_dir == w.ANSWERS_DIR:
         w.write_manifest(manifest, manifest_path)
     print(f"wrote {len(entries)} answer files to {answers_dir}")

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_answers.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 0317d881-99be-4394-8279-b5df7ce3cfa7
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/record_r0_answers.py and its committed answers (F2-12).
@@ -124,9 +124,95 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(
             r.recorded_request_headers("abs:robin", None)["authorization"], "Bearer <redacted>"
         )
-        self.assertNotIn(
-            "x-return-tokens", r.recorded_request_headers("none", {"x-return-tokens": "1"})
+        # x-return-tokens changes the ABS /login body: a replay must send it too.
+        self.assertEqual(
+            r.recorded_request_headers("none", {"x-return-tokens": "true"})["x-return-tokens"],
+            "true",
         )
+        self.assertNotIn("cookie", r.recorded_request_headers("none", {"cookie": "a=b"}))
+
+
+class VolatileFieldsTest(unittest.TestCase):
+    def test_parse_path(self):
+        self.assertEqual(
+            r.parse_path('data.api_keys[?name=="r2-answers"]'),
+            [("key", "data"), ("key", "api_keys"), ("where", ("name", "r2-answers"))],
+        )
+        self.assertEqual(
+            r.parse_path("libraries[*].folders[*].addedAt"),
+            [("key", "libraries"), ("all", None), ("key", "folders"), ("all", None),
+             ("key", "addedAt")],
+        )  # fmt: skip
+        with self.assertRaises(ValueError):
+            r.parse_path("data..x[")
+
+    def test_normalize_and_drop(self):
+        body = {
+            "data": {
+                "count": 2,
+                "api_keys": [
+                    {"name": "scoped-view", "days_since_last_use": 3},
+                    {"name": "r2-answers", "days_since_last_use": 0},
+                ],
+            }
+        }
+        n = r.apply_rule(body, r.parse_path('data.api_keys[?name=="r2-answers"]'), "drop")
+        self.assertEqual(n, 1)
+        r.apply_rule(body, r.parse_path("data.api_keys[*].days_since_last_use"), "normalize")
+        self.assertEqual(
+            body["data"]["api_keys"], [{"name": "scoped-view", "days_since_last_use": r.VOLATILE}]
+        )
+        self.assertEqual(r.apply_rule(body, r.parse_path("data.missing"), "normalize"), 0)
+
+    def test_request_patterns(self):
+        self.assertTrue(
+            r._request_matches("POST /api/items/*/play", "POST", "/api/items/abc-1/play")
+        )
+        self.assertFalse(r._request_matches("POST /api/items/*/play", "GET", "/api/items/abc/play"))
+        self.assertTrue(
+            r._request_matches(
+                "GET /api/v1/auth/api-keys?all=true", "GET", "/api/v1/auth/api-keys?all=true"
+            )
+        )
+
+    def test_a_drop_rule_that_matches_nothing_fails(self):
+        files = {name: {"exchanges": []} for name, _ in r.ANSWERS}
+        with self.assertRaises(r.w.CorpusError):
+            r.normalize_answers(files)
+
+    def test_every_rule_parses_and_names_a_recorded_answer(self):
+        names = {name for name, _ in r.ANSWERS}
+        for rule in r.VOLATILE_FIELDS:
+            self.assertIn(rule["answer"], names, rule)
+            self.assertIn(rule["action"], ("normalize", "drop"), rule)
+            self.assertTrue(rule["why"], rule)
+            r.parse_path(rule["path"])
+
+
+class CommittedNormalizationTest(unittest.TestCase):
+    def _answer(self, name):
+        a = next(a for a in answers() if a["name"] == name)
+        return json.loads((REPO_ROOT / a["file"]).read_text(encoding="utf-8"))
+
+    def test_manifest_lists_the_volatile_fields(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["volatile_fields"], [dict(x) for x in r.VOLATILE_FIELDS])
+
+    def test_recorder_artefacts_are_not_in_the_answers(self):
+        ident = self._answer("identity")
+        for ex in ident["exchanges"]:
+            self.assertNotIn('"name": "r2-answers"', json.dumps(ex["response"]["body"]))
+        abs_ = self._answer("abs")
+        for ex in abs_["exchanges"]:
+            if ex["request"]["path"] == "/api/me/sessions":
+                for sess in ex["response"]["body"]["sessions"]:
+                    self.assertFalse(sess.get("current"), sess)
+
+    def test_abs_playback_is_last(self):
+        ex = self._answer("abs")["exchanges"]
+        paths = [e["request"]["path"] for e in ex]
+        self.assertTrue(paths[-3].endswith("/play"), paths[-3:])
+        self.assertTrue(paths[-1].endswith("/close"), paths[-3:])
 
 
 if __name__ == "__main__":

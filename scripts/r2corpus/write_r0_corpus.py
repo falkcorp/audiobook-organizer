@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -57,6 +57,25 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
+_HERE = pathlib.Path(__file__).resolve().parent
+
+
+def _load_sibling(name: str):
+    """Import a sibling script by path (registered before exec, for dataclasses)."""
+    if name in sys.modules:
+        return sys.modules[name]
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, _HERE / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+pebble_bytes = _load_sibling("pebble_bytes")
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 TAG_FILE = REPO_ROOT / "ci" / "r0_release.txt"
 CORPUS_REL = "internal/books/testdata/r2corpus"
@@ -69,7 +88,7 @@ FIXTURE_AUDIO = REPO_ROOT / "testdata" / "fixtures"
 
 MANIFEST_HEADER = {
     "file": f"{CORPUS_REL}/manifest.json",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "guid": "d808d644-1404-4e9f-b549-f20bbbb939bd",
     "last-edited": "2026-11-10",
 }
@@ -98,6 +117,27 @@ PRIVATE_IP_RE = re.compile(
 
 # Step names of the coverage table (brief "What the corpus must contain").
 STEPS = ("M2", "M3", "M4", "M5", "M6", "books")
+
+# Expiries a replay must not outlive (MAJOR 4a of the F2-12 review). R0 caps an
+# API key at 365 days (handlers/apikeys.go MaxAPIKeyTTLDays: over it is a 400),
+# so every fixture key gets the cap; an invite takes any number of hours, so
+# every fixture invite gets ten years. manifest.json records when the first key
+# lapses (``lapses``): a replay after that date sees expired keys.
+KEY_TTL_DAYS = 365
+INVITE_TTL_HOURS = 10 * 365 * 24
+
+# The maintenance window the corpus configures (tasks.schedules) and the env
+# layer's MAINTENANCE_WINDOW_START, in UTC (TZ=UTC). Window tasks would run
+# while the writer or the recorder is driving R0 and add rows nobody asked for,
+# so both refuse to start inside it, with an hour of margin on each side.
+MAINTENANCE_WINDOW_UTC = (2, 5)
+WINDOW_MARGIN_HOURS = 1
+
+# A slow scan target outside stage1/ (MAJOR 1): a tree of empty directories the
+# library scan has to walk, so a cancel or a stand-down reaches the scan while
+# it runs. 40**3 = 64,000 directories took about 4 s to scan on a laptop. Git
+# keeps no empty directory, so the tree is never part of the committed corpus.
+SLOW_TREE_FANOUT = 40
 
 
 class CorpusError(RuntimeError):
@@ -214,6 +254,10 @@ class Layout:
     @property
     def serve_log(self) -> pathlib.Path:
         return self.workdir / "serve.out"
+
+    @property
+    def slow_tree(self) -> pathlib.Path:  # the slow scan target (not committed)
+        return self.workdir / "gotham-sewers"
 
 
 # The operator YAML layer (viper's --config file). Values here are what R0 reads
@@ -394,6 +438,31 @@ def prepare_workdir(layout: Layout) -> None:
     layout.gapfill_yaml.write_text(_yaml_dump(GAPFILL_YAML), encoding="utf-8")
     layout.gapfill_yaml.chmod(0o600)
     lay_out_import(layout.import_dir)
+    lay_out_slow_tree(layout.slow_tree)
+
+
+def lay_out_slow_tree(root: pathlib.Path, fanout: int = SLOW_TREE_FANOUT) -> int:
+    """fanout**3 empty directories under root; returns how many leaves."""
+    for a in range(fanout):
+        for b in range(fanout):
+            for c in range(fanout):
+                (root / f"tunnel-{a:02d}" / f"junction-{b:02d}" / f"vault-{c:02d}").mkdir(
+                    parents=True, exist_ok=True
+                )
+    return fanout**3
+
+
+def check_outside_maintenance_window(now: _dt.datetime | None = None) -> None:
+    """Refuse to drive R0 inside the configured maintenance window (UTC)."""
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    start, end = MAINTENANCE_WINDOW_UTC
+    lo, hi = start - WINDOW_MARGIN_HOURS, end + WINDOW_MARGIN_HOURS
+    if lo <= now.astimezone(_dt.timezone.utc).hour < hi:
+        raise CorpusError(
+            f"it is {now:%H:%M} UTC: the corpus' maintenance window is "
+            f"{start:02d}:00-{end:02d}:00 UTC and window tasks would run while R0 is "
+            f"driven; start outside {lo:02d}:00-{hi:02d}:00 UTC"
+        )
 
 
 # ------------------------------------------------------------- the R0 process
@@ -497,8 +566,9 @@ class Response:
 class Client:
     """A stdlib HTTP client with one cookie jar per identity and API-key auth."""
 
-    def __init__(self, base: str) -> None:
+    def __init__(self, base: str, user_agent: str = "r2corpus-writer/1.0") -> None:
         self.base = base.rstrip("/")
+        self.user_agent = user_agent
         self.jars: dict[str, http.cookiejar.CookieJar] = {}
         self.keys: dict[str, str] = {}  # fixture key name -> raw secret (memory only)
         self.bearers: dict[str, str] = {}  # ABS identity -> access token (memory only)
@@ -530,7 +600,7 @@ class Client:
         headers: dict[str, str] | None,
         timeout: float,
     ) -> Response:
-        hdrs = {"Accept": "application/json", "User-Agent": "r2corpus-writer/1.0"}
+        hdrs = {"Accept": "application/json", "User-Agent": self.user_agent}
         hdrs.update(headers or {})
         data = None
         if body is not None:
@@ -701,37 +771,103 @@ def run_step(ctx: Ctx, step: Any) -> None:
 CANCEL_ATTEMPTS = 8
 
 
-def _start_and_cancel_scan(ctx: Ctx) -> None:
-    """Start a scan and DELETE it before it finishes, retrying on a lost race.
+def op_status(ctx: Ctx, op_id: str) -> str:
+    assert ctx.client is not None
+    r = ctx.client.request("GET", f"/api/v1/operations/v2/{op_id}", auth="admin")
+    return _status(r.body) if r.status == 200 else ""
 
-    On a fast host the fixture scan can finish before the DELETE lands, and R0
-    answers a cancel of a finished run with 404 ("operation not found"). Each
-    lost race leaves one more completed scan run in the store, which is a normal
-    row of the same family; the attempt that wins records op_canceled.
+
+def wait_status(
+    ctx: Ctx, op_id: str, wanted: frozenset[str] | set[str], timeout: float = 120.0
+) -> str:
+    """Poll a run until its status is in ``wanted``; returns that status."""
+    deadline = time.monotonic() + timeout
+    while True:
+        st = op_status(ctx, op_id)
+        if st in wanted:
+            return st
+        if time.monotonic() > deadline:
+            raise CorpusError(f"run {op_id} never reached {sorted(wanted)} (last {st!r})")
+        time.sleep(0.25)
+
+
+def start_op(ctx: Ctx, def_id: str, params: dict[str, Any]) -> str:
+    assert ctx.client is not None
+    r = ctx.client.request(
+        "POST", "/api/v1/operations/v2", {"def_id": def_id, "params": params}, auth="admin"
+    )
+    if r.status not in (200, 201, 202):
+        raise CorpusError(f"POST /api/v1/operations/v2 {def_id} -> {r.status}: {r.body}")
+    return str(dig(r.body, "op_id"))
+
+
+def _start_and_cancel_scan(ctx: Ctx) -> None:
+    """Start a scan of the slow tree and DELETE it while it runs, until a cancel takes.
+
+    An accepted DELETE does not prove the run ends canceled. R0 answers 204 when
+    the cancel races the run's own completion (registry.go cancelByRow: "a cancel
+    racing completion is not a 404"), and the worker then records the completion
+    (worker.go keepsUserCancel), so the row ends ``completed``. A cancel landing
+    after the run finished answers 404. So after every DELETE the writer waits
+    for the run to be terminal and accepts only ``canceled``; anything else is a
+    lost race and it tries again. The slow tree (64,000 empty directories) keeps
+    the scan running for seconds, so a lost race is rare; each one leaves one
+    more completed scan run, a normal row of the same family.
     """
     assert ctx.client is not None
-    body = {
-        "def_id": "library.scan",
-        "params": {"folder_path": ctx.ids["import_dir"], "force_update": True},
-    }
     last = ""
     for _ in range(CANCEL_ATTEMPTS):
-        r = ctx.client.request("POST", "/api/v1/operations/v2", body, auth="admin")
-        if r.status not in (200, 201, 202):
-            raise CorpusError(
-                f"POST /api/v1/operations/v2 -> {r.status}: {json.dumps(r.body)[:600]}"
-            )
-        op_id = dig(r.body, "op_id")
-        d = ctx.client.request("DELETE", f"/api/v1/operations/v2/{op_id}", auth="admin")
-        if d.status in (200, 202, 204):
+        op_id = start_op(
+            ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree), "force_update": True}
+        )
+        if wait_status(ctx, op_id, TERMINAL | {"running"}, timeout=60.0) == "running":
+            d = ctx.client.request("DELETE", f"/api/v1/operations/v2/{op_id}", auth="admin")
+            if d.status not in (200, 202, 204, 404, 409):
+                raise CorpusError(f"DELETE /api/v1/operations/v2/{op_id} -> {d.status}: {d.body}")
+        final = wait_status(ctx, op_id, TERMINAL)
+        if final == "canceled":
             ctx.ids["op_canceled"] = op_id
             return
-        last = f"{d.status}: {json.dumps(d.body)[:300]}"
-        if d.status not in (404, 409):
-            raise CorpusError(f"DELETE /api/v1/operations/v2/{op_id} -> {last}")
-    raise CorpusError(
-        f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries (last {last})"
-    )
+        last = f"run {op_id} ended {final!r}"
+    raise CorpusError(f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries ({last})")
+
+
+def _quiesce_scan_under_standdown(ctx: Ctx) -> None:
+    """A library scan stood down by a maintenance op, and a second scan held queued.
+
+    R0's library scan never takes the scan stand-down: it is the op that stands
+    down. A maintenance op takes it; ``maintenance.metadata-refresh`` (read-only,
+    no parameters) holds it for its whole run (plugins/maintenance/metadata.go).
+    Acquiring it quiesces a running ``library.scan``: the scan parks and its row
+    becomes ``interrupted_quiesced``, and the stand-down marker is written to the
+    ``registry.scan_standdown`` setting row (cleared to an empty value, not
+    deleted, at the last release). The last release starts the re-queue grace
+    (``scan_standdown_grace_seconds``, set to 600 by the case before this hook);
+    while it runs, a newly enqueued ``library.scan`` is not dispatched (Gate 3.5
+    in registry/dispatcher.go) and stays ``queued``. The clean stop that follows
+    stops the grace timer and leaves both rows as they are (Registry.Shutdown:
+    "the quiesced scan row stays interrupted_quiesced"; a claim never dispatched
+    is released back as a queued row).
+    """
+    scan = start_op(ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree)})
+    if wait_status(ctx, scan, TERMINAL | {"running"}, timeout=60.0) != "running":
+        raise CorpusError(f"the slow-tree scan {scan} finished before it could be stood down")
+    holder = start_op(ctx, "maintenance.metadata-refresh", {})
+    if wait_status(ctx, holder, TERMINAL) != "completed":
+        raise CorpusError(f"maintenance.metadata-refresh {holder} did not complete")
+    st = wait_status(ctx, scan, TERMINAL | {"interrupted_quiesced"}, timeout=30.0)
+    if st != "interrupted_quiesced":
+        raise CorpusError(f"the stood-down scan {scan} ended {st!r}, not interrupted_quiesced")
+    # The queued scan targets the slow tree too, not the import root: a replay
+    # boots on a copy of stage1/ only, where the tree does not exist, so when
+    # the replay dispatches this row it fails at once instead of rescanning the
+    # library and rewriting book rows (updated_at) under the answers.
+    queued = start_op(ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree)})
+    time.sleep(3.0)
+    st = op_status(ctx, queued)
+    if st != "queued":
+        raise CorpusError(f"the scan enqueued during the grace is {st!r}, not queued")
+    ctx.ids.update(op_quiesced=scan, op_standdown_holder=holder, op_queued=queued)
 
 
 def hook_bootstrap(ctx: Ctx) -> None:
@@ -776,6 +912,16 @@ def hook_bootstrap(ctx: Ctx) -> None:
     if r.status not in (200, 204):
         raise CorpusError(f"admin password change -> {r.status}: {r.body}")
     login(ctx, "admin", data["username"], FIXTURE_PASSWORD)
+    # The exchange's all-scope key is a one-boot credential: revoke it (the row
+    # stays, revoked) so the corpus holds no live all-scope key nobody can use.
+    key_id = data.get("key_id")
+    if not key_id:
+        raise CorpusError("the bootstrap exchange named no key_id to revoke")
+    r = ctx.client.request("DELETE", f"/api/v1/auth/api-keys/{key_id}")
+    if r.status not in (200, 204):
+        raise CorpusError(f"revoke bootstrap-admin -> {r.status}: {r.body}")
+    ctx.client.keys.pop("bootstrap-admin", None)
+    ctx.ids["key_bootstrap"] = key_id
 
 
 def login(ctx: Ctx, identity: str, username: str, password: str) -> None:
@@ -959,7 +1105,7 @@ def _invite(user: str, role: str, email: str) -> Call:
     return Call(
         "POST",
         "/api/v1/users/invite",
-        {"username": user, "role_id": role, "email": email, "expires_in": 72},
+        {"username": user, "role_id": role, "email": email, "expires_in": INVITE_TTL_HOURS},
         save=((f"invite_{user.replace('.', '_')}_token", "data.token"),
               (f"invite_{user.replace('.', '_')}_id", "data.invite.id")),
     )  # fmt: skip
@@ -1062,7 +1208,8 @@ CASES: tuple[Case, ...] = (
         "users.invited",
         "user, invite, session",
         "M3",
-        "invites for every seeded role, accepted (each sets a session)",
+        "invites for every seeded role (admin, editor, viewer, fp-worker), accepted "
+        "(each sets a session)",
         (
             _invite("dick.grayson", "editor", "robin@example.com"),
             _invite("barbara.gordon", "viewer", "batgirl@example.com"),
@@ -1119,19 +1266,23 @@ CASES: tuple[Case, ...] = (
             Call(
                 "POST",
                 "/api/v1/auth/api-keys",
-                {"name": "scoped-view", "scopes": ["library.view"], "expires_in_days": 365},
+                {
+                    "name": "scoped-view",
+                    "scopes": ["library.view"],
+                    "expires_in_days": KEY_TTL_DAYS,
+                },
                 save=(("key_scoped", "data.id"),),
             ),
             Call(
                 "POST",
                 "/api/v1/auth/api-keys",
-                {"name": "empty-scope", "scopes": [], "expires_in_days": 365},
+                {"name": "empty-scope", "scopes": [], "expires_in_days": KEY_TTL_DAYS},
                 save=(("key_empty", "data.id"),),
             ),
             Call(
                 "POST",
                 "/api/v1/auth/api-keys",
-                {"name": "every-atom", "scopes": ALL_ATOMS, "expires_in_days": 365},
+                {"name": "every-atom", "scopes": ALL_ATOMS, "expires_in_days": KEY_TTL_DAYS},
                 save=(("key_every", "data.id"),),
             ),
             Call(
@@ -1141,7 +1292,7 @@ CASES: tuple[Case, ...] = (
                     "name": "admin-owned-for-robin",
                     "scopes": ["library.view", "playlists.create"],
                     "user_id": "${user_robin}",
-                    "expires_in_days": 365,
+                    "expires_in_days": KEY_TTL_DAYS,
                 },
                 save=(("key_for_robin", "data.id"),),
             ),
@@ -1152,21 +1303,29 @@ CASES: tuple[Case, ...] = (
                     "name": "fp-worker-key",
                     "scopes": ["fingerprint.worker"],
                     "user_id": "${user_fpworker}",
-                    "expires_in_days": 365,
+                    "expires_in_days": KEY_TTL_DAYS,
                 },
                 save=(("key_fpworker", "data.id"),),
             ),
             Call(
                 "POST",
                 "/api/v1/auth/api-keys",
-                {"name": "editor-own-key", "scopes": ["library.view"], "expires_in_days": 30},
+                {
+                    "name": "editor-own-key",
+                    "scopes": ["library.view"],
+                    "expires_in_days": KEY_TTL_DAYS,
+                },
                 auth="robin",
                 save=(("key_robin_own", "data.id"),),
             ),
             Call(
                 "POST",
                 "/api/v1/auth/api-keys",
-                {"name": "revoked-key", "scopes": ["library.view"], "expires_in_days": 30},
+                {
+                    "name": "revoked-key",
+                    "scopes": ["library.view"],
+                    "expires_in_days": KEY_TTL_DAYS,
+                },
                 save=(("key_revoked", "data.id"),),
             ),
             Call("DELETE", "/api/v1/auth/api-keys/${key_revoked}"),
@@ -1248,7 +1407,7 @@ CASES: tuple[Case, ...] = (
         "runs.succeeded",
         "opv2:run (succeeded), op history",
         "M4",
-        "a library scan run that succeeds (takes the scan stand-down while it runs)",
+        "a library scan run that succeeds",
         (
             Call(
                 "POST",
@@ -1278,14 +1437,14 @@ CASES: tuple[Case, ...] = (
         "runs.canceled",
         "opv2:run (canceled)",
         "M4",
-        "a run started and canceled through DELETE /operations/v2/:id",
+        "a slow library scan canceled while running through DELETE /operations/v2/:id "
+        "(retried until the run ends canceled, not completed)",
         (
             Hook(
-                "start a library.scan and cancel it while it is still in flight",
+                "scan the slow tree and cancel it while it runs, until the run ends canceled",
                 _start_and_cancel_scan,
             ),
-            _done("op_canceled"),
-        ),  # fmt: skip
+        ),
     ),
     Case(
         "runs.task",
@@ -1399,6 +1558,23 @@ CASES: tuple[Case, ...] = (
         ),  # fmt: skip
     ),
     Case(
+        "runs.standdown",
+        "setting:registry.scan_standdown, opv2:run (interrupted_quiesced), opv2:run (queued)",
+        "M4",
+        "a running library scan stood down by maintenance.metadata-refresh (R0's scans "
+        "never take the stand-down; maintenance ops do), then a second scan held queued "
+        "by the stand-down's re-queue grace; the stop leaves both rows as they are",
+        (
+            # Last before the stop: a restart would stop the grace timer and the
+            # boot resume sweep would re-queue and run the quiesced scan.
+            Call("PUT", "/api/v1/config", {"scan_standdown_grace_seconds": 600}),
+            Hook(
+                "scan the slow tree, stand it down with metadata-refresh, enqueue a scan",
+                _quiesce_scan_under_standdown,
+            ),
+        ),
+    ),
+    Case(
         "runs.paused",
         "operations pause marker",
         "M4",
@@ -1425,9 +1601,12 @@ NOT_WRITABLE = (
         "why": "AI jobs are created only through the OpenAI Batch API (no fake endpoint in R0)",
     },
     {
-        "family": "opv2:run (running, stopping, queued)",
+        "family": "opv2:run (running, stopping)",
         "step": "M4",
-        "why": "a clean stop drains or interrupts open runs; F2-13 writes these states",
+        "why": "a clean stop cannot leave a run running or stopping: Registry.Shutdown "
+        "(internal/operations/registry/registry.go at the R0 tag) cancels every running op "
+        "with ErrShutdown and marks what has not drained interrupted per its ResumePolicy; "
+        "F2-13 writes these states",
     },
 )
 
@@ -1486,15 +1665,27 @@ def leak_patterns() -> list[tuple[str, re.Pattern[bytes]]]:
 
 
 def scan_for_leaks(root: pathlib.Path) -> list[str]:
+    """Every file's raw bytes, and a Pebble store's plaintext, against leak_patterns.
+
+    Pebble Snappy-compresses SST blocks and cuts WAL batches into chunks, so the
+    raw bytes alone can hide a secret; pebble_bytes.plaintext_views adds the
+    decompressed blocks and the reassembled WAL. A store file it cannot walk is
+    a finding too (fail closed), never skipped.
+    """
     findings = []
     pats = leak_patterns()
     for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
-        data = p.read_bytes()
+        rel = p.relative_to(root)
+        try:
+            views = pebble_bytes.plaintext_views(p)
+        except pebble_bytes.StoreDecodeError as e:
+            findings.append(f"{rel}: cannot be decoded for the scan ({e})")
+            continue
         for label, pat in pats:
-            if pat.search(data):
-                findings.append(f"{p.relative_to(root)}: {label}")
+            if any(pat.search(v) for v in views):
+                findings.append(f"{rel}: {label}")
     return findings
 
 
@@ -1519,12 +1710,21 @@ def build_manifest(
     store_dir: pathlib.Path,
     answers: list[dict[str, str]] | None = None,
     cases: tuple[Case, ...] = CASES,
+    now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
     return {
         "_header": MANIFEST_HEADER,
         "r0_tag": tag,
         "r0_binary_sha256": binary_sha,
-        "written_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "written_at": now.strftime(fmt),
+        "lapses": {
+            "api_keys": (now + _dt.timedelta(days=KEY_TTL_DAYS)).strftime(fmt),
+            "invites": (now + _dt.timedelta(hours=INVITE_TTL_HOURS)).strftime(fmt),
+            "why": f"R0 caps an API key at {KEY_TTL_DAYS} days; every fixture key and invite "
+            "gets the longest life R0 allows, and a replay after a lapse sees expired rows",
+        },
         "credentials": "every credential in this corpus is a generated fixture value "
         "(invariant 2); API keys in answer files are <api-key:NAME> placeholders",
         "boot": boot,
@@ -1537,6 +1737,7 @@ def build_manifest(
         "blockers": [],
         "stores": {STAGE1_REL: store_files(store_dir)},
         "answers": answers or [],
+        "volatile_fields": [],
     }
 
 
@@ -1574,6 +1775,7 @@ def write_corpus(args: argparse.Namespace) -> int:
         binary = fetch_binary(tag, pathlib.Path(args.cache).expanduser())
     if not args.docker:
         check_native_binary(binary, args.allow_foreign_binary)
+    check_outside_maintenance_window()
     binary_sha = sha256_file(binary)
     out_store = pathlib.Path(args.out).resolve() if args.out else STAGE1_DIR
     if args.allow_foreign_binary and out_store == STAGE1_DIR:
@@ -1604,11 +1806,15 @@ def write_corpus(args: argparse.Namespace) -> int:
         shutil.rmtree(out_store)
     shutil.copytree(layout.store, out_store, symlinks=False)
     manifest = build_manifest(tag, binary_sha, boot_spec(layout, args.port), out_store)
-    # Keep the answers list a previous recording wrote: record_r0_answers.py owns it.
+    # Keep what a previous recording wrote: record_r0_answers.py owns the answers
+    # list and the volatile-field list.
     manifest_path = MANIFEST_PATH if out_store == STAGE1_DIR else out_store.parent / "manifest.json"
     if manifest_path.exists():
-        with contextlib.suppress(ValueError, KeyError):
-            manifest["answers"] = json.loads(manifest_path.read_text())["answers"]
+        with contextlib.suppress(ValueError):
+            old = json.loads(manifest_path.read_text())
+            for key in ("answers", "volatile_fields"):
+                if key in old:
+                    manifest[key] = old[key]
     write_manifest(manifest, manifest_path)
     (layout.workdir / "writer-calls.txt").write_text("\n".join(ctx.log) + "\n", encoding="utf-8")
     print(f"wrote {out_store} ({sum(f['size'] for f in manifest['stores'][STAGE1_REL])} bytes)")
