@@ -153,3 +153,4 @@ internal/transcribe.resetInFlightState
 internal/undo.HandOffCrownedValue
 internal/undo.TagWriteField
 internal/util.ExtractBoolField
+core/kernel.declareCoreCatalog
