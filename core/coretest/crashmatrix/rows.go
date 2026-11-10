@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package crashmatrix
 
@@ -69,6 +69,7 @@ func Rows() []Row {
 			"storage.step.batch", "storage.levelstep.sidecars", "storage.levelstep.rollback", "storage.finish.batch",
 			"storage.finish.sidecars", "storage.checkpoint.complete", "storage.attempt.clear",
 		}},
+		{Phase: "P4b", Writer: "storagemigrate: a data migration's plan with its running state, each chunk's batch with its shard cursor (and its held and quarantine records), and its verifying, done and failed states with Verify's report (05-storage §5S.3.6; 09 §9.2.3 one batch per chunk)", Labels: DataMigrationLabels()},
 		{Phase: "P4b (KindCheckpoint restore boot)", Writer: "the kernel: journal failed when the restored checkpoint's migrations fail (DATA7-12)", Labels: []string{
 			"swap.journal.failed",
 		}},
