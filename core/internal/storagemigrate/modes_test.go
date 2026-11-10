@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/modes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e528233b-da81-41a8-ac2d-88da078cb86c
 // last-edited: 2026-11-10
 
@@ -78,6 +78,12 @@ func TestStepWriterModeRules(t *testing.T) {
 			_ = w.Quarantine(kv.Key, kv.Value, "ignored by a careless step")
 			return w.Delete(kv.Key)
 		}), datamigrate.ErrQuarantineNotWired)
+	})
+	t.Run("Batch committed by a step", func(t *testing.T) {
+		failsWith(t, legacy(t), cutStep(func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			_ = w.Batch().Commit(ctx, storage.Sync) // a careless importer: the chunk's batch is for staging
+			return nil
+		}), storage.ErrBatchDone)
 	})
 	t.Run("Set in a retired claim", func(t *testing.T) {
 		failsWith(t, legacy(t), cutStep(func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
@@ -177,6 +183,65 @@ func TestStepWriterPreconditions(t *testing.T) {
 		}
 		failsWith(t, newEnv(t, 4), m, storage.ErrNotSerialized)
 	})
+}
+
+// TestStepWriterOneWritePerKey: a chunk writes each key once. Two items'
+// SetIfAbsent of one key fail the step at every chunk size (in one chunk
+// ErrKeyWrittenTwice, across chunks the precondition's ErrConflict), and
+// neither write replaces the other; a plain Set twice in one chunk, by two
+// items or by one, fails the step too.
+func TestStepWriterOneWritePerKey(t *testing.T) {
+	serialized := gotham()
+	serialized.Spec.Serialized = []string{"out/"}
+	pairs := func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		var n int
+		if _, err := fmt.Sscanf(string(kv.Key), "item/%05d", &n); err != nil {
+			return err
+		}
+		return w.SetIfAbsent([]byte(fmt.Sprintf("out/%d", (n+1)/2)), kv.Key) // items 1 and 2 claim out/1
+	}
+	for _, size := range []int{1, 2, 3, 10} {
+		t.Run(fmt.Sprintf("SetIfAbsent, chunk_items %d", size), func(t *testing.T) {
+			e := newEnv(t, 4)
+			e.owners = []storage.OwnerSpec{serialized}
+			m := recount(sequential())
+			m.Step = pairs
+			db, err := e.boot(context.Background(), e.runner(storagemigrate.Options{ChunkItems: size}, m))
+			if db != nil {
+				err = errors.Join(err, db.Close())
+			}
+			var se *storage.StepError
+			if !errors.As(err, &se) || !(errors.Is(err, datamigrate.ErrKeyWrittenTwice) || errors.Is(err, storage.ErrConflict)) {
+				t.Fatalf("boot = %v, want the step's StepError (ErrKeyWrittenTwice or ErrConflict)", err)
+			}
+			ks, _ := e.view(e.fs)
+			v, err := ks.Get(context.Background(), []byte("out/1"))
+			if err == nil && string(v) != string(item(1)) {
+				t.Fatalf("out/1 = %q, want absent or item 1's: item 2's write replaced it", v)
+			}
+			if err != nil && !errors.Is(err, storage.ErrNotFound) {
+				t.Fatal(err)
+			}
+		})
+	}
+	for name, step := range map[string]func(context.Context, storage.KV, *datamigrate.StepWriter) error{
+		"Set by two items": func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			return w.Set([]byte("note/the-joker"), kv.Key)
+		},
+		"Set twice by one item": func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			if err := w.Set(kv.Key, []byte("1")); err != nil {
+				return err
+			}
+			_ = w.Delete(kv.Key) // ignored: the refusal fails the chunk anyway
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := recount(sequential())
+			m.Step = step
+			failsWith(t, newEnv(t, 4), m, datamigrate.ErrKeyWrittenTwice)
+		})
+	}
 }
 
 // cutoverOwners is c's cutover build: its claim retired.

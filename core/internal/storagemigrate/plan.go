@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/plan.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f314421-b57d-40b7-9a6c-89e8008985ef
 // last-edited: 2026-11-10
 
@@ -64,21 +64,22 @@ func (r *Runner) newPlan(ctx context.Context, src storage.Reader, mg *migration)
 	return planRecord{Shards: len(bounds) + 1, Boundaries: bounds, Workers: n, At: r.opts.Clock().UTC(), Build: r.opts.Build}, nil
 }
 
-// shardState is one shard of a running migration: its range, its committed
-// cursor, and, under mu, the position its worker has stepped to and the
-// keys the migration wrote into its unvisited part (RewritesInPlace).
+// shardState is one shard of a running migration: its range and, under mu,
+// its committed cursor, the position its worker has stepped to and the keys
+// the migration wrote into its unvisited part (RewritesInPlace).
 //
 // Shards are disjoint key ranges of the source, and each is run by exactly
 // one worker of the tasks.ForEach pool, so no two workers ever step the same
 // item (CLAUDE.md "partition the work into disjoint sets"). The mutex guards
-// only what another shard's worker may touch: a write into this shard's
-// range checks pos and records itself in written.
+// what another shard's worker may touch: a write into this shard's range
+// reads cursor and pos (passed) and records itself in written. Only this
+// shard's worker writes cursor and pos, under mu, so it reads them without.
 type shardState struct {
 	n      int
 	lo, hi []byte // [lo, hi) relative to the source handle; nil lo = open below, nil hi = open above
-	cursor []byte // the committed cursor (nil = nothing committed yet); this shard's worker only
 
 	mu      sync.Mutex
+	cursor  []byte              // the committed cursor (nil = nothing committed yet)
 	pos     []byte              // the last key stepped (committed or not); nil = none
 	written map[string]struct{} // keys written into the unvisited part, skipped when reached
 }
@@ -117,11 +118,18 @@ func shardOf(mg *migration, bounds [][]byte, key []byte) int {
 	return sort.Search(len(bounds), func(i int) bool { return bytes.Compare(bounds[i], key) > 0 })
 }
 
-// visited reports whether the shard's worker has already stepped past key
-// (or is stepping it), so a write there is never revisited this run.
-// s.mu is held.
-func (s *shardState) visited(key []byte) bool {
-	return s.pos != nil && bytes.Compare(key, s.pos) <= 0
+// passed reports whether the shard will never step key again, this run or
+// after a crash: key is at or below its committed cursor, or, when own
+// (the writer's own shard), at or below the item it is stepping, because a
+// crash drops the writer's chunk and that write with it. Another shard's
+// stepped but uncommitted part is not passed: the writer's chunk can commit
+// while that shard's chunk is lost, and the resumed shard would then step
+// the write. s.mu is held.
+func (s *shardState) passed(key []byte, own bool) bool {
+	if s.cursor != nil && bytes.Compare(key, s.cursor) <= 0 {
+		return true
+	}
+	return own && s.pos != nil && bytes.Compare(key, s.pos) <= 0
 }
 
 // step marks key the shard's current item, unless the migration wrote it
@@ -137,13 +145,15 @@ func (s *shardState) step(key []byte) (skip bool) {
 	return skip
 }
 
-// prune drops the written keys at or below the committed cursor: the worker
-// never reaches them again.
-func (s *shardState) prune() {
+// commit records last, the key its chunk just committed, as the shard's
+// cursor and drops the written keys at or below it: the worker never
+// reaches them again.
+func (s *shardState) commit(last []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cursor = last
 	for k := range s.written {
-		if bytes.Compare([]byte(k), s.cursor) <= 0 {
+		if bytes.Compare([]byte(k), last) <= 0 {
 			delete(s.written, k)
 		}
 	}

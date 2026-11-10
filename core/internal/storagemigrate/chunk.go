@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/chunk.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a463dd58-35aa-4d88-86e3-7d8bb405b11c
 // last-edited: 2026-11-10
 
@@ -23,9 +23,10 @@ type chunk struct {
 	shard   *shardState
 	b       *storage.Batch
 	ctx     context.Context
-	current []byte           // the item being stepped
-	counts  map[string]int64 // folded into the stats after the commit
-	err     error            // the first rule broken
+	current []byte              // the item being stepped
+	counts  map[string]int64    // folded into the stats after the commit
+	staged  map[string]struct{} // every key a StepWriter method wrote: one write per key
+	err     error               // the first rule broken
 }
 
 var _ datamigrate.Sink = (*chunk)(nil)
@@ -44,16 +45,32 @@ func (c *chunk) fail(err error) error {
 	return c.err
 }
 
-// admit is runner rule 5 for a write to key: a key outside the source, or
-// in a part of a shard its worker has already stepped, is never revisited
-// this run, so the write is admitted. A write into a shard's unvisited part
-// is refused unless the migration declares RewritesInPlace; then it is
-// recorded in that shard's written set, and the shard skips the key when
-// it reaches it.
-func (c *chunk) admit(key []byte) error {
+// write admits a StepWriter write of key: the one-write-per-key rule, then
+// runner rule 5 (admit).
+func (c *chunk) write(key []byte) error {
 	if c.err != nil {
 		return c.err
 	}
+	if _, twice := c.staged[string(key)]; twice {
+		return c.fail(fmt.Errorf("%w: %q by %s", datamigrate.ErrKeyWrittenTwice, key, c.run.mg.m.ID))
+	}
+	if err := c.admit(key); err != nil {
+		return err
+	}
+	c.staged[string(key)] = struct{}{}
+	return nil
+}
+
+// admit is runner rule 5 for a write to key: a key outside the source, or
+// in a part of a shard its worker has passed (shardState.passed: its
+// committed part, or for the writer's own shard what it has stepped), is
+// never stepped again, after a crash included, so the write is admitted. A
+// write into any other part of a shard is refused unless the migration
+// declares RewritesInPlace; then it is recorded in that shard's written
+// set, and the shard skips the key when it reaches it. The written set is
+// this run's: after a crash a resumed shard may step such a write once,
+// which §5S.3.6 covers (Step is idempotent for its own outputs).
+func (c *chunk) admit(key []byte) error {
 	n := shardOf(c.run.mg, c.run.bounds, key)
 	if n < 0 {
 		return nil
@@ -61,7 +78,7 @@ func (c *chunk) admit(key []byte) error {
 	s := c.run.shards[n]
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.visited(key) {
+	if s.passed(key, s == c.shard) {
 		return nil
 	}
 	if !c.run.mg.m.RewritesInPlace {
@@ -72,21 +89,21 @@ func (c *chunk) admit(key []byte) error {
 }
 
 func (c *chunk) Set(key, value []byte) error {
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	return c.b.Set(key, value)
 }
 
 func (c *chunk) Delete(key []byte) error {
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	return c.b.Delete(key)
 }
 
 func (c *chunk) SetIfAbsent(key, value []byte) error {
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	if err := c.b.Expect(c.run.src, key, nil); err != nil {
@@ -96,7 +113,7 @@ func (c *chunk) SetIfAbsent(key, value []byte) error {
 }
 
 func (c *chunk) SetIfUnchanged(key, expect, value []byte) error {
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	if err := c.b.Expect(c.run.src, key, expect); err != nil {
@@ -106,7 +123,7 @@ func (c *chunk) SetIfUnchanged(key, expect, value []byte) error {
 }
 
 func (c *chunk) DeleteIfUnchanged(key, expect []byte) error {
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	if err := c.b.Expect(c.run.src, key, expect); err != nil {
@@ -155,7 +172,7 @@ func (c *chunk) Quarantine(key, raw []byte, reason string) error {
 	case c.run.r.opts.Quarantine == nil:
 		return c.fail(fmt.Errorf("%w: %s would quarantine %q", datamigrate.ErrQuarantineNotWired, m.ID, key))
 	}
-	if err := c.admit(key); err != nil {
+	if err := c.write(key); err != nil {
 		return err
 	}
 	abs := c.run.mg.absolute(key)
@@ -174,9 +191,12 @@ func (c *chunk) Quarantine(key, raw []byte, reason string) error {
 }
 
 // Batch is the chunk's batch for an importer (Cutover only; any other
-// step's chunk fails at commit). Writes an importer stages through its own
-// handle are outside rule 5's check: a Cutover step's Source is retired
-// claims, which no importer writes.
+// step's chunk fails at commit). Writes an importer stages through it are
+// outside rule 5's check and the one-write-per-key rule: a Cutover step's
+// Source is retired claims, which no importer writes, and a write into the
+// Source through the batch (its origin) is a step defect the runner cannot
+// see. A step that commits or closes the batch fails the chunk at its
+// commit (storage.ErrBatchDone, run.go).
 func (c *chunk) Batch() *storage.Batch {
 	if !c.run.mg.m.Cutover {
 		c.poison(fmt.Errorf("%w: Batch in %s", datamigrate.ErrCutoverOnly, c.run.mg.m.ID))

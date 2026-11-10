@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/run.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98f094d6-2e4a-420d-b36c-e26822f5cc4d
 // last-edited: 2026-11-10
 
@@ -386,7 +386,7 @@ func (run *shardRun) materialize(ctx context.Context, s *shardState) ([]item, er
 func (run *shardRun) chunk(ctx context.Context, s *shardState, items []item) error {
 	mg, sks := run.mg, run.sks
 	b := run.newBatch()
-	c := &chunk{run: run, shard: s, b: b, counts: map[string]int64{}, ctx: ctx}
+	c := &chunk{run: run, shard: s, b: b, counts: map[string]int64{}, staged: map[string]struct{}{}, ctx: ctx}
 	w := datamigrate.NewStepWriter(c)
 	var last []byte
 	for _, it := range items {
@@ -406,16 +406,25 @@ func (run *shardRun) chunk(ctx context.Context, s *shardState, items []item) err
 		}
 	}
 	if err := stage(b, sks, shardKey(mg.m.ID, s.n), cursorCodec(), cursorRecord{Last: last}); err != nil {
+		if errors.Is(err, storage.ErrBatchDone) {
+			// Only a step that committed or closed StepWriter.Batch() ends
+			// the chunk's batch before here.
+			return stepFailed(ctx, mg, fmt.Errorf("a step committed or closed its chunk's batch: %w", err))
+		}
 		return errors.Join(err, b.Close())
 	}
+	// A cancelled boot commits nothing of the chunk: Batch.Commit checks
+	// ctx.Err() before anything else (core/storage/batch.go). The mutation
+	// sweep's M13 (a cancel that breaks the item loop and commits a cursor
+	// past unstepped items) survives only because of that check; this loop
+	// has none of its own.
 	if err := commit(ctx, b, LabelChunk); err != nil {
 		if ctx.Err() == nil && stepCaused(err) {
 			return stepFailed(ctx, mg, err)
 		}
 		return err
 	}
-	s.cursor = last
-	s.prune()
+	s.commit(last)
 	mg.stats.add(c.counts)
 	mg.stats.mu.Lock()
 	n := mg.stats.chunks
@@ -454,10 +463,11 @@ func stepFailed(ctx context.Context, mg *migration, err error) error {
 
 // stepCaused reports a commit refusal that the chunk's own writes caused (a
 // precondition, a claim's mode, a write outside the handles, a blind write
-// in a Serialized range, an oversized chunk), as opposed to I/O.
+// in a Serialized range, an oversized chunk, a batch a step committed or
+// closed), as opposed to I/O.
 func stepCaused(err error) bool {
 	for _, e := range []error{storage.ErrConflict, storage.ErrClaimMode, storage.ErrOutsideKeyspace,
-		storage.ErrNotSerialized, storage.ErrBlindWrite, storage.ErrBatchTooLarge} {
+		storage.ErrNotSerialized, storage.ErrBlindWrite, storage.ErrBatchTooLarge, storage.ErrBatchDone} {
 		if errors.Is(err, e) {
 			return true
 		}

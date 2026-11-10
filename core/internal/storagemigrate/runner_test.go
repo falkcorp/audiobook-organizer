@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/runner_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f7ed22ee-8a79-4b95-9d02-ccbdad75c65c
 // last-edited: 2026-11-10
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -53,14 +54,50 @@ func seedItems(t testing.TB, fs vfs.FS, owners []storage.OwnerSpec, rows int) {
 // chunks, every chunk boundary and a point inside every chunk is rebooted
 // on a build whose parallelism is now 7 workers and whose new plans would
 // have 7 shards. Each resume reuses the persisted 3-shard plan, and every
-// item reads exactly 1: none processed twice, none skipped.
+// item reads exactly 1: none processed twice, none skipped. It runs over a
+// Source of one range and of three (as a cutover over several families
+// has), so a shard's cursor is honoured in every range it spans; a step
+// that meets an item already processed fails the boot at once.
 func TestDataMigrationResumesExactly(t *testing.T) {
-	const rows = 900
+	split := func(bounds ...int) []storage.Range {
+		var out []storage.Range
+		prev := []byte("m/gotham/item/")
+		for _, b := range bounds {
+			end := append([]byte("m/gotham/"), item(b)...)
+			out = append(out, storage.Range{Start: prev, End: end})
+			prev = end
+		}
+		return append(out, storage.Range{Start: prev, End: itemsSource()[0].End})
+	}
+	for _, c := range []struct {
+		name   string
+		rows   int
+		source []storage.Range
+	}{
+		{"one range", 900, itemsSource()},
+		{"three ranges", 600, split(181, 377)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			resumesExactly(t, c.rows, c.source)
+		})
+	}
+}
+
+func resumesExactly(t *testing.T, rows int, source []storage.Range) {
 	e := &env{t: t, owners: []storage.OwnerSpec{gotham()}}
 	resumes := atomic.Int64{}
+	m := recount(tasks.Fixed(3, "test: three workers at first"))
+	m.Source = source
+	inner := m.Step
+	m.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		if string(kv.Value) != "0" {
+			return fmt.Errorf("%s stepped again (value %q)", kv.Key, kv.Value)
+		}
+		return inner(ctx, kv, w)
+	}
 	s := crashmatrix.ChunkScenario{
 		Path:       storePath,
-		Migrations: []datamigrate.DataMigration{recount(tasks.Fixed(3, "test: three workers at first"))},
+		Migrations: []datamigrate.DataMigration{m},
 		Seed:       func(t testing.TB, fs vfs.FS) { seedItems(t, fs, e.owners, rows) },
 		Boot: func(ctx context.Context, fs vfs.FS, migs []datamigrate.DataMigration) error {
 			shards := 3
@@ -100,7 +137,7 @@ func TestDataMigrationResumesExactly(t *testing.T) {
 		Inside: true,
 	}
 	rep := crashmatrix.RunChunks(t, s)
-	if rep.ChunkStarts < 900/40 || resumes.Load() == 0 {
+	if rep.ChunkStarts < rows/40 || resumes.Load() == 0 {
 		t.Fatalf("%d chunk boundaries broken, %d resumes; want every chunk's", rep.ChunkStarts, resumes.Load())
 	}
 }
@@ -729,6 +766,153 @@ func TestDataMigrationVerifyStoppedFailsNothing(t *testing.T) {
 	for n, v := range values(t, ks) {
 		if v != "1" {
 			t.Fatalf("item %d = %q, want 1", n, v)
+		}
+	}
+}
+
+// TestDataMigrationCrossShardWriteNeedsCommittedCursor (runner rule 5):
+// a write into another shard's range is admitted only below that shard's
+// committed cursor. Fixed(2) over 40 rows plans shards 1..20 and 21..40;
+// shard 1 writes the new key item/00003-x.
+//   - While shard 0 has stepped to item 5 and committed nothing, the write
+//     is refused: shard 1's chunk could commit, shard 0's be lost to a
+//     crash, and the resumed shard 0 would step the migration's own write.
+//   - Once shard 0 has committed items 1..10, the write is admitted, and
+//     neither the run nor a resume after a kill at shard 1's next chunk
+//     ever steps it.
+func TestDataMigrationCrossShardWriteNeedsCommittedCursor(t *testing.T) {
+	const rows = 40
+	opts := storagemigrate.Options{ChunkItems: 10, PlanShards: func(tasks.Parallelism) int { return 2 }}
+	wait := func(t *testing.T, ch <-chan struct{}, what string) {
+		select {
+		case <-ch:
+		case <-time.After(20 * time.Second):
+			t.Errorf("timed out waiting for %s (the plan is not the two shards this test assumes)", what)
+		}
+	}
+	type probe struct {
+		pauseAt  string // shard 0's item it pauses at
+		resumeAt string // shard 1's item that releases shard 0 (empty: right after the write)
+		crash    bool   // take a crash clone at resumeAt
+	}
+	migration := func(t *testing.T, e *env, p *probe, steppedOwn *atomic.Int64, writeErr *error, clone **vfs.MemFS) datamigrate.DataMigration {
+		reached, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		free := func() { once.Do(func() { close(release) }) }
+		m := recount(tasks.Fixed(2, "test: two shards"))
+		m.ID = "gotham.crosswrite"
+		m.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			k := string(kv.Key)
+			if strings.HasSuffix(k, "-x") {
+				steppedOwn.Add(1)
+				return nil
+			}
+			if p != nil {
+				switch k {
+				case p.pauseAt:
+					close(reached)
+					wait(t, release, "shard 1's write")
+				case "item/00021":
+					wait(t, reached, "shard 0 at "+p.pauseAt)
+					*writeErr = w.Set([]byte("item/00003-x"), []byte("x"))
+					if p.resumeAt == "" {
+						free()
+					}
+					if *writeErr != nil {
+						return *writeErr
+					}
+				case p.resumeAt:
+					if p.crash {
+						*clone = e.fs.CrashClone(vfs.CrashCloneCfg{})
+					}
+					free()
+				}
+			}
+			return w.Set(kv.Key, []byte("1"))
+		}
+		return m
+	}
+	t.Run("refused above the committed cursor", func(t *testing.T) {
+		e := newEnv(t, rows)
+		var own atomic.Int64
+		var writeErr error
+		m := migration(t, e, &probe{pauseAt: "item/00005"}, &own, &writeErr, nil)
+		db, err := e.boot(context.Background(), e.runner(opts, m))
+		if db != nil {
+			err = errors.Join(err, db.Close())
+		}
+		var se *storage.StepError
+		if !errors.Is(writeErr, datamigrate.ErrUnvisitedWrite) || !errors.As(err, &se) || !errors.Is(err, datamigrate.ErrUnvisitedWrite) {
+			t.Fatalf("write = %v, boot = %v; want the write refused (ErrUnvisitedWrite) and the step failed", writeErr, err)
+		}
+	})
+	t.Run("admitted below it, never stepped across a kill", func(t *testing.T) {
+		e := newEnv(t, rows)
+		var own atomic.Int64
+		var writeErr error
+		var clone *vfs.MemFS
+		m := migration(t, e, &probe{pauseAt: "item/00011", resumeAt: "item/00031", crash: true}, &own, &writeErr, &clone)
+		e.mustBoot(e.runner(opts, m))
+		if writeErr != nil || own.Load() != 0 || clone == nil {
+			t.Fatalf("write = %v, own write stepped %d times, clone %v; want admitted, never stepped, a clone", writeErr, own.Load(), clone != nil)
+		}
+		clone.TestingSetDiskUsage(plenty())
+		db, err := e.bootFS(context.Background(), clone, e.runner(opts, migration(t, e, nil, &own, &writeErr, nil)))
+		if db != nil {
+			err = errors.Join(err, db.Close())
+		}
+		if err != nil || own.Load() != 0 {
+			t.Fatalf("resume = %v, own write stepped %d times; want done without stepping it", err, own.Load())
+		}
+		ks, _ := e.view(clone)
+		for n := 1; n <= rows; n++ {
+			if v, err := ks.Get(context.Background(), item(n)); err != nil || string(v) != "1" {
+				t.Fatalf("item %d = %q (%v) after the resume, want 1", n, v, err)
+			}
+		}
+		if v, err := ks.Get(context.Background(), []byte("item/00003-x")); err != nil || string(v) != "x" {
+			t.Fatalf("item/00003-x = %q (%v), want the write kept", v, err)
+		}
+	})
+}
+
+// TestDataMigrationResumeFromVerifyingRunsVerify: a kill between the
+// verifying state and Verify's done (storage.dm.state) leaves verifying,
+// and the next boot runs Verify again rather than record done: a failing
+// Verify then fails the boot and records failed, stepping nothing again.
+func TestDataMigrationResumeFromVerifyingRunsVerify(t *testing.T) {
+	e := newEnv(t, 30)
+	var clone *vfs.MemFS
+	m := recount(sequential())
+	m.Verify = func(context.Context, storage.Reader) (datamigrate.VerifyReport, error) {
+		clone = e.fs.CrashClone(vfs.CrashCloneCfg{}) // verifying is synced; done is not yet staged
+		return datamigrate.VerifyReport{}, nil
+	}
+	e.mustBoot(e.runner(storagemigrate.Options{}, m))
+	_, sks := e.view(clone)
+	if st := state(t, sks, m.ID); st != datamigrate.StateVerifying {
+		t.Fatalf("state at the kill = %q, want verifying", st)
+	}
+	var verified atomic.Int64
+	m.Verify = func(context.Context, storage.Reader) (datamigrate.VerifyReport, error) {
+		verified.Add(1)
+		return datamigrate.VerifyReport{Failures: []string{"Two-Face's coin landed scarred side up"}}, nil
+	}
+	clone.TestingSetDiskUsage(plenty())
+	db, err := e.bootFS(context.Background(), clone, e.runner(storagemigrate.Options{}, m))
+	if db != nil {
+		err = errors.Join(err, db.Close())
+	}
+	if !errors.Is(err, storagemigrate.ErrVerifyFailed) || verified.Load() != 1 {
+		t.Fatalf("resume = %v after %d Verify calls, want ErrVerifyFailed after one", err, verified.Load())
+	}
+	ks, sks := e.view(clone)
+	if st := state(t, sks, m.ID); st != datamigrate.StateFailed {
+		t.Fatalf("state after the resume = %q, want failed", st)
+	}
+	for n, v := range values(t, ks) {
+		if v != "1" {
+			t.Fatalf("item %d = %q, want 1 (no item stepped again)", n, v)
 		}
 	}
 }
