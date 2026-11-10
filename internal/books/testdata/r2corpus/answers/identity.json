@@ -1,0 +1,420 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/users"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "count": 7,
+            "users": [
+              {
+                "created_at": "2026-11-10T10:07:08.24063042Z",
+                "email": "_system@local",
+                "id": "01M72ESZEG5F5KF39HMX6Z5F3Z",
+                "merged_into_user_id": "",
+                "roles": null,
+                "status": "system",
+                "updated_at": "2026-11-10T10:07:08.24063042Z",
+                "username": "_system"
+              },
+              {
+                "created_at": "2026-11-10T10:07:09.120595246Z",
+                "email": "",
+                "id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "merged_into_user_id": "",
+                "roles": [
+                  "admin"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T10:07:09.445346157Z",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:09.701923873Z",
+                "email": "",
+                "id": "01M72ET0W5S7SCHF9FFZAGRTF1",
+                "merged_into_user_id": "",
+                "roles": [
+                  "editor"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T10:07:09.701923873Z",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T10:07:09.786660937Z",
+                "email": "",
+                "id": "01M72ET0YT6HHF5ZDPVDCH1XB1",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T10:07:09.786660937Z",
+                "username": "barbara.gordon"
+              },
+              {
+                "created_at": "2026-11-10T10:07:09.878105802Z",
+                "email": "",
+                "id": "01M72ET11PM6PZE14S5MR9ADEV",
+                "merged_into_user_id": "",
+                "roles": [
+                  "admin"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T10:07:09.878105802Z",
+                "username": "lucius.fox"
+              },
+              {
+                "created_at": "2026-11-10T10:07:09.958001617Z",
+                "email": "",
+                "id": "01M72ET145YZ9W1AFGTVE9H2TN",
+                "merged_into_user_id": "",
+                "roles": [
+                  "fp-worker"
+                ],
+                "status": "active",
+                "updated_at": "2026-11-10T10:07:09.958001617Z",
+                "username": "fp.worker"
+              },
+              {
+                "created_at": "2026-11-10T10:07:10.040831246Z",
+                "email": "",
+                "id": "01M72ET16RV89C6HFT0HM1B6XY",
+                "merged_into_user_id": "",
+                "roles": [
+                  "viewer"
+                ],
+                "status": "locked",
+                "updated_at": "2026-11-10T10:07:10.061366488Z",
+                "username": "jason.todd"
+              }
+            ]
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/users/invites"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "accepted": [
+              {
+                "accepted_at": "2026-11-10T10:07:10.040831246Z",
+                "accepted_user_id": "01M72ET16RV89C6HFT0HM1B6XY",
+                "email": "redhood@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T10:07:10.041389673Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "jason.todd"
+              },
+              {
+                "accepted_at": "2026-11-10T10:07:09.958001617Z",
+                "accepted_user_id": "01M72ET145YZ9W1AFGTVE9H2TN",
+                "email": "worker@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T10:07:09.958650583Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "fp.worker"
+              },
+              {
+                "accepted_at": "2026-11-10T10:07:09.878105802Z",
+                "accepted_user_id": "01M72ET11PM6PZE14S5MR9ADEV",
+                "email": "lucius@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T10:07:09.878691879Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "lucius.fox"
+              },
+              {
+                "accepted_at": "2026-11-10T10:07:09.786660937Z",
+                "accepted_user_id": "01M72ET0YT6HHF5ZDPVDCH1XB1",
+                "email": "batgirl@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T10:07:09.787337291Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "barbara.gordon"
+              },
+              {
+                "accepted_at": "2026-11-10T10:07:09.701923873Z",
+                "accepted_user_id": "01M72ET0W5S7SCHF9FFZAGRTF1",
+                "email": "robin@example.com",
+                "email_binding": "not_emailed",
+                "guest_policy_at": "2026-11-10T10:07:09.70250587Z",
+                "guest_policy_detail": "the invitation was not emailed to this address, so the address was not verified; set the user's email and add it to Cloudflare by hand if wanted",
+                "guest_policy_status": "skipped",
+                "username": "dick.grayson"
+              }
+            ],
+            "count": 1,
+            "guest_policy_sync_configured": false,
+            "invites": [
+              {
+                "created_at": "2026-11-10T10:07:10.081356057Z",
+                "created_by_user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "email": "tim@example.com",
+                "expires_at": "2026-11-13T10:07:10.081354274Z",
+                "id": "62115495fa7a08f18b05068643378ea2",
+                "role_id": "viewer",
+                "username": "tim.drake"
+              }
+            ],
+            "mail_configured": false,
+            "mail_unavailable_reason": "email is not configured on this server (SMTP_HOST and SMTP_FROM); copy the link instead"
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/auth/api-keys?all=true"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "api_keys": [
+              {
+                "created_at": "2026-11-10T10:07:09.121615956Z",
+                "days_since_last_use": null,
+                "description": "Generated via bootstrap token exchange",
+                "expires_at": "2026-11-10T18:07:09.121613812Z",
+                "id": "01M72ET0A1R0SN26RZBWJZATAT",
+                "identifier": "abk_28bb7f7b",
+                "name": "bootstrap-admin",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:10.316151649Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2027-11-10T10:07:10.316148323Z",
+                "id": "01M72ET1FCVT3PZ7H966YYTF8Z",
+                "identifier": "abk_6859ae46",
+                "name": "scoped-view",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:10.334614849Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2027-11-10T10:07:10.334612435Z",
+                "id": "01M72ET1FYTYQ1YRQ5V3VMAHXV",
+                "identifier": "abk_3ede250b",
+                "name": "empty-scope",
+                "never_used": true,
+                "scopes": [],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:20.371898183Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2027-11-10T10:07:20.371893574Z",
+                "id": "01M72ETB9KDGQFWXV2PA1NM2QX",
+                "identifier": "abk_03baf760",
+                "name": "every-atom",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:20.390654163Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2027-11-10T10:07:20.390652079Z",
+                "id": "01M72ETBA659ETFS75TEJ8FRHT",
+                "identifier": "abk_7f085b72",
+                "name": "admin-owned-for-robin",
+                "never_used": true,
+                "scopes": [
+                  "library.view",
+                  "playlists.create"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0W5S7SCHF9FFZAGRTF1",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T10:07:20.408854874Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2027-11-10T10:07:20.408853642Z",
+                "id": "01M72ETBARZ1ATM26T934DADBP",
+                "identifier": "abk_b6c8e710",
+                "name": "fp-worker-key",
+                "never_used": true,
+                "scopes": [
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET145YZ9W1AFGTVE9H2TN",
+                "username": "fp.worker"
+              },
+              {
+                "created_at": "2026-11-10T10:07:20.427211359Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2026-12-10T10:07:20.427209485Z",
+                "id": "01M72ETBBBAKPYXTF0Q9HYWB18",
+                "identifier": "abk_e4325044",
+                "name": "editor-own-key",
+                "never_used": true,
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "active",
+                "use_count": 0,
+                "user_id": "01M72ET0W5S7SCHF9FFZAGRTF1",
+                "username": "dick.grayson"
+              },
+              {
+                "created_at": "2026-11-10T10:07:20.445677177Z",
+                "days_since_last_use": null,
+                "description": "",
+                "expires_at": "2026-12-10T10:07:20.445674933Z",
+                "id": "01M72ETBBX3JC15JFZQFMAFZV8",
+                "identifier": "abk_2d6d5aa2",
+                "name": "revoked-key",
+                "never_used": true,
+                "revoked_at": "2026-11-10T10:07:20.463897688Z",
+                "scopes": [
+                  "library.view"
+                ],
+                "status": "revoked",
+                "use_count": 0,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              },
+              {
+                "created_at": "2026-11-10T10:07:53.274424114Z",
+                "days_since_last_use": 0,
+                "description": "Generated via bootstrap token exchange",
+                "expires_at": "2026-11-10T18:07:53.274420658Z",
+                "id": "01M72EVBDTAQBYN488NDDX37YH",
+                "identifier": "abk_397f03d0",
+                "last_used_at": "2026-11-10T10:07:53.570601678Z",
+                "last_used_ip": "127.0.0.1",
+                "name": "r2-answers",
+                "never_used": false,
+                "scopes": [
+                  "library.view",
+                  "library.edit_metadata",
+                  "library.delete",
+                  "library.organize",
+                  "scan.trigger",
+                  "integrations.manage",
+                  "users.manage",
+                  "settings.manage",
+                  "playlists.create",
+                  "collections.manage",
+                  "requests.create",
+                  "requests.approve",
+                  "fingerprint.worker"
+                ],
+                "status": "active",
+                "use_count": 15,
+                "user_id": "01M72ET0A01W5DXQ4KTBA3ZM66",
+                "username": "admin"
+              }
+            ],
+            "count": 9,
+            "unreadable": 0
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "identity",
+  "r0_tag": "v0.223.0",
+  "what": "users, invites and API keys as R0 lists them (input of the M3 checks)"
+}
