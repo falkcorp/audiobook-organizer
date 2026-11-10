@@ -1,5 +1,5 @@
 // file: core/internal/configstore/configstore_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
 // last-edited: 2026-11-10
 
@@ -279,8 +279,8 @@ func TestApply_SecretAndOverrideOneBatch(t *testing.T) {
 // core.settings.update record's actor is the request's actor on ctx, whole,
 // when it names Commit.By, and {UserID: Commit.By} without one, so a commit
 // that only unsets keys or only changes boot keys still names its writer. A
-// ctx actor naming someone else, or a row written by someone else, is refused
-// and nothing is written.
+// ctx actor naming someone else, a row written by someone else, or a secret
+// written by someone else is refused and nothing is written.
 func TestCommitter_AuditActor(t *testing.T) {
 	e := boot(t)
 	alfred := audit.Actor{UserID: "alfred", Method: "session", ClientAddr: "wayne-tower", UserAgent: "batcomputer"}
@@ -326,6 +326,12 @@ func TestCommitter_AuditActor(t *testing.T) {
 			config.Commit{Set: []config.Override{{Path: level, Value: json.RawMessage(`"debug"`), Gen: 4, At: time.Now(), By: "alfred"}}, Gen: 4, By: "alfred"}},
 		{"row written by someone else", context.Background(),
 			config.Commit{Set: []config.Override{{Path: level, Value: json.RawMessage(`"debug"`), Gen: 4, At: time.Now(), By: "joker"}}, Gen: 4, By: "alfred"}},
+		{"secret written by someone else", context.Background(),
+			config.Commit{
+				Set:     []config.Override{{Path: level, Value: json.RawMessage(`"debug"`), Gen: 4, At: time.Now(), By: "alfred"}},
+				Secrets: []secrets.Write{{Name: "core.batcave.api_key", Value: secrets.NewValue("wayne-tech"), By: "joker"}},
+				Gen:     4, By: "alfred",
+			}},
 	}
 	for _, r := range refused {
 		if err := e.commit.Commit(r.ctx, r.cm); err == nil {
@@ -337,6 +343,9 @@ func TestCommitter_AuditActor(t *testing.T) {
 	}
 	if rows, err := e.rows(context.Background()); err != nil || rows[level] != nil {
 		t.Errorf("rows %v (%v): a refused commit wrote", rows, err)
+	}
+	if v, err := e.secKS.Get(context.Background(), keys.Join(keys.Str("core.batcave.api_key"))); err == nil {
+		t.Errorf("secret row = %q: a refused commit staged it", v)
 	}
 }
 
