@@ -1,5 +1,5 @@
 // file: core/httpapi/basicgate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 49fa9648-7658-42df-8e5f-edbfdb58bbf8
 // last-edited: 2026-11-10
 
@@ -7,6 +7,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -132,6 +134,10 @@ type basicGate struct {
 	// equal compares two credential digests; subtle.ConstantTimeCompare,
 	// a field only so a test can see what is compared.
 	equal func(x, y []byte) int
+	// macKey keys the comparison digests (credentialsMatch). It is random
+	// per gate and never leaves the process, so a digest is useless to
+	// anyone who sees one: it is a comparison aid, not a stored hash.
+	macKey []byte
 
 	// mu serialises checkPosture, the only writer of posture and the only
 	// caller of health and the posture log; see checkPosture.
@@ -160,8 +166,12 @@ func newBasicGate(o BasicGateOptions, exempt func(*http.Request) bool) (*basicGa
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	macKey := make([]byte, 32)
+	if _, err := rand.Read(macKey); err != nil {
+		return nil, fmt.Errorf("httpapi: basic gate comparison key: %w", err)
+	}
 	return &basicGate{settings: o.Settings, password: o.Password, exempt: exempt, health: o.Health, log: logger,
-		challenge: `Basic realm="` + realm + `"`, equal: subtle.ConstantTimeCompare}, nil
+		challenge: `Basic realm="` + realm + `"`, equal: subtle.ConstantTimeCompare, macKey: macKey}, nil
 }
 
 // wrap is stage 8 around next: a refused request gets 401 with the gate's
@@ -206,16 +216,25 @@ func (g *basicGate) refuses(r *http.Request) bool {
 }
 
 // credentialsMatch compares the presented credentials with the effective
-// ones. Each side is hashed with SHA-256 first, so the constant-time
-// compares always see two 32-byte digests and a length difference leaks
-// nothing (subtle.ConstantTimeCompare returns at once on unequal lengths);
-// both digests and both compares are always computed.
+// ones. Each side goes through HMAC-SHA-256 under the gate's random
+// per-process key first, so the constant-time compares always see two
+// 32-byte digests and a length difference leaks nothing
+// (subtle.ConstantTimeCompare returns at once on unequal lengths); all four
+// digests and both compares are always computed. The key makes each digest
+// a throwaway comparison value, never a stored or portable password hash.
 func (g *basicGate) credentialsMatch(user, pass, wantUser string, wantPass []byte) bool {
-	gotU, wantU := sha256.Sum256([]byte(user)), sha256.Sum256([]byte(wantUser))
-	gotP, wantP := sha256.Sum256([]byte(pass)), sha256.Sum256(wantPass)
-	userMatch := g.equal(gotU[:], wantU[:])
-	passMatch := g.equal(gotP[:], wantP[:])
+	gotU, wantU := g.digest([]byte(user)), g.digest([]byte(wantUser))
+	gotP, wantP := g.digest([]byte(pass)), g.digest(wantPass)
+	userMatch := g.equal(gotU, wantU)
+	passMatch := g.equal(gotP, wantP)
 	return userMatch&passMatch == 1
+}
+
+// digest is the keyed comparison digest of b (credentialsMatch).
+func (g *basicGate) digest(b []byte) []byte {
+	m := hmac.New(sha256.New, g.macKey)
+	m.Write(b) // hash.Hash.Write never returns an error
+	return m.Sum(nil)
 }
 
 // errBasicGateEmptyPassword is an empty effective password: no usable

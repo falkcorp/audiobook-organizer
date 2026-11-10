@@ -1,5 +1,5 @@
 // file: core/httpapi/basicgate_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bdca9e39-c6b8-4939-8a50-7d290cb39a9b
 // last-edited: 2026-11-10
 
@@ -989,7 +989,7 @@ func TestBasicGate_PostureConcurrent(t *testing.T) {
 }
 
 // TestBasicGate_CredentialDigests: the constant-time compares always see two
-// SHA-256 digests, whatever the lengths presented and configured, and both
+// HMAC-SHA-256 digests, whatever the lengths presented and configured, and both
 // are always made, so neither a length nor which credential failed leaks.
 func TestBasicGate_CredentialDigests(t *testing.T) {
 	_, exempt := gcpdBasicRouter(t, headBasicAssets)
