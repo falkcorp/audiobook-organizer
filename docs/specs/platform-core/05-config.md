@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.12 -->
+<!-- version: 1.13.13 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -636,7 +636,7 @@ declares keys; each key table in the 05 files carries a **Protection** column.
 
 | ABO class today | Protection | Keys (core examples; owning spec tables each key) |
 |---|---|---|
-| `FieldSignIn` | `ProtectAdmin` | everything else that decides who signs in and how: `core.auth.*` sign-in keys (OAuth/OIDC providers, client ids and secrets, redirect base, default role) ([05-authn](05-authn.md)); the Basic gate's `core.http.basic_gate.*` (row below); the books ABS token sign-in switch |
+| `FieldSignIn` | `ProtectAdmin` | everything else that decides who signs in and how: `core.auth.*` sign-in keys (each provider's `client_secret`, the redirect base) ([05-authn](05-authn.md)); `core.auth.oidc.providers` itself, whose entries hold the client ids and default roles, is `ProtectOwner` (owner-trust-root row below); the Basic gate's `core.http.basic_gate.*` (row below); the books ABS token sign-in switch |
 | — (new, SEC-6) | `ProtectAdmin` | `core.http.{trusted_proxies, client_ip_header, peer_allowlist, cors.allowed_origins, basic_gate.*}` ([05-http-api](05-http-api.md)); `core.updater.{mode, channel, restart_*}` ([05-updater](05-updater.md)); OTLP endpoints and `core.metrics.{path, listen}` ([05-metrics](05-metrics.md)); `core.integrations.egress.lan_allow` (SEC-15; see below) |
 | `FieldExecutable` | `ProtectAdmin` | a program the server runs, or the managed-copy-vs-path switch |
 | `FieldServerPath` | `ProtectAdmin` | a path the server reads, writes, scans or serves (`core.log.file.path`, library and tool paths) |
