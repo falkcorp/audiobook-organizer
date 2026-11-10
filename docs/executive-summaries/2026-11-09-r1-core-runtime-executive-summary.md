@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-09-r1-core-runtime-executive-summary.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.0.5 -->
 <!-- guid: ce0c598d-0803-4350-976d-12990013b6bc -->
 <!-- last-edited: 2026-11-09 -->
 
@@ -109,8 +109,8 @@ foundation. The shutdown budget is 25 seconds inside a 60-second allowance.
 Deploy waits for the service to report ready and verifies the restart took
 effect, and rollback refuses when the data is newer than the old program, with
 a restore-based path for that case; both are deployed and healthy. A
-continuous-test job that exercises a real service on a test machine was the
-last row still in review at the time of writing.
+continuous-test job now exercises a real service on a test machine on every
+change.
 
 ### The web page
 
@@ -141,13 +141,13 @@ freeze releases, and a nightly job reports how close the split is.
 
 ## Tracked work
 
-All 37 R1 rows, with the pull request that merged each. Rows marked "open" were
-still in review when this summary was written.
+All 37 R1 rows shipped and are deployed and healthy: 36 merged as the pull
+requests below, and this summary is the 37th.
 
 R1-01 #4397; R1-02 #4407; R1-03 #4417; R1-04 #4438; R1-05 #4442; R1-06 #4498;
 R1-07 #4410; R1-08 #4444; R1-09 #4437; R1-10 #4430; R1-11 #4405; R1-12 #4411;
 R1-13 #4450; R1-14 #4452; R1-15 #4467; R1-16 #4470; R1-17 #4487; R1-18 #4485;
 R1-19 #4488; R1-20 #4453; R1-21 #4480; R1-22 #4406; R1-23 #4504; R1-24 #4507;
-R1-25 #4522; R1-26 #4528; R1-27 #4531; R1-28 #4532 (open);
+R1-25 #4522; R1-26 #4528; R1-27 #4531; R1-28 #4532;
 R1-29 #4443; R1-30 #4495; R1-31 this summary; R1-32 #4436; R1-33 #4474;
 R1-34 #4477; R1-35 #4394; R1-36 #4445; R1-37 #4458.
