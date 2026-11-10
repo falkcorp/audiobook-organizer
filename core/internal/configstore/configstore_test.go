@@ -1,5 +1,5 @@
 // file: core/internal/configstore/configstore_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
 // last-edited: 2026-11-10
 
@@ -346,7 +346,7 @@ func TestImporter_StagesOnlyValidNonDefault(t *testing.T) {
 		want error
 	}{
 		{"core.batcave.utility_belt", `"x"`, config.ErrUnknownKey},
-		{"integrations.ai.openai.base_url", `"x"`, config.ErrUnknownKey},
+		{"integrations.ai.wayne.base_url", `"x"`, config.ErrUnknownKey},
 		{"core.batcave.api_key", `"wayne-tech"`, config.ErrInvalid},
 		{"core.batcave.vault", `"arkham"`, config.ErrInvalid},
 		{"core.batcave.mode", `"day"`, config.ErrInvalid},

@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 

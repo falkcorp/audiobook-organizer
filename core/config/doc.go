@@ -1,21 +1,29 @@
 // file: core/config/doc.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: e74dba99-865d-4688-bd81-8e7ca26610c8
 // last-edited: 2026-11-10
 
-// Package config is the declaration surface of core's configuration: the
-// Path grammar, the Reload and Protection vocabularies, Duration, the
-// Validator and FieldError types, and Section[T] with Define and its options
-// (05-config §1.3.1). A module or the kernel declares a section here, as a
-// typed value; nothing in this package reads a file, an environment variable
-// or a store.
+// Package config is core's configuration engine (05-config §1.3). A module or
+// the kernel declares a section as a typed value (Section[T], Define and its
+// options, the Path grammar, the Reload and Protection vocabularies,
+// Duration, Validator, FieldError) and registers it on a Store (Register),
+// which merges defaults, the operator layers (file, env, flags), the boot
+// record and the stored overrides into immutable snapshots read through
+// Handle[T].Get, Pending, OnChange and AfterCommit.
 //
-// The loader, the Store and Register, key state and locks, the stored-override layer,
-// the importer, the JSON Schema reflection (Schema, SchemaFor, Overrides) and
-// the configtest package arrive with F3-01 (04 §8.1 F2: "config holds only
-// the section declarations until F3"). Until then a declared section changes
-// no behaviour: nothing reads its keys before its owner adopts them
-// (05-config §1.12.1). The package imports only the standard library.
+// The Store boots without storage (Boot reads the boot record under
+// core.paths.state_dir, resolved by ResolveStateDir, the one pre-boot rule),
+// seals at Load, reads the DB layer once at Attach (writing nothing), and
+// changes values only through Apply, which authorizes, validates, writes the
+// boot record and hands one Commit to the kernel's Committer. A key an
+// operator layer supplies is locked; ProtectOperator keys are never stored.
+// KeyState, Keys and Schema describe every key for the settings UI; secret
+// values never appear in them. Importer stages a cutover step's rows.
+//
+// The env and file grammar, FailClosed and retired names are F3-02's; the
+// secrets store and its stager are F3-03's; the kernel wires the Store at
+// F3-07. Until then the operator layers that reach a Store are the
+// explicitly set flags, and a configured operator file is refused.
 //
 // # Field metadata
 //
@@ -32,5 +40,8 @@
 //	sensitive:"true"               not a secret, but redacted in diagnostics
 //	                               bundles and logs
 //
-// A tag on a struct-typed field applies to every key beneath it.
+// A tag on a struct-typed field applies to every key beneath it. A tag
+// inside a key's value (a list, map, array or pointer element, or a struct
+// that encodes itself) may not be stricter than the key: config protects,
+// reloads and redacts whole keys, so Register refuses it with ErrInvalid.
 package config

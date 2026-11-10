@@ -1,5 +1,5 @@
 // file: core/config/statedir.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2db35a-2887-406b-8e92-baa5f1f3a3a3
 // last-edited: 2026-11-10
 
@@ -33,8 +33,8 @@ func errNoStateDirDefault() error {
 //
 // The error is mkdir's own, unwrapped, as HEAD returns it: the kernel adds
 // the canonical env name (<APP>_CORE_PATHS_STATE_DIR) and the remedies,
-// which this pure function cannot know. ABO's state_dir.go delegates here, so
-// the two cannot drift.
+// which this pure function cannot know. An app that reads the state directory
+// before New delegates here too, so the two cannot drift.
 func ResolveStateDir(explicit, def, dbPath string, mkdir func(string) error) (dir string, fellBack bool, err error) {
 	if v := strings.TrimSpace(explicit); v != "" {
 		dir = filepath.Clean(v)
