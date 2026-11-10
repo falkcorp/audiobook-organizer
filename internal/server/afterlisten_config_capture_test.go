@@ -1,5 +1,5 @@
 // file: internal/server/afterlisten_config_capture_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0b7d3c5e-92a4-4f16-8e0d-6a41c7f3d825
 // last-edited: 2026-11-10
 
@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
 // TestCaptureStartConfig_IsASnapshot: StartHook's capture holds the settings as
@@ -97,36 +98,89 @@ func TestSchedulerDeps_ReadsTheCapturedMaintenanceNotTheLiveConfig(t *testing.T)
 	wg.Wait()
 }
 
+// afterListenReaders is every function afterListen runs that could read the
+// config, directly or through seedRolesAndTokens and startBackfills, with the
+// file that declares it (relative to this package) and whether it is a *Server
+// method (otherwise a plain function). None may read the global config itself:
+// each reads s.life.startConfig, a parameter, or config.Snapshot (which takes
+// the config lock).
+var afterListenReaders = []struct {
+	file   string
+	name   string
+	method bool
+}{
+	{"server_lifecycle.go", "afterListen", true},
+	{"server_lifecycle.go", "seedRolesAndTokens", true},
+	{"server_lifecycle.go", "startBackfills", true},
+	{"server_lifecycle.go", "startPurgeJournalReplay", true},
+	{"server_lifecycle.go", "startHNSWSnapshotter", true},
+	{"server_lifecycle.go", "hnswSnapshotStore", true},
+	{"server_lifecycle.go", "schedulerDeps", true},
+	{"server_lifecycle.go", "enqueueBootOps", false},
+	{"server_lifecycle.go", "pruneExpiredSessions", false},
+	{"owner_rejected_rerank.go", "startOwnerRejectedRerank", true},
+	{"cache_snapshotter.go", "runCacheStatsSnapshotter", true},
+	{"bootstrap.go", "InitBootstrapToken", false},
+	{"bootstrap.go", "InitStartupReadOnlyKey", false},
+	// The state directory: afterListen passes EnsureSecureStateDir the
+	// captured database path, and its helpers read the environment, not the
+	// config.
+	{"../config/state_dir.go", "EnsureSecureStateDir", false},
+	{"../config/state_dir.go", "configuredStateDir", false},
+}
+
 // TestAfterListenPath_DoesNotReadTheGlobalConfig pins, by source, that the
-// functions afterListen runs (the ones this file owns) read the settings
-// StartHook captured and never config.AppConfig itself: a read there can race
-// a caller's config edit once a stop has abandoned the start. These bodies
-// cannot be driven to that state in a unit test, which is why it is pinned by
-// source, as TestShutdown_ReleasesObserverAndProviderAfterWritersStop does.
+// functions afterListen runs read the settings StartHook captured and never
+// the process-global config.AppConfig (inside package config, AppConfig
+// itself): a read there can race a caller's config edit once a stop has
+// abandoned the start. These bodies cannot be driven to that state in a unit
+// test, which is why it is pinned by source, as
+// TestShutdown_ReleasesObserverAndProviderAfterWritersStop does.
 func TestAfterListenPath_DoesNotReadTheGlobalConfig(t *testing.T) {
-	raw, err := os.ReadFile("server_lifecycle.go")
-	require.NoError(t, err)
-	src := string(raw)
-	for _, name := range []string{"afterListen", "seedRolesAndTokens", "startBackfills", "startPurgeJournalReplay", "startHNSWSnapshotter"} {
-		re := regexp.MustCompile(`(?s)\nfunc \(s \*Server\) ` + name + `\(.*?\n}\n`)
-		body := re.FindString(src)
-		require.NotEmpty(t, body, "server_lifecycle.go no longer declares %s; update this test", name)
-		require.False(t, strings.Contains(body, "config.AppConfig"),
-			"%s reads config.AppConfig; capture the setting in captureStartConfig and read s.life.startConfig", name)
+	for _, fn := range afterListenReaders {
+		raw, err := os.ReadFile(fn.file)
+		require.NoError(t, err)
+		decl := `\nfunc ` + fn.name + `\(`
+		if fn.method {
+			decl = `\nfunc \(s \*Server\) ` + fn.name + `\(`
+		}
+		body := regexp.MustCompile(`(?s)` + decl + `.*?\n}\n`).FindString(string(raw))
+		require.NotEmpty(t, body, "%s no longer declares %s; update this test", fn.file, fn.name)
+		bad := "config.AppConfig"
+		if strings.HasPrefix(fn.file, "../config/") {
+			bad = "AppConfig"
+		}
+		require.False(t, strings.Contains(body, bad),
+			"%s reads %s; capture the setting in captureStartConfig and read s.life.startConfig (or take it as a parameter)", fn.name, bad)
 	}
 }
+
+// bgWGSnapshotter is the name the fake afterListen below enrolls under, as the
+// real one's startBackfills/startHNSWSnapshotter enroll theirs.
+const bgWGSnapshotter = "hnsw-snapshotter"
 
 func TestWithoutFinishedPostListen(t *testing.T) {
 	open := make(chan struct{})
 	closed := make(chan struct{})
 	close(closed)
-	in := []string{"container", postListenAbandoned, "plugins"}
+	in := func() []string { return []string{"container", postListenAbandoned, "plugins"} }
 
-	require.Equal(t, []string{"container", postListenAbandoned, "plugins"}, withoutFinishedPostListen(append([]string(nil), in...), open),
+	var idle namedWaitGroup
+	require.Equal(t, in(), withoutFinishedPostListen(in(), open, &idle),
 		"a start still running stays reported")
-	require.Equal(t, []string{"container", "plugins"}, withoutFinishedPostListen(append([]string(nil), in...), closed),
-		"a start that finished is dropped, and only it")
-	require.Empty(t, withoutFinishedPostListen(nil, closed))
+	require.Equal(t, []string{"container", "plugins"}, withoutFinishedPostListen(in(), closed, &idle),
+		"a start that finished, with no bgWG goroutine left, is dropped, and only it")
+	require.Empty(t, withoutFinishedPostListen(nil, closed, &idle))
+
+	var busy namedWaitGroup
+	release := make(chan struct{})
+	busy.Go(bgWGSnapshotter, func() { <-release })
+	require.Equal(t, in(), withoutFinishedPostListen(in(), closed, &busy),
+		"a start that finished but left a bgWG goroutine running stays reported: the bgWG wait it bypassed has not finished")
+	close(release)
+	busy.Wait()
+	require.Equal(t, []string{"container", "plugins"}, withoutFinishedPostListen(in(), closed, &busy),
+		"dropped once that goroutine has ended")
 }
 
 // TestStopHook_PostListenFinishingBehindTheSealIsNotAbandoned: the seal gives
@@ -150,20 +204,81 @@ func TestStopHook_PostListenFinishingBehindTheSealIsNotAbandoned(t *testing.T) {
 	require.Empty(t, abandoned, "the scheduler-task wait behind the gate returned once the start finished")
 }
 
-// TestScheduler_StoreAndProviderLoadDoNotRace: afterListen publishes the
-// scheduler while request-time providers read it (wire_handlers.go,
-// wire_ops_v3_routes.go, the maintenance-window op).
+// TestStopHook_PostListenStartingBgWorkAfterTheBgWGTimerIsStillAbandoned: the
+// seal gives up and the bgWG wait gives up too, with bgWG empty (the budget is
+// inside both reserves), and only then does the start enroll a bgWG goroutine
+// (the backfills, the snapshotter) and return. The goroutine still runs when
+// stopSteps reaches the clean-stop marker, so the post-listen entry must stay
+// in the abandoned list the marker is withheld for.
+func TestStopHook_PostListenStartingBgWorkAfterTheBgWGTimerIsStillAbandoned(t *testing.T) {
+	s := &Server{stopped: make(chan struct{})}
+	release := make(chan struct{})
+	finish, res := s.life.afterGate.begin()
+	require.Equal(t, beginOK, res)
+	go func() { // the late afterListen
+		time.Sleep(150 * time.Millisecond)
+		s.bgWG.Go(bgWGSnapshotter, func() { <-release })
+		finish()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	abandoned := s.stopSteps(ctx)
+	require.Equal(t, []string{postListenAbandoned}, abandoned,
+		"the goroutine the start enrolled after the bgWG timer still runs: the clean-stop marker must be withheld")
+	require.Equal(t, []string{bgWGSnapshotter}, s.bgWG.Running())
+
+	close(release)
+	s.bgWG.Wait()
+}
+
+// TestStopHook_PostListenBgWorkThatEndedBeforeTheRecheckIsNotAbandoned is the
+// other half: the same late start, but its bgWG goroutine has returned by the
+// recheck, so nothing is left running and the marker need not be withheld.
+func TestStopHook_PostListenBgWorkThatEndedBeforeTheRecheckIsNotAbandoned(t *testing.T) {
+	s := &Server{stopped: make(chan struct{})}
+	finish, res := s.life.afterGate.begin()
+	require.Equal(t, beginOK, res)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		s.bgWG.Go(bgWGSnapshotter, func() {})
+		s.bgWG.Wait() // no bgWG Wait is in flight yet: StopHook's waits for done
+		finish()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.Empty(t, s.stopSteps(ctx))
+}
+
+// TestScheduler_StoreAndProviderLoadDoNotRace: afterListen stores the scheduler
+// on its own goroutine while request-time providers (the ones wire_handlers.go
+// hands the operations and scheduler handlers) load it. Under `-race` this
+// fails if the field is ever a plain pointer; the providers must also return
+// an untyped nil interface until the store, so the handlers' nil checks hold.
 func TestScheduler_StoreAndProviderLoadDoNotRace(t *testing.T) {
 	s := &Server{}
-	require.Nil(t, s.scheduler.Load())
+	opsProvider := s.operationsSchedulerProvider()
+	handlersProvider := s.handlersSchedulerProvider()
+	require.True(t, opsProvider() == nil, "no scheduler yet: a nil interface, not a boxed nil pointer")
+	require.True(t, handlersProvider() == nil)
+
+	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{})
 	var wg sync.WaitGroup
+	start := make(chan struct{})
 	for range 4 {
 		wg.Go(func() {
-			for range 200 {
-				_ = s.scheduler.Load()
+			<-start
+			for range 500 {
+				_ = opsProvider()
+				_ = handlersProvider()
 			}
 		})
 	}
-	s.scheduler.Store(nil)
+	close(start)
+	s.scheduler.Store(ts) // the late afterListen
 	wg.Wait()
+
+	require.NotNil(t, opsProvider(), "the provider sees the stored scheduler")
+	require.NotNil(t, handlersProvider())
 }
