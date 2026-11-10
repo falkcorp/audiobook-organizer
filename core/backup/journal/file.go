@@ -116,9 +116,17 @@ type lineFile interface {
 // seq 0) when absent or empty, and holds it exclusively (ErrLocked while
 // another File holds it) until Close. An incomplete last line, left by a
 // crash inside a write that never returned and so never let its revocation
-// commit, is cut off; a complete line that does not decode, a seq out of
-// order, or a last seq below the store's committed journal_head is
-// ErrCorrupt, and nothing is written.
+// commit, is cut off.
+//
+// A complete line that does not decode, a seq out of order, or a last seq
+// below the store's committed journal_head is ErrCorrupt. Nothing is written
+// to such a file, but OpenFile still returns a File alongside the error:
+// §5B.5 keeps the app open on a broken journal ("chain broken or truncated
+// below the live store's head": health degraded, coverage closed), so the
+// revoking callers still need Gap. That File's Append fails with the same
+// error, Gap works, and it holds the lock until Close, so no second writer
+// numbers the file meanwhile. The caller reports revocation_journal_broken
+// (F4-11). Every other error returns a nil File.
 func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if o.Path == "" {
 		return nil, errors.New("journal: OpenFile without a path")
@@ -137,11 +145,13 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	j := &File{path: o.Path, f: f, ks: o.Keyspace, source: o.Source}
 	valid, last, lines, err := scan(data)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("%s: %w", o.Path, err), f.Close())
+		j.broken = fmt.Errorf("%s: %w", o.Path, err)
+		return j, j.broken
 	}
 	if head.Seq > last {
-		return nil, errors.Join(fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",
-			ErrCorrupt, o.Path, last, headKey, head.Seq), f.Close())
+		j.broken = fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",
+			ErrCorrupt, o.Path, last, headKey, head.Seq)
+		return j, j.broken
 	}
 	if valid < int64(len(data)) {
 		if err := errors.Join(f.Truncate(valid), f.Sync()); err != nil {

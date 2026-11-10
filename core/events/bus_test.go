@@ -201,6 +201,9 @@ func TestBus_PanicIsolated_SubscriptionSurvives(t *testing.T) {
 	if n := lb.count("subscriber panicked"); n != 1 {
 		t.Errorf("panic logs = %d, want 1\n%s", n, lb.String())
 	}
+	if out := lb.String(); strings.Contains(out, "Joker was here") || !strings.Contains(out, "panic_type=string") {
+		t.Errorf("the panic log must carry the panic's type, never its value:\n%s", out)
+	}
 	if got := survivor.envelopes(); got[0].Payload.Block != 2 || got[1].Payload.Block != 3 {
 		t.Errorf("survivor received %+v", got)
 	}
