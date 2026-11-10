@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-10
 
@@ -119,7 +119,7 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 			t.Fatalf("06's hello blocks wait for %v, want %v", waiting, wantWaiting)
 		}
 		if len(build) == 0 {
-			t.Skipf("no package of 06's hello blocks compiles at this release: each waits for a core package (logged above)")
+			t.Skipf("no package of 06's hello blocks compiles at this release: each waits for a core package or identifier (logged above)")
 		}
 		if err := buildSpec(t, root, build); err != nil {
 			t.Fatal(err)
