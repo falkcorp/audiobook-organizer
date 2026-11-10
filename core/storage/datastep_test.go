@@ -1,5 +1,5 @@
 // file: core/storage/datastep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d690ab6-4cc9-4fd9-b3c2-6b3dc81a8f23
 // last-edited: 2026-11-10
 
@@ -115,6 +115,46 @@ func TestDataStepWaitsForItsOwnersVersions(t *testing.T) {
 	e.open()
 	if got, want := l.steps(), []string{"tally", "manor", "wayne.batmobile"}; !slices.Equal(got, want) {
 		t.Fatalf("DAG order = %v, want %v", got, want)
+	}
+}
+
+// TestDataStepBarrierValidated: a Barrier naming no registered version of
+// its owner is a SpecError at Open, and a pending step whose Barrier
+// version the store already applied fails the boot with ErrBarrierApplied
+// before any step runs.
+func TestDataStepBarrierValidated(t *testing.T) {
+	e := upgradedEnv(t) // wayne at version 1
+	var l dataLog
+	e.opts.Owners = []OwnerSpec{{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{
+		loggedStep(&l, 1, "cave"), loggedStep(&l, 2, "manor"),
+	}}}}
+	unknown := dataStep(&l, "wayne", "wayne.batmobile", nil)
+	unknown.Barrier = 9
+	e.opts.DataSteps = []DataStep{unknown}
+	_, err := e.tryOpen()
+	if _, ok := errors.AsType[*SpecError](err); !ok || !strings.Contains(err.Error(), "Barrier 9 names no registered version") {
+		t.Fatalf("boot with Barrier 9 = %v, want a SpecError naming it", err)
+	}
+	applied := dataStep(&l, "wayne", "wayne.batmobile", nil)
+	applied.Barrier = 1
+	e.opts.DataSteps = []DataStep{applied}
+	if _, err := e.tryOpen(); !errors.Is(err, ErrBarrierApplied) {
+		t.Fatalf("boot with Barrier 1 on a store at version 1 = %v, want ErrBarrierApplied", err)
+	}
+	if got := l.steps(); len(got) != 0 {
+		t.Fatalf("steps ran on a refused boot: %v", got)
+	}
+}
+
+// TestRewriteSidecarsChecksTheDAG: the sidecar rewrite validates the
+// owners' DAG as Open does, before it touches the store.
+func TestRewriteSidecarsChecksTheDAG(t *testing.T) {
+	var l dataLog
+	cave := loggedStep(&l, 1, "cave")
+	cave.After = []StepRef{{Owner: "wayne", Version: 7}}
+	owners := []OwnerSpec{{Owner: "wayne", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{cave}}}}
+	if err := RewriteSidecars(context.Background(), vfs.NewMem(), "/batcave/store", owners); !errors.Is(err, ErrMigrationCycle) {
+		t.Fatalf("RewriteSidecars with an After naming no step = %v, want ErrMigrationCycle", err)
 	}
 }
 
