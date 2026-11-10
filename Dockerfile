@@ -1,7 +1,7 @@
 # file: Dockerfile
-# version: 2.7.8
+# version: 2.7.9
 # guid: audiobook-organizer-dockerfile-production
-# last-edited: 2026-11-09
+# last-edited: 2026-11-10
 
 # Multi-stage production Dockerfile for audiobook-organizer
 # Builds React frontend, embeds it into a statically-linked Go binary with
@@ -70,7 +70,7 @@ RUN set -ex \
 
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/
-RUN go mod download && go mod verify
+RUN for i in 1 2 3 4; do go mod download && break; [ "$i" = 4 ] && { echo "go mod download failed after 4 attempts" >&2; exit 1; }; sleep $((i*5)); done && go mod verify
 
 COPY . .
 

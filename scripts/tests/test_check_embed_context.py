@@ -1,7 +1,7 @@
 # file: scripts/tests/test_check_embed_context.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 65991395-4743-4674-ac13-5ce6e1a54129
-# last-edited: 2026-11-08
+# last-edited: 2026-11-10
 """Tests for the embed-context check, core's half of it, the image probe and the
 docker-image workflow (R1-04; 03 §3.2 item 4; 09 §9.2.1 docker-image row).
 
@@ -185,10 +185,10 @@ class RealTreeTests(unittest.TestCase):
             lines = (ROOT / name).read_text().splitlines()
             self.assertIn("COPY go.mod go.sum ./", lines, name)
             self.assertIn("COPY core/go.mod core/go.sum ./core/", lines, name)
-            # core's go.mod is copied before the module download that needs it
+            # core's go.mod is copied before the (retried) module download that needs it
             self.assertLess(
                 lines.index("COPY core/go.mod core/go.sum ./core/"),
-                next(i for i, ln in enumerate(lines) if ln.startswith("RUN go mod download")),
+                next(i for i, ln in enumerate(lines) if ln.startswith("RUN ") and "go mod download" in ln),
                 name,
             )
 
