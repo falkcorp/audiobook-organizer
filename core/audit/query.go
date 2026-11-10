@@ -1,5 +1,5 @@
 // file: core/audit/query.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 925fec3f-eec9-4c97-be35-9a4fb673023e
 // last-edited: 2026-11-10
 
@@ -50,7 +50,13 @@ func (s *Store) Query(ctx context.Context, f Filter) iter.Seq2[Record, error] {
 			yield(Record{}, fmt.Errorf("audit: query: %w", err))
 			return
 		}
-		defer func() { _ = snap.Close() }()
+		// The iterator has no error to return once the consumer may have
+		// stopped (yielding again would panic), so a failed Close is logged.
+		defer func() {
+			if cerr := snap.Close(); cerr != nil {
+				s.log.Warn("audit: close query snapshot", "err", cerr)
+			}
+		}()
 
 		n := 0
 		// take applies the filter to rec and yields it; false ends the query.
