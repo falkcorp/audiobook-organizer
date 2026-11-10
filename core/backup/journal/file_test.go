@@ -555,3 +555,78 @@ func TestOpenFile_SecondOpenerRefused(t *testing.T) {
 		t.Errorf("lines = %q, want header and seqs 1-3", got)
 	}
 }
+
+// gapStillWorks checks a broken File from a failed OpenFile: its Append fails
+// with the open's error and stages nothing, its Gap records journal_gap/<since>
+// so the revocation still commits, and Close succeeds (§5B.3.6: a disk problem
+// never stops a gap being recorded).
+func (fx *fixture) gapStillWorks(t *testing.T, j *File, openErr error, user string) {
+	t.Helper()
+	ctx := context.Background()
+	if j == nil {
+		t.Fatalf("OpenFile returned a nil File with %v: the revoking callers would have no Gap", openErr)
+	}
+	b := fx.auth.NewBatch()
+	must(t, b.Set([]byte("user/"+user), []byte("disabled")))
+	if err := j.Append(ctx, b, Revocation{Kind: UserDisabled}); err == nil || !errors.Is(err, openErr) {
+		t.Errorf("Append on the broken File: err = %v, want the open's error %v", err, openErr)
+	}
+	if b.Count() != 1 {
+		t.Errorf("the refused Append staged into the batch: count %d", b.Count())
+	}
+	at := time.Date(2026, 11, 10, 5, 0, len(user), 0, time.UTC)
+	must(t, j.Gap(b, at))
+	must(t, b.Commit(ctx, storage.Sync))
+	if v, err := fx.auth.Get(ctx, []byte("user/"+user)); err != nil || string(v) != "disabled" {
+		t.Errorf("the revocation did not commit: %q, %v", v, err)
+	}
+	if v, err := fx.ks.Get(ctx, gapKey(at)); err != nil || !strings.Contains(string(v), `"reason":"append_failed"`) {
+		t.Errorf("the gap record: %q, %v", v, err)
+	}
+	must(t, j.Close())
+}
+
+// TestOpenFile_HeaderWriteFailureStillGaps: a header line that cannot be
+// written (a full disk) leaves a broken File, never a nil one; the file is
+// cut back to empty.
+func TestOpenFile_HeaderWriteFailureStillGaps(t *testing.T) {
+	fx := newFixture(t)
+	must(t, os.MkdirAll(filepath.Dir(fx.path), 0o700))
+	j, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks,
+		wrap: func(f lineFile) lineFile { return &failingFile{lineFile: f, failWrite: true} }})
+	if err == nil {
+		t.Fatal("OpenFile succeeded although the header write failed")
+	}
+	fx.gapStillWorks(t, j, err, "joker")
+	if b, _ := os.ReadFile(fx.path); len(b) != 0 {
+		t.Errorf("the failed header left %q in the file", b)
+	}
+}
+
+// TestOpenFile_LockedStillGaps: a second opener gets ErrLocked with a broken
+// File whose Gap works; closing it releases nothing the holder needs.
+func TestOpenFile_LockedStillGaps(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	holder := fx.open(t)
+	j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("second opener: err = %v, want ErrLocked", err)
+	}
+	fx.gapStillWorks(t, j, err, "penguin")
+	must(t, fx.revoke(t, holder, "riddler").Commit(ctx, storage.Sync)) // the holder is unaffected
+	if got := fx.lines(t); len(got) != 2 || !strings.Contains(got[1], `"seq":1`) {
+		t.Errorf("lines = %q, want the header and the holder's seq 1", got)
+	}
+}
+
+// TestOpenFile_UnopenableStillGaps: a journal that cannot be opened at all (its
+// directory is missing) still yields a broken File whose Gap works.
+func TestOpenFile_UnopenableStillGaps(t *testing.T) {
+	fx := newFixture(t)
+	j, err := OpenFile(context.Background(), FileOptions{Path: filepath.Join(t.TempDir(), "gone", "x.journal"), Keyspace: fx.ks})
+	if err == nil {
+		t.Fatal("OpenFile succeeded in a missing directory")
+	}
+	fx.gapStillWorks(t, j, err, "scarecrow")
+}
