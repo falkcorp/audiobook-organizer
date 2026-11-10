@@ -1,5 +1,5 @@
 // file: core/rbac/service.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
 // last-edited: 2026-11-10
 
@@ -1139,20 +1139,22 @@ func Confined(cat *Catalog, perms []Permission) bool {
 // sorted and de-duplicated. ABO's cutover passes core:self, core:metrics.read
 // and books:reading as ambient; core holds no app scope.
 //
+// An empty perms is not an error: it is a key whose atoms lie outside its
+// owner's roles, whose effective set is empty, and §6.3 gives it the ambient
+// scopes only (it is not Confined, and the result is never an empty list
+// when ambient is not). It is never quarantined.
+//
 // Confined can only be decided against a catalog that knows every pattern,
-// so WithAmbient refuses (fail closed) rather than guess: a nil catalog, an
-// empty perms (§6.3 gives no key or role an empty list), a malformed pattern
-// (ErrBadScope) or one that matches no declared scope (ErrUnknownScope), and
-// an ambient entry that is not a concrete declared scope. Without these, a
-// worker key carrying one unknown or typoed pattern next to its Confining
-// scopes would still read as confined, and a nil catalog would read every
-// key as not confined and hand a worker key the ambient scopes.
+// so WithAmbient refuses (fail closed) rather than guess: a nil catalog, a
+// malformed pattern (ErrBadScope) or one that matches no declared scope
+// (ErrUnknownScope), and an ambient entry that is not a concrete declared
+// scope. Without these, a worker key carrying one unknown or typoed pattern
+// next to its Confining scopes would still read as confined, and a nil
+// catalog would read every key as not confined and hand a worker key the
+// ambient scopes. The cutover quarantines on these errors only.
 func WithAmbient(cat *Catalog, perms []Permission, ambient ...Permission) ([]Permission, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("rbac: ambient: %w: no catalog to decide confinement against", ErrUnknownScope)
-	}
-	if len(perms) == 0 {
-		return nil, fmt.Errorf("rbac: ambient: %w: an empty permission set (no key or role has one)", ErrUnknownScope)
 	}
 	errs := []error{CheckRolePermissions(cat, perms)}
 	for _, a := range ambient {
