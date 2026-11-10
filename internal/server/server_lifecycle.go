@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.1
+// version: 4.69.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-10
 
@@ -409,8 +409,9 @@ type lifecycleRun struct {
 
 // startConfig is every config.AppConfig setting the post-listen start reads
 // directly on its own path: the auto-scan watchers' gate and debounce,
-// the startup read-only key, the acoustid backfill gate and the maintenance
-// window the scheduler's Start reads. The tasks' own IsEnabled/RunOnStart
+// the startup read-only key, the acoustid backfill gate, the maintenance
+// window the scheduler's Start reads and the database path the state-directory
+// fallback derives from. The tasks' own IsEnabled/RunOnStart
 // closures inside scheduler.Start read the live config at call time and are
 // not captured here.
 type startConfig struct {
@@ -419,6 +420,9 @@ type startConfig struct {
 	writeStartupReadOnlyKey bool
 	acoustIDBackfill        bool
 	maintenance             scheduler.MaintenanceSettings
+	// databasePath is what config.EnsureSecureStateDir's fallback derives the
+	// credential directory from when the default one is not creatable.
+	databasePath string
 }
 
 // captureStartConfig reads those settings from the process-global config. It
@@ -428,6 +432,7 @@ func captureStartConfig() startConfig {
 		autoScanEnabled:         config.AppConfig.AutoScanEnabled,
 		autoScanDebounce:        5 * time.Second,
 		writeStartupReadOnlyKey: config.AppConfig.WriteStartupReadOnlyKey,
+		databasePath:            config.AppConfig.DatabasePath,
 		acoustIDBackfill:        config.AppConfig.Maintenance.AcoustIDBackfill,
 		maintenance: scheduler.MaintenanceSettings{
 			Enabled:     config.AppConfig.Maintenance.Enabled,
@@ -2090,7 +2095,7 @@ func (s *Server) seedRolesAndTokens() {
 	// relative path; a constant has no such failure mode, and keeping the guard
 	// would mean an install with no database configured also silently has no
 	// emergency access token.
-	if dataDir, err := config.EnsureSecureStateDir(); err != nil {
+	if dataDir, err := config.EnsureSecureStateDir(s.life.startConfig.databasePath); err != nil {
 		slog.Error("Failed to create the state directory; no bootstrap token will be written",
 			"dir", dataDir, "err", err)
 	} else {

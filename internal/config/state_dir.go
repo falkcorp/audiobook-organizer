@@ -1,7 +1,7 @@
 // file: internal/config/state_dir.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b5e0a4d7-1c63-4f28-9a71-3d06e8c5f294
-// last-edited: 2026-09-09
+// last-edited: 2026-11-10
 
 package config
 
@@ -130,7 +130,13 @@ func ResetStateDirForTest() {
 //
 // An EXPLICIT ABK_STATE_DIR never falls back. Someone who named a directory
 // gets an error if it cannot be used, not a quiet substitution somewhere else.
-func EnsureSecureStateDir() (string, error) {
+//
+// databasePath is the configured database_path the fallback derives its
+// directory from. It is a parameter, not a read of AppConfig, so a caller that
+// runs off the main goroutine (the server's post-listen start) passes the value
+// it captured at start instead of racing a concurrent config writer; a caller
+// on the main path passes Snapshot().DatabasePath.
+func EnsureSecureStateDir(databasePath string) (string, error) {
 	dir := configuredStateDir()
 	err := os.MkdirAll(dir, 0o700)
 	if err == nil {
@@ -141,7 +147,7 @@ func EnsureSecureStateDir() (string, error) {
 		return dir, err // explicitly requested: report the failure, do not guess
 	}
 
-	fallback := filepath.Dir(strings.TrimSpace(AppConfig.DatabasePath))
+	fallback := filepath.Dir(strings.TrimSpace(databasePath))
 	if fallback == "" || fallback == "." || !filepath.IsAbs(fallback) {
 		return dir, err
 	}

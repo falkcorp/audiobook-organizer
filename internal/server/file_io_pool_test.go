@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9d4e2a8f-1b6c-4f70-a3d1-7e5b9c2f8a04
 // last-edited: 2026-11-10
 
@@ -149,11 +149,7 @@ func TestSubmitTyped_StopFreesABlockedOverflowWait(t *testing.T) {
 	})
 	// One job on the worker, 500 in the buffer, one on the overflow goroutine
 	// (taking the only overflow slot): the next submit blocks on the slot.
-	for i := range 502 {
-		if !pool.SubmitTyped(fmt.Sprintf("alfred-%d", i), "hold", func() { <-release }) {
-			t.Fatalf("submit %d refused", i)
-		}
-	}
+	fillPoolForBackpressure(t, pool, release)
 
 	stop := make(chan struct{})
 	result := make(chan bool, 1)
@@ -177,9 +173,24 @@ func TestSubmitTyped_StopFreesABlockedOverflowWait(t *testing.T) {
 // fillPoolForBackpressure takes the worker, the 500-slot buffer and the only
 // overflow slot of a 1-worker pool with jobs that block on release, so the
 // next submit waits for an overflow slot.
+//
+// The first job is submitted alone and waited on until the worker is running
+// it. Without that, the worker can still be starting when the buffer fills:
+// the 501st job then takes the one overflow slot while the buffer still holds
+// the first, and the 502nd blocks on the overflow semaphore forever, hanging
+// the helper (seen as a 10-minute test timeout under -count=5).
 func fillPoolForBackpressure(t *testing.T, pool *FileIOPool, release chan struct{}) {
 	t.Helper()
-	for i := range 502 {
+	started := make(chan struct{})
+	if !pool.SubmitTyped("alfred-0", "hold", func() { close(started); <-release }) {
+		t.Fatal("submit 0 refused")
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pool's worker never started the first job")
+	}
+	for i := 1; i < 502; i++ {
 		if !pool.SubmitTyped(fmt.Sprintf("alfred-%d", i), "hold", func() { <-release }) {
 			t.Fatalf("submit %d refused", i)
 		}

@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package books
 
@@ -111,7 +111,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	m.cfg.Store(&cfg)
 
 	if err := m.steps.Run("EnsureSecureStateDir", func() error {
-		dir, err := config.EnsureSecureStateDir()
+		dir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
 		if err != nil {
 			return fmt.Errorf("failed to create state directory %q: %w", dir, err)
 		}
@@ -192,7 +192,7 @@ func storeLocation(stateDir string) (string, error) {
 // PersistentPreRun loads it) and builds no server, logging pipeline or
 // telemetry.
 func OfflineOptions() (app.Options, error) {
-	stateDir, err := config.EnsureSecureStateDir()
+	stateDir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
 	if err != nil {
 		return app.Options{}, fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
 	}

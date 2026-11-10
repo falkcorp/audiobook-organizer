@@ -1,7 +1,7 @@
 // file: internal/config/state_dir_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e27b1f4-5a83-4d60-b2c7-18f4a0e96d35
-// last-edited: 2026-09-09
+// last-edited: 2026-11-10
 
 package config
 
@@ -75,7 +75,7 @@ func TestEnsureSecureStateDir_Creates0700(t *testing.T) {
 	target := filepath.Join(base, "nested", "state")
 	t.Setenv(SecureStateDirEnv, target)
 
-	got, err := EnsureSecureStateDir()
+	got, err := EnsureSecureStateDir("")
 	if err != nil {
 		t.Fatalf("EnsureSecureStateDir: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestEnsureSecureStateDir_IsIdempotentAndKeepsAnExistingMode(t *testing.T) {
 	t.Setenv(SecureStateDirEnv, target)
 
 	for i := range 2 {
-		if _, err := EnsureSecureStateDir(); err != nil {
+		if _, err := EnsureSecureStateDir(""); err != nil {
 			t.Fatalf("call %d: %v", i+1, err)
 		}
 	}
@@ -130,7 +130,7 @@ func TestEnsureSecureStateDir_ReportsThePathItFailedOn(t *testing.T) {
 	target := filepath.Join(blocker, "state")
 	t.Setenv(SecureStateDirEnv, target)
 
-	dir, err := EnsureSecureStateDir()
+	dir, err := EnsureSecureStateDir("")
 	if err == nil {
 		t.Fatal("expected an error when the parent is a regular file")
 	}
@@ -159,7 +159,7 @@ func TestEnsureSecureStateDir_FallsBackWhenTheDefaultIsNotCreatable(t *testing.T
 	dbDir := t.TempDir()
 	AppConfig.DatabasePath = filepath.Join(dbDir, "audiobooks.pebble")
 
-	got, err := EnsureSecureStateDir()
+	got, err := EnsureSecureStateDir(AppConfig.DatabasePath)
 	if err != nil {
 		t.Fatalf("EnsureSecureStateDir returned an error instead of falling back: %v", err)
 	}
@@ -195,7 +195,34 @@ func TestEnsureSecureStateDir_ExplicitOverrideNeverFallsBack(t *testing.T) {
 	// A perfectly usable fallback is available; it must NOT be taken.
 	AppConfig.DatabasePath = filepath.Join(t.TempDir(), "audiobooks.pebble")
 
-	if _, err := EnsureSecureStateDir(); err == nil {
+	if _, err := EnsureSecureStateDir(""); err == nil {
 		t.Fatal("an explicitly requested but unusable ABK_STATE_DIR silently fell back")
+	}
+}
+
+// TestEnsureSecureStateDir_FallbackUsesTheGivenPath — the fallback derives the
+// directory from the argument, not from AppConfig: the server's post-listen
+// start passes the path it captured at start so it never reads the global
+// config concurrently with a caller's edit. Were it to read AppConfig again,
+// this would fall back to the other directory.
+func TestEnsureSecureStateDir_FallbackUsesTheGivenPath(t *testing.T) {
+	ResetStateDirForTest()
+	t.Cleanup(ResetStateDirForTest)
+	t.Setenv(SecureStateDirEnv, "")
+	if err := os.MkdirAll(DefaultSecureStateDir, 0o700); err == nil {
+		t.Skipf("%s is creatable here, so the fallback branch is unreachable", DefaultSecureStateDir)
+	}
+
+	prev := AppConfig.DatabasePath
+	t.Cleanup(func() { AppConfig.DatabasePath = prev })
+	AppConfig.DatabasePath = filepath.Join(t.TempDir(), "gotham", "audiobooks.pebble")
+	given := t.TempDir()
+
+	got, err := EnsureSecureStateDir(filepath.Join(given, "audiobooks.pebble"))
+	if err != nil {
+		t.Fatalf("EnsureSecureStateDir: %v", err)
+	}
+	if got != given {
+		t.Errorf("fell back to %q, want the directory of the path it was given, %q", got, given)
 	}
 }
