@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/secrets"
 )
 
 // This file is the kernel's core-section list (05-config §1.12.1, "Every core
@@ -31,8 +32,11 @@ import (
 // stand-in:
 //   - every key typed as the tasks package's schedule configuration, and the
 //     core.tasks windows map: F2-04;
-//   - the two secret-typed keys, core.auth.oidc.<id>.client_secret and
-//     core.http.basic_gate.password: F3-03;
+//   - the OIDC client secret, core.auth.oidc.<id>.client_secret: a
+//     secrets.Ref inside a list element, which config's decoder refuses until
+//     the engine binds a Ref in a list by the entry's id (F3-03 declares
+//     core.http.basic_gate.password only; docs/agent-tasks/platform-core/
+//     seams.d/F3-03.md);
 //   - the fail-closed declarations on core.auth.mode and
 //     core.http.basic_gate.enabled: F3-02.
 //
@@ -397,7 +401,8 @@ type aiStructured struct {
 
 // ---- core.auth (05-authn §8) ----
 
-// secret-typed keys: F3-03 (core.auth.oidc.<id>.client_secret, one per provider)
+// core.auth.oidc.<id>.client_secret is not declared: a secrets.Ref inside a
+// providers entry is refused by config's decoder (see the file comment).
 
 type authSettings struct {
 	Mode                string        `json:"mode" reload:"restart" protect:"owner" schema:"enum=required|disabled"`
@@ -593,8 +598,6 @@ type diagnosticsSettings struct {
 
 // ---- core.http (05-http-api §10) ----
 
-// secret-typed keys: F3-03 (core.http.basic_gate.password)
-
 type httpSettings struct {
 	Listen            string          `json:"listen" reload:"restart" protect:"admin"`
 	PeerAllowlist     []string        `json:"peer_allowlist" protect:"admin"`  // CIDRs
@@ -625,11 +628,17 @@ type httpRateLimit struct {
 	MaxClients int  `json:"max_clients" reload:"restart"`
 }
 
-// httpBasicGate holds the gate's switch and username. The enabled switch is
-// fail-closed from F3-02; the username and password are not.
+// httpBasicGate holds the gate's switch, username and password. The enabled
+// switch is fail-closed from F3-02; the username and password are not. The
+// password is a secret (05-config §2.2, §1.12.3 row basic_auth_password;
+// 05-http-api §10): config stores it in the secret store under its path and
+// never returns its value; an operator value locks it like any key. It is a
+// sign-in field, so ProtectAdmin (05-config §1.3.7 FieldSignIn), and it has
+// no reload tag (Register refuses reload:"boot" on a secret).
 type httpBasicGate struct {
-	Enabled  bool   `json:"enabled" protect:"admin"`
-	Username string `json:"username" protect:"admin"`
+	Enabled  bool        `json:"enabled" protect:"admin"`
+	Username string      `json:"username" protect:"admin"`
+	Password secrets.Ref `json:"password" protect:"admin"`
 }
 
 type httpOpenAPI struct {
