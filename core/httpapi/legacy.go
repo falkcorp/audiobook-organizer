@@ -546,9 +546,8 @@ func (r *Router) rootHandler() http.Handler {
 // nativeNodes are the routes Build registered itself, as graph nodes.
 func (r *Router) nativeNodes() []*node {
 	var out []*node
-	bases := r.fixedBases()
 	for _, e := range r.routes {
-		if len(e.errs) > 0 || e.handler == nil || isCoreExact(e, bases) {
+		if len(e.errs) > 0 || e.handler == nil || r.isCoreExact(e) {
 			// A CoreExactPatterns() route sits inside the legacy owner's claim
 			// by declaration (§4.9): checkCoreFixed refuses every manifest
 			// route over it, so it never shadows one (ErrShadow) here.

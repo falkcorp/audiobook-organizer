@@ -149,6 +149,7 @@ func TestCoreFixedGroup_OIDCCallback(t *testing.T) {
 			"literal provider":  {http.MethodGet, "/riddler/callback"},
 			"deeper path":       {http.MethodGet, "/{provider}/callback/extra"},
 			"the group's index": {http.MethodGet, "/{$}"},
+			"the base itself":   {http.MethodGet, ""},
 		} {
 			r, g := newFixed(t, newFakeGin())
 			oauthRoutes(g)
