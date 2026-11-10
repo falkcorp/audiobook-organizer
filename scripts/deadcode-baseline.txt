@@ -1,3 +1,4 @@
+core/kernel.declareCoreCatalog
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
 internal/ai.modelLabelSet.setConfigured
