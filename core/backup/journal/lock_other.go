@@ -1,0 +1,23 @@
+// file: core/backup/journal/lock_other.go
+// version: 1.0.0
+// guid: 8aeea5b5-d059-4280-9e81-f5727253ea95
+// last-edited: 2026-11-10
+
+//go:build !(linux || darwin || freebsd || netbsd || openbsd || dragonfly)
+
+package journal
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+)
+
+// lockJournal fails closed where flock(2) is absent: without an exclusive
+// lock a second writer could reuse seqs, so the journal does not open, and
+// the revoking callers record gaps (§5B.3.6 row "Append failure"). The
+// release targets are linux and darwin.
+func lockJournal(f *os.File) error {
+	return fmt.Errorf("journal: no exclusive file lock for %s on %s: %w", f.Name(), runtime.GOOS, errors.ErrUnsupported)
+}
