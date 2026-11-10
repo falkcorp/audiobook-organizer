@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -451,8 +451,7 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 // asFieldError keeps a Validator's *FieldErrors and wraps anything else as
 // one FieldError on the section.
 func asFieldError(p Path, err error) error {
-	var fe *FieldError
-	if errors.As(err, &fe) {
+	if _, ok := errors.AsType[*FieldError](err); ok {
 		return err
 	}
 	return &FieldError{Path: p, Err: err}
