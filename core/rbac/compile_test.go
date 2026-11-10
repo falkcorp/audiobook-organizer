@@ -1,5 +1,5 @@
 // file: core/rbac/compile_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d3f1a64-2e7b-4c95-b6a0-9f4e2c7d1b58
 // last-edited: 2026-11-10
 
@@ -115,9 +115,11 @@ func ambientOf(t testing.TB, cat *rbac.Catalog, ps []rbac.Permission, ambient ..
 
 // TestWithAmbient_FailsClosed (§6.3, review MAJOR-B): the ambient rule
 // decides Confined only against a catalog that knows every pattern, so it
-// refuses a nil catalog, an empty set, a malformed or unknown pattern and an
-// ambient entry that is not a concrete declared scope; a confined set,
-// concrete or by a wildcard over Confining scopes, gains no ambient scope.
+// refuses a nil catalog, a malformed or unknown pattern and an ambient entry
+// that is not a concrete declared scope; a confined set, concrete or by a
+// wildcard over Confining scopes, gains no ambient scope. An empty effective
+// set (a key whose atoms lie outside its owner's roles) is not refused: it
+// keeps the ambient scopes only (05-rbac §6.3).
 func TestWithAmbient_FailsClosed(t *testing.T) {
 	cat, err := rbac.NewCatalog(append(rbac.CoreScopes(),
 		rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true},
@@ -138,7 +140,6 @@ func TestWithAmbient_FailsClosed(t *testing.T) {
 	}{
 		{"nil catalog", nil, perms("books:fingerprint.worker"), ambient, rbac.ErrUnknownScope},
 		{"nil catalog, plain set", nil, perms("books:view"), ambient, rbac.ErrUnknownScope},
-		{"empty set", cat, nil, ambient, rbac.ErrUnknownScope},
 		{"unknown scope next to the worker scope", cat, perms("books:fingerprint.worker", "books:fingerprint.typo"), ambient, rbac.ErrUnknownScope},
 		{"wildcard matching nothing", cat, perms("books:fingerprint.worker", "books:arr.*"), ambient, rbac.ErrUnknownScope},
 		{"malformed pattern", cat, perms("books:fingerprint.worker", "Books:View"), ambient, rbac.ErrBadScope},
@@ -151,6 +152,8 @@ func TestWithAmbient_FailsClosed(t *testing.T) {
 			t.Errorf("%s: WithAmbient returned %v with its error, want nil", c.name, got)
 		}
 	}
+	wantPerms(t, "empty effective set keeps only the ambient scopes", ambientOf(t, cat, nil, ambient...), "books:reading", "core:metrics.read", "core:self")
+	wantPerms(t, "empty effective set, no ambient", ambientOf(t, cat, nil))
 	wantPerms(t, "confined set", ambientOf(t, cat, perms("books:fingerprint.worker", "books:fingerprint.relay"), ambient...), "books:fingerprint.relay", "books:fingerprint.worker")
 	wantPerms(t, "confined by a wildcard", ambientOf(t, cat, perms("books:fingerprint.*"), ambient...), "books:fingerprint.*")
 	wantPerms(t, "mixed set", ambientOf(t, cat, perms("books:fingerprint.worker", "books:view"), ambient...), "books:fingerprint.worker", "books:reading", "books:view", "core:metrics.read", "core:self")
