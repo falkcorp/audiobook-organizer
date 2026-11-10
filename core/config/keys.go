@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -233,7 +233,70 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 	case k.reload == ReloadBoot && !w.sec.core():
 		return fmt.Errorf("%w: %s: reload:\"boot\" is for core sections only: Boot never sees a module section (05-config §1.5)", ErrInvalid, where)
 	}
+	shown := k.path("")
+	if w.sec.isMap {
+		shown = k.path("<id>")
+	}
+	if err := checkNested(where, shown, t, tagSet{reload: k.reload, protect: k.protect, sensitive: k.sensitive}, map[reflect.Type]bool{}); err != nil {
+		return err
+	}
 	w.keys = append(w.keys, k)
+	return nil
+}
+
+// checkNested refuses a tag inside one key's value that is stricter than the
+// key. The walker makes one key of a list, a map, an array, a pointer and a
+// struct that encodes itself, and config authorizes, reloads and redacts per
+// key, so a protect, reload or sensitive tag on a field beneath such a key
+// would be silently ignored: an element field tagged protect:"owner" inside a
+// list tagged protect:"admin" would be writable by any interactive admin.
+// 05-config §1.3.1 lets a nested tag only make a key stricter and says
+// nothing of tags inside a key's value, so Register fails closed with
+// ErrInvalid and the declarer tags the key itself (F3-01's choice, recorded
+// in seams.d/F3-01.md). It walks element types, map values and every field of
+// a struct, the self-encoding ones included, once per type. A malformed tag
+// there fails as it would on a key.
+func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
+	for {
+		switch t.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+			t = t.Elem()
+			continue
+		}
+		break
+	}
+	if t.Kind() != reflect.Struct || seen[t] {
+		return nil
+	}
+	seen[t] = true
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() && !f.Anonymous {
+			continue
+		}
+		if name, _, hasOpts := strings.Cut(f.Tag.Get("json"), ","); name == "-" && !hasOpts {
+			continue
+		}
+		fw := fmt.Sprintf("%s (inside key %s) field %s.%s", where, key, t.Name(), f.Name)
+		tags, err := parseTags(fw, f, tagSet{})
+		if err != nil {
+			return err
+		}
+		switch {
+		case tags.protect > own.protect:
+			return fmt.Errorf("%w: %s carries protect:%q, stricter than its key's %s: config protects whole keys, so the key itself must carry it (05-config §1.3.1)",
+				ErrInvalid, fw, tags.protect, own.protect)
+		case tags.reload > own.reload:
+			return fmt.Errorf("%w: %s carries reload:%q, later than its key's %s: config reloads whole keys, so the key itself must carry it (05-config §1.3.1)",
+				ErrInvalid, fw, tags.reload, own.reload)
+		case tags.sensitive && !own.sensitive:
+			return fmt.Errorf("%w: %s carries sensitive:\"true\" and its key does not: config redacts whole keys, so the key itself must carry it (05-config §1.3.1)",
+				ErrInvalid, fw)
+		}
+		if err := checkNested(where, key, f.Type, own, seen); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
