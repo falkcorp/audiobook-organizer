@@ -7,6 +7,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -304,8 +305,11 @@ func (s *sub) invoke(ctx context.Context, ev *event) (reason string) {
 			now := time.Now().UnixNano()
 			last := s.lastPanic.Load()
 			if (last == 0 || now-last >= int64(warnEvery)) && s.lastPanic.CompareAndSwap(last, now) {
+				// The panic's type and the stack, never its value: a handler
+				// can panic with a payload value, which must not reach the log
+				// (the encode drop's rule). The stack locates the fault.
 				s.b.log.Error("events: subscriber panicked (recovered; the subscription keeps running)",
-					"subscriber", s.name, "topic", s.topic, "panic", r, "stack", string(debug.Stack()))
+					"subscriber", s.name, "topic", s.topic, "panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()))
 			}
 		}
 	}()

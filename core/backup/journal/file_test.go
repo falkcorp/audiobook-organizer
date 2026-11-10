@@ -103,6 +103,43 @@ func (fx *fixture) lines(t *testing.T) []string {
 	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 }
 
+// openBroken opens fx.path expecting ErrCorrupt and checks the broken File
+// that comes with it (§5B.5: the app stays open on a broken journal): it
+// holds the lock, its Append fails with ErrCorrupt and stages nothing, and
+// its Gap records journal_gap/<since> so the revocation still commits.
+func (fx *fixture) openBroken(t *testing.T, what string) {
+	t.Helper()
+	ctx := context.Background()
+	j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
+	if !errors.Is(err, ErrCorrupt) || j == nil {
+		if j != nil {
+			_ = j.Close()
+		}
+		t.Fatalf("%s: OpenFile = %v, %v; want a broken File and ErrCorrupt", what, j, err)
+	}
+	defer func() { must(t, j.Close()) }()
+	if j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrLocked) {
+		if j2 != nil {
+			_ = j2.Close()
+		}
+		t.Errorf("%s: a second opener of the broken journal: err = %v, want ErrLocked", what, err)
+	}
+	b := fx.auth.NewBatch()
+	must(t, b.Set([]byte("user/bane"), []byte("disabled")))
+	if err := j.Append(ctx, b, Revocation{Kind: UserDisabled}); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("%s: Append on the broken journal: err = %v, want ErrCorrupt", what, err)
+	}
+	if b.Count() != 1 {
+		t.Errorf("%s: the refused Append staged into the batch: count %d", what, b.Count())
+	}
+	at := time.Date(2026, 11, 10, 4, 0, 0, 0, time.UTC)
+	must(t, j.Gap(b, at))
+	must(t, b.Commit(ctx, storage.Sync))
+	if v, err := fx.ks.Get(ctx, gapKey(at)); err != nil || !strings.Contains(string(v), `"reason":"append_failed"`) {
+		t.Errorf("%s: the gap record: %q, %v", what, v, err)
+	}
+}
+
 // revoke is a revoking batch of core/auth: the user row and the journal line.
 func (fx *fixture) revoke(t *testing.T, j RevocationJournal, user string) *storage.Batch {
 	t.Helper()
@@ -322,13 +359,9 @@ func TestOpenFile_HeaderAndRecovery(t *testing.T) {
 	must(t, j2.Close())
 
 	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\n{\"seq\":2}\n"), 0o600))
-	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("seq gap: err = %v, want ErrCorrupt", err)
-	}
+	fx.openBroken(t, "seq gap")
 	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\nnot json\n"), 0o600))
-	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("garbage line: err = %v, want ErrCorrupt", err)
-	}
+	fx.openBroken(t, "garbage line")
 	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.auth}); err == nil {
 		t.Error("OpenFile accepted another owner's keyspace")
 	}
@@ -404,7 +437,8 @@ func must(t *testing.T, err error) {
 // is ErrCorrupt and is not renumbered from the head or extended: no seq at or
 // below what consumers already applied is ever assigned again (§5B.3.6
 // "Format and integrity"; §5B.5 "chain broken or truncated below the live
-// store's head").
+// store's head"). The broken File that comes back still records gaps, so
+// revocations keep committing (openBroken).
 func TestOpenFile_RefusesFileBehindHead(t *testing.T) {
 	ctx := context.Background()
 	fx := newFixture(t)
@@ -433,12 +467,7 @@ func TestOpenFile_RefusesFileBehindHead(t *testing.T) {
 			} else {
 				must(t, os.WriteFile(fx.path, content, 0o600))
 			}
-			if j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
-				if j != nil {
-					_ = j.Close()
-				}
-				t.Fatalf("err = %v, want ErrCorrupt", err)
-			}
+			fx.openBroken(t, name)
 			after, err := os.ReadFile(fx.path)
 			must(t, err)
 			if !bytes.Equal(after, content) {
