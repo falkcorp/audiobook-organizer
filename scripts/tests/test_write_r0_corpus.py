@@ -1,5 +1,5 @@
 # file: scripts/tests/test_write_r0_corpus.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: e61bb4fe-2238-459c-be02-94efbf991c39
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/write_r0_corpus.py (F2-12).
@@ -238,6 +238,35 @@ class HookTest(unittest.TestCase):
         # Both scans target the slow tree, which a replay's copy does not have.
         for b in (posts[0], posts[2]):
             self.assertEqual(b["params"]["folder_path"], str(self.layout.slow_tree))
+
+    def test_standdown_retries_a_scan_that_finished_first(self):
+        # Attempt 1: the scan finished before the holder acquired, so the
+        # release armed the grace with nothing quiesced. The writer ends that
+        # grace (1 s grace, one more holder run, grace back to 600) and retries.
+        ctx = w.Ctx(client=FakeClient([
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "scan-1"}),
+            ("GET", "/api/v1/operations/v2/scan-1", 200, _op("running")),
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "refresh-1"}),
+            ("GET", "/api/v1/operations/v2/refresh-1", 200, _op("completed")),
+            ("GET", "/api/v1/operations/v2/scan-1", 200, _op("completed")),
+            ("PUT", "/api/v1/config", 200, {}),
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "refresh-2"}),
+            ("GET", "/api/v1/operations/v2/refresh-2", 200, _op("completed")),
+            ("PUT", "/api/v1/config", 200, {}),
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "scan-2"}),
+            ("GET", "/api/v1/operations/v2/scan-2", 200, _op("running")),
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "refresh-3"}),
+            ("GET", "/api/v1/operations/v2/refresh-3", 200, _op("completed")),
+            ("GET", "/api/v1/operations/v2/scan-2", 200, _op("interrupted_quiesced")),
+            ("POST", "/api/v1/operations/v2", 202, {"op_id": "scan-3"}),
+            ("GET", "/api/v1/operations/v2/scan-3", 200, _op("queued")),
+        ]), proc=None, layout=self.layout, ids={"import_dir": "/x"})  # fmt: skip
+        w._quiesce_scan_under_standdown(ctx)
+        self.assertEqual(ctx.ids["op_quiesced"], "scan-2")
+        self.assertEqual(ctx.ids["op_queued"], "scan-3")
+        self.assertEqual(ctx.client.script, [])
+        graces = [b["scan_standdown_grace_seconds"] for m, _, b in ctx.client.calls if m == "PUT"]
+        self.assertEqual(graces, [1, w.STANDDOWN_GRACE_SECONDS])
 
     def test_standdown_refuses_a_scan_that_was_dispatched(self):
         ctx = w.Ctx(client=FakeClient([

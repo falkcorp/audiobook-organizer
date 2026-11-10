@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_answers.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 0317d881-99be-4394-8279-b5df7ce3cfa7
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/record_r0_answers.py and its committed answers (F2-12).
@@ -189,6 +189,16 @@ class VolatileFieldsTest(unittest.TestCase):
             r.parse_path(rule["path"])
 
 
+class PickAbsItemTest(unittest.TestCase):
+    def test_prefers_the_item_with_progress(self):
+        two = {"media": {"numAudioFiles": 3}}
+        results = [{"id": "a", **two}, {"id": "b", **two}, {"id": "c", "media": {}}]
+        self.assertEqual(r.pick_abs_item(results, {"b"}), "b")
+        self.assertEqual(r.pick_abs_item(results, {"c"}), "c")
+        self.assertEqual(r.pick_abs_item(results, set()), "a")
+        self.assertIsNone(r.pick_abs_item([], {"a"}))
+
+
 class CommittedNormalizationTest(unittest.TestCase):
     def _answer(self, name):
         a = next(a for a in answers() if a["name"] == name)
@@ -213,6 +223,12 @@ class CommittedNormalizationTest(unittest.TestCase):
         paths = [e["request"]["path"] for e in ex]
         self.assertTrue(paths[-3].endswith("/play"), paths[-3:])
         self.assertTrue(paths[-1].endswith("/close"), paths[-3:])
+
+    def test_abs_per_item_requests_read_stored_progress(self):
+        for e in self._answer("abs")["exchanges"]:
+            p = e["request"]["path"]
+            if p.startswith("/api/me/progress/") or p.startswith("/api/me/bookmarks/"):
+                self.assertEqual(e["response"]["status"], 200, p)
 
 
 if __name__ == "__main__":

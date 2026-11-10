@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -832,6 +832,33 @@ def _start_and_cancel_scan(ctx: Ctx) -> None:
     raise CorpusError(f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries ({last})")
 
 
+STANDDOWN_GRACE_SECONDS = 600  # R0 caps the grace at 10 minutes
+
+
+def _set_standdown_grace(ctx: Ctx, seconds: int) -> None:
+    assert ctx.client is not None
+    r = ctx.client.request(
+        "PUT", "/api/v1/config", {"scan_standdown_grace_seconds": seconds}, auth="admin"
+    )
+    if r.status != 200:
+        raise CorpusError(f"PUT scan_standdown_grace_seconds={seconds} -> {r.status}")
+
+
+def _end_standdown_grace(ctx: Ctx) -> None:
+    """End an armed re-queue grace: an acquire cancels it, a 1 s grace replaces it.
+
+    R0 reads the grace from config at each release, and an acquire during a
+    grace cancels it (scan_standdown.go AcquireScanStandDown), so one more
+    holder run under a 1 s grace leaves no grace after it.
+    """
+    _set_standdown_grace(ctx, 1)
+    holder = start_op(ctx, "maintenance.metadata-refresh", {})
+    if wait_status(ctx, holder, TERMINAL) != "completed":
+        raise CorpusError(f"maintenance.metadata-refresh {holder} did not complete")
+    time.sleep(2.0)
+    _set_standdown_grace(ctx, STANDDOWN_GRACE_SECONDS)
+
+
 def _quiesce_scan_under_standdown(ctx: Ctx) -> None:
     """A library scan stood down by a maintenance op, and a second scan held queued.
 
@@ -849,19 +876,29 @@ def _quiesce_scan_under_standdown(ctx: Ctx) -> None:
     "the quiesced scan row stays interrupted_quiesced"; a claim never dispatched
     is released back as a queued row).
     """
-    scan = start_op(ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree)})
-    if wait_status(ctx, scan, TERMINAL | {"running"}, timeout=60.0) != "running":
-        raise CorpusError(f"the slow-tree scan {scan} finished before it could be stood down")
-    holder = start_op(ctx, "maintenance.metadata-refresh", {})
-    if wait_status(ctx, holder, TERMINAL) != "completed":
-        raise CorpusError(f"maintenance.metadata-refresh {holder} did not complete")
-    st = wait_status(ctx, scan, TERMINAL | {"interrupted_quiesced"}, timeout=30.0)
-    if st != "interrupted_quiesced":
-        raise CorpusError(f"the stood-down scan {scan} ended {st!r}, not interrupted_quiesced")
-    # The queued scan targets the slow tree too, not the import root: a replay
-    # boots on a copy of stage1/ only, where the tree does not exist, so when
-    # the replay dispatches this row it fails at once instead of rescanning the
-    # library and rewriting book rows (updated_at) under the answers.
+    last = ""
+    for _ in range(CANCEL_ATTEMPTS):
+        scan = start_op(ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree)})
+        if wait_status(ctx, scan, TERMINAL | {"running"}, timeout=60.0) != "running":
+            last = f"scan {scan} finished before the holder could start"
+            continue
+        holder = start_op(ctx, "maintenance.metadata-refresh", {})
+        if wait_status(ctx, holder, TERMINAL) != "completed":
+            raise CorpusError(f"maintenance.metadata-refresh {holder} did not complete")
+        st = wait_status(ctx, scan, TERMINAL | {"interrupted_quiesced"}, timeout=30.0)
+        if st == "interrupted_quiesced":
+            break
+        # Lost race: the scan finished before the holder acquired. The release
+        # still armed the 600 s grace, which would hold the next attempt's scan
+        # queued, so end it first.
+        last = f"scan {scan} ended {st!r} before the holder acquired"
+        _end_standdown_grace(ctx)
+    else:
+        raise CorpusError(f"no scan could be stood down after {CANCEL_ATTEMPTS} tries ({last})")
+    # The queued scan targets the slow tree too. A library.scan also scans every
+    # import root whatever its folder, so a replay's boot (which dispatches this
+    # row) rescans the library: the recorder settles boot-time runs and lists
+    # the book fields that rescan rewrites as volatile.
     queued = start_op(ctx, "library.scan", {"folder_path": str(ctx.layout.slow_tree)})
     time.sleep(3.0)
     st = op_status(ctx, queued)
@@ -1567,7 +1604,9 @@ CASES: tuple[Case, ...] = (
         (
             # Last before the stop: a restart would stop the grace timer and the
             # boot resume sweep would re-queue and run the quiesced scan.
-            Call("PUT", "/api/v1/config", {"scan_standdown_grace_seconds": 600}),
+            Call(
+                "PUT", "/api/v1/config", {"scan_standdown_grace_seconds": STANDDOWN_GRACE_SECONDS}
+            ),
             Hook(
                 "scan the slow tree, stand it down with metadata-refresh, enqueue a scan",
                 _quiesce_scan_under_standdown,
