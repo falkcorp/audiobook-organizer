@@ -1,7 +1,7 @@
 // file: core/httpapi/dispatch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a494f53-6f15-4cca-bfe7-f575ea6913a4
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -104,16 +104,22 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // slashRedirect reports the mux's trailing-slash redirect: Handler returns
-// the pattern that matched path+"/" (a subtree "/x/" or an exact "/x/{$}",
-// wildcards allowed) for a path without the slash. A pattern ending in "/"
-// matches a path without one only with more segments below it, so the same
-// segment count without the final empty segment is the redirect.
+// the pattern that matched path+"/" (a subtree "/x/", an exact "/x/{$}" or a
+// rest wildcard "/x/{rest...}", other wildcards allowed) for a path without
+// the slash. A pattern ending in "/" matches a path without one only with
+// more segments below it, so the same segment count without the final empty
+// segment is the redirect. A final "{rest...}" may match the empty rest, so
+// it counts as the "/" before it: GET /files is the redirect of
+// "GET /files/{rest...}", never a match.
 func slashRedirect(pattern string, r *http.Request) bool {
 	_, pat := splitPattern(pattern)
 	if i := strings.IndexByte(pat, '/'); i > 0 { // a host-qualified pattern
 		pat = pat[i:]
 	}
 	pat = strings.TrimSuffix(pat, "{$}")
+	if i := strings.LastIndexByte(pat, '/'); strings.HasPrefix(pat[i+1:], "{") && strings.HasSuffix(pat, "...}") {
+		pat = pat[:i+1]
+	}
 	p := r.URL.EscapedPath()
 	return strings.HasSuffix(pat, "/") && !strings.HasSuffix(p, "/") &&
 		strings.Count(p, "/") == strings.Count(pat, "/")-1

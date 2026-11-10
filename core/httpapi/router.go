@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-10
 
@@ -52,8 +52,17 @@ type Router struct {
 	spaOpt SPAOptions // stage 8 reads BasicExemptAssets (R1-17)
 	public map[string]map[string]bool
 	errs   []error
-	built  bool        // set by Build: a registration after it could never be served
+	sealed bool        // set when Build starts: a registration after it could never be served
+	built  bool        // set when Build succeeds, cleared when it starts: the gate's facts below are its own
 	legacy legacyState // legacy.go: manifests, admissions and built infos (R1-14)
+
+	// gateMux and gateAssets are stage 8's route facts, recorded by the last
+	// successful Build (basicGateRoutes): the ServeMux that build serves,
+	// whose every pattern's handler is a gateRoute carrying the facts Build
+	// gave it as it registered the pattern, and the "/" owner's static-asset
+	// predicate. Both are nil until a Build succeeds.
+	gateMux    *http.ServeMux
+	gateAssets func(string) bool
 
 	// chain is the perimeter of the last Build (05-http-api §4.2,
 	// core/internal/httpmw); SetPerimeter swaps its settings.
@@ -292,7 +301,7 @@ var errBuilt = errors.New("httpapi: registration after Router.Build")
 // late reports, and logs at ERROR, a registration made after Build; r.mu
 // is held.
 func (r *Router) late(what string) error {
-	if !r.built {
+	if !r.sealed {
 		return nil
 	}
 	err := fmt.Errorf("%w: %s ignored", errBuilt, what)
@@ -630,7 +639,8 @@ func (r *Router) routeSnapshot() []*routeEntry {
 func (r *Router) Build() (http.Handler, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.built = true
+	r.sealed = true
+	r.built, r.gateMux, r.gateAssets = false, nil, nil
 	r.chain = r.newChain()
 	errs := slices.Clone(r.errs)
 	errs = append(errs, r.checkCoreFixed()...)
@@ -657,7 +667,9 @@ func (r *Router) Build() (http.Handler, error) {
 		if len(e.errs) > 0 || e.handler == nil {
 			continue
 		}
-		if err := register(mux, key, r.wrapRoute(e)); err != nil {
+		// Stage 8's facts ride on the handler Build registers, so the gate
+		// reads them from the very pattern this mux serves (basicGateRoutes).
+		if err := register(mux, key, gateRoute{Handler: r.wrapRoute(e), facts: basicGateFacts{probe: basicGateProbe(e.info)}}); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -665,6 +677,7 @@ func (r *Router) Build() (http.Handler, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
+	r.built, r.gateMux, r.gateAssets = true, mux, r.rootAssets()
 	root := r.rootHandler()
 	d := &dispatcher{
 		mux:            mux,
