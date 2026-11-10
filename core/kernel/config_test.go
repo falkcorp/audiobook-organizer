@@ -1,5 +1,5 @@
 // file: core/kernel/config_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b2e5f7c-3a19-4d06-b8e4-2f9c6a1d7e53
 // last-edited: 2026-11-10
 
@@ -155,6 +155,78 @@ func TestStateDirFallbackMatchesHEAD_Kernel(t *testing.T) {
 	in.StateDirDefault = uncreatable
 	if _, err := bootConfig(context.Background(), in); err == nil || !strings.Contains(err.Error(), "ARKHAM_CORE_PATHS_STATE_DIR") {
 		t.Errorf("custom prefix: %v", err)
+	}
+}
+
+// TestStateDir_KernelAgreesWithTheResolver (T4 review MINOR-2): the
+// directory step 0 picks is config.ResolveStateDir's on every row, an
+// unclean default (a trailing slash, a "..") and a padded explicit value
+// included, and Boot opens the boot record's root there. bootRoot refuses a
+// directory that is not step 0's, so Boot and step 0 can never disagree
+// silently.
+func TestStateDir_KernelAgreesWithTheResolver(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dbDir := filepath.Join(root, "db")
+	rows := []struct {
+		name, def string
+		flags     map[config.Path]string
+	}{
+		{"trailing slash default", filepath.Join(root, "manor") + "/", nil},
+		{"dotdot default", filepath.Join(root, "x", "..", "cave"), nil},
+		{"padded default", "  " + filepath.Join(root, "tower") + " ", nil},
+		{"padded explicit", filepath.Join(root, "unused"), map[config.Path]string{stateDirKey: "  " + filepath.Join(root, "arkham", "..", "arkham") + "/ "}},
+		{"fallback beside the database", filepath.Join(blocker, "state"), map[config.Path]string{storagePathKey: filepath.Join(dbDir, "main.pebble")}},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			in := configIn(t)
+			in.StateDirDefault, in.Flags = r.def, r.flags
+			cb := bootCfg(t, in)
+			want, fellBack, err := config.ResolveStateDir(r.flags[stateDirKey], r.def, r.flags[storagePathKey], func(d string) error { return os.MkdirAll(d, 0o700) })
+			if err != nil || cb.stateDir != want || cb.fellBack != fellBack {
+				t.Fatalf("kernel %q (fell back %v), resolver %q (fell back %v, %v)", cb.stateDir, cb.fellBack, want, fellBack, err)
+			}
+			if cb.stateDir != filepath.Clean(cb.stateDir) {
+				t.Errorf("state dir %q is not clean", cb.stateDir)
+			}
+			// Boot opened the record's root at step 0's directory; the same
+			// directory spelled differently is still accepted.
+			rt, err := cb.bootRoot(cb.stateDir + "/")
+			if err != nil {
+				t.Fatalf("bootRoot(step 0's directory) = %v", err)
+			}
+			if err := rt.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if rt, err := cb.bootRoot(filepath.Join(root, "elsewhere")); err == nil {
+				if cerr := rt.Close(); cerr != nil {
+					t.Error(cerr)
+				}
+				t.Errorf("bootRoot accepted a directory that is not step 0's %q", cb.stateDir)
+			}
+		})
+	}
+}
+
+// TestOperatorValueString_RefusesFileStateDir (05-config §1.7): step 0 reads
+// core.paths.state_dir from the environment and flags only, so an operator
+// file's value is refused naming the file; core.storage.path may come from
+// the file. Reachable through bootConfig once F3-02 builds the file layer.
+func TestOperatorValueString_RefusesFileStateDir(t *testing.T) {
+	file := config.OperatorValue{Value: json.RawMessage(`"/srv/gotham"`), Src: config.SourceFile, By: "file gotham.yaml"}
+	if _, err := operatorValueString(stateDirKey, file); err == nil || !strings.Contains(err.Error(), "file gotham.yaml") {
+		t.Errorf("state_dir from the file = %v, want a refusal naming the file", err)
+	}
+	env := config.OperatorValue{Value: json.RawMessage(`"/srv/gotham"`), Src: config.SourceEnv, By: "env GOTHAM_CORE_PATHS_STATE_DIR"}
+	if v, err := operatorValueString(stateDirKey, env); err != nil || v != "/srv/gotham" {
+		t.Errorf("state_dir from env = %q, %v", v, err)
+	}
+	if v, err := operatorValueString(storagePathKey, file); err != nil || v != "/srv/gotham" {
+		t.Errorf("storage path from the file = %q, %v", v, err)
 	}
 }
 

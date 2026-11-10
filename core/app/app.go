@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-10
 
@@ -273,12 +273,13 @@ func ResolveStateDir(opts Options) (string, error) {
 		if strings.TrimSpace(explicit) != "" {
 			return dir, fmt.Errorf("app: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
 		}
-		what := fmt.Sprintf("the default state directory %q cannot be created", dir)
-		if opts.StateDir == "" {
-			what = "the app declares no default state directory"
+		// With no default, config's error already says so; it is not repeated.
+		what := fmt.Errorf("the default state directory %q cannot be created (%w)", dir, err)
+		if strings.TrimSpace(opts.StateDir) == "" {
+			what = err
 		}
-		return dir, fmt.Errorf("app: %s (%w), and %s %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
-			what, err, dbVar, dbPath, stateVar)
+		return dir, fmt.Errorf("app: %w, and %s %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
+			what, dbVar, dbPath, stateVar)
 	}
 	if fellBack {
 		logger := opts.Logger
