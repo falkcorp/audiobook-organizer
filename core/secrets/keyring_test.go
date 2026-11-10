@@ -203,18 +203,17 @@ func TestReadExportRecord_RegularAndBounded(t *testing.T) {
 
 // TestExportKeyring_RefusesSymlinkedKeyring (a test name coined by F3-03):
 // export-keyring copies only a regular keyring file, never one reached
-// through a symbolic link.
+// through a symbolic link, even one whose target is inside the state
+// directory (which os.Root would follow; a target outside it os.Root
+// refuses on its own).
 func TestExportKeyring_RefusesSymlinkedKeyring(t *testing.T) {
 	e := newEnv(t)
 	e.open(t, nil)
-	elsewhere := filepath.Join(t.TempDir(), "keyring")
-	if err := os.WriteFile(elsewhere, fileBytes(t, e.keyringPath()), 0o600); err != nil {
+	target := filepath.Join(e.dir, "keyring.real")
+	if err := os.Rename(e.keyringPath(), target); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(e.keyringPath()); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, e.keyringPath()); err != nil {
+	if err := os.Symlink("keyring.real", e.keyringPath()); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "keyring.export")
