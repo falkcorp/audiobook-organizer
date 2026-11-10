@@ -397,7 +397,9 @@ func TestCanAssign_RemovalCheckedLikeAssignment(t *testing.T) {
 }
 
 // TestDominates (§4.7 rule 5): acting on a user needs every scope the user
-// holds; an unknown role of the target asks nothing.
+// holds. A target role the service does not know is refused unless the actor
+// holds core:admin (review MINOR-D: the actor cannot be shown to hold what
+// the role will grant once someone creates it).
 func TestDominates(t *testing.T) {
 	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
 	editorScopes := f.role(rbac.RoleEditor).Permissions()
@@ -405,11 +407,17 @@ func TestDominates(t *testing.T) {
 	errIs(t, "viewer over editor", f.svc.Dominates(f.as(viewerScopes...), []rbac.RoleName{rbac.RoleEditor}), rbac.ErrDominance)
 	errIs(t, "editor over admin", f.svc.Dominates(f.as(editorScopes...), []rbac.RoleName{rbac.RoleAdmin}), rbac.ErrDominance)
 	errIs(t, "no actor", f.svc.Dominates(nil, nil), rbac.ErrDominance)
-	if err := f.svc.Dominates(f.as(editorScopes...), []rbac.RoleName{rbac.RoleViewer, "custom.ghost"}); err != nil {
+	err := f.svc.Dominates(f.as(editorScopes...), []rbac.RoleName{rbac.RoleViewer, "custom.ghost"})
+	errIs(t, "editor over viewer and an unknown role", err, rbac.ErrDominance)
+	errIs(t, "editor over viewer and an unknown role", err, rbac.ErrUnknownRole)
+	if err := f.svc.Dominates(f.as(editorScopes...), []rbac.RoleName{rbac.RoleViewer}); err != nil {
 		t.Errorf("editor over viewer: %v", err)
 	}
 	if err := f.svc.Dominates(f.admin(), []rbac.RoleName{rbac.RoleAdmin}); err != nil {
 		t.Errorf("admin over admin: %v", err)
+	}
+	if err := f.svc.Dominates(f.admin(), []rbac.RoleName{rbac.RoleViewer, "custom.ghost"}); err != nil {
+		t.Errorf("admin over viewer and an unknown role: %v", err)
 	}
 }
 

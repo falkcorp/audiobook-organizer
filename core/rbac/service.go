@@ -736,20 +736,27 @@ func (s *Service) escalation(ctx context.Context, cat *Catalog, actor Checker, r
 // actor holds core:admin: assigning a name nobody defined would grant the
 // user whatever role is created under it later.
 func (s *Service) CanAssign(actor Checker, roles []RoleName) error {
-	return s.covers(actor, roles, ErrEscalation, true)
+	return s.covers(actor, roles, ErrEscalation)
 }
 
 // Dominates reports whether actor may act on a user whose roles are target
 // (actor holds every scope target holds, or core:admin). auth.Service calls it
 // for every action on another user's credentials, status or roles (§4.7 rule 5).
 //
-// Scopes are checked as CanAssign checks them. An unknown role of the target
-// grants nothing (it is skipped at Compile), so it asks nothing of the actor.
+// Scopes and role names are checked as CanAssign checks them, so a target
+// role the service does not know is refused (ErrDominance wrapping
+// ErrUnknownRole) unless the actor holds core:admin. An unknown role grants
+// nothing today (Compile skips it), but the name is a claim on whatever role
+// is created under it later, and an actor that cannot see what the target
+// holds does not dominate it (fail closed).
 func (s *Service) Dominates(actor Checker, target []RoleName) error {
-	return s.covers(actor, target, ErrDominance, false)
+	return s.covers(actor, target, ErrDominance)
 }
 
-func (s *Service) covers(actor Checker, roles []RoleName, refusal error, refuseUnknown bool) error {
+// covers is CanAssign and Dominates: actor must hold every scope of every
+// role named, and a name the service does not know is refused unless actor
+// holds core:admin. refusal is the sentinel every error wraps.
+func (s *Service) covers(actor Checker, roles []RoleName, refusal error) error {
 	if actor == nil {
 		return fmt.Errorf("%w: no actor", refusal)
 	}
@@ -762,7 +769,7 @@ func (s *Service) covers(actor Checker, roles []RoleName, refusal error, refuseU
 	for _, name := range roles {
 		r := s.roles[name]
 		if r == nil {
-			if refuseUnknown && !actor.Has(CoreAdmin) {
+			if !actor.Has(CoreAdmin) {
 				return fmt.Errorf("%w: %w: %s", refusal, ErrUnknownRole, name)
 			}
 			continue
