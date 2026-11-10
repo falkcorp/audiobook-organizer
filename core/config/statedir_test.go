@@ -1,11 +1,12 @@
 // file: core/config/statedir_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c1e5b4a-8f0d-4d6e-9a2b-7e5c1f0a9d42
 // last-edited: 2026-11-10
 
 package config_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -103,11 +104,12 @@ func TestStateDirFallbackMatchesHEAD(t *testing.T) {
 	}
 }
 
-// TestStateDirFallbackMatchesHEAD_AppResolver: core/app.ResolveStateDir (R1,
-// core/app/app.go, outside this row's files) must agree with
-// config.ResolveStateDir on a real filesystem. Rows where they do not are
-// listed in knownAppDivergence: each is owed to core/app's owner (app should
-// delegate to config.ResolveStateDir), and a new divergence fails here.
+// TestStateDirFallbackMatchesHEAD_AppResolver: core/app.ResolveStateDir
+// delegates to config.ResolveStateDir, so on a real filesystem the two agree
+// on every row: the same directory (on an error too, the directory that could
+// not be used), the same fallback, and an error from both or neither. Only the
+// error text differs: app wraps it with the env name that chooses a
+// directory. This guards the delegation; a resolver of app's own fails here.
 func TestStateDirFallbackMatchesHEAD_AppResolver(t *testing.T) {
 	root := t.TempDir()
 	blocker := filepath.Join(root, "file")
@@ -118,28 +120,21 @@ func TestStateDirFallbackMatchesHEAD_AppResolver(t *testing.T) {
 	uncreatable := filepath.Join(blocker, "state") // under a file: ENOTDIR
 	dbOK := filepath.Join(root, "db", "main.pebble")
 	dbBad := filepath.Join(blocker, "db", "main.pebble")
-	// Each entry is a behavioural divergence between core/app and
-	// config/HEAD, owed to core/app's owner (app should delegate to
-	// config.ResolveStateDir). Separately, on any error app returns "" where
-	// HEAD and config return the directory they failed on; that is logged,
-	// not listed, because callers stop on the error either way.
-	knownAppDivergence := map[string]string{
-		"explicit=padded":                       "app neither trims nor cleans the explicit value: it creates and uses the padded path",
-		"default=uncreatable db=uncreatableAbs": "app falls back without creating the fallback; HEAD and config refuse with the default's error",
-	}
 	type row struct {
 		name, explicit, def, db string
 	}
 	var rows []row
-	for _, ex := range []struct{ n, v string }{{"unset", ""}, {"set", filepath.Join(root, "explicit")}, {"padded", "  " + filepath.Join(root, "explicit") + "/ "}, {"uncreatable", filepath.Join(blocker, "explicit")}} {
-		for _, d := range []struct{ n, v string }{{"creatable", creatable}, {"uncreatable", uncreatable}} {
+	for _, ex := range []struct{ n, v string }{{"unset", ""}, {"blank", "   "}, {"set", filepath.Join(root, "explicit")}, {"padded", "  " + filepath.Join(root, "explicit", "..", "explicit") + "/ "}, {"uncreatable", filepath.Join(blocker, "explicit")}} {
+		for _, d := range []struct{ n, v string }{{"creatable", creatable}, {"uncreatable", uncreatable}, {"none", ""}} {
 			for _, db := range []struct{ n, v string }{{"abs", dbOK}, {"uncreatableAbs", dbBad}, {"relative", "db/main.pebble"}, {"blank", ""}} {
 				rows = append(rows, row{fmt.Sprintf("explicit=%s default=%s db=%s", ex.n, d.n, db.n), ex.v, d.v, db.v})
 			}
 		}
 	}
+	if len(rows) != 60 {
+		t.Fatalf("%d rows", len(rows))
+	}
 	mkdir := func(d string) error { return os.MkdirAll(d, 0o700) }
-	diverged := map[string]bool{}
 	for _, r := range rows {
 		env := []string{}
 		if r.explicit != "" {
@@ -148,43 +143,37 @@ func TestStateDirFallbackMatchesHEAD_AppResolver(t *testing.T) {
 		if r.db != "" {
 			env = append(env, "GOTHAM_CORE_STORAGE_PATH="+r.db)
 		}
-		ad, aerr := app.ResolveStateDir(app.Options{AppID: "gotham", EnvPrefix: "GOTHAM", StateDir: r.def, Env: env, Logger: discard()})
-		cd, _, cerr := config.ResolveStateDir(r.explicit, r.def, r.db, mkdir)
-		if aerr != nil && cerr != nil {
-			if ad != cd {
-				t.Logf("%s: both refuse; app returns %q, config the directory it failed on, %q", r.name, ad, cd)
-			}
-			continue
+		capture := &warnCount{}
+		ad, aerr := app.ResolveStateDir(app.Options{AppID: "gotham", EnvPrefix: "GOTHAM", StateDir: r.def, Env: env, Logger: slog.New(capture)})
+		cd, cfb, cerr := config.ResolveStateDir(r.explicit, r.def, r.db, mkdir)
+		if ad != cd || (aerr != nil) != (cerr != nil) || capture.n != boolInt(cfb) {
+			t.Errorf("%s: core/app (%q, %d warnings, %v) disagrees with config (%q, fellBack %v, %v)", r.name, ad, capture.n, aerr, cd, cfb, cerr)
 		}
-		if aerr == nil && cerr == nil && ad == cd {
-			continue
-		}
-		known := ""
-		for k, why := range knownAppDivergence {
-			if matchesAll(r.name, strings.Fields(k)) {
-				known, diverged[k] = why, true
-			}
-		}
-		if known == "" {
-			t.Errorf("%s: core/app (%q, %v) disagrees with config (%q, %v)", r.name, ad, aerr, cd, cerr)
-			continue
-		}
-		t.Logf("known divergence, owed to core/app: %s: app (%q, %v), config (%q, %v): %s", r.name, ad, aerr, cd, cerr, known)
-	}
-	for k := range knownAppDivergence {
-		if !diverged[k] {
-			t.Errorf("known divergence %q no longer occurs: remove it from the list", k)
+		if aerr != nil && !strings.Contains(aerr.Error(), "GOTHAM_CORE_PATHS_STATE_DIR") {
+			t.Errorf("%s: core/app's error does not name GOTHAM_CORE_PATHS_STATE_DIR: %v", r.name, aerr)
 		}
 	}
 }
 
-func matchesAll(name string, parts []string) bool {
-	for _, p := range parts {
-		if !slices.Contains(strings.Fields(name), p) {
-			return false
-		}
+// warnCount is a slog.Handler that counts warnings: core/app's fallback
+// warning is its only output, so the count is its fellBack.
+type warnCount struct{ n int }
+
+func (w *warnCount) Enabled(context.Context, slog.Level) bool { return true }
+func (w *warnCount) Handle(_ context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn {
+		w.n++
 	}
-	return true
+	return nil
+}
+func (w *warnCount) WithAttrs([]slog.Attr) slog.Handler { return w }
+func (w *warnCount) WithGroup(string) slog.Handler      { return w }
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // TestStateDir_OneResolverYAMLDBPath (the config half, 05-config §1.11,
@@ -238,5 +227,3 @@ func TestStateDir_OneResolverYAMLDBPath(t *testing.T) {
 		t.Errorf("the boot record is not beside the database: %v", err)
 	}
 }
-
-func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
