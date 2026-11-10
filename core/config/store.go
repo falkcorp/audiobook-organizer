@@ -555,21 +555,24 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 		}
 		rows[ov.Path] = ov
 	}
+	prevQuar := maps.Clone(s.quar)
+	quar := map[Path]error{}
 	vals := map[Path]json.RawMessage{}
+	bad := map[*section]Path{} // a section with an undecodable row: the first such row
 	for _, p := range slices.Sorted(maps.Keys(rows)) {
 		ck, ok := s.keyFor(p)
 		switch {
-		case !ok:
+		case !ok || s.passthrough(p):
 			rep.Unknown = append(rep.Unknown, p)
 			continue
 		case ck.k.secret:
-			s.quar[p] = fmt.Errorf("%s is a secret key: its value lives in the secrets store, never in c/config/", p)
+			quar[p] = fmt.Errorf("%s is a secret key: its value lives in the secrets store, never in c/config/", p)
 			continue
 		case ck.k.protect == ProtectOperator:
-			s.quar[p] = fmt.Errorf("%s is an operator-only key: never read from the DB layer", p)
+			quar[p] = fmt.Errorf("%s is an operator-only key: never read from the DB layer", p)
 			continue
 		case ck.k.reload == ReloadBoot:
-			s.quar[p] = fmt.Errorf("%s is a boot key: its stored value lives in the boot record", p)
+			quar[p] = fmt.Errorf("%s is a boot key: its stored value lives in the boot record", p)
 			continue
 		}
 		if op, locked := s.op[p]; locked {
@@ -580,17 +583,37 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 		}
 		v, err := ck.k.canonical(p, rows[p].Value)
 		if err != nil {
-			// The row's section fails with it: settle quarantines the
-			// section's rows, this one included.
-			vals[p] = append(json.RawMessage(nil), rows[p].Value...)
+			quar[p] = err
+			if _, seen := bad[ck.k.sec]; !seen {
+				bad[ck.k.sec] = p
+			}
 			continue
 		}
 		vals[p] = v
 	}
-	prevQuar := maps.Clone(s.quar)
-	s.db, s.dbVals = rows, vals
+	// A row that does not decode is the section failing with its overrides:
+	// every row of that section is quarantined (05-config §1.4 step 6). It is
+	// never handed to the build, where a missing value would read as JSON
+	// null and decode to the zero value.
+	for _, sec := range s.sections {
+		first, ok := bad[sec]
+		if !ok {
+			continue
+		}
+		for _, p := range sectionPaths(vals, sec, s) {
+			quar[p] = fmt.Errorf("quarantined with its section %s, whose row %s does not decode: %w", sec.path, first, quar[first])
+			delete(vals, p)
+		}
+		s.log.Warn("config: a stored row does not decode; its section's rows are kept and ignored",
+			"section", sec.path, "key", first, "err", quar[first])
+	}
+	if len(quar) > 0 {
+		s.health[healthOverridesQuarantined] = fmt.Sprintf("%d stored overrides ignored", len(quar))
+	}
+	s.db, s.dbVals, s.quar = rows, vals, quar
 	if err := s.settleAll(phaseAttach); err != nil {
 		s.db, s.dbVals, s.quar = map[Path]Override{}, map[Path]json.RawMessage{}, prevQuar
+		delete(s.health, healthOverridesQuarantined)
 		return AttachReport{}, err
 	}
 	for p, err := range s.quar {
