@@ -1,5 +1,5 @@
 // file: core/config/statedir_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c1e5b4a-8f0d-4d6e-9a2b-7e5c1f0a9d42
 // last-edited: 2026-11-10
 
@@ -104,9 +104,27 @@ func TestStateDirFallbackMatchesHEAD(t *testing.T) {
 	}
 }
 
+// TestResolveStateDir_CleansTheDefault (T4 review MINOR-2): the default is
+// trimmed and cleaned like an explicit value before it is created, so the
+// kernel, which compares the directory Boot hands back with this result, and
+// core/app see one spelling. A blank default is no default.
+func TestResolveStateDir_CleansTheDefault(t *testing.T) {
+	for _, def := range []string{"/var/lib/gotham/", " /var/lib/gotham ", "/var/lib/x/../gotham", "/var/lib//gotham"} {
+		fs := &fakeFS{ok: map[string]bool{"/var/lib/gotham": true}}
+		d, fb, err := config.ResolveStateDir("", def, "", fs.mkdir)
+		if d != "/var/lib/gotham" || fb || err != nil || !slices.Equal(fs.calls, []string{"/var/lib/gotham"}) {
+			t.Errorf("default %q: (%q, %v, %v), mkdir %q; want the cleaned default", def, d, fb, err, fs.calls)
+		}
+	}
+	fs := &fakeFS{ok: map[string]bool{}}
+	if d, _, err := config.ResolveStateDir("", "   ", "", fs.mkdir); err == nil || d != "" || len(fs.calls) != 0 {
+		t.Errorf("blank default: (%q, %v), mkdir %q; want no default", d, err, fs.calls)
+	}
+}
+
 // TestStateDirFallbackMatchesHEAD_AppResolver: core/app.ResolveStateDir
 // delegates to config.ResolveStateDir, so on a real filesystem the two agree
-// on every row: the same directory (on an error too, the directory that could
+// on every row (an unclean default included): the same directory (on an error too, the directory that could
 // not be used), the same fallback, and an error from both or neither. Only the
 // error text differs: app wraps it with the env name that chooses a
 // directory. This guards the delegation; a resolver of app's own fails here.
@@ -125,13 +143,13 @@ func TestStateDirFallbackMatchesHEAD_AppResolver(t *testing.T) {
 	}
 	var rows []row
 	for _, ex := range []struct{ n, v string }{{"unset", ""}, {"blank", "   "}, {"set", filepath.Join(root, "explicit")}, {"padded", "  " + filepath.Join(root, "explicit", "..", "explicit") + "/ "}, {"uncreatable", filepath.Join(blocker, "explicit")}} {
-		for _, d := range []struct{ n, v string }{{"creatable", creatable}, {"uncreatable", uncreatable}, {"none", ""}} {
+		for _, d := range []struct{ n, v string }{{"creatable", creatable}, {"unclean", " " + creatable + "/../state/ "}, {"uncreatable", uncreatable}, {"none", ""}} {
 			for _, db := range []struct{ n, v string }{{"abs", dbOK}, {"uncreatableAbs", dbBad}, {"relative", "db/main.pebble"}, {"blank", ""}} {
 				rows = append(rows, row{fmt.Sprintf("explicit=%s default=%s db=%s", ex.n, d.n, db.n), ex.v, d.v, db.v})
 			}
 		}
 	}
-	if len(rows) != 60 {
+	if len(rows) != 80 {
 		t.Fatalf("%d rows", len(rows))
 	}
 	mkdir := func(d string) error { return os.MkdirAll(d, 0o700) }
