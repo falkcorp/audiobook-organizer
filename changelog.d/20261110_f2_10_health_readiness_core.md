@@ -1,5 +1,0 @@
-### Added
-
-#### Health readiness core, dark: `Registry`, `Reporter` and the kernel's `core.storage` and `core.secrets` components
-
-`core/health` grows the readiness core of the platform-core health spec: `Status`, `ComponentID`, `Result`, `Check`, `Registry` (`Register`, `Ready`, `Live`, `Wait`, `Snapshot`), `Reporter`, `Reporters` and `ErrNotOwned`. `Wait` is signalled by `Report`, not polled. A `Reason` outside `[a-z0-9_]{1,40}` is stored as `invalid_reason`. The kernel gains `buildHealth`, which registers `core.storage` (Critical and Readiness, probed once at registration by an engine ping) and `core.secrets` (push-only, Up) on one registry per App. The system handler gains `HealthPostureTokens`, the registry's route into the authenticated `degraded` field of `GET /api/v1/system/status`, never `/health`; `TestHealth_UnauthenticatedTokenSetGolden` carries the F2 cells. Nothing calls `buildHealth` or `HealthPostureTokens` yet (the boot call is F2-16's), so no route, schedule or stored row changes and no token is raised.

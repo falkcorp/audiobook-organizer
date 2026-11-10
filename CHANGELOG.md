@@ -7,6 +7,57 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.225.0'></a>
+## v0.225.0 — 2026-11-10
+
+### Added
+
+#### `core/config` declaration surface and every core config section declared (dark)
+
+New package `core/config` holds only the declaration half of the config API: `Path` with its grammar check, `Reload`, `Protection`, `Duration` (a Go duration string in JSON), `Validator`, `FieldError`, `Section[T]`, `Define` and the options `Permissions`, `Docs`, `ProtectionWaivers`, `EnvBinding` and `FailClosed`. The loader, the store and `Register` follow with F3-01.
+
+`core/kernel/core_sections.go` lists every core section with the key table its owner spec states, 208 keys in 32 sections, whether or not that subsystem is wired yet. Schedule keys, the task windows, the two secret keys and the fail-closed declarations are added by their own later rows. Nothing reads these keys and no route, schedule or stored row changes, so behaviour is unchanged.
+
+#### httpapi: CoreFixedGroup and CoreExactPatterns, with Build's exact-pattern rule (dark)
+
+`httpapi.Router.CoreFixedGroup(base)` returns a core group at a HEAD path kept where it is, and `httpapi.CoreExactPatterns()` lists the only two core patterns allowed inside another owner's claim: `GET /api/v1/auth/oauth/{provider}/callback` and `GET /api/v1/auth/oauth/{provider}/start`. Fixed-group routes run the whole core chain and record owner `core`; the group claims nothing, so it does not collide with the legacy mount's `/api/v1/` claim and its two entries raise no `ErrShadow`. `Build` fails with `ErrPrefixCollision` for a fixed-group route outside the list and for a legacy manifest route that matches a path of an entry core serves. A router that registers no fixed-group route accepts and refuses exactly what it did before. No app registers a fixed-group route yet (the OIDC handlers and the mount arrive in F4-05 and F4-08), so no route, schedule or stored row changes.
+
+#### `core/rbac`, `core/kernel` — fixed `core:*` scope catalog (dark)
+
+Added `rbac.PermissionSpec`, `rbac.PermissionClass`, `rbac.Catalog` and the validating `rbac.NewCatalog` constructor (unique names, same-namespace and declared `Implies`, acyclic implication closure, `Confining` scopes outside implication). `rbac.CoreScopes()` lists the 19 `core:*` permissions with their class and flags, and the kernel builds a catalog from it without any optional subsystem wired. Nothing calls it at boot or enforces with it yet, so no route, schedule or stored row changes.
+
+#### Task public API and `taskstest` kit, dark: `core/tasks`
+
+New package `core/tasks` (`github.com/falkcorp/mediacore/tasks`) declares the platform-core task API of 05-tasks §5T.3.1–§5T.3.13: the `Task`, `Batch` and `Fixer` constructors over `Common`, `Kind`, `Effects` (built on `entity.Ref`), `Parallelism` (`Sequential`, `CPU`, `Fixed`, `FromParam`), `CancelContract`, `ResumePolicy`, `Permissions` and `Approval`, `Schedule` and `ScheduleConfig` (on `config.Duration`), the `RC`/`ItemRC` run context, `Writer`, `Source`, `Row`, `RunState`, the `Client`/`Executor` surfaces and the store records. `RunItems`, `RunSeq` and `ForEach` implement the item loop: a zero `Parallelism` fails before the first item with `ErrNoParallelism`, cancellation stops dispatch, sequential and parallel runs return the same `*ItemsError` shape, a broken pause gate, ref lock or CPU slot fails the item instead of skipping it silently, a panic becomes a one-line `*PanicError` item error whose stack is logged once, and a loop nested in an item runs on that item's CPU slot and ref locks instead of deadlocking on them. `BatchSpec.OnItemError` is a `BatchErrorPolicy` whose zero value, `BatchContinue`, keeps a Batch going past a failed item; `BatchStop` must be stated. Constructors collect problems instead of panicking; `Problems(d)` returns them for registration. `core/tasks/taskstest` adds `FakeRun` and the static half of `Conformance`. Nothing imports `core/tasks` yet, so no route, schedule or stored row changes.
+
+- core: the audit store (`core/audit`) with 05-rbac's 64-action table, synchronous `Record`/`RecordIn` (in the caller's batch), a bounded async `Emit` writer with denial coalescing, secret redaction, filtered `Query`, and its `audit` metrics scope; the kernel-side build/start/stop/metrics functions land dark in `core/kernel/audit.go` (F2-07; nothing calls them until F2-16).
+
+#### Health readiness core, dark: `Registry`, `Reporter` and the kernel's `core.storage` and `core.secrets` components
+
+`core/health` grows the readiness core of the platform-core health spec: `Status`, `ComponentID`, `Result`, `Check`, `Registry` (`Register`, `Ready`, `Live`, `Wait`, `Snapshot`), `Reporter`, `Reporters` and `ErrNotOwned`. `Wait` is signalled by `Report`, not polled. A `Reason` outside `[a-z0-9_]{1,40}` is stored as `invalid_reason`. The kernel gains `buildHealth`, which registers `core.storage` (Critical and Readiness, probed once at registration by an engine ping) and `core.secrets` (push-only, Up) on one registry per App. The system handler gains `HealthPostureTokens`, the registry's route into the authenticated `degraded` field of `GET /api/v1/system/status`, never `/health`; `TestHealth_UnauthenticatedTokenSetGolden` carries the F2 cells. Nothing calls `buildHealth` or `HealthPostureTokens` yet (the boot call is F2-16's), so no route, schedule or stored row changes and no token is raised.
+
+- Test data: R2's fixture corpus, stage 1 (platform-core F2-12). `scripts/r2corpus/write_r0_corpus.py` boots the R0 release binary (`ci/r0_release.txt`, the linux/amd64 asset) on a fresh store and drives it only through its own API, flags, env and config files to create users of every role, invites, sessions, API keys of every shape, stored and layered settings with secrets, integration fields and the webhook plugin, an import root and its library, organized books, playlists, reading state, ABS sessions, progress and a bookmark, task schedules, finished, failed and canceled runs, a queued run and a library scan stood down by a maintenance op, system-log rows and a paused executor. It commits the store under `internal/books/testdata/r2corpus/stage1/` with a manifest of every file's size and sha256. `scripts/r2corpus/record_r0_answers.py` boots R0 on a copy and records its answers (effective config, schedules, search results, ABS responses, identity and library listings) with every API key written as `<api-key:NAME>`, and lists in the manifest the clock-derived fields it normalized and its own artefacts it dropped. The leak scan decompresses Pebble's Snappy SST blocks and reassembles the WAL before searching for secrets. `TestR2Corpus_ManifestMatchesFiles` checks the committed files against the manifest. Regenerating is manual (`--regenerate`); CI only reads the corpus.
+
+- core: the events bus and topic catalog (`core/events`): typed and raw (`OnRaw`, schema-validated) subscriptions, bounded per-subscriber queues with `DropNewest`/`DropOldest`, `KeyFilter` and `Coalesce`, panic isolation, a drain-bounded `Close`, and the bus metrics scope. Drop warnings name a fixed cause and never the payload. `core/backup/journal` adds the revocation journal types, the `c/backup/` `StorageSpec` and a file-backed journal. The journal fsyncs each line before the revoking batch commits and stages `journal_head` through `GetForUpdate`. It refuses a file that ends below the store's head instead of renumbering, and holds the file with an exclusive lock. The kernel side (`core/kernel/events.go`) lands dark: nothing builds the bus or opens the journal until F4-08 and F4-11 (F4-04).
+
+### Changed
+
+#### Spec Go-block harness waits on missing core identifiers, not only missing packages
+
+`TestSpecGoBlocksCompile` (`core/examples/hello`) now pins each missing core identifier a 06 spec block waits for (`config.Handle`, `ui.Bundle`, the `module.Manifest`/`module.Registrar` members and `module.Setting*`), so the hello blocks keep waiting once `core/tasks` exists. Only existing core packages count, so a name missing from another spec block is still a compile error. A missing identifier never hides an independent compile error; an error downstream of a missing type surfaces in the row that lands the type. Every control pins its exact waiting set.
+
+- Docs: the platform-core STATE file records OWNER-03, the R1 release cut (v0.224.0, deployed, release freeze cleared), and names the W24 F2 wave and OWNER-04 as next.
+
+- Docs: the platform-core STATE file records the W24 wave (F2-07, F2-08, F2-09, F2-10, F2-12, F4-04, F4-10) as merged and deployed, and names W25 as next.
+
+### Fixed
+
+#### Task item loop: nested ref locks are per item and fail closed, and a nested panic is logged once
+
+In `core/tasks`, an item that holds refs now keeps one lock table for everything nested under it. Nested loops and `ic.LockRefs` calls under one item can no longer hold the same ref at once. A nested lock may name only refs the item holds. Any other ref is refused with the new `ErrNestedLockNotHeld` instead of risking a deadlock against a sibling item. `RC.LockRefs` now documents that `ic.LockRefs` is the one to use inside an item. A panic inside a nested loop logs its stack once instead of twice. Nothing outside `core/` uses `core/tasks` yet.
+
+- Test data: R2's stage-1 fixture corpus (platform-core F2-12 follow-up). The recorder now normalizes the ABS `/play` answer's `date` and `dayOfWeek` and masks the playback session ID in the recorded `/api/session/*/sync` and `/close` paths, so two recordings of the same corpus are byte-identical. The `updated_at` and `last_scan_mtime` rules are narrowed to books under the import root (books under the library root keep their stored values at every boot), and a volatile-field rule that matches nothing now fails the recording as stale. The writer boots R0 with a ten-year ABS session lifetime (it was 60 days, well short of the 365-day API keys), lists every lapse in the manifest with the earliest one an answer can see as `answers_valid_until`, and the recorder refuses to record past that date. After its final stop the writer checks that the stood-down and queued runs survived. The leak scan also decompresses bleve's zap stored fields, and the SST walker refuses an unknown block type instead of taking a short final block for the footer.
+
 <a id='changelog-v0.224.0'></a>
 ## v0.224.0 — 2026-11-10
 
