@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -163,7 +163,7 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 		}
 		wroteBoot = true
 	}
-	cm := Commit{Set: set, Unset: unset, Secrets: writes, Gen: gen, Boot: bootChg}
+	cm := Commit{Set: set, Unset: unset, Secrets: writes, Gen: gen, Boot: bootChg, By: a.Subject}
 	if err := s.committer.Commit(ctx, cm); err != nil {
 		err = fmt.Errorf("config: commit: %w", err)
 		if wroteBoot {

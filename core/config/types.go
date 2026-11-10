@@ -1,5 +1,5 @@
 // file: core/config/types.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
 // last-edited: 2026-11-10
 
@@ -159,6 +159,12 @@ type Commit struct {
 	// never staged, and listed here only so the audit record names them
 	// (05-rbac §7.1: section and changed key names).
 	Boot []Path
+	// By is the subject of the Actor whose Apply produced the commit
+	// (Actor.Subject; field coined by F3-01). The committer names it as the
+	// audit actor, so a commit that only unsets keys or only changes boot keys
+	// still carries its writer. Every Override.By and secrets.Write.By of the
+	// commit equals it.
+	By string
 }
 
 // Patch is the API write unit. Set values are JSON; for a secret key the JSON
