@@ -1,0 +1,614 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/config"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "config": {
+              "abs_access_token_ttl": "720h",
+              "abs_api_enabled": true,
+              "abs_auth_modes": "jwt",
+              "abs_auth_probe_enabled": false,
+              "abs_default_library_id": "b5e3a5b2-a76e-471f-b18b-915e4716d053",
+              "abs_itunes_position_backfill_user_id": "",
+              "abs_refresh_grace": "10m",
+              "abs_refresh_token_ttl": "87600h",
+              "abs_server_version": "2.36.0",
+              "abs_session_max_ttl": "0",
+              "acoustid_api_key": "********us",
+              "activity_backend": "pebble",
+              "activity_log_compaction_days": 0,
+              "activity_log_full_detail_days": 0,
+              "activity_log_nightly_compaction_enabled": true,
+              "activity_log_retention_change_days": 0,
+              "activity_log_retention_debug_days": 0,
+              "ai_backend": {
+                "embedding_mode": "",
+                "llm_mode": "",
+                "local_base_url": "",
+                "local_embedding_model": "bge-m3",
+                "local_llm_model": "qwen2.5:7b-instruct",
+                "parse_batch_size": 0,
+                "parse_batch_timeout_seconds": 0,
+                "parse_batch_workers": 0
+              },
+              "ai_endpoints": [
+                {
+                  "auth_ref": "********",
+                  "capabilities": [
+                    "llm.filename_parse",
+                    "llm.audiobook_parse",
+                    "llm.cover_art_vision",
+                    "llm.author_review",
+                    "llm.author_discovery",
+                    "llm.author_dedup_batch",
+                    "llm.diagnostics",
+                    "transcribe.intro_clip",
+                    "embed.text",
+                    "embed.text_batch"
+                  ],
+                  "capability_models": {
+                    "llm.audiobook_parse": "gpt-5-mini",
+                    "llm.cover_art_vision": "gpt-5-mini",
+                    "llm.dedup_review": "gpt-5-mini",
+                    "llm.filename_parse": "gpt-5-mini",
+                    "llm.metadata_rerank": "gpt-5-mini"
+                  },
+                  "chat_model": "gpt-5-mini",
+                  "concurrency": 4,
+                  "embed_model": "text-embedding-3-large",
+                  "enabled": true,
+                  "features": [
+                    "batch_api",
+                    "vision"
+                  ],
+                  "id": "openai",
+                  "label": "OpenAI (migrated from openai_api_key)",
+                  "priority": 20,
+                  "protocol": "openai_compat",
+                  "require_gpu": false,
+                  "url": "https://api.openai.com/v1"
+                },
+                {
+                  "capabilities": [
+                    "transcribe.intro_clip",
+                    "transcribe.batch"
+                  ],
+                  "chat_model": "",
+                  "concurrency": 1,
+                  "embed_model": "",
+                  "enabled": true,
+                  "id": "local-uv",
+                  "label": "Local uv/openai-whisper",
+                  "priority": 100,
+                  "protocol": "local_process",
+                  "require_gpu": false,
+                  "url": "local:uv-openai-whisper"
+                },
+                {
+                  "capabilities": [
+                    "llm.filename_parse"
+                  ],
+                  "chat_model": "clocktower-7b",
+                  "concurrency": 1,
+                  "embed_model": "",
+                  "enabled": true,
+                  "id": "oracle-relay",
+                  "label": "Oracle relay (Clocktower)",
+                  "priority": 50,
+                  "protocol": "openai_compat",
+                  "require_gpu": false,
+                  "url": "http://oracle.invalid:not-a-port/v1"
+                }
+              ],
+              "ai_endpoints_routing": false,
+              "ai_journal_retention_days": 30,
+              "api_rate_limit_per_minute": 100,
+              "authority_evidence_enabled": false,
+              "auto_organize": false,
+              "auto_rename_on_apply": true,
+              "auto_scan_debounce_seconds": 2,
+              "auto_scan_enabled": true,
+              "auto_update": {
+                "channel": "stable",
+                "check_minutes": 60,
+                "enabled": false,
+                "window_end": 5,
+                "window_start": 2
+              },
+              "auto_write_tags_on_apply": true,
+              "backup_compression": "gzip",
+              "backup_compression_level": 0,
+              "backup_dir": "",
+              "backup_max_total_bytes": 0,
+              "backup_retention_days": 0,
+              "basic_auth_enabled": false,
+              "basic_auth_password": "********le",
+              "basic_auth_username": "",
+              "bleve_description_max_chars": 500,
+              "bulk_apply_max_items": 5000,
+              "cache_invalidate_on_book_update": false,
+              "catalog": {
+                "enabled": false,
+                "harvest_rate_fraction": 0.5,
+                "language": "english",
+                "marketplace": "us",
+                "max_products_per_author": 2000
+              },
+              "cf_access_aud": "",
+              "cf_access_team_domain": "",
+              "chapter_consolidation_threshold_min": 10,
+              "coalesce_shattered_siblings": false,
+              "concurrent_scans": 3,
+              "cover_art_model": "gpt-5-mini",
+              "create_backups": true,
+              "database_path": "/tmp/r2corpus/stage1/db/audiobooks.pebble",
+              "database_type": "pebble",
+              "db_census_exact_cooldown_hours": 6,
+              "db_census_exact_read_mb_per_sec": 50,
+              "dedup": {
+                "author_high_threshold": 0.92,
+                "author_low_threshold": 0.8,
+                "auto_merge_enabled": true,
+                "auto_resolve_enabled": false,
+                "book_high_threshold": 0.95,
+                "book_low_threshold": 0.85,
+                "chromem_lazy": false,
+                "embeddings_enabled": true,
+                "llm_auto_merge_high_confidence": false,
+                "on_import_via_scheduler": false,
+                "review_model": "gpt-5-mini",
+                "signals": {
+                  "band_certain_min": 97,
+                  "band_high_min": 90,
+                  "band_medium_min": 75,
+                  "band_review_min": 60
+                }
+              },
+              "dedup_boilerplate": {
+                "extra_prefix_patterns": [],
+                "extra_title_patterns": []
+              },
+              "deluge_discovery_enabled": false,
+              "deluge_discovery_label": "batcave",
+              "deluge_move_enabled": false,
+              "deluge_web_password": "********le",
+              "deluge_web_url": "http://deluge.invalid:8112",
+              "disable_per_user_search_filters": false,
+              "disk_quota_percent": 80,
+              "download_client": {
+                "torrent": {
+                  "deluge": {
+                    "host": "deluge.invalid",
+                    "password": "<redacted>",
+                    "port": 58846,
+                    "username": "alfred.pennyworth"
+                  },
+                  "type": "deluge"
+                }
+              },
+              "embed_cover_art": true,
+              "embedding": {
+                "base_url": "",
+                "dimensions": 3072,
+                "enabled": true,
+                "model": "text-embedding-3-large",
+                "request_timeout_seconds": 0,
+                "vector_backend": "hnsw"
+              },
+              "enable_ai_parsing": true,
+              "enable_auth": true,
+              "enable_disk_quota": false,
+              "enable_rate_limit": true,
+              "enable_user_quotas": false,
+              "enabled_sort_indexes": [
+                "year",
+                "created_at"
+              ],
+              "env_locked": [
+                "database_path",
+                "deluge_web_password",
+                "deluge_web_url"
+              ],
+              "exclude_patterns": [],
+              "file_naming_pattern": "{title} - {track:02d}",
+              "filename_parse_model": "gpt-5-mini",
+              "fingerprint_length_sec": 120,
+              "fingerprint_remote_workers_enabled": false,
+              "fingerprint_window_reference_tools": "",
+              "fingerprint_worker_tool_versions": null,
+              "folder_naming_pattern": "{author}/{title}",
+              "fp_parallel_workers": 4,
+              "fragment_window_containment_min": 0.5,
+              "google_books_api_key": "********le",
+              "google_books_background_daily_limit": 0,
+              "google_books_daily_limit": 0,
+              "google_books_fallback_daily_limit": 0,
+              "hardcover_api_token": "********le",
+              "identification_advance_enabled": false,
+              "itunes": {
+                "libraries": {
+                  "ao": {
+                    "frozen": false,
+                    "itl_path": "",
+                    "xml_path": ""
+                  },
+                  "import_source": "",
+                  "original": {
+                    "frozen": false,
+                    "itl_path": "",
+                    "xml_path": ""
+                  },
+                  "pointed_at": ""
+                },
+                "library_read_path": "",
+                "library_write_path": "",
+                "media_root": "",
+                "path_mappings": null,
+                "path_trim_enabled": true,
+                "windows_root_path": "C:\\Gotham\\Music"
+              },
+              "json_body_limit_mb": 1,
+              "kept_sweep_apply_enabled": false,
+              "library_counts_cache_min_interval_seconds": 600,
+              "list_warmer_heap_delta_mb": 4096,
+              "list_warmer_trickle_interval_ms": 10000,
+              "log_level": "info",
+              "log_retention_days": 21,
+              "maintenance": {
+                "acoustid_backfill": false,
+                "acoustid_nightly_limit": 5000,
+                "acoustid_online_lookup": false,
+                "author_split": true,
+                "db_optimize": true,
+                "dedup_refresh": true,
+                "enabled": true,
+                "library_organize": false,
+                "library_scan": false,
+                "library_size_refresh": true,
+                "metadata_refresh": false,
+                "purge_deleted": true,
+                "purge_old_logs": false,
+                "reconcile": true,
+                "series_prune": true,
+                "tombstone_cleanup": true,
+                "window_end": 5,
+                "window_start": 2
+              },
+              "master_list_retention": 10,
+              "metadata_candidate_fetch_workers": 0,
+              "metadata_fetch": {
+                "catalog_stage": false,
+                "folder_parse_person_title": true,
+                "negative_ttl_days": {
+                  "audible": 14,
+                  "audnexus": 14,
+                  "google": 7,
+                  "openlibrary": 30
+                },
+                "shared_cache": true
+              },
+              "metadata_fetch_cache_ttl_days": 180,
+              "metadata_review_model": "gpt-5-mini",
+              "metadata_scoring": {
+                "bulk_fetch_workers": 4,
+                "compilation_penalty": 0.15,
+                "duration_tier_multipliers": [
+                  1.3,
+                  1.2,
+                  1.1,
+                  1,
+                  0.75,
+                  0.5
+                ],
+                "duration_tier_scores": [
+                  20,
+                  15,
+                  10,
+                  0,
+                  -10,
+                  -20
+                ],
+                "embedding_best_match": 0.88,
+                "embedding_enabled": false,
+                "embedding_min_score": 0.82,
+                "f1_min_score": 0.35,
+                "llm_enabled": false,
+                "llm_rerank_epsilon": 0.05,
+                "llm_rerank_top_k": 5,
+                "rich_metadata_bonus_cap": 0.15,
+                "rich_metadata_field_bonus": 0.05,
+                "series_name_match_boost": 1.4,
+                "series_number_exact_boost": 2,
+                "series_number_wrong_penalty": 0.5,
+                "source_fanout_workers": 0,
+                "transcription_author_boost": 1.6,
+                "transcription_narrator_boost": 1.4,
+                "transcription_title_exact_boost": 2,
+                "transcription_title_substr_boost": 1.4,
+                "write_back_workers": 4
+              },
+              "metadata_sources": [
+                {
+                  "credentials": {},
+                  "enabled": true,
+                  "id": "audible",
+                  "name": "Audible",
+                  "priority": 1,
+                  "requires_auth": false
+                },
+                {
+                  "credentials": {},
+                  "enabled": true,
+                  "id": "openlibrary",
+                  "name": "Open Library",
+                  "priority": 2,
+                  "requires_auth": false
+                },
+                {
+                  "credentials": {},
+                  "enabled": false,
+                  "id": "audnexus",
+                  "name": "Audnexus",
+                  "priority": 3,
+                  "requires_auth": false
+                },
+                {
+                  "credentials": {
+                    "apiKey": ""
+                  },
+                  "enabled": false,
+                  "id": "google-books",
+                  "name": "Google Books",
+                  "priority": 4,
+                  "requires_auth": true
+                },
+                {
+                  "credentials": {
+                    "apiKey": "<redacted>"
+                  },
+                  "enabled": true,
+                  "id": "hardcover",
+                  "name": "Hardcover",
+                  "priority": 5,
+                  "requires_auth": true
+                },
+                {
+                  "credentials": {},
+                  "enabled": false,
+                  "id": "wikipedia",
+                  "name": "Wikipedia",
+                  "priority": 6,
+                  "requires_auth": false
+                }
+              ],
+              "min_book_size_bytes": 5242880,
+              "min_rescan_age_hours": 144,
+              "naming_pattern_tokens": [
+                "{author}",
+                "{bitrate}",
+                "{codec}",
+                "{edition_suffix}",
+                "{edition}",
+                "{ext}",
+                "{isbn10}",
+                "{isbn13}",
+                "{language}",
+                "{lang}",
+                "{narrator}",
+                "{print_year}",
+                "{publisher}",
+                "{quality}",
+                "{series_number}",
+                "{series_position}",
+                "{series_prefix}",
+                "{series}",
+                "{title}",
+                "{total_tracks}",
+                "{track_title}",
+                "{track}",
+                "{year}"
+              ],
+              "oauth_allowed_emails": "",
+              "oauth_default_role": "viewer",
+              "oauth_enabled": false,
+              "oauth_github_client_id": "",
+              "oauth_github_client_secret": "",
+              "oauth_google_client_id": "",
+              "oauth_google_client_secret": "",
+              "oauth_redirect_base_url": "",
+              "openai_api_key": "********ed",
+              "openai_base_url": "",
+              "openlibrary_dump_dir": "/tmp/r2corpus/stage1/library/openlibrary-dumps",
+              "openlibrary_dump_enabled": false,
+              "operation_log_retention_days": 0,
+              "operation_timeout_minutes": 30,
+              "organization_strategy": "copy",
+              "otel_exporter_otlp_endpoint": "",
+              "otel_metrics_otlp_endpoint": "",
+              "otel_metrics_otlp_insecure": false,
+              "otel_metrics_otlp_interval": "60s",
+              "owner_email": "",
+              "path_aliases": [],
+              "playlist_dir": "/tmp/r2corpus/stage1/playlists",
+              "plugins": {
+                "webhook": {
+                  "enabled": true,
+                  "settings": {
+                    "events": "all",
+                    "secret": "<redacted>",
+                    "urls": "http://webhook.invalid/gotham"
+                  }
+                }
+              },
+              "protected_paths": null,
+              "purge_soft_deleted_after_days": 30,
+              "purge_soft_deleted_delete_files": false,
+              "repair_chapter_max_min": 120,
+              "retire_versions_apply_enabled": false,
+              "review_apply_enabled": false,
+              "root_dir": "/tmp/r2corpus/stage1/library",
+              "scan_on_startup": false,
+              "scan_progress_every": 0,
+              "scan_standdown_grace_seconds": 600,
+              "scheduled": {
+                "acoustid_backfill": {
+                  "enabled": false,
+                  "interval": 1440,
+                  "on_startup": false
+                },
+                "ai_dedup_batch": {
+                  "enabled": false,
+                  "interval": 1440,
+                  "on_startup": false
+                },
+                "asin_backfill": {
+                  "enabled": false,
+                  "interval": 360,
+                  "on_startup": false
+                },
+                "author_split": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                },
+                "candidate_fetch": {
+                  "enabled": false,
+                  "interval": 360,
+                  "on_startup": false
+                },
+                "catalog_harvest": {
+                  "enabled": false,
+                  "interval": 360,
+                  "on_startup": false
+                },
+                "db_optimize": {
+                  "enabled": false,
+                  "interval": 1440,
+                  "on_startup": false
+                },
+                "dedup_refresh": {
+                  "enabled": true,
+                  "interval": 720,
+                  "on_startup": false
+                },
+                "label_refinement": {
+                  "enabled": false,
+                  "interval": 10080,
+                  "on_startup": false
+                },
+                "library_scan": {
+                  "enabled": false,
+                  "interval": 360,
+                  "on_startup": false
+                },
+                "library_scan_full": {
+                  "enabled": true,
+                  "interval": 1440,
+                  "period_hours": 168
+                },
+                "metadata_refresh": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                },
+                "metadata_upgrade": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                },
+                "reconcile": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                },
+                "resolve_production_authors": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                },
+                "series_prune": {
+                  "enabled": false,
+                  "interval": 0,
+                  "on_startup": false
+                }
+              },
+              "search": {
+                "result_cache": {
+                  "enabled": true,
+                  "max_bytes": 134217728,
+                  "wait_seconds": 20
+                }
+              },
+              "setting_locks": {
+                "database_path": "--db",
+                "deluge_web_password": "DELUGE_WEB_PASSWORD",
+                "deluge_web_url": "DELUGE_WEB_URL"
+              },
+              "setup_complete": true,
+              "supported_extensions": [
+                ".m4b",
+                ".mp3",
+                ".m4a",
+                ".aac",
+                ".ogg",
+                ".flac",
+                ".wma",
+                ".opus",
+                ".oga",
+                ".wav",
+                ".aiff",
+                ".aif",
+                ".mka",
+                ".aax",
+                ".aaxc"
+              ],
+              "telemetry_environment": "prod",
+              "tools": {
+                "allow_periodic_ollama": false,
+                "fpcalc": {
+                  "custom_path": "",
+                  "mode": "system"
+                },
+                "managed_dir": "/var/lib/audiobook-organizer/tools",
+                "ollama": {
+                  "custom_path": "",
+                  "mode": "system"
+                },
+                "ollama_debounce_min": 10
+              },
+              "upload_body_limit_mb": 10,
+              "verify_after_write": true,
+              "whisper_batch_size": 16,
+              "whisper_batch_sleep_ms": 8000,
+              "whisper_clip_cache_dir": "",
+              "whisper_endpoints": null,
+              "whisper_max_in_flight": 0,
+              "whisper_remote_url": "",
+              "whisper_requires": null,
+              "write_back_metadata": false,
+              "write_startup_readonly_key": false
+            }
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "effective_config",
+  "r0_tag": "v0.223.0",
+  "what": "R0's own view of every config key: GET /api/v1/config (stored, YAML and env layers applied; env_locked and setting_locks name the operator layers)"
+}

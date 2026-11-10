@@ -1,0 +1,355 @@
+{
+  "exchanges": [
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/audiobooks?limit=100&sort_by=title&sort_order=asc"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "applied_filters": [
+              {
+                "field": "sort_by",
+                "value": "title"
+              },
+              {
+                "field": "sort_order",
+                "value": "asc"
+              }
+            ],
+            "count": 13,
+            "items": [
+              {
+                "author_id": 4,
+                "author_name": "Harvey Bullock",
+                "created_at": "2026-11-10T11:33:24.562642808Z",
+                "file_hash": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8",
+                "file_path": "/tmp/r2corpus/stage1/import/Harvey Bullock/Dark Victory/Dark Victory.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQYEJ6HK76AJH2GWJP4E0",
+                "is_primary_version": false,
+                "library_state": "suspicious",
+                "original_file_hash": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8",
+                "title": "Dark Victory",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZNCR8V694PCAV7W9Q3T"
+              },
+              {
+                "author_id": 4,
+                "author_name": "Harvey Bullock",
+                "created_at": "2026-11-10T11:33:25.80414263Z",
+                "file_hash": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8",
+                "file_path": "/tmp/r2corpus/stage1/library/Harvey Bullock/Dark Victory/Dark Victory.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQZNCR8V694PCAV34WYG0",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8",
+                "original_file_hash": "433e9e8088f5ed419762639fec86b14330341cf70d1aa6a20808c20c9bfbebf8",
+                "title": "Dark Victory",
+                "updated_at": "2026-11-10T11:33:25.8069815Z",
+                "version_group_id": "01M72KQZNCR8V694PCAV7W9Q3T"
+              },
+              {
+                "author_id": 3,
+                "author_name": "Selina Kyle",
+                "created_at": "2026-11-10T11:33:24.555874326Z",
+                "file_hash": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87",
+                "file_path": "/tmp/r2corpus/stage1/import/Selina Kyle/Hush/Hush.flac",
+                "file_size": 9490,
+                "fingerprint_status": "none",
+                "format": "flac",
+                "id": "01M72KQYEB6JCCA4HZY23XWBX7",
+                "is_primary_version": false,
+                "library_state": "suspicious",
+                "original_file_hash": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87",
+                "title": "Hush",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZJS2MMT868H68SJA4TN"
+              },
+              {
+                "author_id": 3,
+                "author_name": "Selina Kyle",
+                "created_at": "2026-11-10T11:33:25.721266646Z",
+                "file_hash": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87",
+                "file_path": "/tmp/r2corpus/stage1/library/Selina Kyle/Hush/Hush.flac",
+                "file_size": 9490,
+                "fingerprint_status": "none",
+                "format": "flac",
+                "id": "01M72KQZJS2MMT868H670RYKVT",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87",
+                "original_file_hash": "3ca8192b155148f408e6445f36958adcd9c4817c48a97b3075d3e727ab404a87",
+                "title": "Hush",
+                "updated_at": "2026-11-10T11:33:25.724270188Z",
+                "version_group_id": "01M72KQZJS2MMT868H68SJA4TN"
+              },
+              {
+                "author_id": 6,
+                "author_name": "Lucius Fox",
+                "created_at": "2026-11-10T11:33:24.564576132Z",
+                "file_hash": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff",
+                "file_path": "/tmp/r2corpus/stage1/import/Lucius Fox/Knightfall/Knightfall - Part 01.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQYEM9TESSDZVH38WQQFT",
+                "is_primary_version": false,
+                "library_state": "organized_source",
+                "original_file_hash": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff",
+                "title": "Knightfall",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZHT47304H2KKC1T25RB"
+              },
+              {
+                "author_id": 6,
+                "author_name": "Lucius Fox",
+                "created_at": "2026-11-10T11:33:25.690179097Z",
+                "file_hash": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff",
+                "file_path": "/tmp/r2corpus/stage1/library/Lucius Fox/Knightfall/Knightfall.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQZHT47304H2KK9T8FJVB",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff",
+                "original_file_hash": "9a6d85b0fb8e7b4dd054d3972e43b9936ae3d7ab3a488a9420c948f78a52b9ff",
+                "title": "Knightfall",
+                "updated_at": "2026-11-10T11:33:25.693242343Z",
+                "version_group_id": "01M72KQZHT47304H2KKC1T25RB"
+              },
+              {
+                "author_id": 7,
+                "author_name": "Renee Montoya",
+                "created_at": "2026-11-10T11:33:44.748703114Z",
+                "file_hash": "fa4b53dd3ef9d3b23173735603a9506fe18838bb1068015e5f2ebc18303cd02e",
+                "file_path": "/tmp/r2corpus/stage1/import/Renee Montoya/No Man's Land/No Man's Land.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KRJ5CSVKEM3TR2PK6S90G",
+                "is_primary_version": true,
+                "library_state": "suspicious",
+                "original_file_hash": "fa4b53dd3ef9d3b23173735603a9506fe18838bb1068015e5f2ebc18303cd02e",
+                "title": "No Man's Land",
+                "updated_at": "<volatile>"
+              },
+              {
+                "author_id": 5,
+                "author_name": "Leslie Thompkins",
+                "created_at": "2026-11-10T11:33:24.563962925Z",
+                "file_hash": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158",
+                "file_path": "/tmp/r2corpus/stage1/import/Leslie Thompkins/The Killing Joke/The Killing Joke.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQYEKX7DN8C2AVWW2T76S",
+                "is_primary_version": false,
+                "library_state": "suspicious",
+                "original_file_hash": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158",
+                "title": "The Killing Joke",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZKPACZZ0W2V9M1KEN0D"
+              },
+              {
+                "author_id": 5,
+                "author_name": "Leslie Thompkins",
+                "created_at": "2026-11-10T11:33:25.75078704Z",
+                "file_hash": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158",
+                "file_path": "/tmp/r2corpus/stage1/library/Leslie Thompkins/The Killing Joke/The Killing Joke.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQZKPACZZ0W2V9K51673E",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158",
+                "original_file_hash": "fe5746099e3f429613587be2de432a3859af33ec648f16d6344d7185c000a158",
+                "title": "The Killing Joke",
+                "updated_at": "2026-11-10T11:33:25.76529919Z",
+                "version_group_id": "01M72KQZKPACZZ0W2V9M1KEN0D"
+              },
+              {
+                "author_id": 2,
+                "author_name": "Alfred Pennyworth",
+                "created_at": "2026-11-10T11:33:24.550879653Z",
+                "file_hash": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13",
+                "file_path": "/tmp/r2corpus/stage1/import/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
+                "file_size": 1405,
+                "fingerprint_status": "none",
+                "format": "m4b",
+                "id": "01M72KQYE6SKCEEADJZA69MJQR",
+                "is_primary_version": false,
+                "library_state": "suspicious",
+                "original_file_hash": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13",
+                "title": "The Long Halloween",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZFF88CKBD6ERGBKPVPR"
+              },
+              {
+                "author_id": 2,
+                "author_name": "Alfred Pennyworth",
+                "created_at": "2026-11-10T11:33:25.615223561Z",
+                "file_hash": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13",
+                "file_path": "/tmp/r2corpus/stage1/library/Alfred Pennyworth/The Long Halloween/The Long Halloween.m4b",
+                "file_size": 1405,
+                "fingerprint_status": "none",
+                "format": "m4b",
+                "id": "01M72KQZFF88CKBD6ERFB4D53D",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13",
+                "original_file_hash": "7654782c123b7a046e37456d2e717464ac1c9fd7aa41259907cd784464536b13",
+                "title": "The Long Halloween",
+                "updated_at": "2026-11-10T11:33:25.618071134Z",
+                "version_group_id": "01M72KQZFF88CKBD6ERGBKPVPR"
+              },
+              {
+                "author_id": 1,
+                "author_name": "Barbara Gordon",
+                "created_at": "2026-11-10T11:33:24.54776836Z",
+                "file_hash": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93",
+                "file_path": "/tmp/r2corpus/stage1/import/Barbara Gordon/Year One/Year One.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQYE310SSXK8P6KZHNDG4",
+                "is_primary_version": false,
+                "library_state": "suspicious",
+                "original_file_hash": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93",
+                "title": "Year One",
+                "updated_at": "<volatile>",
+                "version_group_id": "01M72KQZGQMSNRCM0YPPD51CXK"
+              },
+              {
+                "author_id": 1,
+                "author_name": "Barbara Gordon",
+                "created_at": "2026-11-10T11:33:25.655086236Z",
+                "file_hash": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93",
+                "file_path": "/tmp/r2corpus/stage1/library/Barbara Gordon/Year One/Year One.mp3",
+                "file_size": 876,
+                "fingerprint_status": "none",
+                "format": "mp3",
+                "id": "01M72KQZGQMSNRCM0YPP9F5FD5",
+                "is_primary_version": true,
+                "library_state": "organized",
+                "organized_file_hash": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93",
+                "original_file_hash": "885a11f3b98419e891978e676395f85555489c6ad5da1a012714fc83e7760f93",
+                "title": "Year One",
+                "updated_at": "2026-11-10T11:33:25.660550131Z",
+                "version_group_id": "01M72KQZGQMSNRCM0YPPD51CXK"
+              }
+            ],
+            "limit": 100,
+            "offset": 0
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/playlists"
+      },
+      "response": {
+        "body": {
+          "count": 2,
+          "items": [
+            {
+              "book_ids": [
+                "01M72KQYE6SKCEEADJZA69MJQR",
+                "01M72KQYE310SSXK8P6KZHNDG4"
+              ],
+              "created_at": "2026-11-10T11:33:38.206251983Z",
+              "created_by_user_id": "01M72KQHXM3TJDMDBTC8G90416",
+              "dirty": true,
+              "id": "01M72KRBRY7RF8T186KZBK89Y0",
+              "name": "Arkham Reading List",
+              "type": "static",
+              "updated_at": "2026-11-10T11:33:38.219908434Z",
+              "version": 2
+            },
+            {
+              "created_at": "2026-11-10T11:33:38.233610824Z",
+              "created_by_user_id": "01M72KQHXM3TJDMDBTC8G90416",
+              "dirty": true,
+              "id": "01M72KRBSS97NB9P92QM2YWR2H",
+              "name": "Knight Stories",
+              "query": "Knight",
+              "type": "smart",
+              "updated_at": "2026-11-10T11:33:38.233610824Z",
+              "version": 1
+            }
+          ],
+          "limit": 50,
+          "offset": 0,
+          "total": 2
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": null,
+        "headers": {
+          "accept": "application/json",
+          "authorization": "Bearer <api-key:r2-answers>",
+          "user-agent": "r2corpus-recorder/1.0"
+        },
+        "method": "GET",
+        "path": "/api/v1/import-paths"
+      },
+      "response": {
+        "body": {
+          "data": {
+            "count": 1,
+            "import_paths": [
+              {
+                "book_count": 1,
+                "created_at": "2026-11-10T11:33:24.515252027Z",
+                "enabled": true,
+                "id": 1,
+                "last_scan": "2026-11-10T11:33:24.574407911Z",
+                "name": "Gotham Archive",
+                "path": "/tmp/r2corpus/stage1/import"
+              }
+            ]
+          }
+        },
+        "headers": {
+          "content-type": "application/json; charset=utf-8"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "library",
+  "r0_tag": "v0.223.0",
+  "what": "books, playlists and import roots as R0 lists them. No run listing: booting the copy re-queues and dispatches the corpus' quiesced and queued scans, so runs listed on the copy are boot-time transitions under fresh run IDs"
+}
