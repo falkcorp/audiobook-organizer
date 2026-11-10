@@ -1,5 +1,5 @@
 // file: core/app/offline_secrets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a2e9f14-c873-4b0d-9e51-2f7d8a3c6b90
 // last-edited: 2026-11-10
 
@@ -10,12 +10,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -94,7 +96,8 @@ func fixtureKeyring(t *testing.T, stateDir string) []string {
 // directory (the keyring and its header's install_id) and leaves the store's
 // files alone, and the next boot is an ordinary one; rotate-derive and
 // set-install-id are refused while the store is held. With the service
-// stopped, rotate-derive adds d2 and asks for a new export.
+// stopped, rotate-derive adds d2 and asks for a new export. Run as any user
+// other than the state directory's owner, each command is refused.
 func TestExportKeyring_OpensNoStore(t *testing.T) {
 	opts := offlineOpts(t)
 	keeper := offlineKeeper()
@@ -165,6 +168,40 @@ func TestExportKeyring_OpensNoStore(t *testing.T) {
 	}
 	if err := setID.Run(t.Context(), []string{"--install-id", "batcave-0001"}, &stdout); err == nil {
 		t.Fatal("set-install-id accepted an ID that is not the store's marker")
+	}
+
+	// The owner rule: as any user other than the state directory's owner,
+	// each command is refused before it reads or writes the keyring.
+	owner, ok, err := storage.StateDirOwner(bootseam.FS(t.Context()), opts.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		stranger := bootseam.With(t.Context(), &bootseam.Seams{Euid: func() int { return int(owner) + 1 }})
+		kr, err := os.ReadFile(keyring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		strangerOut := filepath.Join(t.TempDir(), "stranger.export")
+		for _, c := range []struct {
+			cmd  Command
+			args []string
+		}{
+			{export, []string{"--out", strangerOut}},
+			{rotate, nil},
+			{setID, []string{"--install-id", "batcave-0001"}},
+		} {
+			err := c.cmd.Run(stranger, c.args, &stdout)
+			if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), c.cmd.Name) {
+				t.Errorf("%s as uid %d = %v, want storage.ErrNotStateDirOwner naming the command", c.cmd.Name, owner+1, err)
+			}
+		}
+		if now, _ := os.ReadFile(keyring); !bytes.Equal(now, kr) {
+			t.Error("a command refused for its uid changed the keyring")
+		}
+		if _, err := os.Stat(strangerOut); !os.IsNotExist(err) {
+			t.Error("export-keyring refused for its uid wrote --out")
+		}
 	}
 
 	// Refusals: no --out, a loose destination, no storage.

@@ -1,5 +1,5 @@
 // file: core/kernel/secrets_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f0c9a52-6e1b-4d7a-8c25-b94e1f6a0d37
 // last-edited: 2026-11-10
 
@@ -191,7 +191,8 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 // TestSecretsHealth_Tokens covers the kernel half of
 // TestStageUnreadable_ReadsReenter (05-config §2.9) and the precedence of the
 // core.secrets tokens: a fresh keyring raises secrets_keyring_not_exported, an
-// export covering every key clears it, an unreadable marker raises
+// export covering every key clears it, a failed undecryptable check raises
+// secrets_undecryptable, an unreadable marker raises
 // secrets_undecryptable (the most urgent) until a Put replaces it, and a
 // blocked retirement raises derive_key_retire_blocked. No value reaches a
 // Detail.
@@ -211,6 +212,14 @@ func TestSecretsHealth_Tokens(t *testing.T) {
 	}
 	if r := secretsHealth(ctx, s.store); r.Status != health.StatusUp || r.Reason != "" {
 		t.Fatalf("after the export: %+v, want Up", r)
+	}
+	// The undecryptable check itself fails (a cancelled context stops its
+	// scan): reported as secrets_undecryptable, never taken for "all
+	// readable".
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if r := secretsHealth(cctx, s.store); r.Status != health.StatusDegraded || r.Reason != reasonSecretsUndecryptable || !strings.Contains(r.Detail, "could not be checked") {
+		t.Fatalf("a failed undecryptable check: %+v, want degraded %s", r, reasonSecretsUndecryptable)
 	}
 
 	ks, _ := db.Keyspace(secretsOwnerID)
