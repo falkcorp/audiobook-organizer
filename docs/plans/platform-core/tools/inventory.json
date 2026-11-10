@@ -1806,7 +1806,9 @@
    "core/storage/import_errors.go",
    "core/config/redact_test.go",
    "core/kernel/core_sections_test.go",
-   "core/app/offline_open_test.go"
+   "core/app/offline_open_test.go",
+   "core/app/offline_secrets_test.go",
+   "core/kernel/secrets_test.go"
   ],
   "spec": "05-config §2 (secrets), §2.4 (keyring export, state dir); 06 §6.4.10 F3, §6.5.1 P4; 04 §8.1 F3, §2.3 (keyedmutex)",
   "notes": "Tier: the keyring holds every secret; a durable boot write. Declares the two secrets.Ref keys (core.auth.oidc.<id>.client_secret, core.http.basic_gate.password). secrets.Open is called from the boot sequence only from F3-07, for hello too, so no dark gate is needed. 04 keys: F3 create mediacore/secrets; F3 create mediacore/internal/keyedmutex."
