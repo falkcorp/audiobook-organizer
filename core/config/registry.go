@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -428,7 +428,7 @@ func (s *section) assemble(vals map[Path]json.RawMessage, ids []string) (json.Ra
 func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error) {
 	v := reflect.New(s.spec.typ)
 	if err := strictDecode(raw, v.Interface()); err != nil {
-		return nil, &FieldError{Path: s.path, Err: err}
+		return nil, s.redact(&FieldError{Path: s.path, Err: err})
 	}
 	for _, k := range s.keys {
 		if !k.secret {
@@ -442,10 +442,69 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 	}
 	if val, ok := v.Interface().(Validator); ok {
 		if err := val.Validate(); err != nil {
-			return nil, asFieldError(s.path, err)
+			return nil, s.redact(asFieldError(s.path, err))
 		}
 	}
 	return v.Interface(), nil
+}
+
+// redact keeps a sensitive value out of a decode or Validator error of this
+// section (05-config §1.3.1: a sensitive value is redacted in logs). These
+// errors reach AttachReport.Quarantined, KeyState.Quarantined, the logs and
+// Apply's error, and a Validator's message may quote the value it rejects.
+// In a section that holds a sensitive key, each part of the error (errors.Join
+// parts are taken one by one) is kept only when it is a *FieldError on a
+// non-sensitive key of the section; a *FieldError on a sensitive key keeps its
+// path and loses its message; anything else (a bare error, a wrapped one, a
+// *FieldError on the section itself or on a path that is not a key) is
+// replaced whole by a fixed message on the section, failing closed. A section
+// without a sensitive key is returned as is.
+func (s *section) redact(err error) error {
+	if err == nil || !slices.ContainsFunc(s.keys, func(k *keyInfo) bool { return k.sensitive }) {
+		return err
+	}
+	return s.redactPart(err)
+}
+
+// redactPart is redact for one part of the error tree.
+func (s *section) redactPart(err error) error {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		parts := j.Unwrap()
+		out := make([]error, 0, len(parts))
+		for _, e := range parts {
+			out = append(out, s.redactPart(e))
+		}
+		return errors.Join(out...)
+	}
+	if fe, ok := err.(*FieldError); ok {
+		if k := s.concreteKey(fe.Path); k != nil {
+			if k.sensitive {
+				return &FieldError{Path: fe.Path, Err: errSensitiveRedacted()}
+			}
+			return fe
+		}
+	}
+	return &FieldError{Path: s.path, Err: errors.New("the section fails validation (detail redacted: the section holds a sensitive key)")}
+}
+
+// concreteKey is the key p names in this section: a struct section's key, or
+// a map entry's "<section>.<id>.<rel>". nil when p is not a key of s.
+func (s *section) concreteKey(p Path) *keyInfo {
+	if !s.isMap {
+		if p == s.path {
+			return nil // the section itself: a section-level error
+		}
+		return s.keyOf(p)
+	}
+	rest, ok := strings.CutPrefix(string(p), string(s.path)+pathSep)
+	if !ok {
+		return nil
+	}
+	id, rel, _ := strings.Cut(rest, pathSep)
+	if !validSegment(id) {
+		return nil
+	}
+	return s.byRel[rel]
 }
 
 // asFieldError keeps a Validator's *FieldErrors and wraps anything else as
