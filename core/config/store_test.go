@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -277,6 +277,29 @@ func TestBootRecord_TempFileIsAlwaysNew(t *testing.T) {
 			t.Errorf("record = %s, want the new value", r.record())
 		}
 	})
+}
+
+// TestBootRecord_ValueUnderOperatorLockReported (T4 review MINOR-4,
+// 05-config §1.3.5): a boot-record value of a key an operator layer sets is
+// shadowed like a stored row: the operator value is effective, the record
+// keeps its entry, AttachReport.Ignored names the lock, and the store logs it
+// once although Boot and Load both classify the record.
+func TestBootRecord_ValueUnderOperatorLockReported(t *testing.T) {
+	rec := `{"format":"mediacore-boot/1","gen":1,"values":{"core.batcave.mode":"day"}}`
+	r := newRig(t, rigOpts{bootRecord: rec, env: map[config.Path]string{kMode: `"night"`}})
+	rep := r.start()
+	if got, want := rep.Ignored[kMode], "env GOTHAM_CORE_BATCAVE_MODE"; got != want {
+		t.Errorf("AttachReport.Ignored[%s] = %q, want %q (all: %v)", kMode, got, want, rep.Ignored)
+	}
+	if n := r.logs.count("boot-record value is ignored"); n != 1 {
+		t.Errorf("logged %d times, want once: %s", n, r.logs.all())
+	}
+	if ks, _ := r.st.Lookup(kMode); string(ks.Effective) != `"night"` || ks.Source != config.SourceEnv {
+		t.Errorf("Effective %s from %v, want the operator's \"night\"", ks.Effective, ks.Source)
+	}
+	if !strings.Contains(string(r.record()), `"day"`) {
+		t.Errorf("record = %s: the shadowed entry was dropped", r.record())
+	}
 }
 
 func TestBootRecord_AtomicAndQuarantine(t *testing.T) {
