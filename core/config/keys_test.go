@@ -1,5 +1,5 @@
 // file: core/config/keys_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: f224e583-1d6b-4802-b4f3-62ff97c8cc3e
 // last-edited: 2026-11-10
 
@@ -239,6 +239,35 @@ func TestRegister_DuplicateJSONNameRefused(t *testing.T) {
 				t.Errorf("the refused section left key %s", p)
 			}
 		})
+	}
+}
+
+// reusedNames reuses its own JSON names one object down: cave.mode beside
+// mode, and cave.cave inside cave. Each JSON object has its own names.
+type reusedNames struct {
+	Mode string `json:"mode"`
+	Cave struct {
+		Mode string `json:"mode"`
+		Cave string `json:"cave"`
+	} `json:"cave"`
+}
+
+// TestRegister_NestedObjectReusesParentName (T4 re-verify NEW-4): the JSON
+// names Register checks for duplicates are per JSON object, so a nested
+// object may reuse a name its parent declares, its own field name included.
+// encoding/json decodes each into its own field, and each is its own key.
+func TestRegister_NestedObjectReusesParentName(t *testing.T) {
+	st := bareStore(t)
+	if err := registerAny(st, config.Define("core.gotham.cave", reusedNames{})); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := st.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []config.Path{"core.gotham.cave.mode", "core.gotham.cave.cave.mode", "core.gotham.cave.cave.cave"} {
+		if _, ok := st.Lookup(p); !ok {
+			t.Errorf("no key %s", p)
+		}
 	}
 }
 
