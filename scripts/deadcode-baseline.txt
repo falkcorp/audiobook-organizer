@@ -1,6 +1,3 @@
-core/kernel.coreSections
-core/kernel.dur
-core/kernel.hashWorkersDefault
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
 internal/ai.modelLabelSet.setConfigured
@@ -70,6 +67,9 @@ internal/itunes.ValidateITL
 internal/itunes.computeFileHash
 internal/itunes.encodeWindowsPathToURL
 internal/itunes.extractSeriesFromAlbum
+core/kernel.coreSections
+core/kernel.dur
+core/kernel.hashWorkersDefault
 internal/itunes.formatToKind
 internal/itunes.hexToPID
 internal/itunes.writePlist
