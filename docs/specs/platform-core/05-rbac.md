@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.8 -->
+<!-- version: 1.13.9 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -397,19 +397,27 @@ var ErrImportRejected = errors.New("rbac: imported role breaks a role store inva
 
 **Privileged checkers are not SDK (SEC-26).** The two checkers that bypass role resolution are
 constructed only in `core/internal/authz`: `authz.AuthDisabled(cat *rbac.Catalog) rbac.Checker`
-(§4.11) and `authz.ForSystem(perms []rbac.Permission) rbac.Checker` (the `_system` principal of
-background tasks, built from the task definition's declared permissions, never `core:admin` by
-default). Go's `internal/` rule keeps them out of app code; within core,
-`archtest.NoSystemPrincipalOutsideKernel` allows calls to these two constructors only from `auth`,
-the `tasks` executor and `kernel` (`rbac` reaches `authz` only through the injected `Deps.Compile`,
-COR4-12). The public `rbac.All` of v1.0.0 is removed.
+(§4.11) and `authz.ForSystem(cat *rbac.Catalog, perms []rbac.Permission) rbac.Checker` (the `_system`
+principal of background tasks, built from the task definition's declared permissions, never
+`core:admin` by default). `ForSystem` holds exactly the `perms` that `cat` declares, with no
+implication, and every check goes through `Has` against `cat` as a non-interactive principal, so a
+`Sensitive` scope it was given (a module's as well as core's) and an undeclared one are refused
+(§4.4 rule 1); a nil `cat`, or an entry that is `core:admin`, `AuthRequired`, a wildcard or malformed,
+yields a checker that holds nothing. Go's `internal/` rule keeps `authz` out of app code; within core,
+`archtest.NoSystemPrincipalOutsideKernel` allows a non-test import of `authz` only in `auth`, the
+`tasks` executor and `kernel` (`authz.Compile` mints an interactive admin checker from any role set
+holding `core:admin`, so it is fenced like the two constructors), and no `//go:linkname` naming it
+(`rbac` reaches `authz` only through the injected `Deps.Compile`, COR4-12). The public `rbac.All` of
+v1.0.0 is removed.
 
 **A module's system actor (SEC2-15).** When a module's worker, hook or bus subscriber starts a run
 outside a request, the kernel stamps the module's system actor (05-tasks §5T.3.10). Its checker is
 `authz.ForSystem` over exactly the union of `Perms.Start` of the module's own kinds plus the kinds in
 `Manifest.TaskStarts` (a reviewed list of foreign or core kinds the module may start, 06); `core:admin`
 and every `AuthRequired` scope are never included, so a module cannot start `core:system.manage`
-kinds (diagnostics export, backup create) or another module's undeclared kinds.
+kinds (diagnostics export, backup create) or another module's undeclared kinds. A `Sensitive` scope
+in the union is refused by the checker itself (non-interactive, §4.4 rule 1), so a kind whose `Start`
+is `Sensitive` cannot be started by a system actor.
 
 ### 3.5 Audit
 
@@ -1343,7 +1351,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestAudit_RedactsSecretsByKeyAndPrefix` | |
 | `TestAudit_QueueFullDropsWithoutBlocking` | |
 | `TestNoGlobals` (archtest) | no package-level registries in `rbac`/`audit` (R5) |
-| `archtest.NoSystemPrincipalOutsideKernel` | `core/internal/authz` privileged constructors called only from `auth`, the `tasks` executor and `kernel`; `rbac` imports nothing from `authz` (SEC-26, COR4-12) |
+| `archtest.NoSystemPrincipalOutsideKernel` | no non-test file outside `auth`, the `tasks` executor and `kernel` imports `core/internal/authz` (alias, dot and blank imports included), and none names it in a `//go:linkname`; `rbac` imports nothing from `authz`, test files included (SEC-26, COR4-12) |
 
 ## 13. Gap disposition G1–G15 (all gaps from `raw/10` §8)
 
@@ -1624,3 +1632,5 @@ Round 13 (2026-11-04), by round-13 ruling: R1/IMPL-3/IMPL-4 (F2 lands audit, the
 Round 14 (2026-11-05): V15 (§6.1: every row's route requirement is `AllOf` all of its native scopes, always; `library.view` and `integrations.manage` rows fixed; `TestAtomTable_Golden` says "all of its row's native scopes"), V27 (§7.1: `core.integration.local_migrated`, M6 only), V23 (bare round-13 ruling citations in §3, §4.11, §6.1 and §12 replaced by their finding IDs; the round-13 history entry names its IDs as round-13 rulings).
 
 Round 17 (2026-11-05): brief-sync gap fixes G18 (§3.4 `CompileInput` with `RolePatterns` resolved by `Service.Compile`; `Deps.Compile` takes it; §4.4 cross-reference; `TestCompile_ResolvesRolePatterns`), G19 (§3.1 `Requirement.Kind()` and `RequirementKind`; `TestRequirement_Kind`), G21 (§7.1 `core.outbox.*` row for 05-events §5E.11's audited routes).
+
+Round 18 (2026-11-10, F4-09 review): §3.4 `authz.ForSystem` takes the catalog (`ForSystem(cat, perms)`) so a background actor's `Sensitive` and undeclared scopes are refused through `Has` (§4.4 rule 1 had no enforcement point for a module's `Sensitive` scope); `archtest.NoSystemPrincipalOutsideKernel` counts any non-test import of `authz` outside `auth`, the tasks executor and `kernel` (covering `authz.Compile`) and any `//go:linkname` naming it (§3.4, §12).

@@ -1,5 +1,5 @@
 // file: core/internal/authz/authz_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 25ae54fc-a0cc-4987-aa9e-3573a03acd0a
 // last-edited: 2026-11-10
 
@@ -26,8 +26,8 @@ func perms(s ...string) []rbac.Permission {
 }
 
 // booksScopes is a books module's slice of the catalog, enough for the
-// checker cells: an implied pair, a sub-action, the Confining worker scope
-// and an AuthRequired debug scope.
+// checker cells: an implied pair, a sub-action, the Confining worker scope,
+// an AuthRequired debug scope and a Sensitive purge scope.
 func booksScopes() []rbac.PermissionSpec {
 	return []rbac.PermissionSpec{
 		{Name: "books:view", Class: rbac.ClassView},
@@ -38,6 +38,7 @@ func booksScopes() []rbac.PermissionSpec {
 		{Name: "books:organize"},
 		{Name: "books:fingerprint.worker", Confining: true},
 		{Name: "books:admin.debug", AuthRequired: true},
+		{Name: "books:purge", Sensitive: true},
 	}
 }
 
@@ -521,11 +522,14 @@ func TestWorkerKey_Confined(t *testing.T) {
 }
 
 // TestForSystem_HoldsExactlyGivenPerms: the system actor holds exactly its
-// scopes (no implication, no wildcard), is non-interactive, has no admin
-// flag, and holds nothing at all when handed a scope it must never hold.
+// declared scopes (no implication, no wildcard), is non-interactive, has no
+// admin flag, refuses a Sensitive scope it was given (a module's as much as
+// core's, §4.4 rule 1) and an undeclared one, and holds nothing at all when
+// handed a scope it must never hold or no catalog.
 func TestForSystem_HoldsExactlyGivenPerms(t *testing.T) {
+	cat := testCatalog(t)
 	given := perms("books:scan", "books:edit", "core:tasks.view")
-	c := ForSystem(given)
+	c := ForSystem(cat, given)
 	for _, s := range given {
 		if !c.Has(s) || !c.Satisfies(rbac.Need(s)) {
 			t.Errorf("system actor lacks given scope %s", s)
@@ -556,25 +560,50 @@ func TestForSystem_HoldsExactlyGivenPerms(t *testing.T) {
 		t.Errorf("system actor: admin=%v interactive=%v authOff=%v", ch.admin, ch.interactive, ch.authOff)
 	}
 
+	// Sensitive and undeclared scopes are refused; the rest of the set holds.
+	for _, sensitive := range []rbac.Permission{"books:purge", "core:roles.manage"} {
+		r := ForSystem(cat, perms("books:scan", string(sensitive), "books:ghost"))
+		if r.Has(sensitive) || r.Satisfies(rbac.Need(sensitive)) || r.Satisfies(rbac.AnyOf(sensitive)) ||
+			r.Satisfies(rbac.AllOf("books:scan", sensitive)) {
+			t.Errorf("system actor holds Sensitive %s", sensitive)
+		}
+		if r.Has("books:ghost") || slices.Contains(r.Concrete(), "books:ghost") {
+			t.Error("system actor holds an undeclared scope")
+		}
+		if !r.Has("books:scan") || !r.Satisfies(rbac.Need("books:scan")) {
+			t.Errorf("a Sensitive %s took the rest of the set with it", sensitive)
+		}
+	}
+
 	for name, bad := range map[string][]rbac.Permission{
 		"core:admin":           perms("books:scan", "core:admin"),
 		"AuthRequired core":    perms("books:scan", "core:system.manage"),
-		"Sensitive core":       perms("books:scan", "core:roles.manage"),
-		"undeclared core":      perms("books:scan", "core:batcave"),
+		"AuthRequired module":  perms("books:scan", "books:admin.debug"),
 		"wildcard":             perms("books:scan", "books:*"),
 		"action wildcard":      perms("books:scan", "books:edit.*"),
 		"malformed":            perms("books:scan", "Joker"),
 		"core:* grants admin":  perms("core:*"),
 		"empty string":         perms("books:scan", ""),
-		"backup restore (A+S)": perms("core:backup.restore"),
+		"backup restore (A+S)": perms("books:scan", "core:backup.restore"),
 	} {
-		r := ForSystem(bad)
+		r := ForSystem(cat, bad)
 		if r.Has("books:scan") || len(r.Concrete()) != 0 || r.Satisfies(rbac.Need("books:scan")) || !r.Confined() {
 			t.Errorf("%s: ForSystem(%v) holds %v, want nothing", name, bad, r.Concrete())
 		}
 	}
-	if e := ForSystem(nil); len(e.Concrete()) != 0 || e.Satisfies(rbac.AnyAuthenticated) {
-		t.Error("ForSystem(nil) holds something")
+	if e := ForSystem(cat, nil); len(e.Concrete()) != 0 || e.Satisfies(rbac.AnyAuthenticated) {
+		t.Error("ForSystem(cat, nil) holds something")
+	}
+	// core:admin is refused by name, not only by its AuthRequired flag.
+	odd, err := rbac.NewCatalog(rbac.PermissionSpec{Name: rbac.CoreAdmin}, rbac.PermissionSpec{Name: "books:scan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := ForSystem(odd, perms("books:scan", "core:admin")); o.Has(rbac.CoreAdmin) || o.Has("books:scan") || len(o.Concrete()) != 0 {
+		t.Errorf("ForSystem over a catalog with an unflagged core:admin holds %v", o.Concrete())
+	}
+	if n := ForSystem(nil, given); n.Has("books:scan") || len(n.Concrete()) != 0 || !n.Confined() {
+		t.Error("ForSystem(nil, perms) is not the refusal checker")
 	}
 }
 
@@ -585,7 +614,7 @@ func TestChecker_LegacyKindsRefused(t *testing.T) {
 	for name, c := range map[string]rbac.Checker{
 		"admin session": Compile(session(true, "core:admin"), cat),
 		"auth disabled": AuthDisabled(cat),
-		"system actor":  ForSystem(perms("books:scan")),
+		"system actor":  ForSystem(cat, perms("books:scan")),
 	} {
 		for _, r := range []rbac.Requirement{
 			rbac.LegacyAtom("library.view"), rbac.LegacyCheck("library.view", true),
@@ -617,7 +646,7 @@ func TestChecker_Immutable(t *testing.T) {
 	cat := testCatalog(t)
 	in := session(false, "books:edit", "core:self", "books:fingerprint.*")
 	sys := perms("books:scan")
-	checkers := []rbac.Checker{Compile(in, cat), AuthDisabled(cat), ForSystem(sys)}
+	checkers := []rbac.Checker{Compile(in, cat), AuthDisabled(cat), ForSystem(cat, sys)}
 	before := make([][]rbac.Permission, len(checkers))
 	for i, c := range checkers {
 		before[i] = slices.Clone(c.Concrete())
