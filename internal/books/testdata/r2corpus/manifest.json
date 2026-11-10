@@ -1,7 +1,7 @@
 {
   "_header": {
     "file": "internal/books/testdata/r2corpus/manifest.json",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "guid": "d808d644-1404-4e9f-b549-f20bbbb939bd",
     "last-edited": "2026-11-10"
   },
@@ -673,7 +673,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T5447AXQHJ1YPH9PXEZHG",
         "opv3:ckpt:01M72T5447AXQHJ1YPH9PXEZHG",
         "opv3:ledger:01M72T5447AXQHJ1YPH9PXEZHG",
         "opv3:prog:01M72T5447AXQHJ1YPH9PXEZHG",
@@ -692,7 +691,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544AA42FS7NG7J3JPEHE",
         "opv3:ckpt:01M72T544AA42FS7NG7J3JPEHE",
         "opv3:ledger:01M72T544AA42FS7NG7J3JPEHE",
         "opv3:prog:01M72T544AA42FS7NG7J3JPEHE",
@@ -711,7 +709,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544DWTS6NEW5EGNMC2J1",
         "opv3:ckpt:01M72T544DWTS6NEW5EGNMC2J1",
         "opv3:ledger:01M72T544DWTS6NEW5EGNMC2J1",
         "opv3:prog:01M72T544DWTS6NEW5EGNMC2J1",
@@ -730,7 +727,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544F6JT1KF9WQ9XHD9HP",
         "opv3:ckpt:01M72T544F6JT1KF9WQ9XHD9HP",
         "opv3:ledger:01M72T544F6JT1KF9WQ9XHD9HP",
         "opv3:prog:01M72T544F6JT1KF9WQ9XHD9HP",
@@ -749,7 +745,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544JG5FK3PB9Y470V01T",
         "opv3:ckpt:01M72T544JG5FK3PB9Y470V01T",
         "opv3:ledger:01M72T544JG5FK3PB9Y470V01T",
         "opv3:prog:01M72T544JG5FK3PB9Y470V01T",
@@ -768,7 +763,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544P72VVNP70BB5XT4V8",
         "opv3:ckpt:01M72T544P72VVNP70BB5XT4V8",
         "opv3:ledger:01M72T544P72VVNP70BB5XT4V8",
         "opv3:prog:01M72T544P72VVNP70BB5XT4V8",
@@ -787,7 +781,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544RAC12BW7B4Y9F05EY",
         "opv3:ckpt:01M72T544RAC12BW7B4Y9F05EY",
         "opv3:ledger:01M72T544RAC12BW7B4Y9F05EY",
         "opv3:prog:01M72T544RAC12BW7B4Y9F05EY",
@@ -806,7 +799,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544VRM9JCDF77K25F5YW",
         "opv3:ckpt:01M72T544VRM9JCDF77K25F5YW",
         "opv3:ledger:01M72T544VRM9JCDF77K25F5YW",
         "opv3:prog:01M72T544VRM9JCDF77K25F5YW",
@@ -825,7 +817,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544YNP9E84BNE0H47GKS",
         "opv3:prog:01M72T544YNP9E84BNE0H47GKS",
         "opv3:run:01M72T544YNP9E84BNE0H47GKS"
       ],
@@ -842,7 +833,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T544YNP9E84BNE44S333V",
         "opv3:prog:01M72T544YNP9E84BNE44S333V",
         "opv3:run:01M72T544YNP9E84BNE44S333V"
       ],
@@ -859,7 +849,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T5451034P4RCHK5HAM7V2",
         "opv2:row:01M72T5451034P4RCHK5HAM7V2:plan/row-hush",
         "opv2:row:01M72T5451034P4RCHK5HAM7V2:plan/row-year-one",
         "opv2:rowix:01M72T5451034P4RCHK5HAM7V2:plan/row-hush",
@@ -882,7 +871,6 @@
       "step": "M4",
       "key_prefix": "opv3:run:",
       "keys": [
-        "opv2:op:01M72T5458ASZ4RZZ9XG9XFT95",
         "opv3:ckpt:01M72T5458ASZ4RZZ9XG9XFT95",
         "opv3:ledger:01M72T5458ASZ4RZZ9XG9XFT95",
         "opv3:prog:01M72T5458ASZ4RZZ9XG9XFT95",
@@ -902,8 +890,6 @@
       "step": "M4",
       "key_prefix": "setting:registry.scan_standdown",
       "keys": [
-        "opv2:op:01M72T545BK072FJ8FBYX0BM06",
-        "opv2:op:01M72T545FHKDN47708YFA90YR",
         "opv3:ckpt:01M72T545BK072FJ8FBYX0BM06",
         "opv3:ckpt:01M72T545FHKDN47708YFA90YR",
         "opv3:ledger:01M72T545BK072FJ8FBYX0BM06",
@@ -3285,7 +3271,7 @@
       "refused": "the cutover preflight refuses the boot (storage.ErrCutoverBlocked, exit 78) and writes nothing",
       "not_blocking": "read by the preflight and let through; converted by its step"
     },
-    "keys": "every key the case wrote (primary rows and the indexes the writer kept with them); setting:config_blob#<field> names one field of the settings blob"
+    "keys": "every key the case wrote (primary rows and the indexes the writer kept with them); setting:config_blob#<field> names one field of the settings blob. A run's opv2 mirror row (opv2:op:<id>, written in the same batch as opv3:run:<id> by the tag's InsertRunV3 and TransitionRunV3) is not listed"
   },
   "overlay_answers": [
     {

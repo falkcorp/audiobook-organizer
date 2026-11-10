@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/overlay/build_overlay.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: c9c6a0fe-e62d-4811-a358-f201bb02e188
 # last-edited: 2026-11-10
 """Build R2's fixture corpus, stage 2: the labelled overlay and the blocker corpus (F2-13).
@@ -504,7 +504,9 @@ def build(args: argparse.Namespace) -> int:
             NOT_BLOCKING: "read by the preflight and let through; converted by its step",
         },
         "keys": "every key the case wrote (primary rows and the indexes the writer kept with them); "
-        "setting:config_blob#<field> names one field of the settings blob",
+        "setting:config_blob#<field> names one field of the settings blob. A run's opv2 mirror row "
+        "(opv2:op:<id>, written in the same batch as opv3:run:<id> by the tag's InsertRunV3 and "
+        "TransitionRunV3) is not listed",
     }  # fmt: skip
 
     if not args.no_answers:
