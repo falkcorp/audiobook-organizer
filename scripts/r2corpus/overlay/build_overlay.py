@@ -76,6 +76,12 @@ OVERLAY_DIR = w.REPO_ROOT / OVERLAY_REL
 BLOCKERS_DIR = w.REPO_ROOT / BLOCKERS_REL
 OVERLAY_ANSWERS_DIR = w.ANSWERS_DIR / "overlay"
 
+# The recorder's settle wait on the overlay (seconds). run-queued-deps stays
+# queued until R0's dependency sweep, a fixed 5 minutes after boot at the tag
+# (registry.go, no config surface), dispatches it; 300 s, the recorder's
+# default for stage 1, races that tick.
+SETTLE_TIMEOUT = 900
+
 # Expected cutover outcomes (manifest field "outcome").
 QUARANTINED = (
     "quarantined"  # copied under c/storage/quarantine/ with its reason; the step completes
@@ -255,14 +261,16 @@ CASES: tuple[Case, ...] = (
        "a syslog: row that does not decode: quarantined; the step completes",
        "05-logging TestCutover_SyslogImported; " + _Q_STORAGE),
     # ── M6: integrations, import roots, AI jobs ──
-    _o("integration-field-invalid", "M6", "setting:config_blob (integration field)", "setting:config_blob",
+    _o("integration-field-invalid", "M6", "setting:config_blob (ai_endpoints row)", "setting:config_blob",
        IMPORTED,
-       "the Deluge instance's web URL holding a value that is not a URL: the instance is kept and "
-       "reported misconfigured (not quarantined: no integration field can be undecodable while R0 "
-       "still boots, see seams.d/F2-13.md)", "05-metadata M1.10", reported=True),
+       "an AI endpoint row (oracle-relay) whose URL does not parse: M6 writes the native ai/oracle-relay "
+       "instance, keeps it and reports it misconfigured (not quarantined: no integration field can be "
+       "undecodable while R0 still boots, see seams.d/F2-13.md)", "05-metadata M1.10; 05-ai §10",
+       reported=True),
     _o("corrupt-import-root", "M6", "import_path:", "import_path:", QUARANTINED,
-       "an import_path: row that does not decode: quarantined; the books rows that reference it stay "
-       "byte-identical and are named in the report and health; the step completes",
+       "an import_path: row that does not decode, whose path (import/Selina Kyle) prefixes the Hush book's "
+       "rows: quarantined; those books rows stay byte-identical and are named in the report and health; "
+       "the step completes",
        "05-storage §5S.3.13 TestCutoverQuarantinedParentKeepsReferencingRows; " + _Q_STORAGE),
     _o("corrupt-aijob", "M6", "aijob:", "aijob:", QUARANTINED,
        "an aijob: row that does not decode: quarantined; the step completes", "05-ai §10; " + _Q_STORAGE),
@@ -415,7 +423,8 @@ def changed_answers(stage1_dir: pathlib.Path, overlay_dir: pathlib.Path) -> dict
 
 def record_answers(args: argparse.Namespace, answers_dir: pathlib.Path) -> None:
     cmd = [sys.executable, str(_R2 / "record_r0_answers.py"), "--regenerate",
-           "--corpus", str(OVERLAY_DIR), "--out", str(answers_dir)]  # fmt: skip
+           "--corpus", str(OVERLAY_DIR), "--out", str(answers_dir),
+           "--settle-timeout", str(SETTLE_TIMEOUT)]  # fmt: skip
     for flag in ("binary", "tag", "cache", "workdir"):
         v = getattr(args, flag)
         if v:
