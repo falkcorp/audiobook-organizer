@@ -58,10 +58,10 @@ func TestWorkerKey_Confined(t *testing.T) {
 	}
 	cat := f.cat()
 	ambient := perms("core:self", "core:metrics.read", "books:reading")
-	wantPerms(t, "WithAmbient(fp-worker)", rbac.WithAmbient(cat, f.role("fp-worker").Permissions(), ambient...), "books:fingerprint.worker")
-	wantPerms(t, "WithAmbient(worker key)", rbac.WithAmbient(cat, perms("books:fingerprint.worker"), ambient...), "books:fingerprint.worker")
-	wantPerms(t, "WithAmbient(plain role)", rbac.WithAmbient(cat, perms("books:view"), ambient...), "books:reading", "books:view", "core:metrics.read", "core:self")
-	wantPerms(t, "WithAmbient(admin)", rbac.WithAmbient(cat, perms("core:admin"), ambient...), "books:reading", "core:admin", "core:metrics.read", "core:self")
+	wantPerms(t, "WithAmbient(fp-worker)", ambientOf(t, cat, f.role("fp-worker").Permissions(), ambient...), "books:fingerprint.worker")
+	wantPerms(t, "WithAmbient(worker key)", ambientOf(t, cat, perms("books:fingerprint.worker"), ambient...), "books:fingerprint.worker")
+	wantPerms(t, "WithAmbient(plain role)", ambientOf(t, cat, perms("books:view"), ambient...), "books:reading", "books:view", "core:metrics.read", "core:self")
+	wantPerms(t, "WithAmbient(admin)", ambientOf(t, cat, perms("core:admin"), ambient...), "books:reading", "core:admin", "core:metrics.read", "core:self")
 
 	cells := []struct {
 		name string
@@ -101,6 +101,60 @@ func TestWorkerKey_Confined(t *testing.T) {
 	g := build(t, newEnv(t), setup{})
 	err := g.svc.Declarer("books", "fp-worker").Permissions(rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true, DefaultGrants: []rbac.RoleName{rbac.RoleEditor}})
 	errIs(t, "default grant of the worker scope", err, rbac.ErrRestrictedGrant)
+}
+
+// ambientOf is rbac.WithAmbient, fatal on error.
+func ambientOf(t testing.TB, cat *rbac.Catalog, ps []rbac.Permission, ambient ...rbac.Permission) []rbac.Permission {
+	t.Helper()
+	out, err := rbac.WithAmbient(cat, ps, ambient...)
+	if err != nil {
+		t.Fatalf("WithAmbient(%v): %v", ps, err)
+	}
+	return out
+}
+
+// TestWithAmbient_FailsClosed (§6.3, review MAJOR-B): the ambient rule
+// decides Confined only against a catalog that knows every pattern, so it
+// refuses a nil catalog, an empty set, a malformed or unknown pattern and an
+// ambient entry that is not a concrete declared scope; a confined set,
+// concrete or by a wildcard over Confining scopes, gains no ambient scope.
+func TestWithAmbient_FailsClosed(t *testing.T) {
+	cat, err := rbac.NewCatalog(append(rbac.CoreScopes(),
+		rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true},
+		rbac.PermissionSpec{Name: "books:fingerprint.relay", Confining: true},
+		rbac.PermissionSpec{Name: "books:view"},
+		rbac.PermissionSpec{Name: "books:reading"},
+	)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ambient := perms("core:self", "core:metrics.read", "books:reading")
+	for _, c := range []struct {
+		name    string
+		cat     *rbac.Catalog
+		ps      []rbac.Permission
+		ambient []rbac.Permission
+		want    error
+	}{
+		{"nil catalog", nil, perms("books:fingerprint.worker"), ambient, rbac.ErrUnknownScope},
+		{"nil catalog, plain set", nil, perms("books:view"), ambient, rbac.ErrUnknownScope},
+		{"empty set", cat, nil, ambient, rbac.ErrUnknownScope},
+		{"unknown scope next to the worker scope", cat, perms("books:fingerprint.worker", "books:fingerprint.typo"), ambient, rbac.ErrUnknownScope},
+		{"wildcard matching nothing", cat, perms("books:fingerprint.worker", "books:arr.*"), ambient, rbac.ErrUnknownScope},
+		{"malformed pattern", cat, perms("books:fingerprint.worker", "Books:View"), ambient, rbac.ErrBadScope},
+		{"wildcard ambient", cat, perms("books:view"), perms("core:*"), rbac.ErrBadScope},
+		{"unknown ambient", cat, perms("books:view"), perms("books:shelf"), rbac.ErrUnknownScope},
+	} {
+		got, err := rbac.WithAmbient(c.cat, c.ps, c.ambient...)
+		errIs(t, c.name, err, c.want)
+		if got != nil {
+			t.Errorf("%s: WithAmbient returned %v with its error, want nil", c.name, got)
+		}
+	}
+	wantPerms(t, "confined set", ambientOf(t, cat, perms("books:fingerprint.worker", "books:fingerprint.relay"), ambient...), "books:fingerprint.relay", "books:fingerprint.worker")
+	wantPerms(t, "confined by a wildcard", ambientOf(t, cat, perms("books:fingerprint.*"), ambient...), "books:fingerprint.*")
+	wantPerms(t, "mixed set", ambientOf(t, cat, perms("books:fingerprint.worker", "books:view"), ambient...), "books:fingerprint.worker", "books:reading", "books:view", "core:metrics.read", "core:self")
+	wantPerms(t, "admin by a wildcard", ambientOf(t, cat, perms("core:admin.*", "books:fingerprint.worker"), ambient...), "books:fingerprint.worker", "books:reading", "core:admin.*", "core:metrics.read", "core:self")
 }
 
 // TestSeed_NoNonConfiningScopeOnConfinedRole (§4.8): a confined seed role
