@@ -1,7 +1,7 @@
 // file: core/storage/batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c1fd20f4-e973-4127-8a09-c47f9835a7e6
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 package storage
 
@@ -429,5 +429,22 @@ func TestSequenceAdvancePastRacesNext(t *testing.T) {
 	armed = true
 	if id, err := seq.Next(ctx); err != nil || id <= 1000 {
 		t.Fatalf("Next racing AdvancePast(1000) = %d, %v; want an id past 1000", id, err)
+	}
+}
+
+// TestBatchIndexed: Indexed tells an indexed batch from a plain one, and a
+// nil batch is not indexed.
+func TestBatchIndexed(t *testing.T) {
+	db := newEnv(t, serializedOwners()...).open()
+	ks, _ := db.Keyspace("core/tasks")
+	plain, indexed := ks.NewBatch(), ks.NewIndexedBatch()
+	defer func() {
+		if err := errors.Join(plain.Close(), indexed.Close()); err != nil {
+			t.Error(err)
+		}
+	}()
+	var none *Batch
+	if plain.Indexed() || !indexed.Indexed() || none.Indexed() {
+		t.Fatalf("Indexed: plain %v, indexed %v, nil %v", plain.Indexed(), indexed.Indexed(), none.Indexed())
 	}
 }

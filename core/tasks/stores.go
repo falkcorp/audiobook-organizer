@@ -1,5 +1,5 @@
 // file: core/tasks/stores.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e87dda23-11e8-4a65-9769-3ac16d0b3c05
 // last-edited: 2026-11-10
 
@@ -63,6 +63,11 @@ type Expect struct {
 // chunked batches and never join a multi-owner commit (COR5-12, DATA9-7).
 // Every caller that builds such a batch builds it inside Executor.WriteRuns or
 // Stager.WriteRuns, which commits it (5T.7, R9-1).
+// That batch is indexed (Keyspace.NewIndexedBatch, or a participant's
+// indexed batch), so a later read of a build sees an earlier write of the
+// same build: a method that reads before it writes refuses a plain batch
+// with ErrBatchNotIndexed, because GetForUpdate through a plain batch reads
+// only the committed state and the commit would lose the earlier write.
 //
 // No write may land on a run that changed since it was read: a progress tick
 // cannot revert a cancel, and a chunk-ledger commit cannot land on a run that
@@ -118,11 +123,15 @@ type RunStore interface { //nolint:interfacebloat // spec-mandated SDK interface
 	ReplaceRows(ctx context.Context, id RunID, prefix string, n int, at func(i int) (Row, error)) error
 	Rows(ctx context.Context, id RunID) iter.Seq2[Row, error]
 	MarkRow(ctx context.Context, b *storage.Batch, id RunID, rowID string) error
+	// Marks yields the row IDs of a run's applied-row marks in row-ID order:
+	// the resume evidence of an apply run, which re-applies only unmarked rows.
+	Marks(ctx context.Context, id RunID) iter.Seq2[string, error]
 
 	// Debounce buckets and watchdog strikes.
 	Debounce(ctx context.Context, b *storage.Batch, d DebounceBucket) error
 	DebounceBuckets(ctx context.Context) iter.Seq2[DebounceBucket, error]
 	Strike(ctx context.Context, b *storage.Batch, id RunID, s Strike) error
+	Strikes(ctx context.Context, id RunID) iter.Seq2[Strike, error] // in the order staged; the watchdog's input
 
 	// Delete stages the removal of one run and every record it owns (row,
 	// queue entry, indexes, pages, checkpoints, chunks, rows, errors); only
@@ -285,4 +294,7 @@ var (
 	// ErrRunActive: Discard of a run that is not terminal or that a live
 	// worker holds (409; FIN12-3).
 	ErrRunActive = errors.New("tasks: run is active")
+	// ErrBatchNotIndexed: a method that reads before it writes was handed a
+	// batch that is not indexed (see RunStore).
+	ErrBatchNotIndexed = errors.New("tasks: batch is not indexed")
 )

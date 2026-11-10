@@ -1,5 +1,5 @@
 // file: core/tasks/native_internal_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 077fc32b-be7d-4ba9-9c02-c2ee627bcf57
 // last-edited: 2026-11-10
 
@@ -7,7 +7,10 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,44 +53,62 @@ func batRun(id RunID, state RunState) RunRecord {
 	return r
 }
 
-// TestPruneChunk_SkipsWhatTheFreshReadRules out: a candidate that is no
-// longer terminal, finished after the cutoff, missing or undecodable on the
-// chunk's own read is skipped and never deleted (DATA8-8).
-func TestPruneChunk_SkipsWhatTheFreshReadRulesOut(t *testing.T) {
+// TestPrune_WalksPastWhatItCannotDelete: done-index entries Prune cannot
+// act on never stall it (DATA8-8). Seventy undecodable rows sit ahead of the
+// prunable runs, more than one chunk; an orphan entry (no row) and a stale
+// one (the row is queued) are removed; limit bounds the runs deleted, and a
+// later call picks up where the walk can act again.
+func TestPrune_WalksPastWhatItCannotDelete(t *testing.T) {
 	e := newNativeEnv(t)
 	ctx := t.Context()
 	cutoff := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	early := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	late := batRun("late", StateSucceeded)
 	late.Finished = cutoff.Add(time.Hour)
-	for _, r := range []RunRecord{batRun("old", StateCanceled), batRun("requeued", StateQueued), late} {
+	oldB := batRun("old-b", StateCanceled)
+	oldB.Finished = oldB.Finished.Add(30 * time.Minute)
+	for _, r := range []RunRecord{batRun("old-a", StateCanceled), oldB, batRun("requeued", StateQueued), late} {
 		if err := e.commit(t, func(b *storage.Batch) error { return e.runs.Insert(ctx, b, r) }); err != nil {
 			t.Fatal(err)
 		}
 	}
+	const corrupt = 70
 	b := e.ks.NewBatch()
-	if err := b.Expect(e.ks, taskstore.RunKey("corrupt"), nil); err != nil {
+	for i := range corrupt {
+		id := fmt.Sprintf("corrupt-%02d", i)
+		if err := errors.Join(
+			b.Expect(e.ks, taskstore.RunKey(id), nil),
+			b.Set(taskstore.RunKey(id), []byte("not a codec value")),
+			b.Set(taskstore.DoneIndexKey(early.Add(time.Duration(i)*time.Minute), id), nil),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphan := taskstore.DoneIndexKey(early.Add(24*time.Hour), "ghost")
+	stale := taskstore.DoneIndexKey(early.Add(24*time.Hour), "requeued")
+	if err := errors.Join(b.Set(orphan, nil), b.Set(stale, nil), b.Commit(ctx, storage.Sync), b.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Set(taskstore.RunKey("corrupt"), []byte("not a codec value")); err != nil {
-		t.Fatal(err)
+	for i, want := range []int{1, 1, 0} {
+		n, err := e.runs.Prune(ctx, cutoff, 1)
+		if err != nil || n != want {
+			t.Fatalf("Prune call %d = %d, %v; want %d", i+1, n, err, want)
+		}
 	}
-	if err := b.Commit(ctx, storage.Sync); err != nil {
-		t.Fatal(err)
-	}
-	_ = b.Close()
-	n, err := e.runs.pruneChunk(ctx, []string{"old", "requeued", "late", "missing", "corrupt"}, cutoff)
-	if err != nil || n != 1 {
-		t.Fatalf("pruneChunk = %d, %v; want only the old terminal run", n, err)
-	}
-	for id, want := range map[RunID]bool{"old": false, "requeued": true, "late": true} {
+	for id, want := range map[RunID]bool{"old-a": false, "old-b": false, "requeued": true, "late": true} {
 		if _, err := e.runs.Get(ctx, id); (err == nil) != want {
 			t.Errorf("run %s present=%v, want %v", id, err == nil, want)
 		}
 	}
-	if _, err := e.runs.Get(ctx, "corrupt"); err == nil || errors.Is(err, ErrRunNotFound) {
-		t.Errorf("corrupt row: %v, want a decode error (left in place)", err)
+	for _, k := range [][]byte{orphan, stale} {
+		if ok, err := e.ks.Has(ctx, k); err != nil || ok {
+			t.Errorf("done entry %q: present=%v err=%v, want removed", k, ok, err)
+		}
 	}
-	// A listing hides the undecodable row behind an error and goes on.
+	if es, err := e.runs.st.DoneBefore(ctx, cutoff, nil, 0); err != nil || len(es) != corrupt {
+		t.Errorf("done entries left = %d, %v; want the %d undecodable rows'", len(es), err, corrupt)
+	}
+	// A listing hides each undecodable row behind an error and goes on.
 	var listed, failed int
 	for _, err := range e.runs.List(ctx, RunQuery{}) {
 		if err != nil {
@@ -96,8 +117,83 @@ func TestPruneChunk_SkipsWhatTheFreshReadRulesOut(t *testing.T) {
 		}
 		listed++
 	}
-	if listed != 2 || failed != 1 {
-		t.Errorf("List over a corrupt row: %d rows, %d errors; want 2 and 1", listed, failed)
+	if listed != 2 || failed != corrupt {
+		t.Errorf("List over corrupt rows: %d rows, %d errors; want 2 and %d", listed, failed, corrupt)
+	}
+}
+
+// TestPlainBatchRefused: every method that reads before it writes refuses a
+// batch that is not indexed, so no second write of a run in one build can
+// read past the first and lose it (ErrBatchNotIndexed).
+func TestPlainBatchRefused(t *testing.T) {
+	e := newNativeEnv(t)
+	ctx := t.Context()
+	run := batRun("patrol-1", StateQueued)
+	if err := e.commit(t, func(b *storage.Batch) error { return e.runs.Insert(ctx, b, run) }); err != nil {
+		t.Fatal(err)
+	}
+	running := run
+	running.State = StateRunning
+	clocks := NativeStores(e.ks).Clocks
+	for name, stage := range map[string]func(b *storage.Batch) error{
+		"Insert": func(b *storage.Batch) error { return e.runs.Insert(ctx, b, batRun("patrol-2", StateQueued)) },
+		"Transition": func(b *storage.Batch) error {
+			return e.runs.Transition(ctx, b, run.ID, Expect{StateQueued, 1, 1}, running)
+		},
+		"Progress": func(b *storage.Batch) error { return e.runs.Progress(ctx, b, run.ID, 1, 2, "Ace Chemicals") },
+		"Debounce": func(b *storage.Batch) error {
+			return e.runs.Debounce(ctx, b, DebounceBucket{Kind: run.Kind, First: run.Created, Last: run.Created})
+		},
+		"Clock":        func(b *storage.Batch) error { return clocks.Advance(ctx, b, run.Kind, Clock{}, false, Clock{}) },
+		"Importer.Run": func(b *storage.Batch) error { return e.imp.Run(ctx, b, batRun("arkham-1", StateQueued)) },
+		"RunData":      func(b *storage.Batch) error { return e.imp.RunData(ctx, b, run.ID, RunData{}) },
+		"RenameKind": func(b *storage.Batch) error {
+			_, err := e.imp.RenameKind(ctx, b, run.Kind, "gotham.night-patrol", "", 10)
+			return err
+		},
+	} {
+		b := e.ks.NewBatch()
+		err := stage(b)
+		if cerr := b.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		if !errors.Is(err, ErrBatchNotIndexed) {
+			t.Errorf("%s on a plain batch: %v, want ErrBatchNotIndexed", name, err)
+		}
+	}
+	if got, err := e.runs.Get(ctx, run.ID); err != nil || got.State != StateQueued {
+		t.Fatalf("run after the refusals: %+v, %v", got, err)
+	}
+}
+
+// TestTerminalWithoutFinishRefused: a terminal record must carry its finish
+// time, through every path that stages a run row (else the done index puts
+// it before every cutoff and Prune deletes it at once).
+func TestTerminalWithoutFinishRefused(t *testing.T) {
+	e := newNativeEnv(t)
+	ctx := t.Context()
+	run := batRun("patrol-1", StateRunning)
+	if err := e.commit(t, func(b *storage.Batch) error { return e.runs.Insert(ctx, b, run) }); err != nil {
+		t.Fatal(err)
+	}
+	unfinished := func(id RunID, s RunState) RunRecord {
+		r := batRun(id, s)
+		r.Finished = time.Time{}
+		return r
+	}
+	for name, stage := range map[string]func(b *storage.Batch) error{
+		"Insert": func(b *storage.Batch) error { return e.runs.Insert(ctx, b, unfinished("patrol-2", StateSucceeded)) },
+		"Transition": func(b *storage.Batch) error {
+			return e.runs.Transition(ctx, b, run.ID, Expect{StateRunning, 1, 1}, unfinished(run.ID, StateFailed))
+		},
+		"Importer.Run": func(b *storage.Batch) error { return e.imp.Run(ctx, b, unfinished("arkham-1", StateCanceled)) },
+	} {
+		if err := e.commit(t, stage); err == nil || !strings.Contains(err.Error(), "without a finish time") {
+			t.Errorf("%s of a terminal run without Finished: %v", name, err)
+		}
+	}
+	if n, err := e.runs.Prune(ctx, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), 10); err != nil || n != 0 {
+		t.Fatalf("Prune = %d, %v; nothing may be prunable", n, err)
 	}
 }
 
@@ -222,9 +318,9 @@ func TestNativeRefusals(t *testing.T) {
 	}
 }
 
-// TestRenameKind_EdgeCases: stale and dangling kind-index entries, a stamp
-// and a bucket that the new kind already holds, and a clock both kinds
-// hold.
+// TestRenameKind_EdgeCases: stale and dangling kind-index entries, a stamp,
+// a bucket and an idempotency record that the new kind already holds, and a
+// clock both kinds hold.
 func TestRenameKind_EdgeCases(t *testing.T) {
 	e := newNativeEnv(t)
 	ctx := t.Context()
@@ -246,7 +342,25 @@ func TestRenameKind_EdgeCases(t *testing.T) {
 			if err := NativeStores(e.ks).Clocks.Advance(ctx, b, k, Clock{}, false, Clock{ScheduleHash: string(k)}); err != nil {
 				return err
 			}
-			if err := e.runs.Debounce(ctx, b, DebounceBucket{Kind: k, Subjects: []entity.Ref{{Module: "gotham", Kind: "villains", ID: string(k)}}, First: early, Last: early}); err != nil {
+		}
+		// from's bucket arrived last, so its parameters win the merge.
+		for k, d := range map[Kind]DebounceBucket{
+			from: {Last: later, Params: json.RawMessage(`{"district":"east-end"}`)},
+			to:   {Last: early, Params: json.RawMessage(`{"district":"the-narrows"}`)},
+		} {
+			d.Kind, d.First = k, early
+			d.Subjects = []entity.Ref{{Module: "gotham", Kind: "villains", ID: string(k)}}
+			if err := e.runs.Debounce(ctx, b, d); err != nil {
+				return err
+			}
+		}
+		// Idempotency records: one only from holds, one both hold.
+		for k, v := range map[string]string{
+			string(taskstore.IdemKey(string(from), "bat-signal")): "run-cave",
+			string(taskstore.IdemKey(string(from), "batarang")):   "run-old",
+			string(taskstore.IdemKey(string(to), "batarang")):     "run-new",
+		} {
+			if err := errors.Join(b.Expect(e.ks, []byte(k), nil), b.Set([]byte(k), []byte(v))); err != nil {
 				return err
 			}
 		}
@@ -296,8 +410,18 @@ func TestRenameKind_EdgeCases(t *testing.T) {
 		}
 		buckets = append(buckets, d)
 	}
-	if len(buckets) != 1 || buckets[0].Kind != to || len(buckets[0].Subjects) != 2 {
-		t.Errorf("buckets after the rename = %+v, want one merged bucket of %s", buckets, to)
+	if len(buckets) != 1 || buckets[0].Kind != to || len(buckets[0].Subjects) != 2 ||
+		string(buckets[0].Params) != `{"district":"east-end"}` || !buckets[0].Last.Equal(later) {
+		t.Errorf("buckets after the rename = %+v, want one merged bucket of %s with the later bucket's params", buckets, to)
+	}
+	for k, want := range map[string]string{"bat-signal": "run-cave", "batarang": "run-new"} {
+		v, err := e.ks.Get(ctx, taskstore.IdemKey(string(to), k))
+		if err != nil || string(v) != want {
+			t.Errorf("idem %s of the new kind = %q, %v; want %q", k, v, err, want)
+		}
+		if ok, _ := e.ks.Has(ctx, taskstore.IdemKey(string(from), k)); ok {
+			t.Errorf("idem %s of the old kind survived the rename", k)
+		}
 	}
 	// Cursor round trip.
 	for _, c := range []string{"", formatRenameCursor(renameStamps, []byte{1, 2}), formatRenameCursor(renameClock, nil)} {

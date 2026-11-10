@@ -1,5 +1,5 @@
 // file: core/tasks/importer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f56c7a6a-86cb-4b03-9df0-0366ab0a8b04
 // last-edited: 2026-11-10
 
@@ -68,9 +68,15 @@ type RunData struct {
 // kernel hands to an app's cutover step in module.Importers (06 §6.4.2) at the
 // tasks flip. It writes the same keys NativeStores reads.
 //
-// A batch that stages a run's Run and its RunData together must be indexed
-// (ks.NewIndexedBatch, or a participant's indexed batch): RunData finds the
-// run through the batch, and only an indexed batch reads its own writes.
+// Every batch it stages into must be indexed (ks.NewIndexedBatch, or a
+// participant's indexed batch): RunData finds a run imported earlier in the
+// same batch, and Run refuses a run the batch already holds, only by reading
+// the batch's own writes. A plain batch is refused with ErrBatchNotIndexed.
+//
+// A run is imported as RunStore stages one (validRecord): a terminal run
+// must carry its finish time. HEAD's CompletedAt is optional, and the spec
+// gives no value for a terminal row without one, so the cutover step decides
+// (05-tasks 5T.8.3: supply one, or quarantine the row); Run refuses it.
 func NativeImporter(ks storage.Keyspace) Importer {
 	return &nativeImporter{st: taskstore.New(ks)}
 }
@@ -92,7 +98,7 @@ func (im *nativeImporter) Run(ctx context.Context, b *storage.Batch, r RunRecord
 // RunData implements Importer.RunData: it records the guard precondition of
 // the run (which must exist as b sees it) and stages every record of d.
 func (im *nativeImporter) RunData(ctx context.Context, b *storage.Batch, id RunID, d RunData) error {
-	if _, found, err := im.st.ReadForUpdate(ctx, b, taskstore.RunKey(string(id))); err != nil {
+	if _, found, err := readForUpdate(ctx, im.st, b, taskstore.RunKey(string(id))); err != nil {
 		return err
 	} else if !found {
 		return fmt.Errorf("%w: RunData of %s, which is neither stored nor imported in this batch (an import batch that stages Run and RunData together must be indexed)", ErrRunNotFound, id)
@@ -156,7 +162,7 @@ func (im *nativeImporter) Clock(ctx context.Context, b *storage.Batch, k Kind, c
 		return errors.New("tasks: import of a clock without a kind")
 	}
 	key := taskstore.SchedKey(string(k))
-	if _, _, err := im.st.ReadForUpdate(ctx, b, key); err != nil {
+	if _, _, err := readForUpdate(ctx, im.st, b, key); err != nil {
 		return err
 	}
 	c.ScheduleHash = ""
@@ -194,20 +200,25 @@ const (
 	renameDef
 	renameDebounce
 	renameStamps
+	renameIdem
 	renamePhases
 )
 
-// RenameKind implements Importer.RenameKind. It walks five families in a
+// RenameKind implements Importer.RenameKind. It walks six families in a
 // fixed order: the kind index (each run row and its index entry), the clock,
 // the definition snapshot, the debounce buckets of from (a stored reference
-// to the kind too, 5T.8.2) and the stamps (through their reverse index).
+// to the kind too, 5T.8.2), the stamps (through their reverse index) and the
+// start idempotency records, so a client's retry of a start under the new
+// name within the record's window still finds its run.
 // The cursor names the phase and the last key the phase staged, so a second
 // call into the same uncommitted batch never stages a reference twice; after
 // the batch commits, every rewritten reference is gone from from's keys, so
 // a call over committed state that finds nothing is a no-op (idempotent).
-// Where to already holds a clock, a definition snapshot or a stamp, to's
-// copy is kept (a stamp keeps the later time) and from's is deleted; a
-// debounce bucket is merged.
+// Where to already holds a clock, a definition snapshot, an idempotency
+// record or a stamp, to's copy is kept (a stamp keeps the later time) and
+// from's is deleted; a debounce bucket is merged. The definition snapshot and
+// the idempotency records move as bytes, unread, so neither value may embed
+// its kind (the kind lives in the key).
 func (im *nativeImporter) RenameKind(ctx context.Context, b *storage.Batch, from, to Kind, cursor string, limit int) (string, error) {
 	if from == "" || to == "" || from == to {
 		return "", fmt.Errorf("tasks: RenameKind %q -> %q: both kinds must be set and differ", from, to)
@@ -217,6 +228,9 @@ func (im *nativeImporter) RenameKind(ctx context.Context, b *storage.Batch, from
 	}
 	if err := im.st.Bind(b); err != nil {
 		return "", err
+	}
+	if !b.Indexed() {
+		return "", ErrBatchNotIndexed
 	}
 	phase, after, err := parseRenameCursor(cursor)
 	if err != nil {
@@ -254,6 +268,9 @@ func (im *nativeImporter) renamePhase(ctx context.Context, b *storage.Batch, pha
 	case renameDebounce:
 		prefix = taskstore.DebouncePrefix(from)
 		each = func(key, _ []byte) error { return im.renameBucket(ctx, b, key, to) }
+	case renameIdem:
+		prefix = taskstore.IdemPrefix(from)
+		each = func(key, _ []byte) error { return im.renameIdem(ctx, b, key, to) }
 	default:
 		prefix = taskstore.ReqRevPrefix(from)
 		each = func(key, value []byte) error { return im.renameStamp(ctx, b, key, value, from, to) }
@@ -286,7 +303,7 @@ func (im *nativeImporter) renameSingle(ctx context.Context, b *storage.Batch, fr
 	}
 	read := func(key []byte) ([]byte, bool, error) {
 		if guarded {
-			return im.st.ReadForUpdate(ctx, b, key)
+			return readForUpdate(ctx, im.st, b, key)
 		}
 		return im.st.Get(ctx, key)
 	}
@@ -312,12 +329,12 @@ func (im *nativeImporter) renameSingle(ctx context.Context, b *storage.Batch, fr
 
 // renameRun rewrites the run that one kind-index entry of from names.
 func (im *nativeImporter) renameRun(ctx context.Context, b *storage.Batch, ixKey []byte, from, to string) error {
-	segs, err := taskstore.Segments(ixKey)
-	if err != nil || len(segs) != 4 {
-		return fmt.Errorf("tasks: RenameKind: malformed kind-index key")
+	_, rawID, err := taskstore.ParseKindIndexKey(ixKey)
+	if err != nil {
+		return fmt.Errorf("tasks: RenameKind: %w", err)
 	}
-	id := RunID(segs[3])
-	v, found, err := im.st.ReadForUpdate(ctx, b, taskstore.RunKey(string(id)))
+	id := RunID(rawID)
+	v, found, err := readForUpdate(ctx, im.st, b, taskstore.RunKey(string(id)))
 	if err != nil {
 		return err
 	}
@@ -339,7 +356,7 @@ func (im *nativeImporter) renameRun(ctx context.Context, b *storage.Batch, ixKey
 // renameBucket moves one debounce bucket of from to to, merging it into a
 // bucket to already holds.
 func (im *nativeImporter) renameBucket(ctx context.Context, b *storage.Batch, key []byte, to string) error {
-	v, found, err := im.st.ReadForUpdate(ctx, b, key)
+	v, found, err := readForUpdate(ctx, im.st, b, key)
 	if err != nil || !found {
 		return err
 	}
@@ -357,11 +374,10 @@ func (im *nativeImporter) renameBucket(ctx context.Context, b *storage.Batch, ke
 // renameStamp moves one stamp of from (found through its reverse-index key)
 // to to, keeping the later time where to already has one.
 func (im *nativeImporter) renameStamp(ctx context.Context, b *storage.Batch, revKey, value []byte, from, to string) error {
-	segs, err := taskstore.Segments(revKey)
-	if err != nil || len(segs) != 5 {
-		return fmt.Errorf("tasks: RenameKind: malformed stamp reverse-index key")
+	_, subject, err := taskstore.ParseReqRevKey(revKey)
+	if err != nil {
+		return fmt.Errorf("tasks: RenameKind: %w", err)
 	}
-	subject := taskstore.Subject{Module: string(segs[2]), Kind: string(segs[3]), ID: string(segs[4])}
 	at, err := decodeValue[stampValue](value)
 	if err != nil {
 		return fmt.Errorf("tasks: RenameKind of a stamp: %w", err)
@@ -380,6 +396,31 @@ func (im *nativeImporter) renameStamp(ctx context.Context, b *storage.Batch, rev
 	}
 	ref := entity.Ref{Module: subject.Module, Kind: subject.Kind, ID: subject.ID}
 	return stageStamp(im.st, b, ref, Kind(to), at.At)
+}
+
+// renameIdem moves one start idempotency record of from to to under both
+// keys' guard preconditions (idem/ is Serialized), keeping a record to
+// already holds under the same client key.
+func (im *nativeImporter) renameIdem(ctx context.Context, b *storage.Batch, key []byte, to string) error {
+	_, idemKey, err := taskstore.ParseIdemKey(key)
+	if err != nil {
+		return fmt.Errorf("tasks: RenameKind: %w", err)
+	}
+	v, found, err := readForUpdate(ctx, im.st, b, key)
+	if err != nil || !found {
+		return err
+	}
+	toKey := taskstore.IdemKey(to, idemKey)
+	_, toFound, err := readForUpdate(ctx, im.st, b, toKey)
+	if err != nil {
+		return err
+	}
+	if !toFound {
+		if err := im.st.Set(b, toKey, v); err != nil {
+			return err
+		}
+	}
+	return im.st.Delete(b, key)
 }
 
 // formatRenameCursor is "<phase>:<hex of the last staged key>".
