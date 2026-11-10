@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -855,6 +855,74 @@ func TestApply_QuarantinedValueIsNeverANoOp(t *testing.T) {
 		}
 		if r.cm.Calls() != 1 {
 			t.Errorf("committer called %d times after the refusal, want 1", r.cm.Calls())
+		}
+	})
+}
+
+// TestApply_QuarantineHealthTracksState (05-config §1.4 step 6, §1.5): an
+// Apply that clears quarantined values keeps the quarantine health token
+// raised while any value of that layer is still quarantined and lowers it
+// once none is left, for override rows and for boot-record values. A boot
+// record set aside whole as .bad keeps its token raised after an Apply.
+func TestApply_QuarantineHealthTracksState(t *testing.T) {
+	raised := func(r *rig, token string) bool { return slices.Contains(r.st.HealthTokens(), token) }
+	t.Run("override rows", func(t *testing.T) {
+		const token = "config_overrides_quarantined"
+		r := newRig(t, rigOpts{
+			o:    config.Options{Flags: map[config.Path]string{kMax: "5"}},
+			rows: map[config.Path]string{kMin: `8`, kVillains: `["bane"]`},
+		})
+		r.start()
+		if !raised(r, token) {
+			t.Fatalf("health %v after Attach, want %s", r.st.HealthTokens(), token)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{kVillains: `["bane"]`}); err != nil {
+			t.Fatal(err)
+		}
+		if !raised(r, token) {
+			t.Errorf("health %v with min still quarantined, want %s", r.st.HealthTokens(), token)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{kMin: `2`}); err != nil {
+			t.Fatal(err)
+		}
+		if raised(r, token) {
+			t.Errorf("health %v with nothing quarantined, want %s lowered", r.st.HealthTokens(), token)
+		}
+	})
+	t.Run("boot record values", func(t *testing.T) {
+		const token = "config_boot_record_quarantined"
+		r := newRig(t, rigOpts{bootRecord: `{"format":"mediacore-boot/1","gen":1,"values":{"core.lantern.mode":"off","core.lantern.range":3}}`})
+		if _, err := config.Register(r.st.Registry(), config.Define(lanternSection, lantern{})); err != nil {
+			t.Fatal(err)
+		}
+		r.start()
+		if !raised(r, token) {
+			t.Fatalf("health %v after boot, want %s", r.st.HealthTokens(), token)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{lanternRange: `3`}); err != nil {
+			t.Fatal(err)
+		}
+		if !raised(r, token) {
+			t.Errorf("health %v with mode still quarantined, want %s", r.st.HealthTokens(), token)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{lanternMode: `"on"`}); err != nil {
+			t.Fatal(err)
+		}
+		if raised(r, token) {
+			t.Errorf("health %v with nothing quarantined, want %s lowered", r.st.HealthTokens(), token)
+		}
+	})
+	t.Run("boot record set aside whole", func(t *testing.T) {
+		const token = "config_boot_record_quarantined"
+		r := started(t, rigOpts{bootRecord: "{not json"})
+		if !raised(r, token) {
+			t.Fatalf("health %v after boot, want %s", r.st.HealthTokens(), token)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{kMode: `"day"`}); err != nil {
+			t.Fatal(err)
+		}
+		if !raised(r, token) {
+			t.Errorf("health %v after an Apply, want %s kept for the .bad record", r.st.HealthTokens(), token)
 		}
 	})
 }

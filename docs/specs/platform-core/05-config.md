@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.15 -->
+<!-- version: 1.13.16 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -746,7 +746,10 @@ services and before any listener opens.
    `Validate` with its overrides but passes without them, **all of that section's overrides are quarantined**
    (kept, ignored, reported, health token `config_overrides_quarantined`) and boot continues. An `Apply` that sets a
    quarantined key, or a quarantined boot-record entry, to its stored bytes is never skipped as unchanged: the value is
-   written and validated again, so the quarantine clears or `Apply` refuses with `ErrInvalid`. FailClosed keys whose
+   written and validated again, so the quarantine clears or `Apply` refuses with `ErrInvalid`. The health tokens
+   follow the quarantine after every `Apply`: `config_overrides_quarantined` and `config_boot_record_quarantined` stay
+   raised while their layer holds a quarantined value and are lowered when an `Apply` clears the last one (a boot
+   record set aside whole as `.bad` keeps its token for the rest of the boot). FailClosed keys whose
    stored value wins are reported in `AttachReport.FailClosed` with health token `config_fail_closed_override`
    (§1.3.5). Rationale: an operator cannot repair the DB without booting; ABO's equivalent path is fatal
    (`cmd/root.go:385-391`). Services built after this step (06 P5) see the DB layer; nothing built before it reads
