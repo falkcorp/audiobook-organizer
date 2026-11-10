@@ -1,5 +1,5 @@
 // file: core/audit/audit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 868e4187-08f4-4ee4-8747-ba40f7c9e404
 // last-edited: 2026-11-10
 

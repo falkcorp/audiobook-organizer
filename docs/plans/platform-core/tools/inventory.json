@@ -1422,7 +1422,8 @@
   ],
   "files": [
    "core/audit/",
-   "core/kernel/audit.go"
+   "core/kernel/audit.go",
+   "core/kernel/audit_test.go"
   ],
   "spec": "05-rbac §3.5, §7 (audit); 03 §3.8 F2; 06 §6.4.10 F2; 04 §8.1 F2",
   "notes": "Tier: a store and a fixed action table. core/kernel/audit.go holds the kernel side; the boot call is F2-16's. audit.New's Options and Deps fields are coined from 05-rbac §7.3, §10 and §11. 04 keys: F2 create mediacore/audit."
