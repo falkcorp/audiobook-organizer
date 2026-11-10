@@ -1,5 +1,5 @@
 // file: core/config/importer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c9586e1-b071-417e-a1e0-e58dc0945411
 // last-edited: 2026-11-10
 
@@ -60,8 +60,7 @@ func (i storeImporter) Stage(b *storage.Batch, p Path, v json.RawMessage, by str
 	}
 	c, err := ck.k.canonical(p, v)
 	if err != nil {
-		var fe *FieldError
-		if errors.As(err, &fe) {
+		if fe, ok := errors.AsType[*FieldError](err); ok {
 			return fe
 		}
 		return &FieldError{Path: p, Err: err}

@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -622,9 +622,7 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 		delete(s.health, healthOverridesQuarantined)
 		return AttachReport{}, err
 	}
-	for p, err := range s.quar {
-		rep.Quarantined[p] = err
-	}
+	maps.Copy(rep.Quarantined, s.quar)
 	rep.Applied = len(s.dbVals)
 	s.overrides, s.committer, s.attached = o, c, true
 	s.refreshSecrets(ctx, nil)
