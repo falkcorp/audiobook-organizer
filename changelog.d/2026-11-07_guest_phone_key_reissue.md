@@ -1,3 +1,0 @@
-### Added
-
-- Admins can issue or reissue a guest's phone-app key from the Users page (`POST /api/v1/admin/guest-service-tokens/:userId/reissue`, owner-gated like Revoke). Reissue revokes the current Cloudflare service token first, mints a new one, and emails it to the guest's verified address; the admin never sees the secret, and nothing credential-shaped is logged or audited. A user with a verified email and no key yet gets a first key the same way. The key is revoked again if the email cannot be sent, and the request is refused before anything is revoked when mail or Cloudflare settings are missing. The Users panel now lists such users with an "Issue key" button, and a "Reissue key" button on existing rows.

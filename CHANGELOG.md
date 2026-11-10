@@ -7,6 +7,499 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.224.0'></a>
+## v0.224.0 — 2026-11-10
+
+### Added
+
+- ABS API: `GET /api/libraries/:libraryId/stats` (genre counts), `POST /api/items/batch/get` and `GET|HEAD /api/authors/:id/image` (404, no author images stored) so the Lissen Android client's Genre view, series search and author pages work instead of falling through to the `/api/v1` redirect.
+
+- Admins can issue or reissue a guest's phone-app key from the Users page (`POST /api/v1/admin/guest-service-tokens/:userId/reissue`, owner-gated like Revoke). Reissue revokes the current Cloudflare service token first, mints a new one, and emails it to the guest's verified address; the admin never sees the secret, and nothing credential-shaped is logged or audited. A user with a verified email and no key yet gets a first key the same way. The key is revoked again if the email cannot be sent, and the request is refused before anything is revoked when mail or Cloudflare settings are missing. The Users panel now lists such users with an "Issue key" button, and a "Reissue key" button on existing rows.
+
+- After an upgrade, open browser tabs offer to reload. The UI build now stamps
+  its ID into the page, every API response is compared with it, and a tab whose
+  build differs shows a "A new version is available" bar with a Reload button.
+- `--version-json` and `--print-upgrade-floor` print machine-readable build and
+  store facts. `--version-json` prints the app, version, commit, UI build ID and
+  binary ID as one JSON line; `--print-upgrade-floor` prints nothing until a
+  release declares a floor.
+
+- The first start after this upgrade keeps a full copy of the database,
+  including saved passwords and sign-in tokens, beside it for 7 days;
+  `audiobook-organizer storage prune-checkpoints` deletes it sooner.
+- A checkpoint sweeper now runs once every start, right after the server is
+  ready, and then every hour. It deletes each database copy 7 days after it
+  stops being needed (a completed upgrade's copy 7 days after the upgrade; a
+  failed upgrade's copy is kept while it is the only way back, then 7 days
+  more), removes half-written copies, and deletes leftover dry-run and
+  rehearsal copies 7 days after they were last changed. The 7 days are fixed;
+  no setting makes them longer. It also checks that every copy is readable
+  only by the service account and logs an error naming any file or folder
+  that is not; it never changes a permission itself.
+- `audiobook-organizer storage prune-checkpoints` deletes completed and
+  released copies now, and with `--include-open --confirm` also the copy a
+  failed upgrade is still using as its way back. It works whether the server
+  is running or stopped, and refuses while an offline restore is in progress.
+
+- Internal: the core web workspace with the generated API client.
+
+- `audiobook-organizer --print-storage-levels` prints, as one JSON object, the
+  storage level this build supports for each owner (`{"books":0,"core":0}` in
+  this release), then exits without opening anything. The Docker image check
+  now requires it to exit 0 and print JSON (`PROBE_STORAGE_LEVELS=1`), and
+  `make rollback` will use it to compare builds once a release raises a level.
+  A trailing `--db PATH` is accepted and ignored.
+- Before the first start of this release writes anything to an existing
+  database, it saves a copy of the database (hard-linked where the filesystem
+  allows) together with the encryption key and the gap-fill settings file. The
+  copy goes in a `.mediacore-checkpoints/` folder next to the database, and a
+  `<database>.migration-checkpoint` file points at it, so an upgrade can be
+  rolled back to that exact state.
+
+- Internal: the core module (`core/`) and its build guards. The nested Go
+  module `github.com/falkcorp/mediacore` holds its first three packages
+  (`buildid`, `storage/keys`, `archtest`); ABO's layering guard now runs on the
+  shared `archtest` engine; new guards check that core imports nothing from the
+  app, holds no app key names, keeps the one genproto exclude, and resolves
+  every shared module to the version the root uses. Nothing user-visible
+  changes.
+
+- Docs: `docs/plans/2026-11-06-asin-conflict-edition-asins.md`, the parked plan for ASIN conflicts. When a matched Audible record has a different ASIN from the book, the book will keep its own ASIN and record the other as an edition ASIN instead of refusing the apply. If another book already has that ASIN, the two are queued in the Dupes lane to merge as versions. Work starts after the audiocore split.
+
+- CI: `extraction-gates`, `vet-darwin` and `vet-integration` required checks. `extraction-gates` builds every commit of a PR that renames a file into `core/` in both modules (`scripts/ci/check_commits_build.py`) and reports any moved file whose first-commit rename similarity is below 90 %; `vet-darwin` and `vet-integration` run `go vet` over the root and `core` modules. The `make vet-darwin` and `make vet-integration` targets loop over every Go module and join `make ci`. `e2e` now also runs on the merge queue. `scripts/tests/test_ci_classifier.py` checks the changes classifier, that every required-check workflow carries the `merge_group` trigger, and that the workflow shapes hold.
+
+- Internal: core SDK leaf types for permissions, identity, UI manifests and the JSON Schema reflector.
+
+- Internal: the core runtime skeleton (module, kernel, app, httpapi) and the hello example.
+
+- Internal: one credential redactor for logs and traces in the core module. When tracing is on, every exported span now has API keys, tokens, passwords and invite links removed from its name, attributes, events and status before it leaves the server, and the server refuses to start tracing without the redactor.
+
+- Internal: the core storage engine, not yet used by the app.
+
+- Internal: core's in-process test harness and the route-permission gate. `coretest.New` boots core in process with no listener and hands tests a client that sends requests to the App's handler, plus the G1 "disabled module is inert" assertion. `archtest.RoutesHavePermissions` fails a build whose router has a route without an admissible permission, naming each one. The shared test log capture moved to the leaf package `coretest/logcapture` so core's own kernel and app tests can still use it.
+
+- CI: every PR builds and runs the Docker image; the image build copies the core module.
+
+- CI: core version checks, checkpoint recording and a nightly split-readiness report.
+
+- Internal: core's one journaled swap for restores and factory resets, applied at P0a (`core/internal/restoreswap`), and the boot crash-matrix kit (`coretest/crashmatrix`). The kit kills the boot before, and fails, every durable write from P0a to readiness, then kills the boot after each broken one again. `TestBootCrashMatrix` runs it over hello, and `TestBootCrashMatrixCoversEveryWriter` requires every writer-table label to be faulted.
+
+- CI: unit-lifecycle job proves a long first boot is not killed and a staged restore restarts the service.
+
+### Changed
+
+- CI: automatic minor-release promotion now honours the RELEASE_FREEZE repository variable (the release freezes).
+
+- Repairs: the fixer list is now grouped under eight headers (Duplicates & split books, Titles, Authors, Series, Metadata & tags, Files & iTunes paths, Versions, Imports & one-shot tools), most-used first inside each group, in a fixed order that does not reshuffle after a trial. Every fixer has a plain-language `<Verb> <what it fixes>` title (for example "Merge chapter files into their book", "Fix junk titles"), a one-line summary in the list, and the long description with its safety warnings in the header. Fixer ids are unchanged, so `?fixer=` links, stored plans and history keep working. "Preview only" and "API only" are badges, not title suffixes, and the retired-versions fixer keeps one title whether or not its apply flag is on. `GET /api/v1/repairs` now returns `summary`, `group`, `group_title`, `rank` and `api_only_reason` for each fixer, and lists them in that order; `repairs.Fixer` has a new required `Meta()` method (group, rank, summary, API-only reason), so a new fixer cannot be added without them.
+
+- CI: the four bots that write to GitHub (`todo-collect`, `auto-revert`, `ratchet-lower`, `memory-leak-scan`) now authenticate as the org-owned CI bot GitHub App instead of `GITHUB_TOKEN` or the personal `JF_CI_GH_PAT`. Each run mints a short-lived installation token with `actions/create-github-app-token` (pinned to a SHA), narrowed per workflow with `permission-*` inputs from the variable `CI_BOT_APP_CLIENT_ID` and the `ci-bot` environment secret `CI_BOT_APP_PRIVATE_KEY`, and commits as `<app-slug>[bot]` (slug and user id are looked up at runtime by the new `scripts/ci/set_bot_git_identity.sh`). Every minting job runs in the `ci-bot` GitHub Environment (limited to the default branch, holding the key as its environment secret) so a workflow on another branch cannot mint a token that bypasses the ruleset. A missing variable or `ci-bot` environment secret now fails the job with a clear error instead of falling back to a token that cannot push. The app is the only bypass actor on the main merge-queue ruleset, which the daily TODO collection and a real auto-revert both need: since the queue went on, their direct pushes to main were rejected (GH013). Each job's own `GITHUB_TOKEN` is cut back to read-only (plus `issues`/`actions: write` for auto-revert's bug filing and gate re-run).
+- CI: `todo-collect` now checks, before it pushes, that its commit sits directly on the default branch tip and touches only `TODO.md` and `todo.d/`; it previously persisted `GITHUB_TOKEN` in the checkout, which silently overrode the token in its push URL. `memory-leak-scan` no longer puts `[skip ci]` on its commit and PR title: with the PR now opened by the app, the marker would have suppressed the required checks the merge queue waits for.
+
+- CI: every `falkcorp/github-common` reusable-workflow pin, and `.github/ghcommon-ref.txt`, moves to one SHA, `23ed8a46` (github-common main, 2026-11-06). Before this the nine callers sat on five different SHAs. What each one gains:
+  - `nightly.yml` (`reusable-ci.yml`, from `861d4e83`): the gha-ci-workflow-helpers fix for a frontend run that exited 0 when its npm script failed, and Playwright browsers installed as the runner user. The fixes exposed that the nightly E2E step had never worked. It starts no server, so all 710 tests failed at once while the step showed green, and with the fixes it ran into its 30-minute limit. `nightly.yml` now passes `skip-e2e-tests: true` like `frontend-ci.yml`, and `e2e.yml` remains the E2E run.
+  - `security.yml` (`reusable-security.yml`, from `d0c3326b` of 2026-07-05): the github-common#374 fallback script-ref fix, plus four months of dependency updates.
+  - `ci.yml` (`reusable-ci-minimal.yml`) and `frontend-ci.yml`: dependency updates only.
+  - `prerelease.yml` and `release-prod.yml` (`reusable-release.yml`, from `861d4e83`): github-common#388. Changelog collection now runs in its own job, so a refused push can no longer skip the package publish. When the `main` ruleset refuses the push, the collected `CHANGELOG.md` lands through a same-repo PR set to auto-merge.
+  - The three burndown and triage callers, which are disabled: the newer runner image.
+- Workflow headers: `triage-poll.yml`, `hard-burndown.yml` and `nightly-burndown.yml` get the `guid` and `last-edited` lines they were missing.
+
+- Internal: telemetry provider construction moved into the core module; every metric keeps its name.
+
+- Invitations: when accepting will mint the guest's own phone-app key, the invite email now has setup steps for AudioBooth (iPhone) and Lissen (Android 9+), telling the guest to add the key as custom headers before signing in. Android names Lissen because the official Audiobookshelf Android app (v0.14.2-beta) can't send custom headers on its first request, the API, streaming or downloads, so Cloudflare Access blocks it.
+
+- Platform-core STATE.md records waves W09 (R1-03, R1-32) and W10 (R1-04, R1-09); R1 is at 12 of 37 rows.
+
+- Platform-core STATE.md records wave 11 (R1-05, R1-08, R1-29, R1-36): 16 of 37 R1 rows merged.
+
+- Platform-core STATE.md records wave 12 (R1-13): 17 of 37 R1 rows merged.
+
+- Platform-core STATE.md records wave 13 (R1-14): 18 of 37 R1 rows merged.
+
+- Docker Compose now gives the server 60 seconds to stop and sets a 25-second shutdown budget; the macOS launchd file waits 60 seconds.
+- `serve` reads `ABO_CORE_SHUTDOWN_BUDGET` and passes it to the core app as its shutdown budget. A value that is not a positive duration (for example `abc` or `0s`) now stops `serve` at startup with an error naming the variable; unset keeps the default of 25 seconds.
+
+- Woodpecker CI now runs only what GitHub Actions cannot: `checks-lint` (reduced to staticcheck, the one `make ci` gate with no GitHub PR job) and `test-native-taglib` (needs libtag on the host). The seven duplicate workflows (`test-rest`, `test-database`, `test-server-scanner`, `test-fixtures-1/2/3`, `checks-build`) are deleted; the PR gate is ci.yml's `go-test-short-shards` and `Fixture Tests` jobs, which cover the same packages and make targets. This takes the duplicated load off our servers.
+- ci.yml `Repo Guards` gained a `make pprof-check` step: it was run only by Woodpecker's `checks-build`, so deleting that workflow would otherwise have dropped the gate.
+
+- The deploy template checks the deployed version by running
+  `--version-json` on the host over ssh instead of calling an HTTP route that
+  does not exist.
+- Release builds no longer pass `-X main.commit` and `-X main.date`, which named
+  variables the program does not have.
+- The `docker-image` check now also requires the `X-App-Build` header to equal
+  the build ID in the served page.
+
+- `GET /api/v1/system/status` (signed in, settings permission) now lists
+  every degraded token in `degraded`, including the ones `/health` shows,
+  and adds `storage_checkpoint_retained` (a database copy exists, with when
+  it will be deleted), `storage_checkpoint_open` (a copy still in use, or a
+  leftover dry-run copy, with its age) and `storage_checkpoint_mode` (a copy
+  readable by other accounts, naming it). The details are in a new
+  `degraded_details` list. `/health` still shows only `memdb_warming`,
+  failed optional startup steps such as `search_index`, and
+  `basic_gate_no_password`.
+
+- The server's log file is now `logs/abo.log` under the state directory (rotated at 100 MiB, seven files kept), instead of a dated `audiobook-organizer-<date>.log` in the directory the server was started from. Lines still go to standard output as well, so the journal is unchanged. The old dated files stay where they are; nothing deletes them, so remove `logs/audiobook-organizer-<date>.log` from the directory the server used to be started in once you no longer need them.
+- `log_level` (and the `--log-level` flag) now sets the level the server logs at. It was read but never applied to the server's logger, which always logged at info. `log_level=debug` now really raises the level of the journal output and the log file, so a server left at `debug` will log far more than it did and the file will rotate sooner. The level is read once at boot: changing `log_level` needs a restart to take effect. A level the server does not know falls back to info and prints a warning at startup.
+- The `scan` and `organize` commands no longer open a debug-level log file in the working directory. They log to standard output as text, at `log_level` (info unless set), where they logged at debug before; pass `--log-level debug` to get the old verbosity.
+- `serve`'s own startup lines (configuration, opening the database, migrations, the encryption-key check) go to standard output only: the log file under the state directory opens when the server's logging starts, after them. They used to be written to the dated log file as well.
+- A line logged by a named part of the program (the scheduler, db-optimize, the registry and so on) now carries `subsystem=<name>` as a field of the journal and log-file line, where it used to start the message with `<name>: `. Anything that searched the journal for `db-optimize: ` now searches for `subsystem=db-optimize`. The Activity page is unchanged: its entries still read `<name>: <message>`. A subsystem can now be given its own level, `process.<name>`.
+- Log lines written by third-party libraries through Go's standard `log` package no longer appear as system entries on the Activity page. They still reach the journal and the log file.
+
+- Internal: the service registry is built from one explicit list; the global registration map is gone.
+
+- The core runtime now opens the library database, before the books module
+  starts. The server no longer opens it, runs its upgrades or writes to it
+  before startup itself. Upgrade steps, the encryption-key checks and the
+  start-of-day repairs now run in the core runtime's own startup order. The
+  stored format is unchanged, so the previous release (v0.223.0) still opens a
+  database this release has used, and `make rollback` to it still works.
+- The database now refuses a read or write of a key outside the families the
+  books module has registered, instead of letting it through. If a key is
+  refused in production, setting `ABO_CORE_STORAGE_CLAIMS_MODE=shadow` lets
+  single-key reads and writes through while still counting them
+  (`audiobook_organizer_storage_claim_violations_total`) and logging them (the
+  1st, 2nd, 4th, 8th... time for each kind, so the log does not flood). Shadow
+  mode does not widen listings: a family that is not registered stays
+  invisible to every scan either way. These logs and the refusal errors
+  describe a key by the registered family that holds it and its length
+  (`key under claim "sess:" len=21`), or, for a key in no registered family,
+  by its length alone. Neither the key nor a hash of it is shown, so a session
+  token or other secret held in a key never reaches a log.
+- The first start of this release on an existing database counts the keys that
+  belong to no registered family and logs how many there are with a few
+  examples, each described by its length. It leaves them in place and does
+  not refuse to start.
+- If startup cannot save a settings upgrade (the settings blob's new layout,
+  the maintenance-window marker, or a reset of an unreadable secret), the server
+  logs the error, reports `settings_writes` in `/health`'s degraded list, and
+  keeps serving with the upgraded settings in memory. The next start tries the
+  save again, as before.
+- A database without a `storage_format` record gets one (format 1, which is
+  what a missing record already meant) during startup, after the upgrade
+  checkpoint is taken, as releases before this one did when they opened it.
+- Startup refuses a database that holds core-runtime keys but no install
+  marker, which would mean some other program wrote them, and changes nothing
+  in it.
+
+- CI: the "Require changelog fragment" check passes Dependabot PRs straight away, logging "dependabot PR — changelog fragment not required", so dependency bumps no longer sit red waiting for a fragment Dependabot cannot write. It goes by the PR's author, so a re-run or rebase by someone else still skips. The scriv collect dry run still runs on every PR.
+
+- CI: the U1 Woodpecker agent now runs around the clock, with 6 parallel workflows inside its daytime windows and 1 outside them, instead of being paused outside those windows. The schedule job drains U1 before each restart, so no running job is killed. `docs/ci/woodpecker.md` describes the schedule.
+- CI: the llm1 Woodpecker agent runs 3 parallel workflows (was 2).
+
+- Internal: the shutdown and logging helper packages moved into the core module.
+
+- Internal: three database files split so the storage move can be a pure file move; no behaviour change.
+
+- CI: every gate runs per module or for one module, as R1's classification table states; core has its own errcheck and interface-width baselines, one short-test shard, a nightly job and its own deadcode filter.
+
+- The platform-core state file records waves W03 to W06, the 11 required merge checks and the move-window decision.
+
+- Woodpecker `checks-build` now also puts u0-local's checksum-verified Node 26 (`/srv/ci/tools/node`) on PATH, so u0's local agent can take `heavy=true` jobs while U1's agent is stopped.
+
+- CI: one web dependency entry point (`make web-deps`, which runs `scripts/ci/build_web.sh deps`) at every build site, so web builds keep working when `web/` starts depending on the shared `core/web` packages. The two release workflows no longer run the reusable workflow's separate frontend job, whose output was discarded: the binary embeds the UI built by the pre-build script.
+
+- Internal: core leaves version, entity, coretest and health (the runtime flight recorder) created; flight-recorder log lines carry `subsystem=flight-recorder` instead of a text prefix.
+
+- Internal: the path-safety helpers moved into the core module's library package.
+
+- Internal: core's logging pipeline (levels per module, context attributes, taps, rotating file) and removal of the old log-sanitising helpers.
+
+- The errcheck lint no longer counts `errors.AsType` type tests as dropped errors. They were 37 of the 726 tolerated findings, and the Go modernizer rewrites code into exactly that form, so the two checks contradicted each other. The tolerated count drops to 689; no code changed.
+
+- Paths of the form `/api/<name>/v<N>/…` are reserved for versioned APIs and are no longer redirected to `/api/v1/`.
+- Internal: core's router can mount the existing route engine as a legacy mount, with a reviewed manifest that names the permission of every one of its 571 routes (496 with the Audiobookshelf API off). Nothing serves through it yet.
+
+- The platform-core plan state now records waves W07 and W08 as merged (8 of 37 R1 rows done) and names W09 as the next wave.
+
+- The web client uses react-router 8; routing is unchanged.
+
+- Every github-common pin moves to `016cd02` together with `.github/ghcommon-ref.txt`. Releases now collect the changelog in a job with no secrets, and push it as the CI bot app from the main-only `ci-bot` environment (`bot-environment: ci-bot`), so the push no longer fails on the merge queue (GH013).
+
+- After an unclean shutdown, the dedup vector index is brought up to date from its last snapshot at startup instead of being rebuilt from scratch. It is rebuilt only when an indexed book's or author's embedding changed, and the log names which ones.
+
+- Every response carries an `X-App-Build` header naming the build (the
+  `mediacore-build` tag of the embedded web app; `dev` for a build without
+  one). The one exception is a request refused by the peer allow-list, which
+  is answered before any header is added.
+- Internal: the HTTP perimeter (peer allow-list, request IDs, tracing and the
+  HTTP metrics, panic recovery, the access log, security headers, CORS,
+  compression and the `/api` rate limit) runs in the core runtime instead of
+  the gin engine. Only the Basic sign-in gate and the per-route body limits
+  stay in gin for now.
+- Every response carries an `X-Request-ID` header (again, except a refused
+  peer's), and an error's problem body carries the same ID as `request_id`.
+- A rate-limited request now gets an `application/problem+json` body with the
+  code `rate_limited`, plus `RateLimit-Policy` and `RateLimit` headers next to
+  `Retry-After`. When the tunnel connectors are listed in
+  `TUNNEL_CONNECTOR_ADDRS`, the limit applies per visitor
+  (`CF-Connecting-IP`) instead of one shared bucket per connector.
+- A request from a peer outside `ALLOWED_PEER_CIDRS` is refused with a 403
+  `application/problem+json` body (code `peer_refused`) instead of plain text.
+- A cookie-carrying request from another site or a sibling subdomain that
+  would change something (`POST`, `PUT`, `PATCH`, `DELETE`) is refused with
+  403 `cross_origin_rejected` and logged as a security event.
+- `Strict-Transport-Security` is sent over TLS, or when a trusted tunnel
+  connector (`TUNNEL_CONNECTOR_ADDRS`) says the visitor used HTTPS; a caller
+  can no longer turn it on by sending `X-Forwarded-Proto: https` itself.
+- CORS no longer allows the Vite dev server's origin (port 5173) in debug
+  builds; the dev server proxies `/api`, so the browser sees same-origin
+  requests and never needed it.
+- HTTP metrics: the `http_server_*` series are recorded by the core runtime
+  for every request, gin's included. A request refused before a route (a
+  refused peer, CORS, a cross-origin refusal, an unrouted 404 and, from F4,
+  authentication) carries no `http_route`; a request refused by the rate
+  limit or a body limit carries its route's pattern. Preflights and Basic-gate
+  challenges are counted for the first time. `http_route` values follow
+  core's route patterns (`/api/v1/audiobooks/{id}` where gin wrote
+  `/api/v1/audiobooks/:id`). `http_server_response_body_size` measures bytes
+  before compression.
+- The HTTP access log changes format. gin's text lines
+  (`[GIN] 2026/11/08 - 05:00:00 | 200 | ...`) become structured records with
+  `msg="http access"` and the attributes `method`, `path`, `status`,
+  `duration`, `bytes`, `proto`, `client`, `request_id` and `route`. A Loki
+  query or alert that matches `[GIN]` no longer matches anything; match
+  `msg="http access"` instead. The lines still go to standard output only and
+  stay out of the Activity Log, as gin's did. A request whose handler panics
+  still gets its line, with status 500.
+- Server-sent event streams are no longer gzipped: every `text/event-stream`
+  response is sent uncompressed, where HEAD excluded only `/api/events`.
+- `error.type` on the `http_server_*` series and on request spans is set only
+  when the request ended early (the client went away or a deadline passed). A
+  gin handler's recorded error no longer sets it.
+- When the Basic sign-in gate is on, a request without credentials now meets
+  the core perimeter before the gate. Its 401 carries `X-App-Build` and
+  `X-Request-ID`. A rate-limit (429), body-limit (413), peer (403) or
+  cross-origin (403) refusal comes before the gate and is
+  `application/problem+json`, and every such request spends the client's
+  `/api` rate-limit tokens even if the gate would have refused it.
+- A setting saved through the API for the listener, rate limit, body limits,
+  peer allow-list or trusted proxies takes effect at the next restart.
+
+- The server starts through the core runtime; shutdown follows one ordered budget.
+
+- Internal: systemd readiness notifications are sent by the core runtime. The
+  server no longer sends `READY=1`, `STATUS=` or `STOPPING=1` itself, and a
+  startup step that asks systemd for more time now also extends the core
+  runtime's own 60 second start limit for that step.
+
+- Internal: the books store package moved to internal/books/store (storetest, aggtest and mocks beside it). Import paths only; the generated store mocks now name the package `store`.
+
+- Deploy waits on the systemd unit and reports exit 78 by name; the unit no longer restarts on exit 78 and stops within 60 s; `make rollback-restore` for releases that change the store.
+- `make rollback` refuses when the store is at a level the previous binary cannot read (`<db>.storage-levels` against `.prev --print-storage-levels`), when a checkpoint pointer exists without a levels file, and while a restore or reset swap is in flight.
+- Every privileged deploy and rollback step runs through root-owned helpers in `deploy/rollback-helpers/` that validate their own arguments and read their paths from `/etc/audiobook-organizer/rollback.conf`; the sudoers drop-in grants only those helpers and fixed commands, with no wildcards, no `tee` and no free `cp` into `/etc/systemd/system`. `Makefile.local.example`'s `deploy` installs the binary (atomically, keeping `.prev`), the unit and `deploy/local.conf` through `install-staged`, which never installs uploaded text as a unit file: the unit is copied from the root-owned helper bundle, and the `local.conf` drop-in is re-rendered from the staged file's one-assignment `Environment=` lines, refusing any other setting (so a deploy cannot set `User=root` or `ExecStartPre=`). Staged files are opened with no symlink in any path component and must be regular, singly linked and owned by the deploy user. `deploy/local.conf` now holds `Environment=` lines only: `ExecStart=`, `TimeoutStopSec=` and other host settings move to a root-installed `host.conf` drop-in (owner migration); `install-staged unit` and `install-staged local-conf` refuse, before copying anything, unless that `host.conf` exists as a root-owned regular file, not group- or other-writable, running nothing but the service user's `ExecStart=`, so the service can never restart on the base unit's command line. The same rules apply to every drop-in systemd will apply to the unit (`systemctl show -p DropInPaths` plus a scan of every unit directory, including the dash-prefix and type-wide `service.d` directories) and to the unit template and the unit's main file wherever systemd finds it (`FragmentPath`, refusing a generated unit or one outside the unit directories, plus every copy in them), and `local.conf` refuses loader and runtime-injection variables (`LD_*`, `MALLOC_*`, `PYTHON*`, `PERL5*`, `GCONV_PATH`, `GLIBC_TUNABLES`, `GODEBUG`, `NODE_OPTIONS`, `SSL_CERT_*`, `LOCPATH` and others). Unit files and drop-ins are read as systemd joins their lines (odd trailing backslashes continue, comments inside a continuation are skipped), `ExecStart=` may carry only the `@`, `-` and `:` prefixes and one command (no `;` word, no `Type=oneshot`), the template's and unit files' `User=`/`Group=`/`ExecStart=` are read the same way (a folded or emptied `User=` refuses), `install-staged unit` no longer checks the `/etc` copy it replaces, and drop-in directories of the unit's aliases are checked too. `deploy-debug` and `pprof-off` switch the pprof drop-in through `pprof on|off`; the storage-format sidecar files are read as the service user, and refusals print a length and hash in place of file contents; `deploy-debug` and `pprof-off` switch the pprof drop-in through `pprof on|off`. The documented drop-in is rendered by `scripts/storage_format_guard.py sudoers`, and tests check every `sudo` the deploy and rollback recipes run against it. `make deploy`, `make deploy-debug`, `make rollback`, `make rollback-restore` and `scripts/deploy-match-unit-type.sh` need the helpers installed (owner action).
+- `make deploy`, `make deploy-debug` and both rollbacks wait `DEPLOY_READY_TIMEOUT` seconds (default 300) after the unit leaves `activating`, and refuse to report ready until the unit's `InvocationID` differs from the one read before the restart, so a restart that never ran no longer passes. `scripts/deploy-wait-ready.sh` without an ssh host waits at least `DEPLOY_READY_URL_TIMEOUT` seconds (default 1800).
+- Rollbacks install `.prev` atomically, match the unit type before stopping the service, run the restore as the service user in a transient unit that survives an ssh drop and writes its own exit status into a log the deploy user can read without `sudo` (appended, never truncated; a second restore refuses while one is still running, before anything is stopped), and print the host's state and the commands that finish or undo the rollback when a step fails. `ROLLBACK_ARCHIVE` is a file name in the helpers' `archive_dir`.
+- `storage restore-offline --into <dir>` writes the copy's own `<dir>.storage-levels` beside it.
+
+- A restore now takes effect at the next restart, which the service performs itself; a container started without a restart policy must be started again.
+- In this release a factory reset or a database reset runs only from the command line, with the service stopped (`audiobook-organizer storage reset`); the reset button in Settings returns with <R2 release>. Undoing a factory reset restores the database but not the library files or Open Library data it deleted. A reset now leaves `config.yaml` beside the database unchanged; delete it by hand for a full reset.
+- Restoring a backup from Settings stages it and restarts the service; the page reloads once the server is back. With "Verify backup" on, a backup without a checksum file is refused instead of restored unchecked, and a refused restore now says why (another restore or reset already waiting, a checksum mismatch, a backup that is no longer listed) instead of calling the file corrupt.
+- `storage restore-offline` (`--checkpoint`, `--archive`, `--into`, `--accept-loss`) restores with the service stopped: in place through the same journaled swap a restart uses, or into an empty directory. If it is interrupted once the restore is staged, the next start of the service finishes the restore.
+- `storage restore-offline` and `storage reset` refuse while the service is running or starting, and the service refuses to start while either one runs, so a service started by the system during a restore can no longer write to a database that is being replaced. The lock is `swap.lock` in the state directory.
+- The service also refuses to start while another process has the database open (a command-line tool, or a second copy of the service), before it applies a waiting restore or reset; start it once that process exits.
+- The service, `storage restore-offline` and `storage reset` refuse a state directory that group or others can write, since another user could then hold the swap lock against them: run `chmod g-w,o-w` on the directory. `swap.lock` is readable only by the state directory's owner.
+- `storage restore-offline` (in place or `--into`), `storage reset` and every command-line tool that changes the database run only as the state directory's owner, the user the service runs as. Run as anyone else (root, say), they refuse before changing anything and print the command to run instead (`sudo -u <owner> audiobook-organizer ...`): files they wrote as root would be unreadable to the service, which would then fail to start, or, for an `--into` copy, stop pruning old upgrade checkpoints. Tools that only read the database are not held to this rule, though, like any tool that opens the database, they need the service's user or root to open its lock file; a read-only tool run as root needs the service to have started once, to create `swap.lock`.
+- After a restore or reset, the next start checks the duplicate finder's similarity index against the restored database instead of trusting the copy saved from the database it replaced.
+- Every command-line tool that opens the database (`seed`, `diagnostics`, `dedup-bench`, `transcode-skip` and the others) now opens it the way the service does, and refuses while the service holds it, while a restore or reset is waiting or half-applied, or before the service has created it. Stop the service first.
+- The updater refuses to apply an update while a restore or reset is waiting or in progress.
+
+- Docs: the platform-core STATE file records R1-25 to R1-28 and R1-31 as merged and names OWNER-03, the R1 release cut, as the next step.
+
+### Removed
+
+- Repairs: three fixers are retired by owner decision, because a fresh trial of each found nothing to fix or another fixer covers it: "Fix l used for 1 in titles" (`maintenance.normalize-letter-l-ordinals`, 0 rows), "Relink books to their lost series" (`maintenance.relink-stale-series`, 3 rows and none applicable, and the database repairs those itself) and "Merge books split into one per chapter" (`dedup.split-books`, 0 of 239 clusters applicable; "Merge chapter files into their book" covers them). Their code, registration, tests and UI references are gone, and the maintenance dependency that only the split-books fixer used (`SplitBookCandidates`) is gone with it. Stored history is not rewritten: past plan and apply operations, the undo journal and decision records keep their ids, and a `?fixer=` link or `/dedup?tab=split-books` for one of them still opens the lane. The lane labels such a link "retired", and `/dedup?tab=split-books` now lands on "Merge chapter files into their book". The `repairs_last_plan_op:` and `repairs_last_apply_op:` settings for the three ids are left in place, since nothing reads them any more and nothing in the code clears settings of a retired fixer. The book-level skip "Stale series object" no longer tells the owner to run the retired relink fixer; the book is still held until its series is chosen by hand.
+- Split-book merge: the `AcquireLock`, `OnJournal` and `BeforeSource` options of `dedup.SplitMergeOptions`, and the `NotAttempted` field of its result, are removed. Only the retired split-books fixer set them. The merge always takes the merge lock itself and always journals its undo pointer before its first write, and a failure to journal that pointer still refuses the merge with nothing written.
+- Repairs: an editor keeps the view and revert of past applies of the three retired fixers. Their ids are no longer registered, and an unregistered id needs every permission (admin only), so the retired ids are listed in `repairs.RetiredFixerPermissions` with the scope the fixers had (`library.edit_metadata`); any other unregistered id stays admin only.
+- Repairs: a fixer group id the server does not know sorts after the known groups, ordered by its group string, so two different typos no longer interleave.
+
+- The `POST /api/v1/system/reset` and `POST /api/v1/system/factory-reset` routes, and the reset control in Settings, until the core reset route lands.
+- The `target_path` field of `POST /api/v1/backup/restore` (answered 400): restore into another directory with `audiobook-organizer storage restore-offline --archive <file> --into <dir>` instead.
+- The `pebble-inject-skip` tool. `audiobook-organizer transcode-skip <file>...` writes the same transcode-skip settings through the guarded open, with the service stopped.
+
+### Fixed
+
+- Repairs: the three fixers whose plan refuses to start without params (Audible read-status import, master-list read-status import, scan title revert) no longer offer a "Run trial" button that could only fail. The lane shows an "API only" badge and a disabled button whose tooltip says why, and a stray trial request for one is refused with the same reason. Their existing plans stay readable and applicable.
+- Repairs: skip labels and row texts that sent the owner to another fixer by nickname ("use the consolidation fixer", "use the swapped fixer") now quote its new title.
+
+- Eight configuration writes outside the config package now go through the config lock.
+
+- CI: merge-queue runs of `ci.yml` get a concurrency group of their own and are never cancelled in progress. The queue reuses one `gh-readonly-queue/main/pr-<n>-<base>` ref per entry, and the shared per-ref group with `cancel-in-progress: true` let a second run or a re-run attempt on that ref cancel the running one ("Canceling since a higher priority waiting request ... exists"). The queue counts a cancelled required check as failed, so it dropped #4394 twice. Pull-request and push runs keep the per-ref cancel.
+
+- Releases: the prerelease workflow's "Promote to a minor release when RC count hits 10" step dispatches the Production Release with the workflow's own `GITHUB_TOKEN` (the workflow already grants `actions: write`) instead of `JF_CI_GH_PAT`. That PAT has no Actions permission on this repo, so every promotion since 2026-10-31 failed with HTTP 403 and every prerelease run went red while the RC count kept climbing. A `workflow_dispatch` started by `GITHUB_TOKEN` does start a run; GitHub exempts `workflow_dispatch` and `repository_dispatch` from its no-recursive-runs rule, so the old comment's reason for the PAT was wrong.
+
+- Tests: `TestOpsV3Events_RoleLoweredMidStreamStopsTheRuns` no longer fails intermittently under load. It took its "before the demotion" baseline while a Repairs run event from the broker's same flush was still queued, then counted that event as delivered after the demotion. The test now settles the stream deterministically (two ordered plain-run events, so the event queue is provably drained) before and after lowering the role; the assertion is unchanged and the stream code is untouched.
+
+- The activity log now reads an operation's `op_id` and `component` from the exact attribute key, so a message or file name containing text like `opID=other` can no longer attach the activity row to the wrong operation or component.
+
+- CI: `scripts/ci/free_runner_disk.sh` now renames the unused preinstalled toolchains into a trash directory and deletes them in the background. On a slow runner the foreground delete had taken 8 minutes, which pushed Repo Guards past its 15-minute timeout and dropped a PR from the merge queue.
+
+- Phone-app key reissue now fails closed. If the key record cannot be read back after the new key is made, or reads anything other than that key being active, the new key is revoked and the admin is told the truth (it was revoked, or it could not be and may still be active); only a record that someone else already revoked is left alone.
+- Reissue stops cleanly at shutdown: it checks for shutdown before the revoke, after the revoke (the record is left `revoked` and audited as `reissue_failed`) and after the mint (the unsent key is revoked instead of left active). The residual mid-Cloudflare-call window is documented in `docs/operations/cloudflare-guest-service-tokens.md`.
+- Revoking a pending or revoking key record with no recorded token id now reaps any Cloudflare token named for that guest, so a crash between Cloudflare's create and the record write no longer leaves a live token. If Cloudflare cannot be asked the record becomes `revoke_failed` and can be retried.
+- The first-key path is for active, non-admin users only: admins and the owner are left out of the "No key" rows and `POST .../reissue` for one with no record answers 409 ("admins sign in through Cloudflare's own login and don't need a phone-app key"). Reissue for an existing record is unchanged.
+- The "already set up with your old key" line appears only in reissue emails, not first-key or accept-time ones; the accept-time key email trims a trailing `/` from the server address like the reissue one does.
+- A row shows "a key is being issued now" while a reissue worker is mailing after a 202; an internal error text no longer reaches the admin's response; the Issue dialog refreshes its row after a failed first-key attempt; admin-facing wording says "the account's email address" instead of "verified address" (an admin-set address counts as trusted; the trust rule is unchanged).
+
+- CI: `check_commits_build.py` now builds every commit of a move PR in one reused worktree instead of a new directory per commit. Go's build cache keys include the package directory, so every commit used to recompile from scratch, and a 33-commit PR ran past the 30-minute job timeout.
+
+- CI: `check-commits-build` now runs as 4 parallel shards (`check_commits_build.py --shard K/N`), each building one contiguous slice of a move PR's commits. A 48-commit PR (#4453) ran past the job's 30-minute cap, which 09 §9.2.10 fixes for every extraction-gates job, so the work is split instead of the timeout raised. Shard 1 also runs the rename-similarity check.
+- CI: `dashboard-reference` gets promtool from the first source that works: the cached, checksum-verified release tarball; the release download, retried for 90 seconds; or a build of the same release from the Go module proxy (about 35 seconds). GitHub's release CDN returned 504 to runners for over an hour, and 5 minutes of retries did not get through, which failed this required check on every PR.
+
+- Tests: `TestCollectCompactionStats_RealPebble` no longer flakes with "a compaction must show written bytes" under load. Its Pebble instance now disables automatic compactions, so the explicit `db.Compact` is the only compaction and the test asserts it is counted, the same fix its core storage twin got in #4468.
+
+- Tests: `TestCompactionStats_RealPebble` no longer flakes with "a compaction must show written bytes". The test's Pebble instance now disables automatic compactions, so a background compaction cannot land before the `before` snapshot and zero out the measured delta; the explicit `db.Compact` is the only compaction and the test asserts it is counted and writes bytes.
+
+- A log file that cannot be opened under the state directory now stops `serve` with an error naming the path, instead of being skipped with a warning.
+
+- Tests: `TestPerimeter_ParityWithHEAD` and `TestPerimeterShim_AltSvcOnUnroutedAnswers` no longer flake when a second boundary falls between the two `/health` requests of a parity case. `/health` stamps its body with the wall-clock second, so the byte-for-byte body comparison saw `timestamp` differ by one. The system handler gains a `WithClock` setter (default `time.Now`, unchanged in production) and the parity stacks pin it, so the timestamp stays in the comparison and every other field is still compared exactly.
+
+- Fixed an intermittent `TestProp_TranslateValidQueries` failure: the property generator could draw `tag` as a field name, and `TranslateAt` refuses a `tag:` term by design (it is split off by `SplitTagTerms` first). The generator now skips `tag`, and a deterministic test pins the refusal.
+
+- CI: the short-test shard runner (`short_test_shards.py`) now decodes `go test` output with undecodable bytes replaced. A test that printed raw gzip bytes made strict UTF-8 decoding raise `UnicodeDecodeError`, which crashed the whole shard and threw away every real test result in it.
+
+- CI: the R0 release download in the books tests retries transient failures (network errors, 5xx, 429) with backoff, and the Dockerfiles' curl calls now fail and retry on HTTP errors instead of saving an error page that then fails its sha256 check.
+
+- CI: the fixture-test shards and boot-crash-matrix-abo now prefetch the R0 release archive with `gh release download` (cached, retried, checksum-pinned) through `scripts/ci/fetch_r0.sh` and hand the extracted binary to TestR0OpensR1Store via `ABO_R0_BINARY`, so the test no longer depends on the github.com release redirect at run time.
+
+- The core auth type now lets a delegated (temp-login) session change credentials, as the reset-password flow needs, and core's staticcheck finding in the auth tests is cleared.
+
+- Tests: the login timing tests no longer fail on a loaded CI agent. Every failed-login path (wrong password for a real account, unknown name, account without a password, disabled account) was already doing the same password work; the tests now prove that directly by counting the argon2id derivations each login spends (new read-only `absauth.DerivationsForTest`), which holds under `-short -race` at any load. The wall-clock comparisons stay as an end-to-end check, compare each path's fastest sample instead of a median of five, rotate the order each round, and skip under `-short`.
+
+- The `internal/plugins/maintenance` test package no longer runs into the CI test timeout. It spent its time waiting on fsync from 47 test files that each opened an on-disk store, not computing; they now open in-memory stores, and the two 1,001-book page-streak tests share one source directory. Package `-short -race` wall time on a loaded Mac went from 11m42s to 3m06s, non-race from over 10 minutes (it timed out at the default budget) to 1m50s. A guard test keeps new tests from opening on-disk stores without a reason.
+
+- The weekly Lower Ratchet Baselines bot PR now carries the `skip-changelog` label, so the changelog fragment check no longer fails a PR that only lowers baseline numbers.
+
+- A frontend test no longer fails intermittently on a slow CI agent: the test event-stream stub now reports itself connected, so no "Connection lost" message can interrupt a test.
+
+- `TestBatch_50RapidEnqueues` no longer flakes on loaded CI agents. The batch debounce window is trailing-edge by design, so an enqueuing goroutine stalled for longer than the window legitimately ended the burst early and split it across two rows (21 + 29 subjects); the test raced a real 100 ms window against goroutine scheduling. The test now injects the timer primitive (new test-only `registry.Options.BatchAfterFunc`) and fires the window by hand, and a real-timer companion asserts that every subject is dispatched exactly once across rows. No change to batching behaviour.
+
+- Test: `TestInviteRateLimit_Global` no longer fails on a heavily loaded CI agent. The global invite limiter is a token bucket that refills 5 tokens a second on the real clock, so a 200 ms stall between the first refusal and the final "fresh token and client" probe let a token refill and answered 200. `IPRateLimiter` gains `UseClock`, `ReserveKey` and `Commit` now honour the injected clock (they read `time.Now()` directly), and the test holds the global bucket's clock still. No change to production behaviour: the clock defaults to `time.Now`.
+
+- Internal: fixed a flaky `TestResume_ShutdownTimeoutLeavesQuiescedAndResumable`. The test slept a fixed 400ms and then read the store, racing the drain-deadline stamp that `Shutdown` writes on its own goroutine, so a CPU-starved CI agent could read the row as `running`. It now waits for `Shutdown` to return, which always happens after the stamp. Test-only change; `Shutdown` itself was correct.
+
+- Listings of series, authors and import paths now come back in the same order whether the in-memory index or the on-disk store answers. Names that differ only in case used to swap places between the two, which made the series-prune repair refuse a preview as "changed since preview" for no reason. Ties are now broken by ID, and duplicate-group members are ordered by ID as well.
+
+- The warmup-hold timeout test no longer fails when a busy CI agent is slow to start the operation after warmup ends. It now proves the hold leaves the timeout untouched by giving the operation a timeout shorter than the hold, so a counted hold still fails every time.
+
+#### Dedup vector index: a crash that kept the row count no longer leaves the index wrong
+
+At startup the server trusted the saved vector index whenever the number of embedding rows still matched the number saved with it. A crash could change rows without changing that number (one book embedded and another deleted, a book re-embedded, a merge that changed which version is primary), and the index then stayed wrong until something rebuilt it.
+
+A clean stop now leaves a marker beside the snapshot, and a startup that finds no marker brings the snapshot up to date against the database whatever the counts say. The marker is written only when both of these hold:
+
+- the snapshot is exactly the index in memory (complete, undamaged, saved after its last change, and no write the index refused or failed to mirror during the run);
+- nothing during the run changed what that update would read from the database: an embedding row, or a book's existence, primary flag or series fields. The check sits where every database write passes, so merges, primary changes, embedding cleanups and re-embeds all count. A run that embedded anything therefore leaves no marker, so only quiet runs let the next start skip the update.
+
+It also records the embedding model, and a startup with another model brings the snapshot up to date. It is the last step of a stop, and is skipped when any stop step was still running or failed, a plugin's shutdown included. A backup restore replaces database files without going through the database layer, so the index counts as out of step from just before the restore writes its first file to the end of the run. A stop that lands while a restore is still writing therefore leaves no marker, even if the process exits before the restore finishes. Any marker beside the live database and beside the database it writes is removed before the restore writes its first file and again after it. A backup holds only the database folder, so a restore now refuses, before writing anything, an archive with anything in the index's snapshot folder beside it or with a file name that climbs out of the restore folder (even one that climbs back in), rather than restore a marker from a file that has no reason to match. A folder named like the snapshot folder counts anywhere in the archive, not only at its top. A restore whose `target_path` is the snapshot folder, contains it or lies inside it is refused too (to restore over the live database, leave `target_path` out), and the extraction compares every folder on the way to each file with the snapshot folders by identity, after following each symlink to where it really leads, so a symlink (one that points at a folder inside a snapshot folder included) or a case-insensitive spelling of the folder counts, refuses a file that would land in either, and never writes a file through a symlink. A `target_path` is compared the same way. A snapshot folder whose path is a symlink that does not resolve (dangling or looping) cannot be compared, so such a restore is refused with a 409 before anything is marked or written. A file whose own path runs through such a symlink, or through a folder the server cannot look into, is refused with a 409 when the extraction reaches it. A restore stopped during the extraction now says why and what it may have left: files extracted before the refusal may have been written, and the index is treated as out of step. An archive changed since the check to carry a snapshot entry or a climbing name gets the same 400 as one refused before writing, where it used to get an unexplained 500. Each file is written as a new file beside its destination and renamed into place, so a file already there that is a hard link to a snapshot file is replaced, not written through, and a file cut short leaves the old one whole. Before it reports success, the restore flushes the folders it changed to disk, so a crash right after a successful restore cannot bring back a mix of old and new files. A clean-stop marker the restore can neither delete nor empty now fails the restore before it writes anything. Only a regular file at the marker name counts as a marker: a symlink there, even one that points nowhere, is deleted like a marker, never vouches and is never written through, so a restore cannot fill a marker through it. Writing the marker or one of the snapshot's files replaces the name instead of writing into the file there, so a second name (a hard link) for another file keeps that file's contents. The index's saved files are read the same way, so a symlink in the snapshot folder is refused and the index is rebuilt from the database. The same check reads the whole archive before the restore starts writing, so a backup file that is cut short, damaged or empty, or that names a file outside the restore folder, is now refused with nothing written, where the restore used to write part of it and then fail; with checksum verification on, the check shares the checksum's read of the file. A restore refused before it wrote anything (the backup was not found, its checksum failed, the backup directory could not be read, the archive could not be read to its end or was empty, it had an entry in the snapshot folder or outside the restore folder, the target overlapped the snapshot folder, or a snapshot folder did not resolve) leaves the marker alone. Any process that opens the database removes the marker, so running a command-line tool between a stop and the next start costs that start one update. A startup that runs a database upgrade step brings the snapshot up to date too, because the upgrade writes rows the check does not count. A marker that cannot be deleted is emptied, which makes it invalid. A deleted marker, and one found already gone, is flushed to disk before the restore writes anything, so a crash cannot bring it back. The short-lived worker processes that run a single operation leave the marker alone and check only the counts.
+
+Not covered: a tool that writes those database rows without going through the server's database layer (none does today), writes made by a worker process (no operation runs in one today), and the index holding non-primary books that a startup leaves out. For that last one, a run that adds a non-primary book to the index from its stored embedding now leaves no marker; the fix that removes the cost is tracked in TODO.
+
+#### Stop timeout: comments and the deploy example
+
+Three code comments said the systemd unit's stop timeout was 30 s. The committed unit sets none, so the deploy drop-in's value (or systemd's default) applies, and production's drop-in sets 90 s. The comments now say where the value comes from, and `deploy/local.conf.example` uses 90 s.
+
+#### Core's journaled swap: tests now pin the twin proof and the mode order
+
+The restore swap's twin proof now has tests for a symlink at either name, which keeps the `Lstat`, not `Stat`, of the final component that stops mv deleting the only copy. On macOS a test covers a directory reached through a firmlink, which only the directory check refuses. The tests for a filesystem with no modes now count writes, so a state file can never receive data before it is made 0600.
+
+- `scripts/deploy-wait-ready.sh` reads `ready` inside `/health`'s `{"data": ...}` envelope; it required a top-level `ready` and exited 2 against every real server.
+
+#### `storage prune-checkpoints` and `diagnostics reserved-prefs --set`/`--delete` run only as the service's user
+
+Both now follow the rule the other database-changing commands already
+follow: they run only as the owner of the state directory, which is the
+user the service runs as. Run as anyone else, they refuse before changing
+anything and print the command to use instead (`sudo -u <owner>
+audiobook-organizer ...`).
+
+Before this, a prune run as root before the service's first checkpoint
+sweep (after an upgrade that failed before the service came up, for
+example) created a checkpoint lock file the service could not open. From then on
+the service stopped clearing old upgrade checkpoints, with no error in its
+log. Every later `storage restore-offline` also waited 30 seconds and then
+failed, saying another prune was running when none was. The reserved-prefs
+changes opened the database read-write as whoever ran them, which left
+files in the database folder that the service could not replace.
+
+#### A checkpoint lock file left by another user is reported, not waited on
+
+If the checkpoint folder's `.sweep.lock` is not a plain file owned by the
+service's user, for example one an earlier root run left behind, the
+service logs an error and `storage prune-checkpoints` and
+`storage restore-offline` refuse at once. Each names the file's owner and
+gives the fix: chown the file to the service's user, or remove it while
+nothing is pruning. A lock file that cannot be opened is no longer reported
+as "another sweep is running" either.
+
+#### `diagnostics query --raw` and the reserved-prefs listing open the database read-only
+
+They no longer add files to the database folder, and `query --raw` no
+longer creates an empty database at a mistyped path. The service-user rule
+does not apply to them, though, like any tool that opens the database, they
+still need the service's user or root to open its lock file.
+
+#### The HNSW clean-stop marker's errors say what to do
+
+When the similarity index's snapshot folder cannot be checked or synced
+before a restore or a command-line change, the error now tells you to run
+as the service's user, or to delete the marker by hand, and then to run
+again.
+
+### Security
+
+- Web: raised the `minimatch` override from `>=10.2.1` to `^11.0.1`, so the lint toolchain (eslint, typescript-eslint) resolves minimatch 11.0.5 and no longer carries the globparts-amplification denial-of-service range (Dependabot alert 66). Dev-only dependency; not shipped in the built UI.
+
+#### `core/log` redactor — three residuals from the R1-32 re-verification review
+
+- **URL cap cut inside userinfo.** A URL-keyed value longer than 64 KiB was
+  cut back to its last `&`, `;`, `#` or whitespace, and that could land
+  inside the userinfo: `https://bruce:pa;<t>@host/` + 70,000 bytes logged as
+  `https://bruce:pa;[REDACTED]`, leaking the password's prefix. The cut
+  (`urlCapCut`, used by `Redactor.URL` and URL-keyed `StringKinds`) now
+  replaces the whole value when it would fall inside any userinfo: the
+  value's own authority read exactly as `urlKinds` reads it (`authorityOf`,
+  on the whole value), the authority of a second URL in the same token, or
+  any position whose next `/`, `?`, `#` or `@` is an `@` (a URL nested in a
+  query value, `?next=https://bruce:pa;<t>@host/`).
+- **Digest over-redacting prose.** `verified digest sha256=<hex> path=...`
+  became `verified digest [REDACTED]`. Outside header context a Digest word
+  now needs an RFC 7616 parameter name (`username`, `realm`, `nonce`, `uri`,
+  `response`, `cnonce`, `qop`, `nc`, `opaque`, `algorithm`), a
+  comma-separated list of two or more auth-params, or a long token68. Header
+  context is unchanged.
+- **JSON brace enabling the `%+v` empty-field reading.** In
+  `payload={"a":1 Token: V2:<t>` the unclosed JSON `{` made `Token: V2:<t>`
+  read as an empty `%+v` field, so `<t>` leaked. Only a `{` that `%+v`
+  writes (an identifier and `:` right after it) now turns that reading on,
+  and each `}` closes only its own brace.
+- **Nested URL userinfo split by the outer query.** A URL in a query value
+  whose password holds `;`, `&` or `#`
+  (`?next=https://bruce:pa;<t>@host/`) came back unchanged, the whole
+  secret included: the outer query was split on `;`/`&`, or its fragment cut
+  at `#`, before the nested URL was read, so the nested userinfo never
+  reached its `@`. Query splitting (`paramEnd`, used by `maskQuery` and the
+  new `fragStart`) now reads a nested URL's userinfo as one unit, so the
+  nested URL keeps its `@` and its userinfo is removed. Only the userinfo is
+  read whole; a parameter after a nested host
+  (`next=https://host&token=<t>`) is still split off and masked.
+
+### Documentation
+
+- Platform-core STATE: W14 (R1-37, #4458) and W15 (R1-20, #4453) recorded; R1 now 20 of 37 rows merged.
+
+- Platform-core STATE: W16 (R1-15 composition root, #4467) merged and deployed; R1 at 21 of 37.
+
+- Platform-core STATE: W17 (R1-16, #4470), W18 (R1-33, #4474) and W19 (R1-34, #4477) merged and deployed; R1 at 24 of 37.
+
+- Platform-core STATE: rows W20 (R1-21 journaled swap) and W21 (R1-18 logging stages); R1 at 26 of 37; serial order R1-17, R1-19, R1-30, then the R1-15 follow-up.
+
+- Platform-core STATE: rows W22 (R1-17 perimeter stages), W23 (R1-19 build identity), W24 (R1-30 core web API client) and W25 (R1-06 core version and split readiness); R1 at 30 of 37; deploy hold between R1-23 and R1-24 recorded.
+
+- Platform-core STATE: rows W26 (R1-23 storage flip) and W27 (R1-24 checkpoint sweeper); R1 at 32 of 37; the R1-15 follow-up (#4512) and the CI retry and prefetch fix (#4508) recorded; in-flight status for R1-25, R1-26, R1-27, R1-28 and R1-31.
+
+- R1 (core runtime) executive summary in plain language, and TODO check-offs for the two follow-ups R1-25 closed.
+
 <a id='changelog-v0.223.0'></a>
 ## v0.223.0 — 2026-11-06
 
