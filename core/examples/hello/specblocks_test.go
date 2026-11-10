@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-10
 
@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ type specGroup struct {
 	pkg   string            // package name of its non-test files
 	files map[string]string // file name -> text
 	core  []string          // core packages it imports, relative to the core module root
+	names map[string]bool   // the names its files refer to core packages by (import name or alias)
 	deps  []string          // other snapshot directories it imports
 	boot  bool              // a non-main package declaring func New() T: booted through coretest.New
 }
@@ -66,11 +68,16 @@ type specGroup struct {
 //
 // A package whose blocks import a core package that does not exist yet waits
 // for it, and so does every package that imports it; the test names each one
-// and why. Until core/tasks lands that is every block of 06 (they need
-// config, which has landed, and tasks), so the 06 subtest skips with that list, and the control
-// snapshots below prove the harness compiles, boots, catches a compile error,
-// catches a refusal and plans a skip. A package joins the build on its own
-// the day its last core import lands.
+// and why. A package whose every compile error names a core identifier that
+// does not exist yet (an undefined core name, a missing field or method of a
+// core type) waits for those identifiers in the same way, listed one by one
+// (waitForCore). Since core/tasks landed (F2-01) every package of 06 compiles
+// against existing packages, and hello waits only for identifiers later rows
+// add (config.Handle, ui.Bundle, the Manifest and Registrar members), so the
+// 06 subtest skips with that list, and the control snapshots below prove the
+// harness compiles, boots, catches a compile error, catches a refusal and plans
+// both kinds of skip. A package joins the build on its own the day its last
+// missing core package and identifier land.
 func TestSpecGoBlocksCompile(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -90,15 +97,22 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if build, err = waitForCore(t, root, build, waiting); err != nil {
+			t.Fatal(err)
+		}
 		for _, dir := range slices.Sorted(maps.Keys(waiting)) {
 			t.Logf("core/%s waits: %s", dir, waiting[dir])
 		}
-		// The waiting set is pinned, so the skip below cannot hide a block
-		// that waits for a new reason (a typo in an import, a package the
-		// spec renamed). A row that lands config or tasks shrinks it here,
-		// in the same PR.
+		// The waiting set is pinned, identifier by identifier, so the skip
+		// below cannot hide a block that waits for a new reason (a typo in an
+		// import or a name, a package or member the spec renamed). A row that
+		// lands one of these identifiers shrinks the list here, in the same
+		// PR; the row that lands the last one deletes the entry and the
+		// blocks build.
 		wantWaiting := map[string]string{
-			"examples/hello":           "no Go file yet in core/tasks",
+			"examples/hello": "missing in core: config.Handle, module.Manifest.Permissions, module.Manifest.Settings, " +
+				"module.Manifest.TaskLedger, module.Registrar.Resources, module.Registrar.Tasks, module.Setting, " +
+				"module.Settings, module.SettingsSection, ui.Bundle",
 			"examples/hello/cmd/hello": "imports core/examples/hello, which waits too",
 		}
 		if !maps.Equal(waiting, wantWaiting) {
@@ -118,8 +132,20 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			build, err = waitForCore(t, root, build, waiting)
+			switch {
+			case err != nil && c.wantErr != "" && strings.Contains(err.Error(), c.wantErr):
+				return
+			case err != nil:
+				t.Fatal(err)
+			}
 			if got := slices.Sorted(maps.Keys(waiting)); !slices.Equal(got, c.waiting) {
 				t.Fatalf("waiting packages = %v (%v), want %v", got, waiting, c.waiting)
+			}
+			for dir, reason := range c.reasons {
+				if waiting[dir] != reason {
+					t.Fatalf("core/%s waits for %q, want %q", dir, waiting[dir], reason)
+				}
 			}
 			if len(build) == 0 {
 				return
@@ -219,6 +245,16 @@ func planSpec(root string, blocks []specBlock) ([]*specGroup, map[string]string,
 				return nil, nil, fmt.Errorf("block %s: import %s: %w", b.Dest, is.Path.Value, err)
 			}
 			imports[dir] = append(imports[dir], p)
+			if strings.HasPrefix(p, corePath+"/") {
+				name := path.Base(p)
+				if is.Name != nil {
+					name = is.Name.Name
+				}
+				if g.names == nil {
+					g.names = make(map[string]bool)
+				}
+				g.names[name] = true
+			}
 		}
 	}
 
@@ -246,29 +282,135 @@ func planSpec(root string, blocks []specBlock) ([]*specGroup, map[string]string,
 			waiting[dir] = "no Go file yet in " + strings.Join(slices.Compact(missing), ", ")
 		}
 	}
+	all := make([]*specGroup, 0, len(groups))
+	for _, dir := range slices.Sorted(maps.Keys(groups)) {
+		all = append(all, groups[dir])
+	}
+	return propagateWaits(all, waiting), waiting, nil
+}
+
+// propagateWaits marks every group that imports a waiting group as waiting
+// too, and returns the groups that do not wait, in their given order.
+func propagateWaits(groups []*specGroup, waiting map[string]string) []*specGroup {
 	for changed := true; changed; {
 		changed = false
-		for dir, g := range groups {
-			if _, ok := waiting[dir]; ok {
+		for _, g := range groups {
+			if _, ok := waiting[g.dir]; ok {
 				continue
 			}
 			for _, d := range g.deps {
 				if _, ok := waiting[d]; ok {
-					waiting[dir] = "imports core/" + d + ", which waits too"
+					waiting[g.dir] = "imports core/" + d + ", which waits too"
 					changed = true
 					break
 				}
 			}
 		}
 	}
-
 	var build []*specGroup
-	for _, dir := range slices.Sorted(maps.Keys(groups)) {
-		if _, ok := waiting[dir]; !ok {
-			build = append(build, groups[dir])
+	for _, g := range groups {
+		if _, ok := waiting[g.dir]; !ok {
+			build = append(build, g)
 		}
 	}
-	return build, waiting, nil
+	return build
+}
+
+// waitForCore compiles the groups planSpec would build, reporting every
+// error (-gcflags=-e). A group whose every error names a core identifier that
+// does not exist yet (missingCoreIdent) waits for those identifiers, sorted
+// and de-duplicated, and so does every group that imports it; it is added to
+// waiting and left out of the returned groups. Any other error, or an error
+// line the classifier cannot read, is returned: a compile error is never a
+// wait.
+func waitForCore(t *testing.T, root string, build []*specGroup, waiting map[string]string) ([]*specGroup, error) {
+	t.Helper()
+	if len(build) == 0 {
+		return build, nil
+	}
+	tmp, _, _, err := writeSpecModule(t, root, build)
+	if err != nil {
+		return nil, err
+	}
+	out, err := goCmd(t, tmp, 0, "build", "-gcflags=-e", "./...")
+	if err == nil {
+		return build, nil
+	}
+	byDir := make(map[string]*specGroup, len(build))
+	for _, g := range build {
+		byDir[g.dir] = g
+	}
+	missing := make(map[string][]string)
+	for line := range strings.Lines(string(out)) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "# ") {
+			continue
+		}
+		file, msg, ok := splitCompileError(line)
+		g := byDir[path.Dir(file)]
+		if !ok || g == nil {
+			return nil, fmt.Errorf("compile: %w\n%s", err, out)
+		}
+		ident, ok := missingCoreIdent(msg, g.names)
+		if !ok {
+			return nil, fmt.Errorf("compile: %w\n%s", err, out)
+		}
+		missing[g.dir] = append(missing[g.dir], ident)
+	}
+	if len(missing) == 0 {
+		return nil, fmt.Errorf("compile: %w\n%s", err, out)
+	}
+	for dir, idents := range missing {
+		slices.Sort(idents)
+		waiting[dir] = "missing in core: " + strings.Join(slices.Compact(idents), ", ")
+	}
+	return propagateWaits(build, waiting), nil
+}
+
+// splitCompileError splits "<file>:<line>:<col>: <message>".
+func splitCompileError(line string) (file, msg string, ok bool) {
+	m := compileErrorPattern().FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	return filepath.ToSlash(m[1]), m[2], true
+}
+
+func compileErrorPattern() *regexp.Regexp {
+	return regexp.MustCompile(`^(\S+\.go):\d+:\d+: (.+)$`)
+}
+
+// missingCoreIdent reads one compiler message as a core identifier that does
+// not exist yet, qualified by the core package name the block uses (names):
+// "undefined: config.Handle" -> config.Handle; "unknown field TaskLedger in
+// struct literal of type module.Manifest" -> module.Manifest.TaskLedger;
+// "r.Tasks undefined (type *module.Registrar has no field or method Tasks)"
+// -> module.Registrar.Tasks. Anything else, or a name that is not a core
+// package's, is not a missing core identifier.
+func missingCoreIdent(msg string, names map[string]bool) (string, bool) {
+	for _, re := range missingIdentPatterns() {
+		m := re.FindStringSubmatch(msg)
+		if m == nil {
+			continue
+		}
+		pkg, ident := m[re.SubexpIndex("pkg")], m[re.SubexpIndex("ident")]
+		if !names[pkg] {
+			return "", false
+		}
+		if i := re.SubexpIndex("member"); i > 0 {
+			ident += "." + m[i]
+		}
+		return pkg + "." + ident, true
+	}
+	return "", false
+}
+
+func missingIdentPatterns() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`^undefined: (?P<pkg>[a-z][a-z0-9]*)\.(?P<ident>[A-Z]\w*)$`),
+		regexp.MustCompile(`^unknown field (?P<member>[A-Z]\w*) in struct literal of type (?P<pkg>[a-z][a-z0-9]*)\.(?P<ident>[A-Z]\w*)$`),
+		regexp.MustCompile(`^\S+ undefined \(type \*?(?P<pkg>[a-z][a-z0-9]*)\.(?P<ident>[A-Z]\w*) has no field or method (?P<member>[A-Z]\w*)\)$`),
+	}
 }
 
 // declaresNew reports a top-level func New() with no parameters and one
@@ -304,50 +446,10 @@ func hasGoFiles(dir string) bool {
 // package's New() through coretest.New, which fails the test on a boot error.
 func buildSpec(t *testing.T, root string, build []*specGroup) error {
 	t.Helper()
-	tmp := t.TempDir()
-	gomod, err := specGoMod(root)
+	tmp, boots, hasTests, err := writeSpecModule(t, root, build)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), gomod, 0o644); err != nil {
-		return err
-	}
-	sum, err := os.ReadFile(filepath.Join(root, "go.sum"))
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "go.sum"), sum, 0o644); err != nil {
-		return err
-	}
-
-	var boots []string
-	hasTests := false
-	for _, g := range build {
-		dir := filepath.Join(tmp, filepath.FromSlash(g.dir))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		for name, text := range g.files {
-			for _, d := range append([]string{g.dir}, g.deps...) {
-				text = strings.ReplaceAll(text, strconv.Quote(corePath+"/"+d), strconv.Quote(specModule+"/"+d))
-			}
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
-				return err
-			}
-			hasTests = hasTests || strings.HasSuffix(name, "_test.go")
-		}
-		if g.boot {
-			pkg := "specboot/" + strings.ReplaceAll(g.dir, "/", "-")
-			if err := os.MkdirAll(filepath.Join(tmp, filepath.FromSlash(pkg)), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(filepath.Join(tmp, filepath.FromSlash(pkg), "boot_test.go"), bootTest(g), 0o644); err != nil {
-				return err
-			}
-			boots = append(boots, pkg)
-		}
-	}
-
 	if out, err := goCmd(t, tmp, 0, "build", "./..."); err != nil {
 		return fmt.Errorf("compile: %w\n%s", err, out)
 	}
@@ -362,6 +464,57 @@ func buildSpec(t *testing.T, root string, build []*specGroup) error {
 		}
 	}
 	return nil
+}
+
+// writeSpecModule writes the groups into a fresh temp module (go.mod, core's
+// go.sum, every block with its snapshot imports rewritten, and one boot test
+// package per module package) and returns its directory, the boot packages
+// and whether any test file was written.
+func writeSpecModule(t *testing.T, root string, build []*specGroup) (tmp string, boots []string, hasTests bool, err error) {
+	t.Helper()
+	tmp = t.TempDir()
+	gomod, err := specGoMod(root)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), gomod, 0o644); err != nil {
+		return "", nil, false, err
+	}
+	sum, err := os.ReadFile(filepath.Join(root, "go.sum"))
+	if err != nil {
+		return "", nil, false, err
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "go.sum"), sum, 0o644); err != nil {
+		return "", nil, false, err
+	}
+
+	for _, g := range build {
+		dir := filepath.Join(tmp, filepath.FromSlash(g.dir))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", nil, false, err
+		}
+		for name, text := range g.files {
+			for _, d := range append([]string{g.dir}, g.deps...) {
+				text = strings.ReplaceAll(text, strconv.Quote(corePath+"/"+d), strconv.Quote(specModule+"/"+d))
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+				return "", nil, false, err
+			}
+			hasTests = hasTests || strings.HasSuffix(name, "_test.go")
+		}
+		if g.boot {
+			pkg := "specboot/" + strings.ReplaceAll(g.dir, "/", "-")
+			if err := os.MkdirAll(filepath.Join(tmp, filepath.FromSlash(pkg)), 0o755); err != nil {
+				return "", nil, false, err
+			}
+			if err := os.WriteFile(filepath.Join(tmp, filepath.FromSlash(pkg), "boot_test.go"), bootTest(g), 0o644); err != nil {
+				return "", nil, false, err
+			}
+			boots = append(boots, pkg)
+		}
+	}
+
+	return tmp, boots, hasTests, nil
 }
 
 // specGoMod is core's go.mod renamed to specModule, without its ignore
@@ -434,14 +587,16 @@ func goCmd(t *testing.T, dir string, timeout time.Duration, args ...string) ([]b
 type controlSnapshot struct {
 	name    string
 	blocks  []specBlock
-	waiting []string // directories that must wait, sorted
-	wantErr string   // "" = compiles and boots
+	waiting []string          // directories that must wait, sorted
+	reasons map[string]string // directory -> the exact reason it waits (checked when set)
+	wantErr string            // "" = compiles and boots
 }
 
 // controlSnapshots prove the harness is not blind: a good module boots (and
 // its main, importing it by its core path, compiles only if the import was
-// rewritten into the temp module); a compile error, a reserved module ID and
-// a missing core package are each caught. They are written here, not taken
+// rewritten into the temp module); a compile error, a reserved module ID, a
+// missing core package and missing core identifiers are each caught, and a
+// missing identifier never hides a real compile error beside it. They are written here, not taken
 // from a spec, so the 06 subtest's skip at R1 leaves the harness tested.
 func controlSnapshots() []controlSnapshot {
 	const batcave = `// core/examples/batcave/batcave.go
@@ -537,6 +692,44 @@ import "github.com/falkcorp/mediacore/examples/riddler"
 
 func main() { _ = riddler.New() }
 `
+	const penguin = `// core/examples/penguin/penguin.go
+package penguin
+
+import "github.com/falkcorp/mediacore/module"
+
+type Module struct{}
+
+func New() *Module { return &Module{} }
+
+func (*Module) Manifest() module.Manifest {
+	return module.Manifest{ID: "penguin", Version: "1.0.0", MinCoreVersion: "0.1.0", Umbrellas: 3}
+}
+
+func (*Module) Register(r *module.Registrar) error {
+	r.Iceberg()
+	var lounge module.Lounge
+	r.Iceberg(lounge)
+	return r.Err()
+}
+`
+	const penguinMain = `// core/examples/penguin/cmd/penguin/main.go
+package main
+
+import "github.com/falkcorp/mediacore/examples/penguin"
+
+func main() { penguin.New() }
+`
+	const twoFace = `// core/examples/twoface/twoface.go
+package twoface
+
+import "github.com/falkcorp/mediacore/module"
+
+type Module struct{}
+
+func New() *Module { return coinFlip }
+
+func (*Module) Register(r *module.Registrar) error { r.Scar(); return r.Err() }
+`
 	return []controlSnapshot{
 		{name: "batcave-boots", blocks: []specBlock{
 			{Dest: "examples/batcave/batcave.go", Text: batcave},
@@ -552,5 +745,15 @@ func main() { _ = riddler.New() }
 			{Dest: "examples/riddler/riddler.go", Text: riddler},
 			{Dest: "examples/riddler/cmd/riddler/main.go", Text: riddlerMain},
 		}, waiting: []string{"examples/riddler", "examples/riddler/cmd/riddler"}},
+		{name: "penguin-waits-on-identifiers", blocks: []specBlock{
+			{Dest: "examples/penguin/penguin.go", Text: penguin},
+			{Dest: "examples/penguin/cmd/penguin/main.go", Text: penguinMain},
+		}, waiting: []string{"examples/penguin", "examples/penguin/cmd/penguin"}, reasons: map[string]string{
+			"examples/penguin":             "missing in core: module.Lounge, module.Manifest.Umbrellas, module.Registrar.Iceberg",
+			"examples/penguin/cmd/penguin": "imports core/examples/penguin, which waits too",
+		}},
+		{name: "two-face-missing-identifier-does-not-hide-compile-error", blocks: []specBlock{
+			{Dest: "examples/twoface/twoface.go", Text: twoFace},
+		}, wantErr: "undefined: coinFlip"},
 	}
 }
