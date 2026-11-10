@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -39,7 +39,11 @@ type sourceQuery struct {
 	paths       []Path          // every concrete key path of the registered struct sections
 	maps        []Path          // map-typed section roots: their entries are data ("core.modules")
 	passthrough func(Path) bool // Options.Passthrough; never nil
-	want        map[Path]bool   // when non-nil, only these paths are asked for (Store.Operator)
+	// want, when non-nil, asks for these paths only (Store.Operator). A
+	// source returns a wanted path even when no registered section owns it
+	// yet, raw (an env value as a JSON string): the kernel's step 0 reads
+	// core.paths.state_dir before core.paths registers (05-config §1.7).
+	want map[Path]bool
 }
 
 // operatorSource is one operator layer parsed outside this file.
