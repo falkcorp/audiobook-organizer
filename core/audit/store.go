@@ -1,5 +1,5 @@
 // file: core/audit/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 58cf84f8-755a-46df-b0dd-c7b6f1a73e73
 // last-edited: 2026-11-10
 
@@ -160,14 +160,17 @@ func (s *Store) build(ctx context.Context, e Event) (Record, error) {
 }
 
 // Record writes e synchronously, in a batch of its own committed with Sync.
-// Any error means no record was written and the caller fails its operation.
-func (s *Store) Record(ctx context.Context, e Event) error {
+// A commit error means no record was written and the caller fails its
+// operation; an error from closing the batch after a successful commit is
+// returned too, though the record is then durable.
+func (s *Store) Record(ctx context.Context, e Event) (err error) {
 	rec, err := s.build(ctx, e)
 	if err != nil {
 		return err
 	}
 	b := s.ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	// A Close failure after a successful Commit still surfaces to the caller.
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := s.assign(ctx, b, &rec); err != nil {
 		s.ctr.writeError(pathSync)
 		return err
@@ -239,9 +242,9 @@ type storeSink struct{ s *Store }
 
 // write assigns each record its seq, in order, and commits all of them in one
 // batch with Sync.
-func (k storeSink) write(ctx context.Context, recs []Record) error {
+func (k storeSink) write(ctx context.Context, recs []Record) (err error) {
 	b := k.s.ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	for i := range recs {
 		if err := k.s.assign(ctx, b, &recs[i]); err != nil {
 			return err
