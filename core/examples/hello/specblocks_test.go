@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-10
 
@@ -77,7 +77,7 @@ type specGroup struct {
 // core type) waits for those identifiers in the same way, listed one by one
 // (waitForCore). Since core/tasks landed (F2-01) every package of 06 compiles
 // against existing packages, and hello waits only for identifiers later rows
-// add (config.Handle, ui.Bundle, the Manifest and Registrar members), so the
+// add (ui.Bundle, the Manifest and Registrar members), so the
 // 06 subtest skips with that list, and the control snapshots below prove the
 // harness compiles, boots, catches a compile error, catches a refusal and plans
 // both kinds of skip. A package joins the build on its own the day its last
@@ -117,7 +117,6 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		// five with no owning row are tracked in TODO.md (todo.d fragment
 		// filed with F2-01).
 		helloMissing := []string{
-			"config.Handle",               // F3-01
 			"module.Manifest.Permissions", // no owning row yet
 			"module.Manifest.Settings",    // no owning row yet
 			"module.Manifest.TaskLedger",  // F2-16/F5-18
