@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
 // last-edited: 2026-11-10
 
@@ -421,7 +421,7 @@ func TestCoreSections_ReloadAndProtection(t *testing.T) {
 		"core.ui.enabled":                    {config.ReloadRestart, config.ProtectNone},
 		"core.ui.csp.connect_src":            {config.ReloadLive, config.ProtectNone},
 		"core.secrets.allow_key_regen":       {config.ReloadRestart, config.ProtectOperator},
-		"core.auth.oidc.providers":           {config.ReloadLive, config.ProtectAdmin},
+		"core.auth.oidc.providers":           {config.ReloadLive, config.ProtectOwner},
 		"core.diagnostics.dir":               {config.ReloadRestart, config.ProtectAdmin},
 		"core.http.rate_limit.max_clients":   {config.ReloadRestart, config.ProtectNone},
 	}

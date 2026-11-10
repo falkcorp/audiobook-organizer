@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -465,13 +465,18 @@ type authTempLogin struct {
 
 type authOIDC struct {
 	RedirectBaseURL string             `json:"redirect_base_url" protect:"admin" schema:"format=uri"`
-	Providers       []authOIDCProvider `json:"providers" protect:"admin"`
+	Providers       []authOIDCProvider `json:"providers" protect:"owner"`
 }
 
 // authOIDCProvider is one entry of core.auth.oidc.providers. ID is
 // [a-z][a-z0-9_]{0,47} and is neither "providers" nor "redirect_base_url".
-// AllowedEmails and AllowedDomains are ProtectOwner (SEC3-6); the rest of the
-// entry is ProtectAdmin as the list is.
+// AllowedEmails and AllowedDomains are ProtectOwner (SEC3-6). The list is one
+// key (05-config §1.3.6), and config protects whole keys, so the list is
+// ProtectOwner: Register refuses an element tag stricter than its key
+// (F3-01). 05-authn's table gives the other entry fields ProtectAdmin, but an
+// admin who may repoint a provider's issuer or client_id while its
+// allowed_emails name the owner could mint the owner's identity, so the
+// owner-trust root covers the whole entry (seams.d/F3-01.md).
 type authOIDCProvider struct {
 	ID                  string   `json:"id"`
 	Kind                string   `json:"kind" schema:"enum=oidc|github"`
