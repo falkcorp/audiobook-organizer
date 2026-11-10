@@ -1,5 +1,5 @@
 // file: core/internal/taskstore/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fde9d96f-27b6-454c-8ddb-e85d358661e7
 // last-edited: 2026-11-10
 
@@ -20,6 +20,11 @@ import (
 
 // ErrNilBatch: a staging call was handed no batch.
 var ErrNilBatch = errors.New("taskstore: nil batch")
+
+// ErrNotIndexed: a read-modify-write was handed a batch that is not indexed.
+// Such a batch reads only the committed state, so a second read of a key the
+// batch already wrote would miss that write and the commit would lose it.
+var ErrNotIndexed = errors.New("taskstore: batch is not indexed (a read-modify-write needs Keyspace.NewIndexedBatch)")
 
 // Store is the raw staging layer over one c/tasks/ keyspace. It holds the
 // keyspace and the strike sequence and nothing mutable of its own, so it is
@@ -70,10 +75,15 @@ func (s *Store) Get(ctx context.Context, key []byte) (value []byte, found bool, 
 // ReadForUpdate binds the keyspace to b, reads a guard key through b (its own
 // writes first) and records the commit-time precondition that the key still
 // holds the committed value read (absent when it was absent). found is false
-// when the key is absent as b sees it. Only Serialized keys accept it.
+// when the key is absent as b sees it. Only Serialized keys accept it, and
+// only an indexed batch (ErrNotIndexed): every caller stages a write derived
+// from the read, and a later read in the same batch must see that write.
 func (s *Store) ReadForUpdate(ctx context.Context, b *storage.Batch, key []byte) (value []byte, found bool, err error) {
 	if err := s.Bind(b); err != nil {
 		return nil, false, err
+	}
+	if !b.Indexed() {
+		return nil, false, ErrNotIndexed
 	}
 	v, err := b.GetForUpdate(ctx, s.ks, key)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -285,21 +295,31 @@ func (s *Store) IDs(ctx context.Context, prefix []byte) iter.Seq2[string, error]
 	}
 }
 
-// DoneBefore returns up to limit run IDs of the done index finished before
-// before, oldest first.
-func (s *Store) DoneBefore(ctx context.Context, before time.Time, limit int) ([]string, error) {
-	prefix := DoneIndexPrefix()
+// DoneEntry is one done-index entry: its key and what the key names.
+type DoneEntry struct {
+	Key      []byte
+	ID       string
+	Finished time.Time
+}
+
+// DoneBefore returns up to limit done-index entries finished before before,
+// oldest first, after the key after (exclusive; nil = from the oldest).
+func (s *Store) DoneBefore(ctx context.Context, before time.Time, after []byte, limit int) ([]DoneEntry, error) {
+	start := DoneIndexPrefix()
+	if after != nil {
+		start = append(slices.Clone(after), 0x00)
+	}
 	end := keys.Join(keys.Str(famIndex), keys.Str(ixDone), keys.Time(before))
-	var out []string
-	for kv, err := range s.ks.Scan(ctx, storage.ScanOptions{Start: prefix, End: end, KeysOnly: true, Limit: limit}) {
+	var out []DoneEntry
+	for kv, err := range s.ks.Scan(ctx, storage.ScanOptions{Start: start, End: end, KeysOnly: true, Limit: limit}) {
 		if err != nil {
 			return nil, err
 		}
-		seg := lastSeg(kv.Key)
-		if seg == nil {
-			return nil, fmt.Errorf("taskstore: malformed done-index key")
+		finished, id, err := ParseDoneIndexKey(kv.Key)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, string(seg))
+		out = append(out, DoneEntry{Key: slices.Clone(kv.Key), ID: id, Finished: finished})
 	}
 	return out, nil
 }
@@ -314,11 +334,11 @@ func (s *Store) StateCounts(ctx context.Context) (map[string]int64, error) {
 		if err != nil {
 			return nil, err
 		}
-		segs, err := keys.Split(kv.Key)
-		if err != nil || len(segs) != 4 {
-			return nil, fmt.Errorf("taskstore: malformed state-index key")
+		state, _, err := ParseStateIndexKey(kv.Key)
+		if err != nil {
+			return nil, err
 		}
-		out[string(segs[2])]++
+		out[state]++
 	}
 	return out, nil
 }

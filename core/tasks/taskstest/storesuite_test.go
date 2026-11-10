@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/storesuite_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 630eea01-5924-4ce6-8c9e-1def4106715d
 // last-edited: 2026-11-10
 
@@ -7,7 +7,6 @@ package taskstest_test
 
 import (
 	"context"
-	"iter"
 	"path/filepath"
 	"testing"
 
@@ -26,6 +25,16 @@ import (
 func TestStoresSuite_NativeStores(t *testing.T) {
 	taskstest.StoresSuite(t, func(t *testing.T) tasks.Stores {
 		return boot(t, vfs.NewCrashableMem(), filepath.Join(t.TempDir(), "main.pebble"))
+	})
+}
+
+// TestStoresSuite_SkipsWithoutBatches: a Stores whose Runs offers no batches
+// of its own DB skips every case that writes, rather than failing them.
+func TestStoresSuite_SkipsWithoutBatches(t *testing.T) {
+	taskstest.StoresSuite(t, func(t *testing.T) tasks.Stores {
+		s := boot(t, vfs.NewCrashableMem(), filepath.Join(t.TempDir(), "main.pebble"))
+		s.Runs = struct{ tasks.RunStore }{s.Runs}
+		return s
 	})
 }
 
@@ -80,14 +89,6 @@ func (c crashRuns) NewBatch() *storage.Batch { return c.RunStore.(taskstest.Batc
 
 func (c crashRuns) Importer() tasks.Importer {
 	return c.RunStore.(taskstest.ImporterProvider).Importer()
-}
-
-func (c crashRuns) Marks(ctx context.Context, id tasks.RunID) iter.Seq2[string, error] {
-	return c.RunStore.(taskstest.RecordReader).Marks(ctx, id)
-}
-
-func (c crashRuns) Strikes(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Strike, error] {
-	return c.RunStore.(taskstest.RecordReader).Strikes(ctx, id)
 }
 
 func (c crashRuns) CrashClone(t *testing.T) tasks.Stores {

@@ -1,11 +1,12 @@
 // file: core/tasks/native.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b82512e6-4c65-4b2a-b347-85d82bd5b3c7
 // last-edited: 2026-11-10
 
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -43,9 +44,9 @@ const (
 // and every precondition is the store's commit-time check on a guard key.
 //
 // Beyond the interfaces, Stores.Runs also offers NewBatch (an indexed batch
-// over ks), Importer (NativeImporter over the same ks), and Marks and
-// Strikes (readers of the applied-row marks and watchdog strikes, which no
-// RunStore method reads); taskstest.StoresSuite finds them by type assertion.
+// over ks) and Importer (NativeImporter over the same ks);
+// taskstest.StoresSuite finds them by type assertion. Every method that reads
+// before it writes refuses a batch that is not indexed (ErrBatchNotIndexed).
 func NativeStores(ks storage.Keyspace) Stores {
 	st := taskstore.New(ks)
 	return Stores{
@@ -69,6 +70,16 @@ func putValue[T any](st *taskstore.Store, b *storage.Batch, key []byte, v T) err
 		return err
 	}
 	return st.Set(b, key, raw)
+}
+
+// readForUpdate is taskstore's ReadForUpdate with its refusal of a batch
+// that is not indexed reported as ErrBatchNotIndexed.
+func readForUpdate(ctx context.Context, st *taskstore.Store, b *storage.Batch, key []byte) ([]byte, bool, error) {
+	v, found, err := st.ReadForUpdate(ctx, b, key)
+	if errors.Is(err, taskstore.ErrNotIndexed) {
+		return nil, false, fmt.Errorf("%w: %w", ErrBatchNotIndexed, err)
+	}
+	return v, found, err
 }
 
 // decodeRun decodes a stored run row.
@@ -99,7 +110,11 @@ func unfinishedStates() []RunState {
 		StateInterruptedQuiesced, StateAwaitingDecision}
 }
 
-// validRecord is what every stored run row must satisfy.
+// validRecord is what every stored run row must satisfy. A terminal run
+// carries its finish time ("zero until terminal", 5T.3.13): the done index
+// and Prune's cutoff are keyed on it, and a zero time sorts before every
+// cutoff, so such a run would be pruned at once whatever the retention.
+// Transition, Insert and the Importer all stage through here.
 func validRecord(r RunRecord) error {
 	switch {
 	case r.ID == "":
@@ -108,6 +123,8 @@ func validRecord(r RunRecord) error {
 		return fmt.Errorf("tasks: run %s without a kind", r.ID)
 	case !knownState(r.State):
 		return fmt.Errorf("tasks: run %s in unknown state %q", r.ID, r.State)
+	case r.State.Terminal() && r.Finished.IsZero():
+		return fmt.Errorf("tasks: run %s is %s without a finish time", r.ID, r.State)
 	}
 	return nil
 }
@@ -150,7 +167,7 @@ func insertRun(ctx context.Context, st *taskstore.Store, b *storage.Batch, r Run
 	if err := validRecord(r); err != nil {
 		return err
 	}
-	if _, found, err := st.ReadForUpdate(ctx, b, taskstore.RunKey(string(r.ID))); err != nil {
+	if _, found, err := readForUpdate(ctx, st, b, taskstore.RunKey(string(r.ID))); err != nil {
 		return err
 	} else if found {
 		return fmt.Errorf("%w: run %s already exists", ErrRunConflict, r.ID)
@@ -249,14 +266,17 @@ func stageStamp(st *taskstore.Store, b *storage.Batch, subject entity.Ref, k Kin
 // read through b under the bucket's guard precondition, so a concurrent
 // merge fails the commit and the caller's retry merges again from a fresh
 // read (5T.7): subjects are unioned in arrival order, First keeps the
-// earliest arrival, Last the latest, and Params the latest non-empty value.
+// earliest arrival, Last the latest, and Params come from the side with the
+// later Last (the stored side on a tie) unless that side has none. Order of
+// staging does not decide: RenameKind merges from's bucket into to's, and the
+// later bucket's parameters win either way.
 // A d whose First is zero is a flush: it deletes the bucket.
 func stageDebounce(ctx context.Context, st *taskstore.Store, b *storage.Batch, d DebounceBucket) error {
 	if d.Kind == "" {
 		return errors.New("tasks: debounce bucket without a kind")
 	}
 	key := taskstore.DebounceKey(string(d.Kind), d.Bucket)
-	v, found, err := st.ReadForUpdate(ctx, b, key)
+	v, found, err := readForUpdate(ctx, st, b, key)
 	if err != nil {
 		return err
 	}
@@ -279,7 +299,7 @@ func stageDebounce(ctx context.Context, st *taskstore.Store, b *storage.Batch, d
 		if cur.Last.After(merged.Last) {
 			merged.Last = cur.Last
 		}
-		if len(merged.Params) == 0 {
+		if len(cur.Params) > 0 && (len(merged.Params) == 0 || !d.Last.After(cur.Last)) {
 			merged.Params = cur.Params
 		}
 	}
@@ -329,7 +349,7 @@ func (r *nativeRuns) Get(ctx context.Context, id RunID) (RunRecord, error) {
 
 // readRun reads a run through b under its guard precondition.
 func (r *nativeRuns) readRun(ctx context.Context, b *storage.Batch, id RunID) (RunRecord, error) {
-	v, found, err := r.st.ReadForUpdate(ctx, b, taskstore.RunKey(string(id)))
+	v, found, err := readForUpdate(ctx, r.st, b, taskstore.RunKey(string(id)))
 	if err != nil {
 		return RunRecord{}, err
 	}
@@ -690,22 +710,18 @@ func (r *nativeRuns) Pages(ctx context.Context, id RunID, q PageQuery) iter.Seq2
 
 // decodePage decodes one stored page entry.
 func decodePage(k PageKind, kv storage.KV) (PageEntry, error) {
-	segs, err := taskstore.Segments(kv.Key)
-	if err != nil || len(segs) != 4 {
-		return PageEntry{}, errors.New("malformed page key")
+	_, _, cursor, err := taskstore.ParsePageKey(kv.Key)
+	if err != nil {
+		return PageEntry{}, err
 	}
-	cursor := segs[3]
 	e := PageEntry{Page: k}
 	if k == PageItems {
 		e.Key = string(cursor)
 		e.Item, err = decodeValue[ItemOutcome](kv.Value)
 		return e, err
 	}
-	if len(cursor) != 8 {
-		return PageEntry{}, errors.New("malformed page seq")
-	}
-	for _, c := range cursor {
-		e.Seq = e.Seq<<8 | uint64(c)
+	if e.Seq, err = taskstore.ParseSeqSeg(cursor); err != nil {
+		return PageEntry{}, err
 	}
 	e.Key = strconv.FormatUint(e.Seq, 10)
 	switch k {
@@ -789,7 +805,7 @@ func (r *nativeRuns) ReplaceRows(ctx context.Context, id RunID, prefix string, n
 	}
 	commit := func(stage func(b *storage.Batch) error) error {
 		return storage.RetryOnConflict(ctx, maintenanceAttempts, func(ctx context.Context) (err error) {
-			b := r.st.Keyspace().NewBatch()
+			b := r.st.NewBatch()
 			defer func() { err = errors.Join(err, b.Close()) }()
 			if _, err := r.openRun(ctx, b, id, true); err != nil {
 				return err
@@ -845,8 +861,7 @@ func (r *nativeRuns) MarkRow(ctx context.Context, b *storage.Batch, id RunID, ro
 	return stageMark(r.st, b, id, rowID)
 }
 
-// Marks yields the row IDs of a run's applied-row marks, in row-ID order.
-// No RunStore method reads them; the executor's resume reads them here.
+// Marks implements RunStore.Marks, in row-ID order.
 func (r *nativeRuns) Marks(ctx context.Context, id RunID) iter.Seq2[string, error] {
 	return r.st.IDs(ctx, taskstore.MarkPrefix(string(id)))
 }
@@ -876,8 +891,8 @@ func (r *nativeRuns) Strike(ctx context.Context, b *storage.Batch, id RunID, s S
 	return putValue(r.st, b, taskstore.StrikeKey(string(id), n), s)
 }
 
-// Strikes yields a run's watchdog strikes in the order they were staged. No
-// RunStore method reads them; the watchdog reads them here.
+// Strikes implements RunStore.Strikes, in the order they were staged (each
+// takes the next number of the strike sequence).
 func (r *nativeRuns) Strikes(ctx context.Context, id RunID) iter.Seq2[Strike, error] {
 	return scanValues[Strike](ctx, r.st, taskstore.StrikePrefix(string(id)))
 }
@@ -913,51 +928,74 @@ func (r *nativeRuns) Stamped(ctx context.Context, subject entity.Ref, k Kind) (t
 	return at.At, true, nil
 }
 
-// Prune implements RunStore.Prune: up to limit runs of the done index
-// finished before before are deleted, pruneChunkRuns per batch, each batch
-// committed under RetryOnConflict and rebuilt from fresh reads on a
-// conflict. A run whose fresh read is no longer terminal, or no longer
-// finished before before, is skipped (DATA8-8).
+// Prune implements RunStore.Prune: it walks the done index from the oldest
+// entry before before, pruneChunkRuns entries per batch, and deletes up to
+// limit runs. Each batch is committed under RetryOnConflict and rebuilt from
+// fresh reads on a conflict. The walk moves past every entry it does not
+// delete a run for, so no entry it cannot act on stalls a later call: an
+// entry whose run is gone, or whose run's own done key is another (requeued,
+// or finished at another time), is deleted as an orphan; an undecodable run
+// row is left for an operator (5T.5) and walked past (DATA8-8).
 func (r *nativeRuns) Prune(ctx context.Context, before time.Time, limit int) (int, error) {
 	if limit < 1 {
 		return 0, fmt.Errorf("tasks: Prune limit %d: must be at least 1", limit)
 	}
-	ids, err := r.st.DoneBefore(ctx, before, limit)
-	if err != nil {
-		return 0, err
-	}
 	deleted := 0
-	for start := 0; start < len(ids); start += pruneChunkRuns {
-		n, err := r.pruneChunk(ctx, ids[start:min(start+pruneChunkRuns, len(ids))], before)
+	var after []byte
+	for deleted < limit {
+		page, err := r.st.DoneBefore(ctx, before, after, pruneChunkRuns)
+		if err != nil {
+			return deleted, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		n, err := r.pruneChunk(ctx, page, before, limit-deleted)
 		deleted += n
 		if err != nil {
 			return deleted, err
 		}
+		after = page[len(page)-1].Key
 	}
 	return deleted, nil
 }
 
-// pruneChunk deletes, in one batch, the runs of ids that a fresh read finds
-// terminal and finished before before; it returns how many it deleted.
-func (r *nativeRuns) pruneChunk(ctx context.Context, ids []string, before time.Time) (int, error) {
+// pruneChunk acts, in one batch, on the done-index entries of page: up to max
+// runs that a fresh read finds terminal, finished before before and indexed
+// at exactly that entry are deleted, and orphan entries are removed (see
+// Prune). It returns how many runs it deleted.
+func (r *nativeRuns) pruneChunk(ctx context.Context, page []taskstore.DoneEntry, before time.Time, max int) (int, error) {
 	n := 0
 	err := storage.RetryOnConflict(ctx, maintenanceAttempts, func(ctx context.Context) (err error) {
 		n = 0
-		b := r.st.Keyspace().NewBatch()
+		b := r.st.NewBatch()
 		defer func() { err = errors.Join(err, b.Close()) }()
-		for _, id := range ids {
-			v, found, err := r.st.ReadForUpdate(ctx, b, taskstore.RunKey(id))
+		for _, e := range page {
+			v, found, err := readForUpdate(ctx, r.st, b, taskstore.RunKey(e.ID))
 			if err != nil {
 				return err
 			}
 			if !found {
+				if err := r.st.Delete(b, e.Key); err != nil { // an entry without its run
+					return err
+				}
 				continue
 			}
 			rec, err := decodeRun(v)
-			if err != nil || !rec.State.Terminal() || !rec.Finished.Before(before) {
+			if err != nil {
 				continue // undecodable rows are left for an operator, never guessed at
 			}
-			if err := r.st.DeleteRun(b, runIndex(rec)); err != nil {
+			x := runIndex(rec)
+			if !x.Terminal || !bytes.Equal(taskstore.DoneIndexKey(x.Finished, x.ID), e.Key) {
+				if err := r.st.Delete(b, e.Key); err != nil { // a stale entry: the row is indexed elsewhere
+					return err
+				}
+				continue
+			}
+			if n == max || !rec.Finished.Before(before) {
+				continue
+			}
+			if err := r.st.DeleteRun(b, x); err != nil {
 				return err
 			}
 			n++
@@ -999,7 +1037,7 @@ func (c nativeClocks) Advance(ctx context.Context, b *storage.Batch, k Kind, pre
 		return errors.New("tasks: clock advance without a kind")
 	}
 	key := taskstore.SchedKey(string(k))
-	v, found, err := c.st.ReadForUpdate(ctx, b, key)
+	v, found, err := readForUpdate(ctx, c.st, b, key)
 	if err != nil {
 		return err
 	}

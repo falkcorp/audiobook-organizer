@@ -1,5 +1,5 @@
 // file: core/tasks/native_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: eb6000b7-aaf8-47bf-b775-57052084dc34
 // last-edited: 2026-11-10
 
@@ -84,14 +84,6 @@ func (c crashRuns) Importer() tasks.Importer {
 	return c.RunStore.(taskstest.ImporterProvider).Importer()
 }
 
-func (c crashRuns) Marks(ctx context.Context, id tasks.RunID) iter.Seq2[string, error] {
-	return c.RunStore.(taskstest.RecordReader).Marks(ctx, id)
-}
-
-func (c crashRuns) Strikes(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Strike, error] {
-	return c.RunStore.(taskstest.RecordReader).Strikes(ctx, id)
-}
-
 func (c crashRuns) CrashClone(t *testing.T) tasks.Stores {
 	return bootHarness(t, c.h.fs.CrashClone(vfs.CrashCloneCfg{}), c.h.path).stores
 }
@@ -126,9 +118,6 @@ func TestNativeStores_RoundTrip(t *testing.T) {
 		}
 		if _, ok := r.(taskstest.ImporterProvider); !ok {
 			t.Error("NativeStores' Runs is not a taskstest.ImporterProvider")
-		}
-		if _, ok := r.(taskstest.RecordReader); !ok {
-			t.Error("NativeStores' Runs is not a taskstest.RecordReader")
 		}
 		if _, ok := r.(taskstest.Crasher); ok {
 			t.Error("NativeStores' Runs offers a crash clone; only the test harness may")

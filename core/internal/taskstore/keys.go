@@ -1,5 +1,5 @@
 // file: core/internal/taskstore/keys.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2337f4c-99d8-4f8b-ba15-6aca8b3118e4
 // last-edited: 2026-11-10
 
@@ -31,6 +31,7 @@
 //	req-rev/<taskkind>/<module>/<kind>/<id>       their reverse index
 //	def/<kind>                                    definition snapshots (the kernel writes them)
 //	idem/<kind>/<key>                             HTTP start idempotency records (Serialized; Client.Start writes them)
+//	_seq/strike                                   the strike-number sequence (storage's Keyspace.Sequence key)
 //
 // The Serialized sub-prefixes are exactly the guard keys run/, debounce/,
 // sched/ and idem/ (5T.6.1): every other family is written only in a batch
@@ -39,6 +40,9 @@
 package taskstore
 
 import (
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -257,7 +261,9 @@ func ReqRevPrefix(taskKind string) []byte {
 }
 
 // DefKey is def/<kind>, a definition snapshot (5T.3.11). Its writer is the
-// kernel's registration step (5T.4 step 1), not this package's.
+// kernel's registration step (5T.4 step 1), not this package's. The kind
+// lives in the key only: the stored value must not embed it, because
+// Importer.RenameKind moves the snapshot to def/<to> as bytes, unread.
 func DefKey(kind string) []byte { return keys.Join(keys.Str(famDef), keys.Str(kind)) }
 
 // IdemKey is idem/<kind>/<key>, an HTTP start idempotency record (5T.6).
@@ -266,8 +272,13 @@ func IdemKey(kind, key string) []byte {
 	return keys.Join(keys.Str(famIdem), keys.Str(kind), keys.Str(key))
 }
 
-// IdemPrefix is idem/.
-func IdemPrefix() []byte { return keys.Prefix(keys.Str(famIdem)) }
+// IdemPrefix is idem/<kind>/, or idem/ for an empty kind.
+func IdemPrefix(kind string) []byte {
+	if kind == "" {
+		return keys.Prefix(keys.Str(famIdem))
+	}
+	return keys.Prefix(keys.Str(famIdem), keys.Str(kind))
+}
 
 // lastSeg returns the last segment of a key, or nil when the key does not
 // split.
@@ -279,5 +290,82 @@ func lastSeg(key []byte) keys.Seg {
 	return segs[len(segs)-1]
 }
 
-// Segments splits a relative key into its segments.
-func Segments(key []byte) ([]keys.Seg, error) { return keys.Split(key) }
+// ErrMalformedKey: a key under a family does not have that family's shape.
+var ErrMalformedKey = errors.New("taskstore: malformed key")
+
+// parse splits key and checks that it is a key of family fam (with sub, the
+// second segment, when sub is not empty) of exactly n segments.
+func parse(key []byte, n int, fam, sub string) ([]keys.Seg, error) {
+	segs, err := keys.Split(key)
+	if err != nil || len(segs) != n || string(segs[0]) != fam || (sub != "" && string(segs[1]) != sub) {
+		return nil, fmt.Errorf("%w: %q is not a %s/%s key", ErrMalformedKey, key, fam, sub)
+	}
+	return segs, nil
+}
+
+// ParseKindIndexKey is KindIndexKey's inverse.
+func ParseKindIndexKey(key []byte) (kind, id string, err error) {
+	segs, err := parse(key, 4, famIndex, ixKind)
+	if err != nil {
+		return "", "", err
+	}
+	return string(segs[2]), string(segs[3]), nil
+}
+
+// ParseStateIndexKey is StateIndexKey's inverse.
+func ParseStateIndexKey(key []byte) (state, id string, err error) {
+	segs, err := parse(key, 4, famIndex, ixState)
+	if err != nil {
+		return "", "", err
+	}
+	return string(segs[2]), string(segs[3]), nil
+}
+
+// ParseDoneIndexKey is DoneIndexKey's inverse; finished is in UTC.
+func ParseDoneIndexKey(key []byte) (finished time.Time, id string, err error) {
+	segs, err := parse(key, 4, famIndex, ixDone)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	if len(segs[2]) != 8 {
+		return time.Time{}, "", fmt.Errorf("%w: done-index time of %q", ErrMalformedKey, key)
+	}
+	return time.Unix(0, int64(binary.BigEndian.Uint64(segs[2])^(1<<63))).UTC(), string(segs[3]), nil
+}
+
+// ParsePageKey is PageKey's inverse: cursor is the raw last segment
+// (ParseSeqSeg reads a sequence number from it; for item outcomes it is the
+// item key).
+func ParsePageKey(key []byte) (id string, p Page, cursor keys.Seg, err error) {
+	segs, err := parse(key, 4, famPage, "")
+	if err != nil {
+		return "", "", nil, err
+	}
+	return string(segs[1]), Page(segs[2]), segs[3], nil
+}
+
+// ParseSeqSeg is SeqSeg's inverse.
+func ParseSeqSeg(seg keys.Seg) (uint64, error) {
+	if len(seg) != 8 {
+		return 0, fmt.Errorf("%w: a sequence segment is 8 bytes, not %d", ErrMalformedKey, len(seg))
+	}
+	return binary.BigEndian.Uint64(seg), nil
+}
+
+// ParseReqRevKey is ReqRevKey's inverse.
+func ParseReqRevKey(key []byte) (taskKind string, s Subject, err error) {
+	segs, err := parse(key, 5, famReqRev, "")
+	if err != nil {
+		return "", Subject{}, err
+	}
+	return string(segs[1]), Subject{Module: string(segs[2]), Kind: string(segs[3]), ID: string(segs[4])}, nil
+}
+
+// ParseIdemKey is IdemKey's inverse.
+func ParseIdemKey(key []byte) (kind, idemKey string, err error) {
+	segs, err := parse(key, 3, famIdem, "")
+	if err != nil {
+		return "", "", err
+	}
+	return string(segs[1]), string(segs[2]), nil
+}
