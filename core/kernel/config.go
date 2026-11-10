@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-10
 
@@ -163,8 +163,12 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		if strings.TrimSpace(explicit) != "" {
 			return nil, fmt.Errorf("kernel: config: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
 		}
-		return nil, fmt.Errorf("kernel: config: the default state directory %q cannot be created (%w), and core.storage.path %q gives no absolute directory to keep state beside; set %s to a directory that can be created",
-			dir, err, cb.dbPath, stateVar)
+		what := fmt.Sprintf("the default state directory %q cannot be created", dir)
+		if in.StateDirDefault == "" {
+			what = "the app declares no default state directory"
+		}
+		return nil, fmt.Errorf("kernel: config: %s (%w), and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
+			what, err, cb.dbPath, stateVar)
 	}
 	cb.stateDir, cb.fellBack = dir, fellBack
 	if fellBack {
