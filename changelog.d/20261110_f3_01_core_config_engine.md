@@ -6,6 +6,7 @@
 
 - Core: `Register` refuses a protect, reload or sensitive tag inside a key's value (a list, map, array, pointer or self-encoding struct) that is stricter than the key itself. `core.auth.oidc.providers` is now owner-protected as a whole list, so an admin can no longer repoint an owner-trusted provider.
 - ABO: the credential-directory rule in `internal/config/state_dir.go` now delegates to core's `config.ResolveStateDir`. Behaviour is unchanged.
+- Core: `app.ResolveStateDir` now delegates to `config.ResolveStateDir`, so core and ABO pick the state directory by one rule. A padded `<APP>_CORE_PATHS_STATE_DIR` is trimmed and cleaned, and the directory beside the database is used as a fallback only when it can be created.
 
 ### Fixed
 
