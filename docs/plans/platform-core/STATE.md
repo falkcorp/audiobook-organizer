@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.54.0 -->
+<!-- version: 1.55.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -121,6 +121,13 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W31 | R1-28 | #4532 `b571caa6a` | `unit-lifecycle` CI job (fake-migration and staged-restore cells, swap.lock state-directory rules). Supersedes #4524 (and the draft #4520). Merged 2026-11-09 19:57 EST, deployed, healthy |
 | W32 | R1-31 | #4533 | R1's executive summary (docs only). Supersedes #4529. Merged 2026-11-09 |
 | W33 | OWNER-03 | — | owner-ordered run 2026-11-10: P12 Branch A; R1 production release **v0.224.0** (run 42777399688, `release-type=minor`, tag `d977adb1c`), R1 release-note lines prepended; deployed `v0.224.0-1-ga9d9f2136`, `/health` ready; smoke run skipped; kept; `RELEASE_FREEZE` deleted; recorded on #4382 |
+| W34 | F4-10 | #4537 `41743d7f1` | T2: `CoreFixedGroup` and the two exact core patterns; a fixed-group route is exempt from the shadow graph; a legacy route over an entry is refused only once a fixed route serves it (dark reading). Merged 2026-11-10 |
+| W34 | F2-10 | #4536 `3d5b6327c` | T2: `core/health` readiness registry, kernel storage and secrets components, the `HealthPostureTokens` bridge. Staged code baselined in the deadcode ratchet until a row adds the App health accessor (open seam). Merged 2026-11-10 |
+| W34 | F4-04 | #4541 `670e09b80` | T3: events bus and catalog, backup revocation journal (dark). Security review: no payload in drop or panic logs; journal refuses a file behind `journal_head`, flock, broken `File` keeps `Gap`. T3 review 0 BLOCKER; both MAJORs and three MINORs fixed in-PR. Merged 2026-11-10 |
+| W34 | F2-07 | #4540 `570693717` | T2: `core/audit` store, 64-action table, async writer. Security review: open denial folds capped; fold key gains target and reason (owner's take-recommended directive), 05-rbac §7.3 amended. Merged 2026-11-10 |
+| W34 | F2-08 | #4543 `2101b9845` | T2: fixed `core:*` scope catalog declared by the kernel (dark). Re-cut of #4538 (merge-queue `merge_conflict` on the deadcode baseline). Merged 2026-11-10 |
+| W34 | F2-09 | #4544 `f797a0217` | T2: every core config section declared, 208 keys in 32 sections (dark). Re-cut of #4539. Open seams for F3-01, F3-02, F3-06 in `seams.d/F2-09.md`. Merged 2026-11-10, deployed with the wave, healthy |
+| W34 | F2-12 | #4542 `954f7a35a` | T3: R2 corpus stage 1 written by R0 v0.223.0 on a GitHub-hosted linux/amd64 runner (temporary workflow, removed), 1.8 MB. T3 review: four MAJORs fixed and regenerated; re-verify 0 BLOCKER. A follow-up PR fixes the remaining answer normalization before F2-15. Merged 2026-11-10 |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -145,7 +152,9 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 ## Next action
 
-R1 is released as v0.224.0 and deployed (OWNER-03, 2026-11-10), and `RELEASE_FREEZE` is cleared. Next is the W24 wave: F2-07, F2-08, F2-09, F2-10, F2-12, F4-04 and F4-10, landing dark (no route, schedule or stored row changes), plus OWNER-04, the owner's read-only production counts, which F2-14 and F3-07 wait for. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: R1 is a published release running in production; the next stage builds R2's pieces switched off.
+W24 (the first F2 wave) is merged, 7 of 7, and deployed 2026-11-10. Next is W25: F2-01, F2-13, F3-01 (inside an announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`) and F4-01. F2-14 waits for OWNER-04, the owner's read-only production counts. The F2-12 follow-up (answer normalization and lapse guards) lands before F2-15. The deadcode ratchet carries staged entries for F2-07, F2-08, F2-09, F2-10 and F4-04 until their boot rows wire them. The R1-27 owner action is still pending. In plain terms: the first set of R2 building blocks is in production, switched off.
+
+Before W24: R1 is released as v0.224.0 and deployed (OWNER-03, 2026-11-10), and `RELEASE_FREEZE` is cleared. Next is the W24 wave: F2-07, F2-08, F2-09, F2-10, F2-12, F4-04 and F4-10, landing dark (no route, schedule or stored row changes), plus OWNER-04, the owner's read-only production counts, which F2-14 and F3-07 wait for. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: R1 is a published release running in production; the next stage builds R2's pieces switched off.
 
 On 2026-11-09 all R1 rows were merged (37 of 37); next was OWNER-03, the owner's R1 release cut: read P12 (disk headroom, because the first R1 boot takes a checkpoint), cut R1 with its release-note lines, deploy, optionally smoke-run, and clear `RELEASE_FREEZE`. Every F2 task and OWNER-04 depend on it. The owner also finishes the R1-27 action first (host.conf and the root-owned rollback helpers). In plain terms: the new storage, offline restore and the deploy and rollback tooling are in place and deployed; nothing users see has changed.
 
