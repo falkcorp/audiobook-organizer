@@ -1,3 +1,6 @@
+core/kernel.coreSections
+core/kernel.dur
+core/kernel.hashWorkersDefault
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
 internal/ai.modelLabelSet.setConfigured
