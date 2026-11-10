@@ -1,5 +1,5 @@
 // file: core/internal/authz/authz.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9ab14091-8ae1-439c-ad61-28782f1e547d
 // last-edited: 2026-11-10
 
@@ -11,7 +11,8 @@
 // authz imports rbac; rbac imports nothing from authz (COR4-12). Go's
 // internal/ rule keeps authz out of app code, and
 // archtest.NoSystemPrincipalOutsideKernel lets only auth, the tasks executor
-// and kernel call the two privileged constructors (SEC-26).
+// and kernel import authz at all (SEC-26): Compile mints an interactive admin
+// checker as readily as the privileged constructors bypass roles.
 //
 // Every checker here fails closed: a scope it cannot prove it holds is not
 // held. A checker is immutable once built (05-rbac §9) and the package holds
@@ -29,9 +30,9 @@ import (
 // constructor and never written again, so a checker is safe for concurrent
 // use without locks.
 type checker struct {
-	// cat is the catalog the checker was compiled against. It answers a
+	// cat is the catalog the checker was built against. It answers a
 	// scope's flags (Sensitive, AuthRequired, Confining) on every check. nil
-	// only for ForSystem, which has no catalog and holds exactly its scopes.
+	// only for the refusal checker, which holds nothing.
 	cat *rbac.Catalog
 	// set is the effective concrete set: every concrete scope held, with
 	// implication closures and wildcard expansions folded in (§4.4).
@@ -59,9 +60,8 @@ var _ rbac.Checker = (*checker)(nil)
 
 // denied returns the checker of a refused construction: it holds nothing and
 // is Confined(), so no rule that admits by default can admit it either (the
-// rule rbac's own deny-all checker keeps). Compile with no catalog,
-// AuthDisabled with no catalog and ForSystem with an entry it must not hold
-// all return it.
+// rule rbac's own deny-all checker keeps). Each constructor returns it for a
+// nil catalog, and ForSystem also for an entry it must never hold.
 func denied() *checker {
 	return &checker{confined: true}
 }
@@ -162,7 +162,7 @@ func Compile(in rbac.CompileInput, cat *rbac.Catalog) rbac.Checker {
 // auth-off evaluation rule (an AllOf drops its AuthRequired members). A nil
 // catalog yields a checker that holds nothing.
 //
-// Only auth, the tasks executor and kernel may call it
+// Only auth, the tasks executor and kernel may import authz
 // (archtest.NoSystemPrincipalOutsideKernel).
 func AuthDisabled(cat *rbac.Catalog) rbac.Checker {
 	if cat == nil {
@@ -180,26 +180,33 @@ func AuthDisabled(cat *rbac.Catalog) rbac.Checker {
 }
 
 // ForSystem is the checker of a module's system actor, the _system principal
-// of background tasks (05-rbac §3.4, SEC2-15): it holds exactly perms, is
-// non-interactive and has no admin flag. The kernel passes the union of
-// Perms.Start of the module's own kinds plus Manifest.TaskStarts, never
-// core:admin or an AuthRequired scope (05-tasks §5T.3.10).
+// of background tasks (05-rbac §3.4, SEC2-15): it holds exactly the perms cat
+// declares, is non-interactive and has no admin flag. The kernel passes the
+// union of Perms.Start of the module's own kinds plus Manifest.TaskStarts,
+// never core:admin or an AuthRequired scope (05-tasks §5T.3.10).
 //
-// It has no catalog, so it holds exactly what it is given: no implication
-// and no wildcard. A check is literal membership. Confined() reports true,
-// because a checker that cannot read Confining flags cannot show the
-// principal is unconfined, so AnyAuthenticated never admits it. It does
-// check what it can without a catalog: if any entry is malformed or a
-// wildcard, is core:admin, or is a core:* scope that rbac.CoreScopes does not
-// declare or marks AuthRequired or Sensitive, it holds nothing at all. A
-// kernel bug then fails loudly instead of granting part of a set.
+// Every check goes through Has against cat, so §4.4 rule 1 holds for the
+// background actor as for any non-interactive principal: a Sensitive scope
+// it was given, a module's as much as core's, is refused, and so is a scope
+// cat does not declare (which the set leaves out). It holds exactly what it
+// is given, with no implication and no wildcard.
 //
-// Only auth, the tasks executor and kernel may call it
+// Confined() reports true. The system actor is not a request principal:
+// AnyAuthenticated gates the HTTP surface a person or a key reaches (the
+// event stream, /me), which a background run has no business reaching, and
+// its set is the exact list the kernel computed, so judging requirements by
+// literal naming refuses nothing it holds.
+//
+// A nil catalog yields a checker that holds nothing. So does an entry the
+// kernel must never pass: a malformed scope or a wildcard, core:admin, or a
+// scope cat marks AuthRequired. A kernel bug then fails loudly instead of
+// granting part of a set.
+//
+// Only auth, the tasks executor and kernel may import authz
 // (archtest.NoSystemPrincipalOutsideKernel).
-func ForSystem(perms []rbac.Permission) rbac.Checker {
-	core := map[rbac.Permission]rbac.PermissionSpec{}
-	for _, spec := range rbac.CoreScopes() {
-		core[spec.Name] = spec
+func ForSystem(cat *rbac.Catalog, perms []rbac.Permission) rbac.Checker {
+	if cat == nil {
+		return denied()
 	}
 	set := map[rbac.Permission]struct{}{}
 	for _, s := range perms {
@@ -207,15 +214,16 @@ func ForSystem(perms []rbac.Permission) rbac.Checker {
 		if err != nil || p == rbac.CoreAdmin {
 			return denied()
 		}
-		if p.Namespace() == "core" {
-			spec, ok := core[p]
-			if !ok || spec.AuthRequired || spec.Sensitive {
-				return denied()
-			}
+		spec, ok := cat.Lookup(p)
+		if !ok {
+			continue // undeclared: held by no one
+		}
+		if spec.AuthRequired {
+			return denied()
 		}
 		set[p] = struct{}{}
 	}
-	return &checker{set: set, confined: true, concrete: sortedKeys(set)}
+	return &checker{cat: cat, set: set, confined: true, concrete: sortedKeys(set)}
 }
 
 // Has reports whether the principal holds s (05-rbac §4.4). For a concrete
@@ -235,8 +243,7 @@ func (c *checker) Has(s rbac.Permission) bool {
 		return c.holdsPattern(p)
 	}
 	if c.cat == nil {
-		_, ok := c.set[p]
-		return ok
+		return false
 	}
 	spec, ok := c.cat.Lookup(p)
 	if !ok {
@@ -313,12 +320,17 @@ func (c *checker) Satisfies(r rbac.Requirement) bool {
 	}
 }
 
-// holds is the per-scope test of Satisfies: Has, and for a Confined()
-// principal also literal membership (§4.10). The confined path still goes
-// through Has, so its rules hold there too: an undeclared scope is refused,
-// and so is a Sensitive scope for a non-interactive principal (§4.4 rule 1),
-// even when the catalog makes that scope Confining as well. A confined
-// principal is never admin, so Has adds no reach beyond the set.
+// holds is the per-scope test of Satisfies: Has, for a Confined() principal
+// too, so Has's rules (an undeclared scope, a Sensitive scope for a
+// non-interactive principal) hold on the confined path.
+//
+// The literal-membership block below is defense in depth and can never
+// change a result: a confined principal is never admin, so Has is true only
+// for a member of the set, and a confined set (only Confining scopes)
+// holds no implied scope, because NewCatalog refuses a Confining scope that
+// implies or is implied (rbac.ErrConfiningImplication). So every member was
+// named literally (§4.10) and no vector can kill the block. It stays so the
+// literal rule does not rest on a catalog check in another package.
 func (c *checker) holds(p rbac.Permission) bool {
 	if c.confined {
 		if _, ok := c.set[p]; !ok {

@@ -1,5 +1,5 @@
 // file: core/archtest/nosystemprincipal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: defaa454-c7bf-4aa1-b9d2-821d1bdcccb9
 // last-edited: 2026-11-10
 
@@ -13,8 +13,8 @@ import (
 )
 
 // systemPrincipalTree is a fixture core module: an rbac leaf, an authz that
-// declares the two privileged constructors and Compile, and the three
-// packages allowed to call them. extra adds or replaces files.
+// declares Compile and the two privileged constructors, and the three
+// packages allowed to import it. extra adds or replaces files.
 func systemPrincipalTree(t *testing.T, extra map[string]string) string {
 	t.Helper()
 	files := map[string]string{
@@ -38,7 +38,7 @@ func Off() { _ = authz.AuthDisabled() }
 
 import az "github.com/falkcorp/mediacore/internal/authz"
 
-func System() { _ = az.ForSystem(nil); f := az.AuthDisabled; _ = f }
+func System() { _ = az.ForSystem(nil); _ = az.Compile(); f := az.AuthDisabled; _ = f }
 `,
 		"internal/executor/executor.go": `package executor
 
@@ -46,14 +46,9 @@ import "github.com/falkcorp/mediacore/internal/authz"
 
 func Run() { _ = authz.ForSystem([]string{"gotham:patrol"}) }
 `,
-		// A forbidden package may call Compile, and its tests may call the
-		// privileged constructors: neither is reported.
-		"httpapi/httpapi.go": `package httpapi
-
-import "github.com/falkcorp/mediacore/internal/authz"
-
-func Serve() { _ = authz.Compile() }
-`,
+		// A forbidden package's tests may import authz: test files are not
+		// scanned by rule (a).
+		"httpapi/httpapi.go": "package httpapi\n\nfunc Serve() {}\n",
 		"httpapi/httpapi_test.go": `package httpapi
 
 import (
@@ -62,10 +57,8 @@ import (
 	"github.com/falkcorp/mediacore/internal/authz"
 )
 
-func TestOff(t *testing.T) { _ = authz.ForSystem(nil); _ = authz.AuthDisabled() }
+func TestOff(t *testing.T) { _ = authz.ForSystem(nil); _ = authz.AuthDisabled(); _ = authz.Compile() }
 `,
-		// A blank import names nothing.
-		"events/events.go": "package events\n\nimport _ \"github.com/falkcorp/mediacore/internal/authz\"\n",
 	}
 	maps.Copy(files, extra)
 	return writeModule(t, files)
@@ -93,9 +86,9 @@ func findingsByFile(root string, findings []string) map[string]int {
 	return out
 }
 
-// TestNoSystemPrincipal_AllowedTree: the allowed callers, a Compile call in a
-// forbidden package, a test file of a forbidden package and a blank import
-// pass.
+// TestNoSystemPrincipal_AllowedTree: the three allowed importers (one of
+// them calling Compile and taking a function value) and a forbidden
+// package's test file pass.
 func TestNoSystemPrincipal_AllowedTree(t *testing.T) {
 	root := systemPrincipalTree(t, nil)
 	got, err := NoSystemPrincipalFindings(root)
@@ -111,14 +104,14 @@ func TestNoSystemPrincipal_AllowedTree(t *testing.T) {
 // with an exact count per file.
 func TestNoSystemPrincipal_ForbiddenTree(t *testing.T) {
 	root := systemPrincipalTree(t, map[string]string{
-		// default name, a call of each constructor
-		"httpapi/serve.go": `package httpapi
+		// an import used only for Compile is still an import
+		"httpapi/httpapi.go": `package httpapi
 
 import "github.com/falkcorp/mediacore/internal/authz"
 
-func Open() { _ = authz.AuthDisabled(); _ = authz.ForSystem(nil) }
+func Serve() { _ = authz.Compile() }
 `,
-		// a renamed import and a reference that is not a call
+		// a renamed import taking function values
 		"tasks/tasks.go": `package tasks
 
 import gordon "github.com/falkcorp/mediacore/internal/authz"
@@ -127,14 +120,15 @@ var _ = gordon.ForSystem
 
 func Start() { f := gordon.AuthDisabled; _ = f }
 `,
-		// a dot import
+		// a dot import and a blank import
 		"outbox/outbox.go": `package outbox
 
 import . "github.com/falkcorp/mediacore/internal/authz"
 
 func Drain() { _ = ForSystem(nil) }
 `,
-		// a call seen only under the integration tag set
+		"events/events.go": "package events\n\nimport _ \"github.com/falkcorp/mediacore/internal/authz\"\n",
+		// an import seen only under the integration tag set
 		"library/library_integration.go": `//go:build integration
 
 package library
@@ -144,14 +138,15 @@ import "github.com/falkcorp/mediacore/internal/authz"
 func Scan() { _ = authz.ForSystem(nil) }
 `,
 		"library/library.go": "package library\n",
-		// a sub-package of an allowed caller is not allowed
+		// a sub-package of an allowed importer is not allowed
 		"auth/oidc/oidc.go": `package oidc
 
 import "github.com/falkcorp/mediacore/internal/authz"
 
 func Login() { _ = authz.AuthDisabled() }
 `,
-		// rbac's tree importing authz: a sub-package, and rbac's external test
+		// rbac's tree importing authz: a sub-package (also a forbidden
+		// importer) and rbac's external test
 		"rbac/rbacx/rbacx.go": "package rbacx\n\nimport _ \"github.com/falkcorp/mediacore/internal/authz\"\n",
 		"rbac/rbac_test.go": `package rbac_test
 
@@ -163,19 +158,39 @@ import (
 
 func TestJoker(t *testing.T) {}
 `,
+		// a linkname reaches authz without an import, in a forbidden package
+		// and in an allowed one alike
+		"metrics/link.go": `package metrics
+
+import _ "unsafe"
+
+//go:linkname forSystem github.com/falkcorp/mediacore/internal/authz.ForSystem
+func forSystem(p []string) any
+`,
+		"kernel/link.go": `package kernel
+
+import _ "unsafe"
+
+//go:linkname compile github.com/falkcorp/mediacore/internal/authz.Compile
+func compile() any
+`,
 	})
 	got, err := NoSystemPrincipalFindings(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]int{
-		"httpapi/serve.go":               2,
-		"tasks/tasks.go":                 2,
+		"httpapi/httpapi.go":             1,
+		"tasks/tasks.go":                 1,
 		"outbox/outbox.go":               1,
+		"events/events.go":               1,
 		"library/library_integration.go": 1,
 		"auth/oidc/oidc.go":              1,
+		"rbac/rbacx/rbacx.go":            1,
 		"import rbac/rbacx":              1,
 		"import rbac":                    1,
+		"metrics/link.go":                1,
+		"kernel/link.go":                 1,
 	}
 	count := findingsByFile(root, got)
 	for k, n := range want {
@@ -193,8 +208,8 @@ func TestJoker(t *testing.T) {}
 	}
 }
 
-// TestNoSystemPrincipal_Vacuous: a tree without authz, and one whose only
-// files are allowed callers, are errors, not passes.
+// TestNoSystemPrincipal_Vacuous: a tree without authz, and one with no
+// non-test file outside authz, are errors, not passes.
 func TestNoSystemPrincipal_Vacuous(t *testing.T) {
 	noAuthz := writeModule(t, map[string]string{
 		"go.mod":     "module github.com/falkcorp/mediacore\n\ngo 1.27.0\n",
@@ -204,13 +219,12 @@ func TestNoSystemPrincipal_Vacuous(t *testing.T) {
 	if _, err := NoSystemPrincipalFindings(noAuthz); err == nil || !strings.Contains(err.Error(), "vacuous") {
 		t.Errorf("a tree without authz: err = %v, want a vacuity error", err)
 	}
-	onlyAllowed := writeModule(t, map[string]string{
+	onlyAuthz := writeModule(t, map[string]string{
 		"go.mod":                  "module github.com/falkcorp/mediacore\n\ngo 1.27.0\n",
 		"internal/authz/authz.go": "package authz\n\nfunc ForSystem() {}\n",
-		"kernel/kernel.go":        "package kernel\n\nimport \"github.com/falkcorp/mediacore/internal/authz\"\n\nfunc K() { authz.ForSystem() }\n",
 	})
-	if _, err := NoSystemPrincipalFindings(onlyAllowed); err == nil || !strings.Contains(err.Error(), "vacuous") {
-		t.Errorf("a tree of allowed callers only: err = %v, want a vacuity error", err)
+	if _, err := NoSystemPrincipalFindings(onlyAuthz); err == nil || !strings.Contains(err.Error(), "vacuous") {
+		t.Errorf("a tree of authz only: err = %v, want a vacuity error", err)
 	}
 }
 
