@@ -1,5 +1,5 @@
 // file: core/internal/configstore/configstore_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
 // last-edited: 2026-11-10
 
@@ -337,6 +337,53 @@ func TestCommitter_AuditActor(t *testing.T) {
 	}
 	if rows, err := e.rows(context.Background()); err != nil || rows[level] != nil {
 		t.Errorf("rows %v (%v): a refused commit wrote", rows, err)
+	}
+}
+
+// TestImporter_RefusesAfterAttach (T4 review MINOR-3, 05-config §1.3.3):
+// once Attach has run, Importer.Stage is refused and writes nothing. It
+// checks no protection and records no audit event, which is right only for a
+// cutover step before P4d; an owner-protected key staged at run time would
+// otherwise skip both.
+func TestImporter_RefusesAfterAttach(t *testing.T) {
+	ctx := context.Background()
+	e := boot(t)
+	st, err := config.NewStore(config.Options{AppID: "gotham"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(ctx); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if _, err := config.Register(st.Registry(), configtest.BatcaveSection()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.SetImportTarget(e.store)
+	if _, err := st.Attach(ctx, e.store, e.commit); err != nil {
+		t.Fatal(err)
+	}
+	b := e.ks.NewBatch()
+	defer func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := st.Importer().Stage(b, "core.batcave.owner_email", json.RawMessage(`"joker@arkham.example"`), "m2"); err == nil || !strings.Contains(err.Error(), "before Attach") {
+		t.Fatalf("Stage after Attach = %v, want a refusal", err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := e.rows(ctx); err != nil || len(rows) != 0 {
+		t.Errorf("rows %v (%v): the refused Stage wrote", rows, err)
+	}
+	if d, err := st.Importer().Default("core.batcave.owner_email"); err != nil || len(d) == 0 {
+		t.Errorf("Default after Attach = %s, %v; the read side stays valid", d, err)
 	}
 }
 
