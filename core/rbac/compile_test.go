@@ -225,6 +225,59 @@ func TestSeed_NoNonConfiningScopeOnConfinedRole(t *testing.T) {
 			}
 		}
 	})
+
+	// Review MAJOR-C and its extension: a worker role a release empties, or
+	// whose worker scope a release stops declaring, stays confined for the
+	// merge, so a later release cannot refill it with a non-Confining scope
+	// unless an administrator accepts it.
+	view := rbac.PermissionSpec{Name: "books:fingerprint.view", Title: "View fingerprints"}
+	withSeed := func(seed []rbac.Permission, extra ...rbac.PermissionSpec) module {
+		m := books(extra...)
+		m.seeds = []rbac.RoleSeed{{Name: "fp-worker", Title: "Fingerprint worker", Permissions: seed}}
+		return m
+	}
+	dropWorker := books()
+	dropWorker.specs = slices.DeleteFunc(slices.Clone(dropWorker.specs), func(s rbac.PermissionSpec) bool { return s.Name == "books:fingerprint.worker" })
+	dropWorker.specs = append(dropWorker.specs, view)
+	dropWorker.seeds = []rbac.RoleSeed{{Name: "fp-worker", Title: "Fingerprint worker", Permissions: perms("books:fingerprint.view")}}
+	for name, c := range map[string]struct {
+		releases []module
+		pending  []string
+	}{
+		"wildcard seed after the worker seed": {
+			releases: []module{withSeed(perms("books:fingerprint.*"), view)},
+			pending:  []string{"books:fingerprint.*"},
+		},
+		"wildcard seed, then the plain scope alone": {
+			releases: []module{withSeed(perms("books:fingerprint.*"), view), withSeed(perms("books:fingerprint.view"), view)},
+			pending:  []string{"books:fingerprint.view"},
+		},
+		"empty seed, then the plain scope": {
+			releases: []module{withSeed(nil, view), withSeed(perms("books:fingerprint.view"), view)},
+			pending:  []string{"books:fingerprint.view"},
+		},
+		"worker scope no longer declared": {
+			releases: []module{dropWorker},
+			pending:  []string{"books:fingerprint.view"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			boot(t, e, setup{modules: []module{books()}})
+			for i, rel := range c.releases {
+				for boots := range 2 {
+					f := boot(t, e, setup{modules: []module{rel}})
+					w := f.role("fp-worker")
+					if slices.Contains(w.Permissions(), "books:fingerprint.view") || f.svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"fp-worker"}}).Has("books:fingerprint.view") {
+						t.Fatalf("release %d boot %d: fp-worker = %v: a worker role gained a non-Confining scope unaccepted", i, boots, w.Permissions())
+					}
+					if i == len(c.releases)-1 {
+						wantPerms(t, "pending", w.PendingSeed, c.pending...)
+					}
+				}
+			}
+		})
+	}
 }
 
 // TestCompileCache_GenerationInvalidates (§9): Compile calls Deps.Compile

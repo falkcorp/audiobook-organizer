@@ -1,5 +1,5 @@
 // file: core/rbac/seeds_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8a2f93-1d6e-4b47-9e0a-3f7b4d2c6e81
 // last-edited: 2026-11-10
 
@@ -283,8 +283,9 @@ func TestSeedMerge_RefusesForeignRows(t *testing.T) {
 // same declarations write nothing; over random release sequences the merge
 // keeps its invariants: every seed scope reaches the role (effective or
 // pending), nothing effective is outside the seed, a pending scope is a
-// restricted addition, admin stays {core:admin}, and committing again is a
-// no-op.
+// restricted addition or was added to a role that came in empty (which the
+// merge treats as confined), admin stays {core:admin}, and committing again
+// is a no-op.
 func TestSeedMerge_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
@@ -356,8 +357,12 @@ func TestSeedMerge_Idempotent(t *testing.T) {
 					if slices.Contains(eff, p) {
 						t.Fatalf("%s: %s holds %s both effective and pending", where, name, p)
 					}
-					if !restricted[p] {
-						t.Fatalf("%s: %s holds an unrestricted %s pending", where, name, p)
+					// An unrestricted scope waits only when the role came
+					// into this release empty: the merge treats an empty
+					// role as confined (it may be a worker role a release
+					// emptied), so everything added to it waits.
+					if !restricted[p] && len(prev[name]) > 0 {
+						t.Fatalf("%s: %s holds an unrestricted %s pending though it held %v", where, name, p, prev[name])
 					}
 					if prev == nil {
 						t.Fatalf("%s: a freshly created %s holds %s pending", where, name, p)
