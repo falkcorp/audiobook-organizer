@@ -1,3 +1,6 @@
+core/kernel.DataMigrations.Preflight
+core/kernel.DataMigrations.RecordMetrics
+core/kernel.DataMigrations.Stats
 core/kernel.buildHealth
 core/kernel.enginePing
 internal/ai.NewEmbeddingClient
