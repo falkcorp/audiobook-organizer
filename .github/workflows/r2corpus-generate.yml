@@ -1,0 +1,51 @@
+# file: .github/workflows/r2corpus-generate.yml
+# version: 0.1.0
+# guid: 7c2e9f41-3b8a-4d6e-a1f5-0e9b2c4d8a73
+# last-edited: 2026-11-10
+#
+# TEMPORARY (F2-12): writes R2's stage-1 corpus with the R0 linux/amd64 release
+# binary on a GitHub-hosted runner and uploads it as an artifact. The coordinator
+# commits the artifact and deletes this workflow before the PR merges.
+
+name: R2 corpus generate (temporary)
+
+on:
+  push:
+    branches: [agent/platform-core-f2-12]
+    paths: [.github/workflows/r2corpus-generate.yml, scripts/r2corpus/**]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Runtime libraries for the R0 binary
+        run: sudo apt-get update -q && sudo apt-get install -y -q libtag1v5 || sudo apt-get install -y -q libtag2
+      - name: Write the corpus with R0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/r2corpus/write_r0_corpus.py --regenerate
+      - name: Record R0's answers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/r2corpus/record_r0_answers.py --regenerate
+      - name: Show the result
+        run: |
+          du -sh internal/books/testdata/r2corpus
+          find internal/books/testdata/r2corpus -type f | sort
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: r2corpus
+          path: internal/books/testdata/r2corpus
+          include-hidden-files: true
+          if-no-files-found: error
