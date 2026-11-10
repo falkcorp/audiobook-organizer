@@ -1,5 +1,5 @@
 // file: core/rbac/seeds.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e81f27-3a9d-4b6c-8f15-0d7a2e9b4c63
 // last-edited: 2026-11-10
 
@@ -47,11 +47,17 @@ func adminSeed() seedDef {
 //   - no seed role is declared twice (ErrRoleExists);
 //   - a DefaultGrant names editor, viewer or a seed role some module declared
 //     (ErrUnknownRole);
-//   - a module role whose RoleSeed names a Confining scope holds only
-//     concrete Confining scopes (ErrConfiningSeed): a non-Confining scope,
-//     from its own seed or from a DefaultGrant, would end its confinement
+//   - a confined seed role holds only concrete Confining scopes
+//     (ErrConfiningSeed): a non-Confining scope, from its own seed or from a
+//     DefaultGrant, would end its confinement
 //     (TestSeed_NoNonConfiningScopeOnConfinedRole), and a wildcard could
-//     reach one later.
+//     reach one later. A role is confined here when its RoleSeed names a
+//     concrete Confining scope or is Confined (a wildcard that today expands
+//     only to Confining scopes); the wildcard case is refused because the
+//     wildcard is not concrete, so a later release declaring a non-Confining
+//     scope under it cannot widen the role silently. The final seed adds
+//     only DefaultGrants, which never carry a Confining scope
+//     (ErrRestrictedGrant), so it is Confined only if the RoleSeed is.
 //
 // Core's own seeds for editor and viewer (core:self, core:tasks.view,
 // core:system.status, core:metrics.read) are the DefaultGrants of
@@ -76,6 +82,9 @@ func buildSeeds(cat *Catalog, decls []*moduleDecl) ([]seedDef, error) {
 				errs = append(errs, fmt.Errorf("seed role %s: %w", rs.Name, err))
 			}
 			defs[rs.Name] = seedDef{name: rs.Name, title: rs.Title, description: rs.Description, perms: rs.Permissions}
+			if Confined(cat, rs.Permissions) {
+				confining[rs.Name] = true
+			}
 			for _, p := range rs.Permissions {
 				if spec, ok := cat.Lookup(p); ok && spec.Confining {
 					confining[rs.Name] = true
