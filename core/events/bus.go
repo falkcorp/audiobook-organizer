@@ -163,34 +163,42 @@ type event struct {
 	time                           time.Time
 	payload                        any
 
-	rawOnce sync.Once
-	raw     json.RawMessage
-	rawErr  error
+	rawOnce  sync.Once
+	raw      json.RawMessage
+	rawCause string // why the JSON form is unavailable: causeMarshal or causeSchema; "" when it is
 }
 
+// The causes an encode drop logs (05-events §5E.7 "Raw JSON encode
+// failure"). A drop's log carries the topic, the subscriber, the reason and
+// one of these fixed words, never an error's text: a marshal or schema error
+// can quote the payload's values, which may be user data or secrets, so the
+// error itself is not kept (seams.d/F4-04.md).
+const (
+	causeMarshal     = "marshal"      // json.Marshal refused the payload
+	causeSchema      = "schema"       // the payload fails the topic's declared schema
+	causePayloadType = "payload_type" // a typed subscriber of another type (an entry without a known payload type)
+)
+
 // json is the payload's JSON form, encoded and validated against the declared
-// schema once per publish, on the first raw subscriber's goroutine.
-func (ev *event) json() (json.RawMessage, error) {
+// schema once per publish, on the first raw subscriber's goroutine; when it
+// is unavailable, cause says why.
+func (ev *event) json() (raw json.RawMessage, cause string) {
 	ev.rawOnce.Do(func() {
 		b, err := json.Marshal(ev.payload)
 		if err != nil {
-			ev.rawErr = err
+			ev.rawCause = causeMarshal
 			return
 		}
 		if rs := ev.topic.resolved; rs != nil {
 			var inst any
-			if err := json.Unmarshal(b, &inst); err != nil {
-				ev.rawErr = err
-				return
-			}
-			if err := rs.Validate(inst); err != nil {
-				ev.rawErr = fmt.Errorf("events: %s payload fails its schema: %w", ev.topic.spec.Name, err)
+			if json.Unmarshal(b, &inst) != nil || rs.Validate(inst) != nil {
+				ev.rawCause = causeSchema
 				return
 			}
 		}
 		ev.raw = b
 	})
-	return ev.raw, ev.rawErr
+	return ev.raw, ev.rawCause
 }
 
 func (b *Bus) publish(ctx context.Context, owner, name string, typ reflect.Type, key string, payload any) {

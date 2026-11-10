@@ -66,8 +66,8 @@ func OnRaw(topic, name string, h RawHandler, opts ...SubOption) Subscription {
 		return s
 	}
 	s.deliver = func(ctx context.Context, ev *event) string {
-		payload, err := ev.json()
-		if err != nil {
+		payload, cause := ev.json()
+		if cause != "" {
 			return reasonEncode
 		}
 		h(ctx, RawEnvelope{ID: ev.id, Topic: ev.topic.spec.Name, Key: ev.key, Actor: ev.actor,
