@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/runs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8b2c5f-7a14-4d96-a0c3-5b9e1f6d2a47
 // last-edited: 2026-11-10
 
@@ -25,10 +25,14 @@ import (
 
 var systemActor = database.Actor{UserID: "", AuthMethod: "system"}
 
-// runKeys are the primary keys of one run: its record, its progress half and
-// its opv2 mirror row.
+// runKeys are the primary keys of one run: its record and its progress half.
+// The run's opv2 mirror row, written in the same batch by the tag's
+// InsertRunV3/TransitionRunV3, is not listed: main's
+// TestOpsV2RowWritesGoThroughStageOpRow keeps every mention of that row key
+// in the module reviewed, and this program never touches the row itself (the
+// manifest's stage2.keys says so).
 func runKeys(id string) []string {
-	return []string{"opv3:run:" + id, "opv3:prog:" + id, "opv2:op:" + id}
+	return []string{"opv3:run:" + id, "opv3:prog:" + id}
 }
 
 // newRun inserts a queued run of defID through InsertRunV3.
