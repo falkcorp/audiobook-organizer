@@ -181,6 +181,27 @@ func TestSeed_NoNonConfiningScopeOnConfinedRole(t *testing.T) {
 			specs: []rbac.PermissionSpec{{Name: "books:fingerprint.worker", Confining: true}, {Name: "books:arr.request", Confining: true}},
 			seeds: []rbac.RoleSeed{{Name: "fp-worker", Permissions: perms("books:fingerprint.worker", "books:arr.*")}},
 		},
+		// Review MAJOR-C: a seed confined only through a wildcard names no
+		// concrete Confining scope, and the wildcard would reach whatever
+		// non-Confining scope a later release declares under it.
+		"wildcard-only worker seed": {
+			id: "books", imported: []rbac.RoleName{"fp-worker"},
+			specs: []rbac.PermissionSpec{{Name: "books:fingerprint.worker", Confining: true}, {Name: "books:fingerprint.relay", Confining: true}},
+			seeds: []rbac.RoleSeed{{Name: "fp-worker", Permissions: perms("books:fingerprint.*")}},
+		},
+		"wildcard-only worker seed with a default grant": {
+			id: "books", imported: []rbac.RoleName{"fp-worker"},
+			specs: []rbac.PermissionSpec{
+				{Name: "books:fingerprint.worker", Confining: true},
+				{Name: "books:view", DefaultGrants: []rbac.RoleName{"fp-worker"}},
+			},
+			seeds: []rbac.RoleSeed{{Name: "fp-worker", Permissions: perms("books:fingerprint.*")}},
+		},
+		"namespace wildcard over Confining scopes": {
+			id: "books", imported: []rbac.RoleName{"fp-worker"},
+			specs: []rbac.PermissionSpec{{Name: "books:fingerprint.worker", Confining: true}},
+			seeds: []rbac.RoleSeed{{Name: "fp-worker", Permissions: perms("books:*")}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := build(t, newEnv(t), setup{})
