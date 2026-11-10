@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.0.2
+# version: 1.0.3
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -391,8 +391,11 @@ def record_abs(rec: Recorder, client: Any) -> None:
         raise w.CorpusError(f"ABS login on the copy failed: {r.status}")
     client.bearers["robin"] = token
     auth = "abs:robin"
+    progressed: set[str] = set()
     for path in ("/api/me", "/api/me/progress", "/api/me/sessions", "/api/libraries"):
-        rec.send(a, "GET", path, auth=auth)
+        rr = rec.send(a, "GET", path, auth=auth)
+        if path == "/api/me" and isinstance(rr.body, dict):
+            progressed = {str(mp.get("libraryItemId")) for mp in rr.body.get("mediaProgress") or []}
     libs = client.request("GET", "/api/libraries", auth=auth).body.get("libraries", [])
     item_id = None
     for lib in libs:
@@ -408,12 +411,7 @@ def record_abs(rec: Recorder, client: Any) -> None:
         ):
             rr = rec.send(a, "GET", f"/api/libraries/{lid}/{suffix}", auth=auth)
             if suffix.startswith("items") and item_id is None and rr.status == 200:
-                for res in rr.body.get("results", []):
-                    if (res.get("media") or {}).get("numAudioFiles", 0) > 1:
-                        item_id = res["id"]
-                        break
-                if item_id is None and rr.body.get("results"):
-                    item_id = rr.body["results"][0]["id"]
+                item_id = pick_abs_item(rr.body.get("results", []), progressed)
     if item_id is None:
         raise w.CorpusError("the ABS library on the copy has no item")
     rec.send(a, "GET", f"/api/items/{item_id}?expanded=1&include=progress", auth=auth)
@@ -457,6 +455,29 @@ def wait_for_boot_runs(client: Any, auth: str, timeout: float = 300.0) -> list[d
             raise w.CorpusError(f"boot-time runs did not settle: {active}")
         prev = snap
         time.sleep(2.0)
+
+
+def pick_abs_item(results: list[dict[str, Any]], progressed: set[str]) -> str | None:
+    """The item the per-item requests read: one the user has progress on.
+
+    The corpus holds two multi-file items titled Knightfall (the import root's
+    and root_dir's copy); the writer stored progress and a bookmark on one of
+    them. Preferring an item in the user's mediaProgress makes the progress and
+    bookmark requests read stored rows instead of answering 404.
+    """
+    for want in (
+        lambda res: (
+            str(res.get("id")) in progressed
+            and (res.get("media") or {}).get("numAudioFiles", 0) > 1
+        ),
+        lambda res: str(res.get("id")) in progressed,
+        lambda res: (res.get("media") or {}).get("numAudioFiles", 0) > 1,
+        lambda res: True,
+    ):
+        for res in results:
+            if want(res):
+                return str(res["id"])
+    return None
 
 
 def mint_answer_key(ctx: Any) -> None:
