@@ -142,25 +142,37 @@ type seedDelta struct {
 }
 
 // confinedForMerge reports whether the merge treats a stored seed role as
-// confined: its effective set is Confined (05-rbac §4.10), or it is empty
-// and holds a pending scope that no flag restricts, which only the
-// confinement rule below can have held. The second case is the role a
-// release emptied by withdrawing its last Confining scope while its new
-// scopes wait: without it, the next boot would see an empty, unconfined role
-// and apply them, and the merge would be neither safe nor idempotent.
-func confinedForMerge(cat *Catalog, cur *Role, old []Permission) bool {
-	if Confined(cat, old) {
-		return true
-	}
-	if len(old) > 0 {
+// confined. It fails closed: the role is confined unless its effective set
+// old shows it is not, by granting core:admin or by holding a pattern that
+// reaches a declared non-Confining scope. An empty role, or one that holds
+// only Confining or undeclared scopes, is confined here.
+//
+// This is deliberately wider than Confined (05-rbac §4.10), which authz
+// uses and which needs at least one concrete Confining scope: a credential
+// with nothing is not confined, but a stored worker role with nothing may be
+// one a release emptied (withdrawing its worker scope while the new seed
+// waits, or seeding it empty), or one whose worker scope a release stopped
+// declaring. Judged by Confined, the next release could refill such a role
+// with a plain scope and every holder would leave confinement with no
+// administrator accepting it. Do not replace this with Confined.
+//
+// The price is that a module role a release empties, even one that was
+// never a worker role, takes an administrator's AcceptSeed before a plain
+// scope lands in it again. Within one release the answer can only go from
+// false to true across boots (a confined role's next set is a subset of its
+// old one), so the merge stays idempotent.
+func confinedForMerge(cat *Catalog, old []Permission) bool {
+	if GrantsAdmin(old) {
 		return false
 	}
-	for _, p := range cur.PendingSeed {
-		if !flagRestricted(cat, p) {
-			return true
+	for _, p := range old {
+		for _, c := range cat.Expand(p) {
+			if spec, _ := cat.Lookup(c); !spec.Confining {
+				return false
+			}
 		}
 	}
-	return false
+	return true
 }
 
 // flagRestricted reports whether p is or reaches a Sensitive, AuthRequired or
@@ -220,7 +232,7 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 	if def.locked {
 		next = slices.Clone(def.perms)
 	} else {
-		confined := confinedForMerge(cat, cur, old)
+		confined := confinedForMerge(cat, old)
 		for _, p := range minus(def.perms, old) {
 			if restrictedAddition(cat, confined, p) {
 				pending = append(pending, p)
