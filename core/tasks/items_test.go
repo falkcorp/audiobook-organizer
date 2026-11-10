@@ -1,13 +1,16 @@
 // file: core/tasks/items_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
 package tasks_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -725,8 +728,9 @@ func TestForEach_NestedCPUInheritsSlot(t *testing.T) {
 }
 
 // TestRunItems_PanicBecomesItemError: a panic in fn, Label, Key or
-// ExclusiveRefs fails that item with the panic value and its stack; the
-// loop and its other items carry on.
+// ExclusiveRefs fails that item with a one-line *PanicError that carries the
+// stack, which is logged once through the run's logger; the loop and its
+// other items carry on.
 func TestRunItems_PanicBecomesItemError(t *testing.T) {
 	errGas := errors.New("laughing gas")
 	boom := func(i int) bool { return i == 1 }
@@ -765,16 +769,148 @@ func TestRunItems_PanicBecomesItemError(t *testing.T) {
 				fn = func(*tasks.ItemRC, int) error { return nil }
 			}
 			c.opts.OnError = tasks.Collect
-			res, err := tasks.RunItems(taskstest.NewFakeRun(t.Context(), caseKind).RC(), tasks.Sequential("in order"),
-				[]int{0, 1, 2}, fn, c.opts)
+			logs := &syncBuffer{}
+			h := logHost{FakeRun: taskstest.NewFakeRun(t.Context(), caseKind), log: slog.New(slog.NewTextHandler(logs, nil))}
+			res, err := tasks.RunItems(tasks.NewRC(h), tasks.Sequential("in order"), []int{0, 1, 2}, fn, c.opts)
 			ie := asItemsError(t, err)
-			if !errors.Is(err, errGas) || ie.FirstIndex != 1 || !strings.Contains(ie.First.Error(), name+" panicked") ||
-				!strings.Contains(ie.First.Error(), "goroutine ") {
-				t.Fatalf("ItemsError = %v (index %d), want the %s panic with its stack at item 1", ie.First, ie.FirstIndex, name)
+			var pe *tasks.PanicError
+			if !errors.Is(err, errGas) || ie.FirstIndex != 1 || !errors.As(ie.First, &pe) || len(pe.Stack) == 0 {
+				t.Fatalf("ItemsError = %v (index %d), want the %s panic as a *PanicError with a stack at item 1", ie.First, ie.FirstIndex, name)
+			}
+			if msg := ie.First.Error(); msg != "tasks: "+name+": panic: laughing gas" || strings.Contains(err.Error(), "\n") {
+				t.Fatalf("error text %q is not one line naming the panic", msg)
+			}
+			if out := logs.String(); strings.Count(out, "level=ERROR") != 1 || !strings.Contains(out, "goroutine ") {
+				t.Fatalf("the stack was not logged once at Error level: %q", out)
 			}
 			if res.Failed != 1 || res.Done != 2 {
 				t.Fatalf("result = %+v, want Failed 1, Done 2", res)
 			}
 		})
 	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent log writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+// logHost is a FakeRun whose run logger writes where the test can read it.
+type logHost struct {
+	*taskstest.FakeRun
+	log *slog.Logger
+}
+
+func (h logHost) Log() *slog.Logger { return h.log }
+
+func TestPanicError_OneLineAndUnwrap(t *testing.T) {
+	errGas := errors.New("laughing gas")
+	e := &tasks.PanicError{Value: "first line\nsecond line", Stack: []byte("goroutine 1")}
+	if e.Error() != "panic: first line second line" || e.Unwrap() != nil {
+		t.Fatalf("Error() = %q, Unwrap() = %v", e.Error(), e.Unwrap())
+	}
+	if w := (&tasks.PanicError{Value: errGas}); !errors.Is(w, errGas) {
+		t.Fatal("a panic(err) does not unwrap to err")
+	}
+}
+
+// TestRunItems_CauseWhenCanceledAllInFlight: a shutdown while every item is
+// in flight (none left to start) still reports the run's cause, because the
+// items failed after the run's context ended.
+func TestRunItems_CauseWhenCanceledAllInFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		run := taskstest.NewFakeRun(ctx, caseKind)
+		var res tasks.ItemsResult
+		var err error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			res, err = tasks.RunItems(run.RC(), tasks.Fixed(3, "three detectives"), make([]int, 3), func(ic *tasks.ItemRC, _ int) error {
+				<-ic.Context().Done()
+				return ic.Context().Err()
+			})
+		}()
+		synctest.Wait()
+		cancel(tasks.ErrShutdown)
+		<-done
+		ie := asItemsError(t, err)
+		if ie.Cause != tasks.ErrShutdown || !errors.Is(err, tasks.ErrShutdown) || res.Failed != 3 || res.NotStarted != 0 {
+			t.Fatalf("result %+v, ItemsError %+v; want Failed 3 and Cause ErrShutdown", res, ie)
+		}
+	})
+}
+
+// TestRunItems_OwnFailureBeforeCancelHasNoCause: an item that failed on its
+// own before the run was canceled does not pick up the run's cause.
+func TestRunItems_OwnFailureBeforeCancelHasNoCause(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	run := taskstest.NewFakeRun(ctx, caseKind)
+	errClue := errors.New("clue missing")
+	res, err := tasks.RunItems(run.RC(), tasks.Sequential("in order"), []int{0, 1}, func(_ *tasks.ItemRC, i int) error {
+		if i == 0 {
+			return errClue
+		}
+		cancel(tasks.ErrShutdown)
+		return nil
+	}, tasks.ItemsOptions[int]{OnError: tasks.Collect})
+	if ie := asItemsError(t, err); ie.Cause != nil || ie.First != errClue || res.Done != 1 || res.Failed != 1 {
+		t.Fatalf("result %+v, ItemsError %+v; want the item's own error and no Cause", res, ie)
+	}
+}
+
+// TestNestedRefLocks_SkipHeldRefs: an item holding a ref can run a nested
+// loop and call ic.LockRefs on that ref without waiting on itself; the
+// nested loop's items still exclude each other on it; an overlapping ref the
+// item does not cover is refused, not waited for.
+func TestNestedRefLocks_SkipHeldRefs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+		defer cancel()
+		run := taskstest.NewFakeRun(ctx, caseKind)
+		cave := tasks.ResID("gotham", "caves", "batcave")
+		lab := tasks.ResID("gotham", "labs", "lab-1")
+		var inFlight, peak atomic.Int64
+		res, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
+			release, err := ic.LockRefs(cave)
+			if err != nil {
+				return err
+			}
+			release()
+			if _, err := ic.LockRefs(tasks.Res("gotham", "caves")); !errors.Is(err, tasks.ErrHeldOverlap) {
+				return fmt.Errorf("a whole-kind lock over a held ID = %v, want ErrHeldOverlap", err)
+			}
+			_, err = tasks.ForEach(ic.Context(), tasks.Fixed(4, "four detectives"), make([]int, 4), func(context.Context, int) error {
+				n := inFlight.Add(1)
+				for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+				}
+				time.Sleep(time.Millisecond)
+				inFlight.Add(-1)
+				return nil
+			}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave, lab} }})
+			return err
+		}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
+		if err != nil || res.Done != 1 {
+			t.Fatalf("result %+v err %v (a nested lock waited on its own item?)", res, err)
+		}
+		if peak.Load() != 1 {
+			t.Fatalf("nested items sharing a held ref ran %d at once, want 1", peak.Load())
+		}
+		if _, err := tasks.LockRefs(run.RC().Context(), cave, lab); err != nil {
+			t.Fatalf("a ref stayed locked after the run: %v", err)
+		}
+	})
 }
