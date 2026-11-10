@@ -445,7 +445,7 @@
               "root_dir": "/tmp/r2corpus/stage1/library",
               "scan_on_startup": false,
               "scan_progress_every": 0,
-              "scan_standdown_grace_seconds": 45,
+              "scan_standdown_grace_seconds": 600,
               "scheduled": {
                 "acoustid_backfill": {
                   "enabled": false,
