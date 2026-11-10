@@ -1,5 +1,5 @@
 // file: core/internal/authz/authz_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 25ae54fc-a0cc-4987-aa9e-3573a03acd0a
 // last-edited: 2026-11-10
 
@@ -310,6 +310,39 @@ func TestSensitive_EvaluatedBeforeAdmin(t *testing.T) {
 	}
 	if !Compile(session(true, "core:*"), cat).Has("core:*") {
 		t.Error("interactive core:* session does not hold core:*")
+	}
+
+	// Confinement does not bypass the rule: a scope that is both Sensitive
+	// and Confining is refused to a confined non-interactive principal, and
+	// held by the same principal on an interactive credential.
+	both, err := rbac.NewCatalog(append(rbac.CoreScopes(),
+		rbac.PermissionSpec{Name: "gotham:batcave", Sensitive: true, Confining: true},
+		rbac.PermissionSpec{Name: "gotham:patrol", Confining: true},
+	)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]rbac.CompileInput{
+		"key":                     key([]string{"gotham:batcave", "gotham:patrol"}, "gotham:batcave", "gotham:patrol"),
+		"non-interactive session": session(false, "gotham:batcave", "gotham:patrol"),
+	} {
+		c := Compile(in, both)
+		if !c.Confined() {
+			t.Fatalf("%s: not Confined(); the cell would not reach the confined path", name)
+		}
+		for _, r := range []rbac.Requirement{
+			rbac.Need("gotham:batcave"), rbac.AllOf("gotham:patrol", "gotham:batcave"), rbac.AnyOf("gotham:batcave"),
+		} {
+			if c.Satisfies(r) {
+				t.Errorf("%s: confined non-interactive principal satisfies Sensitive %s", name, r)
+			}
+		}
+		if !c.Satisfies(rbac.Need("gotham:patrol")) {
+			t.Errorf("%s: lost its plain Confining scope", name)
+		}
+	}
+	if !Compile(session(true, "gotham:batcave"), both).Satisfies(rbac.Need("gotham:batcave")) {
+		t.Error("interactive confined session refused its Sensitive Confining scope")
 	}
 }
 
