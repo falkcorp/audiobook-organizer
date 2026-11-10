@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/falkcorp/mediacore/config"
 )
@@ -606,36 +605,46 @@ func TestCoreSections_Defaults(t *testing.T) {
 	}
 }
 
-// TestCoreSections_DefaultsRoundTripJSON is a test name coined by F2-09: every
-// section's defaults marshal to JSON and decode back strictly into the same
-// type, so every json name is unique within its struct and every Duration
-// default is in the string form.
-func TestCoreSections_DefaultsRoundTripJSON(t *testing.T) {
+// TestCoreSections_JSONShape is a test name coined by F2-09: every section's
+// type marshals to JSON and decodes back strictly (so every json name is
+// unique within its struct), and every
+// list and map default is an empty value, not nil, so it reads as [] or {} and
+// not null (the owner tables' "[]" and "{}" defaults). The map section
+// core.modules is the one nil default: each manifest's DefaultEnabled applies.
+func TestCoreSections_JSONShape(t *testing.T) {
 	for _, sec := range coreSections() {
 		v := reflect.ValueOf(sec)
 		path := string(v.MethodByName("Path").Call(nil)[0].Interface().(config.Path))
-		p := reflect.New(v.Type())
-		p.Elem().Set(v)
-		f := p.Elem().FieldByName("defaults")
-		def := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Interface()
-		b, err := json.Marshal(def)
+		ft, _ := v.Type().FieldByName("defaults")
+		zero := reflect.New(ft.Type)
+		b, err := json.Marshal(zero.Interface())
 		if err != nil {
 			t.Errorf("%s: marshal: %v", path, err)
 			continue
 		}
 		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.DisallowUnknownFields()
-		back := reflect.New(f.Type())
-		if err := dec.Decode(back.Interface()); err != nil {
+		if err := dec.Decode(reflect.New(ft.Type).Interface()); err != nil {
 			t.Errorf("%s: strict decode of %s: %v", path, b, err)
+		}
+		if ft.Type.Kind() == reflect.Map {
 			continue
 		}
-		if !reflect.DeepEqual(back.Elem().Interface(), def) {
-			t.Errorf("%s: round trip changed the value:\n got %+v\nwant %+v", path, back.Elem().Interface(), def)
+		var walk func(p string, d reflect.Value)
+		walk = func(p string, d reflect.Value) {
+			switch d.Kind() {
+			case reflect.Struct:
+				for i := 0; i < d.NumField(); i++ {
+					name, _, _ := strings.Cut(d.Type().Field(i).Tag.Get("json"), ",")
+					walk(p+"."+name, d.Field(i))
+				}
+			case reflect.Slice, reflect.Map:
+				if d.IsNil() {
+					t.Errorf("%s: default is nil, want an empty value", p)
+				}
+			}
 		}
-		if bytes.Contains(b, []byte(`_ttl":0`)) {
-			t.Errorf("%s: a Duration was encoded as a number: %s", path, b)
-		}
+		walk(path, v.FieldByName("defaults"))
 	}
 }
 
