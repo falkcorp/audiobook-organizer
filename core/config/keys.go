@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -325,7 +325,20 @@ func secretValue(p Path) json.RawMessage {
 // canonical checks raw against k's schema and type and returns its canonical
 // JSON (decoded into the key's Go type and encoded again), so two spellings of
 // one value compare equal.
+//
+// A sensitive key's error never carries the value: the schema validator echoes
+// the rejected value, and these errors reach logs and the quarantine report
+// (05-config §1.3.1: sensitive values are redacted in logs).
 func (k *keyInfo) canonical(p Path, raw json.RawMessage) (json.RawMessage, error) {
+	out, err := k.canonicalOf(p, raw)
+	if err != nil && k.sensitive {
+		return nil, &FieldError{Path: p, Err: errors.New("the value fails the key's schema or type (detail redacted: sensitive key)")}
+	}
+	return out, err
+}
+
+// canonicalOf is canonical without the redaction.
+func (k *keyInfo) canonicalOf(p Path, raw json.RawMessage) (json.RawMessage, error) {
 	if k.secret {
 		return secretValue(p), nil
 	}
