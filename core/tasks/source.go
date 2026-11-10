@@ -1,5 +1,5 @@
 // file: core/tasks/source.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 215ba8a1-85e2-40f5-bb7f-72017190f611
 // last-edited: 2026-11-10
 
@@ -18,7 +18,7 @@ import (
 )
 
 // Source yields a Batch's items or a Fixer's candidates. Order is a promise
-// the runner relies on for resume (v3 meaning, pkg/ops/batch.go:197-259).
+// the runner relies on for resume (v3 meaning, the v3 ops package's batch.go:197-259).
 type Source[T any] struct {
 	// Items is the full item list, or nil when Pages is used.
 	Items []T
@@ -139,7 +139,7 @@ const (
 )
 
 // Row is what a person approves in a Fixer plan (v3 meaning,
-// pkg/ops/fixer.go:20-80), with Subjects as entity references.
+// the v3 ops package's fixer.go:20-80), with Subjects as entity references.
 type Row struct {
 	ID string `json:"id"`
 	// Subjects names the entities the row is about. At apply they act as

@@ -1,5 +1,5 @@
 // file: core/tasks/writer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 19b8f153-7be6-4fe6-970d-3ad665c17db8
 // last-edited: 2026-11-10
 
@@ -14,7 +14,7 @@ import (
 
 // Writer is the run's only write path. Modules wrap it in typed writers
 // (books: ModifyBook, ModifyBookFile, RepointBookFile, ModifyBookAuthors —
-// today's pkg/ops/writer.go:46-92 methods: their contract interface moves to
+// the v3 ops package's writer.go:46-92 methods: their contract interface moves to
 // internal/books/contract and their implementation to internal/books/writer,
 // the opswriter rename; 04 §2.4, §8.6; MOD6-12). Core names no app type (A3).
 type Writer interface {
@@ -47,7 +47,7 @@ type Change struct {
 type ChangeSink interface {
 	Record(ctx context.Context, run RunID, changes []Change) error
 	// Stands reports whether every change a marker names is still in effect
-	// (the v3 RowApplied evidence rule, pkg/ops/writer.go:75-91).
+	// (the v3 RowApplied evidence rule, the v3 ops package's writer.go:75-91).
 	Stands(ctx context.Context, run RunID, rowID string) (bool, error)
 }
 

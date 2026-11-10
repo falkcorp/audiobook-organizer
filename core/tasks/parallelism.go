@@ -1,5 +1,5 @@
 // file: core/tasks/parallelism.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d0dae22a-d03d-45de-8385-0c4532e7fd77
 // last-edited: 2026-11-10
 
@@ -57,7 +57,7 @@ func FromParam(field string, def, max int) Parallelism {
 	return Parallelism{kind: parParam, field: field, n: def, max: max}
 }
 
-// MaxFixed caps Fixed and FromParam (v3 MaxNetworkWorkers, pkg/ops/batch.go:132-134).
+// MaxFixed caps Fixed and FromParam (v3 MaxNetworkWorkers, the v3 ops package's batch.go:132-134).
 const MaxFixed = 64
 
 // ErrNoParallelism is the single sentinel for an undeclared parallelism (03 R7's name).
