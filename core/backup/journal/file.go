@@ -47,9 +47,22 @@ func StorageSpec() storage.Spec {
 }
 
 // ErrCorrupt reports a journal file whose complete lines do not decode or do
-// not number 0, 1, 2, ... without a gap. F4-11's chain verification replaces
-// this check with the MAC chain.
+// not number 0, 1, 2, ... without a gap, or a file that ends below the
+// store's committed c/backup/journal_head (deleted, emptied, truncated or
+// replaced). §5B.5's failure table treats both as one condition, "chain
+// broken or truncated below the live store's head": the app stays open,
+// coverage is closed, and the boot reports revocation_journal_broken. The
+// journal is never renumbered from the head: every line's seq is the
+// previous line's + 1 (§5B.3.6 row "Format and integrity"), so numbering
+// on would forge a chain. Deciding what the boot does with such a file
+// (rename it aside, start a new journal with a gap line) is F4-11's P4d
+// step 2. F4-11's chain verification also replaces the seq check with the
+// MAC chain.
 var ErrCorrupt = errors.New("journal: the revocation journal is corrupt")
+
+// ErrLocked reports a journal another open File holds (flock(2) LOCK_EX on
+// the file, in this process or another): two writers would reuse seqs.
+var ErrLocked = errors.New("journal: another writer holds the revocation journal")
 
 // ErrClosed is returned by Append after Close.
 var ErrClosed = errors.New("journal: the revocation journal is closed")
@@ -70,7 +83,9 @@ type FileOptions struct {
 
 // File is the file-backed RevocationJournal: one JSON line per revocation,
 // fsynced before Append returns, with the store's head staged into the
-// caller's batch. Safe for concurrent use; appends are serialised.
+// caller's batch. Safe for concurrent use; appends are serialised by one
+// mutex (§5B.6), and one File per journal file at a time across processes
+// (flock(2), ErrLocked), so no two writers number the same file.
 //
 // The line encoding (encodeLine, encodeHeader) and the file open (openJournal)
 // each live in one place, and every write goes through writeLine, so F4-11's
@@ -98,16 +113,22 @@ type lineFile interface {
 }
 
 // OpenFile opens the journal at o.Path, creating it (mode 0600, header line
-// seq 0) when absent or empty. An incomplete last line, left by a crash
-// inside a write that never returned and so never let its revocation commit,
-// is cut off; a complete line that does not decode, or a seq out of order,
-// is ErrCorrupt.
-func OpenFile(o FileOptions) (*File, error) {
+// seq 0) when absent or empty, and holds it exclusively (ErrLocked while
+// another File holds it) until Close. An incomplete last line, left by a
+// crash inside a write that never returned and so never let its revocation
+// commit, is cut off; a complete line that does not decode, a seq out of
+// order, or a last seq below the store's committed journal_head is
+// ErrCorrupt, and nothing is written.
+func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if o.Path == "" {
 		return nil, errors.New("journal: OpenFile without a path")
 	}
 	if o.Keyspace.Owner() != Owner {
 		return nil, fmt.Errorf("journal: OpenFile needs the %s keyspace, got %q", Owner, o.Keyspace.Owner())
+	}
+	head, err := readHead(o.Keyspace.Get(ctx, []byte(headKey)))
+	if err != nil {
+		return nil, fmt.Errorf("journal: read %s: %w", headKey, err)
 	}
 	f, data, err := openJournal(o.Path)
 	if err != nil {
@@ -117,6 +138,10 @@ func OpenFile(o FileOptions) (*File, error) {
 	valid, last, lines, err := scan(data)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("%s: %w", o.Path, err), f.Close())
+	}
+	if head.Seq > last {
+		return nil, errors.Join(fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",
+			ErrCorrupt, o.Path, last, headKey, head.Seq), f.Close())
 	}
 	if valid < int64(len(data)) {
 		if err := errors.Join(f.Truncate(valid), f.Sync()); err != nil {
@@ -136,11 +161,15 @@ func OpenFile(o FileOptions) (*File, error) {
 }
 
 // openJournal is the one place the journal file is opened: read-write,
-// append-only writes, created 0600, and its current content.
+// append-only writes, created 0600, locked exclusively (lockJournal) before
+// anything is read, and its current content.
 func openJournal(path string) (*os.File, []byte, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, nil, fmt.Errorf("journal: open %s: %w", path, err)
+	}
+	if err := lockJournal(f); err != nil {
+		return nil, nil, errors.Join(err, f.Close())
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
@@ -278,12 +307,16 @@ type headRecord struct {
 	MAC string `json:"mac,omitempty"`
 }
 
-// Append writes r, numbered with the next seq, as one fsynced line before the
-// caller commits, then stages c/backup/journal_head = max(head, seq) into b,
-// reading the head with GetForUpdate. On any error the line is cut back off
-// the file and nothing is staged (an Expect the head read recorded is the one
-// exception, when the read itself failed and poisoned b); the caller commits
-// its revocation with Gap(b, at).
+// Append reads c/backup/journal_head with GetForUpdate, writes r, numbered
+// with the next seq, as one fsynced line before the caller commits, then
+// stages c/backup/journal_head = max(head, seq) into b. A head at or past
+// the next seq means the file is behind the store (another writer, or a file
+// replaced under this one): nothing is written, the journal is broken
+// (ErrCorrupt) and every later Append fails, so no seq at or below a head
+// consumers have applied is ever assigned. On any error nothing is staged
+// and the file holds no new line (the Expect the head read recorded in b is
+// the one trace: it only makes a concurrent head change retry the batch);
+// the caller commits its revocation with Gap(b, at).
 func (j *File) Append(ctx context.Context, b *storage.Batch, r Revocation) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -307,36 +340,47 @@ func (j *File) Append(ctx context.Context, b *storage.Batch, r Revocation) error
 	if err != nil {
 		return err
 	}
+	if err := bind(b, j.ks); err != nil {
+		return err
+	}
+	head, err := readHead(b.GetForUpdate(ctx, j.ks, []byte(headKey)))
+	if err != nil {
+		return fmt.Errorf("journal: read %s: %w", headKey, err)
+	}
+	if head.Seq >= r.Seq {
+		j.broken = fmt.Errorf("%w: the store's %s is %d but %s ends at seq %d: another writer, or the file was replaced",
+			ErrCorrupt, headKey, head.Seq, j.path, j.last)
+		return j.broken
+	}
 	prev := j.size
 	if err := j.writeLine(line); err != nil {
 		return err
 	}
-	if err := j.stageHead(ctx, b, r.Seq); err != nil {
+	if err := j.setHead(b, r.Seq); err != nil {
 		return errors.Join(fmt.Errorf("journal: stage the head for seq %d: %w", r.Seq, err), j.rollback(prev))
 	}
 	j.last = r.Seq
 	return nil
 }
 
-// stageHead binds the c/backup/ handle to b and stages max(head, seq).
-func (j *File) stageHead(ctx context.Context, b *storage.Batch, seq uint64) error {
-	if err := bind(b, j.ks); err != nil {
-		return err
-	}
-	raw, err := b.GetForUpdate(ctx, j.ks, []byte(headKey))
-	var cur headRecord
+// readHead decodes a journal_head read; absent is seq 0.
+func readHead(raw []byte, err error) (headRecord, error) {
+	var h headRecord
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
+		return h, nil
 	case err != nil:
-		return err
-	default:
-		if err := json.Unmarshal(raw, &cur); err != nil {
-			return fmt.Errorf("decode %s: %w", headKey, err)
-		}
+		return h, err
 	}
-	if seq <= cur.Seq {
-		return nil
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return h, fmt.Errorf("decode %s: %w", headKey, err)
 	}
+	return h, nil
+}
+
+// setHead stages journal_head = seq into b, which Append checked is above
+// the head it read, so the staged value is max(head, seq).
+func (j *File) setHead(b *storage.Batch, seq uint64) error {
 	v, err := json.Marshal(headRecord{Seq: seq})
 	if err != nil {
 		return err

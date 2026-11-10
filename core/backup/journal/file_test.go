@@ -68,7 +68,7 @@ func (fx *fixture) open(t *testing.T) *File {
 	if err := os.MkdirAll(filepath.Dir(fx.path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	j, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks, Source: "batcomputer-1"})
+	j, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks, Source: "batcomputer-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,23 +186,13 @@ func TestJournal_AppendBeforeCommitHeadMonotone(t *testing.T) {
 		t.Errorf("line 3 = %+v", r)
 	}
 
-	// A head already past a line's seq is kept (max), never lowered.
-	b := fx.ks.NewBatch()
-	_, err = b.GetForUpdate(ctx, fx.ks, []byte(headKey))
-	must(t, err)
-	must(t, b.Set([]byte(headKey), []byte(`{"seq":99}`)))
-	must(t, b.Commit(ctx, storage.Sync))
-	must(t, fx.revoke(t, j, "riddler").Commit(ctx, storage.Sync))
-	if h := fx.head(t); h != 99 {
-		t.Errorf("head = %d, want 99 kept", h)
-	}
-
-	// Reopening continues the numbering.
+	// Reopening continues the numbering. (A head past the file's end is
+	// refused, never kept and appended under: TestAppend_NeverAtOrBelowHead.)
 	must(t, j.Close())
 	j2 := fx.open(t)
 	must(t, fx.revoke(t, j2, "bane").Commit(ctx, storage.Sync))
-	if got := fx.lines(t); !strings.Contains(got[len(got)-1], `"seq":5`) {
-		t.Errorf("after reopen the last line is %s, want seq 5", got[len(got)-1])
+	if got := fx.lines(t); !strings.Contains(got[len(got)-1], `"seq":4`) {
+		t.Errorf("after reopen the last line is %s, want seq 4", got[len(got)-1])
 	}
 	if err := j.Append(ctx, fx.auth.NewBatch(), Revocation{Kind: UserDeleted}); !errors.Is(err, ErrClosed) {
 		t.Errorf("Append after Close: err = %v, want ErrClosed", err)
@@ -255,7 +245,9 @@ func TestJournal_AppendFailureStagesNothing(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Errorf("the failed append left %q in the file, want it unchanged", after[len(before):])
 	}
-	if b.Count() != 1 || !slices.Equal(b.Participants(), []storage.Owner{authOwner}) {
+	// The head read bound c/backup/ to b before the write; nothing is staged
+	// there (the head stays absent after the commit, below).
+	if b.Count() != 1 || !slices.Equal(b.Participants(), []storage.Owner{authOwner, Owner}) {
 		t.Errorf("the failed append staged into the batch: count %d, participants %v", b.Count(), b.Participants())
 	}
 
@@ -330,22 +322,24 @@ func TestOpenFile_HeaderAndRecovery(t *testing.T) {
 	must(t, j2.Close())
 
 	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\n{\"seq\":2}\n"), 0o600))
-	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
+	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
 		t.Errorf("seq gap: err = %v, want ErrCorrupt", err)
 	}
 	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\nnot json\n"), 0o600))
-	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
+	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
 		t.Errorf("garbage line: err = %v, want ErrCorrupt", err)
 	}
-	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.auth}); err == nil {
+	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.auth}); err == nil {
 		t.Error("OpenFile accepted another owner's keyspace")
 	}
-	if _, err := OpenFile(FileOptions{Keyspace: fx.ks}); err == nil {
+	if _, err := OpenFile(context.Background(), FileOptions{Keyspace: fx.ks}); err == nil {
 		t.Error("OpenFile accepted an empty path")
 	}
+	// An empty file for a store with no head gets the header (fx's store
+	// has head 2 by now, so a fresh store).
 	empty := filepath.Join(t.TempDir(), "empty.journal")
 	must(t, os.WriteFile(empty, nil, 0o600))
-	j3, err := OpenFile(FileOptions{Path: empty, Keyspace: fx.ks})
+	j3, err := OpenFile(context.Background(), FileOptions{Path: empty, Keyspace: newFixture(t).ks})
 	must(t, err)
 	must(t, j3.Close())
 	if b, _ := os.ReadFile(empty); string(b) != "{\"seq\":0}\n" {
@@ -402,5 +396,133 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestOpenFile_RefusesFileBehindHead: a journal file that ends below the
+// store's committed journal_head (emptied, truncated, deleted and recreated)
+// is ErrCorrupt and is not renumbered from the head or extended: no seq at or
+// below what consumers already applied is ever assigned again (§5B.3.6
+// "Format and integrity"; §5B.5 "chain broken or truncated below the live
+// store's head").
+func TestOpenFile_RefusesFileBehindHead(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	j := fx.open(t)
+	for _, u := range []string{"joker", "penguin", "riddler"} {
+		must(t, fx.revoke(t, j, u).Commit(ctx, storage.Sync))
+	}
+	must(t, j.Close())
+	if h := fx.head(t); h != 3 {
+		t.Fatalf("head = %d, want 3", h)
+	}
+	full, err := os.ReadFile(fx.path)
+	must(t, err)
+	header := full[:bytes.IndexByte(full, '\n')+1]
+	upToTwo := full[:bytes.Index(full, []byte(`{"seq":3`))]
+
+	for name, content := range map[string][]byte{
+		"empty":            nil,
+		"header only":      header,
+		"truncated to two": upToTwo,
+		"deleted":          nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "deleted" {
+				must(t, os.Remove(fx.path))
+			} else {
+				must(t, os.WriteFile(fx.path, content, 0o600))
+			}
+			if j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
+				if j != nil {
+					_ = j.Close()
+				}
+				t.Fatalf("err = %v, want ErrCorrupt", err)
+			}
+			after, err := os.ReadFile(fx.path)
+			must(t, err)
+			if !bytes.Equal(after, content) {
+				t.Errorf("the refused open wrote %q, want the file unchanged (%q)", after, content)
+			}
+		})
+	}
+	if h := fx.head(t); h != 3 {
+		t.Errorf("head = %d after the refusals, want 3", h)
+	}
+}
+
+// TestAppend_NeverAtOrBelowHead: when the store's head reaches the next seq
+// under an open journal (another writer committed through another file, or
+// the file was replaced), Append writes nothing, breaks the journal, and
+// every later Append fails too, so the callers record gaps instead of
+// reusing seqs.
+func TestAppend_NeverAtOrBelowHead(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	j := fx.open(t)
+	must(t, fx.revoke(t, j, "joker").Commit(ctx, storage.Sync))
+
+	b := fx.ks.NewBatch()
+	_, err := b.GetForUpdate(ctx, fx.ks, []byte(headKey))
+	must(t, err)
+	must(t, b.Set([]byte(headKey), []byte(`{"seq":5}`)))
+	must(t, b.Commit(ctx, storage.Sync))
+	before, err := os.ReadFile(fx.path)
+	must(t, err)
+
+	for i, user := range []string{"penguin", "riddler"} {
+		rb := fx.auth.NewBatch()
+		must(t, rb.Set([]byte("user/"+user), []byte("disabled")))
+		err := j.Append(ctx, rb, Revocation{Kind: UserDisabled, Subject: entity.Ref{Module: "core", Kind: "user", ID: user}})
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("append %d: err = %v, want ErrCorrupt", i, err)
+		}
+		if rb.Count() != 1 {
+			t.Errorf("append %d staged into the batch: count %d", i, rb.Count())
+		}
+		at := time.Date(2026, 11, 10, 3, 0, i, 0, time.UTC)
+		must(t, j.Gap(rb, at))
+		must(t, rb.Commit(ctx, storage.Sync))
+	}
+	after, err := os.ReadFile(fx.path)
+	must(t, err)
+	if !bytes.Equal(before, after) {
+		t.Errorf("a refused append wrote %q", after[len(before):])
+	}
+	if h := fx.head(t); h != 5 {
+		t.Errorf("head = %d, want 5 (never lowered)", h)
+	}
+}
+
+// TestOpenFile_SecondOpenerRefused: a journal file has one writer. A second
+// OpenFile of the same path, which would number the same seqs, is ErrLocked
+// until the first closes. flock(2) locks belong to the open file, so an
+// opener in this process is refused like one in another process.
+func TestOpenFile_SecondOpenerRefused(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	j := fx.open(t)
+	must(t, fx.revoke(t, j, "joker").Commit(ctx, storage.Sync))
+	before, err := os.ReadFile(fx.path)
+	must(t, err)
+	if j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrLocked) {
+		if j2 != nil {
+			_ = j2.Close()
+		}
+		t.Fatalf("second opener: err = %v, want ErrLocked", err)
+	}
+	after, err := os.ReadFile(fx.path)
+	must(t, err)
+	if !bytes.Equal(before, after) {
+		t.Errorf("the refused opener changed the file: %q", after)
+	}
+	must(t, fx.revoke(t, j, "penguin").Commit(ctx, storage.Sync)) // the holder keeps writing
+	must(t, j.Close())
+	j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
+	must(t, err)
+	must(t, fx.revoke(t, j2, "riddler").Commit(ctx, storage.Sync))
+	must(t, j2.Close())
+	if got := fx.lines(t); len(got) != 4 || !strings.Contains(got[3], `"seq":3`) {
+		t.Errorf("lines = %q, want header and seqs 1-3", got)
 	}
 }
