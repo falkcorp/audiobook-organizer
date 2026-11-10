@@ -1,5 +1,5 @@
 // file: core/rbac/seeds_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c8a2f93-1d6e-4b47-9e0a-3f7b4d2c6e81
 // last-edited: 2026-11-10
 
@@ -454,6 +454,28 @@ func TestSeedMerge_ConfinedFlagIsSticky(t *testing.T) {
 			w := worker(t, boot(t, e, setup{modules: []module{add}}))
 			wantPerms(t, "pending after the follow-on release", w.PendingSeed, "books:fingerprint.view")
 		}
+	})
+
+	// The reverse flip: a release that only makes the role's scope
+	// Confining changes nothing but the flag (same seed, permissions and
+	// pending set), and that change alone must be written, or a later flip
+	// back lets a plain addition land unaccepted.
+	t.Run("Confining flipped on with the seed unchanged", func(t *testing.T) {
+		e := newEnv(t)
+		plain := books()
+		plain.specs[0].Confining = false
+		if boot(t, e, setup{modules: []module{plain}}).role("fp-worker").Confined {
+			t.Fatal("fp-worker flagged while its scope is not Confining")
+		}
+		for range 2 {
+			if w := boot(t, e, setup{modules: []module{books()}}).role("fp-worker"); !w.Confined {
+				t.Fatalf("fp-worker = %+v after its scope became Confining, want the Confined flag stored", w)
+			}
+		}
+		add := withSeed(books(view), "books:fingerprint.worker", "books:fingerprint.view")
+		add.specs[0].Confining = false
+		w := worker(t, boot(t, e, setup{modules: []module{add}}))
+		wantPerms(t, "pending after flipping back and adding a plain scope", w.PendingSeed, "books:fingerprint.view")
 	})
 
 	// Probe G2: emptied, then the worker scope re-added: a Confining
