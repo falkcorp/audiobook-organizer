@@ -334,9 +334,7 @@ LIBRARY_BOOKS = (
 
 
 # Dropped into the import root while R0 runs (the watcher's auto-scan imports it).
-LATE_BOOKS = (
-    ("Renee Montoya", "No Man's Land", [("No Man's Land.mp3", "test_sample.mp3")]),
-)
+LATE_BOOKS = (("Renee Montoya", "No Man's Land", [("No Man's Land.mp3", "test_sample.mp3")]),)
 
 
 def _id3v1(title: str, artist: str, album: str, track: int) -> bytes:
@@ -370,7 +368,9 @@ def lay_out_import(
         for idx, (name, sample) in enumerate(files, start=1):
             data = (fixtures / sample).read_bytes()
             if name.endswith(".mp3"):
-                data += _id3v1(title if len(files) == 1 else f"{title} {idx:02d}", author, title, idx)
+                data += _id3v1(
+                    title if len(files) == 1 else f"{title} {idx:02d}", author, title, idx
+                )
             (book_dir / name).write_bytes(data)
             written.append(str((book_dir / name).relative_to(import_dir)))
     return written
@@ -710,13 +710,17 @@ def _start_and_cancel_scan(ctx: Ctx) -> None:
     row of the same family; the attempt that wins records op_canceled.
     """
     assert ctx.client is not None
-    body = {"def_id": "library.scan",
-            "params": {"folder_path": ctx.ids["import_dir"], "force_update": True}}
+    body = {
+        "def_id": "library.scan",
+        "params": {"folder_path": ctx.ids["import_dir"], "force_update": True},
+    }
     last = ""
     for _ in range(CANCEL_ATTEMPTS):
         r = ctx.client.request("POST", "/api/v1/operations/v2", body, auth="admin")
         if r.status not in (200, 201, 202):
-            raise CorpusError(f"POST /api/v1/operations/v2 -> {r.status}: {json.dumps(r.body)[:600]}")
+            raise CorpusError(
+                f"POST /api/v1/operations/v2 -> {r.status}: {json.dumps(r.body)[:600]}"
+            )
         op_id = dig(r.body, "op_id")
         d = ctx.client.request("DELETE", f"/api/v1/operations/v2/{op_id}", auth="admin")
         if d.status in (200, 202, 204):
@@ -725,7 +729,9 @@ def _start_and_cancel_scan(ctx: Ctx) -> None:
         last = f"{d.status}: {json.dumps(d.body)[:300]}"
         if d.status not in (404, 409):
             raise CorpusError(f"DELETE /api/v1/operations/v2/{op_id} -> {last}")
-    raise CorpusError(f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries (last {last})")
+    raise CorpusError(
+        f"no scan could be canceled in flight after {CANCEL_ATTEMPTS} tries (last {last})"
+    )
 
 
 def hook_bootstrap(ctx: Ctx) -> None:
@@ -786,7 +792,9 @@ def login(ctx: Ctx, identity: str, username: str, password: str) -> None:
 
 
 def hook_login(identity: str, username: str, password: str) -> Hook:
-    return Hook(f"web login {username} (a session row)", lambda c: login(c, identity, username, password))
+    return Hook(
+        f"web login {username} (a session row)", lambda c: login(c, identity, username, password)
+    )
 
 
 def hook_accept_invite(identity: str, token_id: str, user_id: str, password: str) -> Hook:
@@ -854,7 +862,9 @@ def hook_pick_books(ctx: Ctx) -> None:
     by_title = {b.get("title"): b for b in items}
     for _, title, _ in LIBRARY_BOOKS:
         if title not in by_title:
-            raise CorpusError(f"book {title!r} not in the library after the scan: {sorted(by_title)}")
+            raise CorpusError(
+                f"book {title!r} not in the library after the scan: {sorted(by_title)}"
+            )
         ctx.ids[f"book_{_slug(title)}"] = by_title[title]["id"]
 
 
@@ -877,8 +887,10 @@ def hook_pick_abs_item(ctx: Ctx) -> None:
         if title == "Knightfall":
             ctx.ids["abs_item"] = item["id"]
             return
-    raise CorpusError(f"ABS items list has no Knightfall: {r.status} titles={seen} "
-                      f"body={json.dumps(r.body)[:600]}")
+    raise CorpusError(
+        f"ABS items list has no Knightfall: {r.status} titles={seen} "
+        f"body={json.dumps(r.body)[:600]}"
+    )
 
 
 def hook_play_sync_close(ctx: Ctx) -> None:
@@ -1062,8 +1074,12 @@ CASES: tuple[Case, ...] = (
                 "batgirl", "invite_barbara_gordon_token", "user_batgirl", OTHER_PASSWORD
             ),
             hook_accept_invite("lucius", "invite_lucius_fox_token", "user_lucius", OTHER_PASSWORD),
-            hook_accept_invite("fpworker", "invite_fp_worker_token", "user_fpworker", OTHER_PASSWORD),
-            hook_accept_invite("redhood", "invite_jason_todd_token", "user_redhood", OTHER_PASSWORD),
+            hook_accept_invite(
+                "fpworker", "invite_fp_worker_token", "user_fpworker", OTHER_PASSWORD
+            ),
+            hook_accept_invite(
+                "redhood", "invite_jason_todd_token", "user_redhood", OTHER_PASSWORD
+            ),
         ),
     ),
     Case(
@@ -1100,29 +1116,59 @@ CASES: tuple[Case, ...] = (
         "M3",
         "scoped, empty-scope, every-atom, admin-owned-for-another-user, fp-worker keys",
         (
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "scoped-view", "scopes": ["library.view"], "expires_in_days": 365},
-                 save=(("key_scoped", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "empty-scope", "scopes": [], "expires_in_days": 365},
-                 save=(("key_empty", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "every-atom", "scopes": ALL_ATOMS, "expires_in_days": 365},
-                 save=(("key_every", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "admin-owned-for-robin", "scopes": ["library.view", "playlists.create"],
-                  "user_id": "${user_robin}", "expires_in_days": 365},
-                 save=(("key_for_robin", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "fp-worker-key", "scopes": ["fingerprint.worker"],
-                  "user_id": "${user_fpworker}", "expires_in_days": 365},
-                 save=(("key_fpworker", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "editor-own-key", "scopes": ["library.view"], "expires_in_days": 30},
-                 auth="robin", save=(("key_robin_own", "data.id"),)),
-            Call("POST", "/api/v1/auth/api-keys",
-                 {"name": "revoked-key", "scopes": ["library.view"], "expires_in_days": 30},
-                 save=(("key_revoked", "data.id"),)),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {"name": "scoped-view", "scopes": ["library.view"], "expires_in_days": 365},
+                save=(("key_scoped", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {"name": "empty-scope", "scopes": [], "expires_in_days": 365},
+                save=(("key_empty", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {"name": "every-atom", "scopes": ALL_ATOMS, "expires_in_days": 365},
+                save=(("key_every", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {
+                    "name": "admin-owned-for-robin",
+                    "scopes": ["library.view", "playlists.create"],
+                    "user_id": "${user_robin}",
+                    "expires_in_days": 365,
+                },
+                save=(("key_for_robin", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {
+                    "name": "fp-worker-key",
+                    "scopes": ["fingerprint.worker"],
+                    "user_id": "${user_fpworker}",
+                    "expires_in_days": 365,
+                },
+                save=(("key_fpworker", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {"name": "editor-own-key", "scopes": ["library.view"], "expires_in_days": 30},
+                auth="robin",
+                save=(("key_robin_own", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/auth/api-keys",
+                {"name": "revoked-key", "scopes": ["library.view"], "expires_in_days": 30},
+                save=(("key_revoked", "data.id"),),
+            ),
             Call("DELETE", "/api/v1/auth/api-keys/${key_revoked}"),
         ),  # fmt: skip
     ),
@@ -1156,11 +1202,18 @@ CASES: tuple[Case, ...] = (
         "M6",
         "an import root added through the API; its auto-scan imports the fixture library",
         (
-            Call("POST", "/api/v1/import-paths",
-                 {"path": "${import_dir}", "name": "Gotham Archive", "enabled": True},
-                 save=(("import_path_id", "data.import_path.id"),)),
-            Poll("/api/v1/audiobooks?limit=100", lambda b: _count_books(b) >= len(LIBRARY_BOOKS),
-                 f"{len(LIBRARY_BOOKS)} books are in the library", timeout=300.0),
+            Call(
+                "POST",
+                "/api/v1/import-paths",
+                {"path": "${import_dir}", "name": "Gotham Archive", "enabled": True},
+                save=(("import_path_id", "data.import_path.id"),),
+            ),
+            Poll(
+                "/api/v1/audiobooks?limit=100",
+                lambda b: _count_books(b) >= len(LIBRARY_BOOKS),
+                f"{len(LIBRARY_BOOKS)} books are in the library",
+                timeout=300.0,
+            ),
             Hook("save book IDs by title", hook_pick_books),
         ),  # fmt: skip
     ),
@@ -1181,12 +1234,14 @@ CASES: tuple[Case, ...] = (
         "task schedules edited through the task routes; maintenance window config",
         (
             Call("PUT", "/api/v1/tasks/library_scan_full", {"interval_minutes": 1440}),
-            Call("PUT", "/api/v1/tasks/dedup_refresh",
-                 {"enabled": True, "run_on_startup": False}),
+            Call("PUT", "/api/v1/tasks/dedup_refresh", {"enabled": True, "run_on_startup": False}),
             Call("PUT", "/api/v1/tasks/purge_old_logs", {"run_in_maintenance_window": False}),
             Call("PUT", "/api/v1/tasks/library_scan", {"enabled": False}),
-            Call("PUT", "/api/v1/maintenance-window/config",
-                 {"enabled": True, "window_start": 2, "window_end": 5}),
+            Call(
+                "PUT",
+                "/api/v1/maintenance-window/config",
+                {"enabled": True, "window_start": 2, "window_end": 5},
+            ),
         ),  # fmt: skip
     ),
     Case(
@@ -1195,9 +1250,12 @@ CASES: tuple[Case, ...] = (
         "M4",
         "a library scan run that succeeds (takes the scan stand-down while it runs)",
         (
-            Call("POST", "/api/v1/operations/v2",
-                 {"def_id": "library.scan", "params": {"folder_path": "${import_dir}"}},
-                 save=(("op_scan", "op_id"),)),
+            Call(
+                "POST",
+                "/api/v1/operations/v2",
+                {"def_id": "library.scan", "params": {"folder_path": "${import_dir}"}},
+                save=(("op_scan", "op_id"),),
+            ),
             _done("op_scan"),
         ),  # fmt: skip
     ),
@@ -1207,9 +1265,12 @@ CASES: tuple[Case, ...] = (
         "M4",
         "a library scan of a missing folder (fails)",
         (
-            Call("POST", "/api/v1/operations/v2",
-                 {"def_id": "library.scan", "params": {"folder_path": "${missing_dir}"}},
-                 save=(("op_failed", "op_id"),)),
+            Call(
+                "POST",
+                "/api/v1/operations/v2",
+                {"def_id": "library.scan", "params": {"folder_path": "${missing_dir}"}},
+                save=(("op_failed", "op_id"),),
+            ),
             _done("op_failed"),
         ),  # fmt: skip
     ),
@@ -1219,8 +1280,10 @@ CASES: tuple[Case, ...] = (
         "M4",
         "a run started and canceled through DELETE /operations/v2/:id",
         (
-            Hook("start a library.scan and cancel it while it is still in flight",
-                 _start_and_cancel_scan),
+            Hook(
+                "start a library.scan and cancel it while it is still in flight",
+                _start_and_cancel_scan,
+            ),
             _done("op_canceled"),
         ),  # fmt: skip
     ),
@@ -1237,15 +1300,27 @@ CASES: tuple[Case, ...] = (
         "books",
         "a static playlist with two books and a smart playlist",
         (
-            Call("POST", "/api/v1/playlists",
-                 {"name": "Arkham Reading List", "type": "static",
-                  "book_ids": ["${book_the_long_halloween}"]},
-                 save=(("playlist_static", "data.id"),)),
-            Call("POST", "/api/v1/playlists/${playlist_static}/books",
-                 {"book_ids": ["${book_year_one}"]}),
-            Call("POST", "/api/v1/playlists",
-                 {"name": "Knight Stories", "type": "smart", "query": "Knight"},
-                 save=(("playlist_smart", "data.id"),)),
+            Call(
+                "POST",
+                "/api/v1/playlists",
+                {
+                    "name": "Arkham Reading List",
+                    "type": "static",
+                    "book_ids": ["${book_the_long_halloween}"],
+                },
+                save=(("playlist_static", "data.id"),),
+            ),
+            Call(
+                "POST",
+                "/api/v1/playlists/${playlist_static}/books",
+                {"book_ids": ["${book_year_one}"]},
+            ),
+            Call(
+                "POST",
+                "/api/v1/playlists",
+                {"name": "Knight Stories", "type": "smart", "query": "Knight"},
+                save=(("playlist_smart", "data.id"),),
+            ),
         ),  # fmt: skip
     ),
     Case(
@@ -1255,10 +1330,18 @@ CASES: tuple[Case, ...] = (
         "reading status set through the web API for two users",
         (
             Call("PATCH", "/api/v1/audiobooks/${book_hush}/status", {"status": "finished"}),
-            Call("PATCH", "/api/v1/audiobooks/${book_dark_victory}/status",
-                 {"status": "abandoned"}, auth="robin"),
-            Call("PATCH", "/api/v1/audiobooks/${book_year_one}/status",
-                 {"status": "in_progress"}, auth="batgirl"),
+            Call(
+                "PATCH",
+                "/api/v1/audiobooks/${book_dark_victory}/status",
+                {"status": "abandoned"},
+                auth="robin",
+            ),
+            Call(
+                "PATCH",
+                "/api/v1/audiobooks/${book_year_one}/status",
+                {"status": "in_progress"},
+                auth="batgirl",
+            ),
         ),  # fmt: skip
     ),
     Case(
@@ -1271,12 +1354,24 @@ CASES: tuple[Case, ...] = (
             hook_abs_login("batgirl", "barbara.gordon", OTHER_PASSWORD),
             Hook("find the ABS library and the multi-file item", hook_pick_abs_item),
             Hook("play, sync and close a session", hook_play_sync_close),
-            Call("PATCH", "/api/me/progress/${abs_item}",
-                 {"currentTime": 0.2, "duration": 0.3, "isFinished": False}, auth="abs:robin"),
-            Call("POST", "/api/me/item/${abs_item}/bookmark",
-                 {"time": 0.15, "title": "The Bane confrontation"}, auth="abs:robin"),
-            Call("PATCH", "/api/me/progress/${abs_item}",
-                 {"currentTime": 0.3, "duration": 0.3, "isFinished": True}, auth="abs:batgirl"),
+            Call(
+                "PATCH",
+                "/api/me/progress/${abs_item}",
+                {"currentTime": 0.2, "duration": 0.3, "isFinished": False},
+                auth="abs:robin",
+            ),
+            Call(
+                "POST",
+                "/api/me/item/${abs_item}/bookmark",
+                {"time": 0.15, "title": "The Bane confrontation"},
+                auth="abs:robin",
+            ),
+            Call(
+                "PATCH",
+                "/api/me/progress/${abs_item}",
+                {"currentTime": 0.3, "duration": 0.3, "isFinished": True},
+                auth="abs:batgirl",
+            ),
         ),  # fmt: skip
     ),
     Case(
@@ -1289,11 +1384,18 @@ CASES: tuple[Case, ...] = (
             # minutes (internal/watcher/supervisor.go), so a restart arms it.
             hook_restart("the watcher picks up the import root at boot"),
             Hook("drop No Man's Land into the import root", hook_drop_late_book),
-            Poll("/api/v1/system/activity-log?limit=5", lambda b: _syslog_rows(b) > 0,
-                 "a system activity-log row exists", timeout=180.0),
-            Poll("/api/v1/audiobooks?limit=100",
-                 lambda b: _count_books(b) >= len(LIBRARY_BOOKS) + len(LATE_BOOKS),
-                 "the dropped book is imported", timeout=300.0),
+            Poll(
+                "/api/v1/system/activity-log?limit=5",
+                lambda b: _syslog_rows(b) > 0,
+                "a system activity-log row exists",
+                timeout=180.0,
+            ),
+            Poll(
+                "/api/v1/audiobooks?limit=100",
+                lambda b: _count_books(b) >= len(LIBRARY_BOOKS) + len(LATE_BOOKS),
+                "the dropped book is imported",
+                timeout=300.0,
+            ),
         ),  # fmt: skip
     ),
     Case(
@@ -1517,21 +1619,34 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Write R2's stage-1 fixture corpus with the R0 release binary (F2-12).",
     )
-    ap.add_argument("--regenerate", action="store_true",
-                    help="actually boot R0 and (re)write the committed corpus (a manual act)")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="list every API call in order without a binary")
+    ap.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="actually boot R0 and (re)write the committed corpus (a manual act)",
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="list every API call in order without a binary"
+    )
     ap.add_argument("--tag", help="override ci/r0_release.txt (a re-cut only)")
     ap.add_argument("--binary", help="use this R0 binary instead of downloading the release asset")
     ap.add_argument("--cache", default="~/.cache/r2corpus", help="download cache directory")
-    ap.add_argument("--docker", action="store_true",
-                    help="run the linux/amd64 binary in a container (host name r2corpus)")
-    ap.add_argument("--workdir", default=DEFAULT_WORKDIR,
-                    help="fixed work directory (its paths end up in the store)")
+    ap.add_argument(
+        "--docker",
+        action="store_true",
+        help="run the linux/amd64 binary in a container (host name r2corpus)",
+    )
+    ap.add_argument(
+        "--workdir",
+        default=DEFAULT_WORKDIR,
+        help="fixed work directory (its paths end up in the store)",
+    )
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--out", help="write the store here instead of the committed stage1/")
-    ap.add_argument("--allow-foreign-binary", action="store_true",
-                    help="development only: drive a non-linux/amd64 R0 build; needs --out")
+    ap.add_argument(
+        "--allow-foreign-binary",
+        action="store_true",
+        help="development only: drive a non-linux/amd64 R0 build; needs --out",
+    )
     return ap  # fmt: skip
 
 
@@ -1541,7 +1656,9 @@ def main(argv: list[str] | None = None) -> int:
         dry_run()
         return 0
     if not args.regenerate:
-        print("nothing to do: pass --dry-run, or --regenerate to rewrite the corpus", file=sys.stderr)
+        print(
+            "nothing to do: pass --dry-run, or --regenerate to rewrite the corpus", file=sys.stderr
+        )
         return 2
     try:
         return write_corpus(args)

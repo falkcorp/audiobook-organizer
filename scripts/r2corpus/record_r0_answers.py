@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -345,9 +345,11 @@ def record(args: argparse.Namespace) -> int:
         (answers_dir / f"{name}.json").write_text(
             json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        rel = (answers_dir / f"{name}.json").relative_to(w.REPO_ROOT).as_posix() if (
-            answers_dir.is_relative_to(w.REPO_ROOT)
-        ) else f"answers/{name}.json"
+        rel = (
+            (answers_dir / f"{name}.json").relative_to(w.REPO_ROOT).as_posix()
+            if (answers_dir.is_relative_to(w.REPO_ROOT))
+            else f"answers/{name}.json"
+        )
         entries.append({"name": name, "file": rel, "what": what})
     bad = scan_answers(answers_dir)
     if bad:
@@ -363,8 +365,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Record the R0 binary's answers over the stage-1 corpus (F2-12).",
     )
-    ap.add_argument("--regenerate", action="store_true",
-                    help="boot R0 on a copy of the corpus and (re)write answers/")
+    ap.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="boot R0 on a copy of the corpus and (re)write answers/",
+    )
     ap.add_argument("--list", action="store_true", help="list the answers and their requests")
     ap.add_argument("--corpus", default=str(w.STAGE1_DIR), help="the store directory to copy")
     ap.add_argument("--tag", help="override ci/r0_release.txt (a re-cut only)")
@@ -374,8 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--workdir", default=w.DEFAULT_WORKDIR)
     ap.add_argument("--port", type=int, default=w.DEFAULT_PORT)
     ap.add_argument("--out", help="write answers here instead of the committed answers/")
-    ap.add_argument("--allow-foreign-binary", action="store_true",
-                    help="development only: a non-linux/amd64 R0 build; needs --out")
+    ap.add_argument(
+        "--allow-foreign-binary",
+        action="store_true",
+        help="development only: a non-linux/amd64 R0 build; needs --out",
+    )
     return ap  # fmt: skip
 
 
@@ -397,4 +405,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_write_r0_corpus.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: e61bb4fe-2238-459c-be02-94efbf991c39
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/write_r0_corpus.py (F2-12).
@@ -165,9 +165,7 @@ class HygieneTest(unittest.TestCase):
     def test_fixture_audio_files_are_distinct(self):
         with tempfile.TemporaryDirectory() as d:
             rels = w.lay_out_import(pathlib.Path(d))
-            hashes = {
-                hashlib.sha256((pathlib.Path(d) / r).read_bytes()).hexdigest() for r in rels
-            }
+            hashes = {hashlib.sha256((pathlib.Path(d) / r).read_bytes()).hexdigest() for r in rels}
             self.assertEqual(len(hashes), len(rels), "two fixture files are byte-identical")
 
     def test_boot_spec_paths_stay_in_the_workdir(self):

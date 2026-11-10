@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_answers.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 0317d881-99be-4394-8279-b5df7ce3cfa7
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/record_r0_answers.py and its committed answers (F2-12).
@@ -124,7 +124,9 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(
             r.recorded_request_headers("abs:robin", None)["authorization"], "Bearer <redacted>"
         )
-        self.assertNotIn("x-return-tokens", r.recorded_request_headers("none", {"x-return-tokens": "1"}))
+        self.assertNotIn(
+            "x-return-tokens", r.recorded_request_headers("none", {"x-return-tokens": "1"})
+        )
 
 
 if __name__ == "__main__":
