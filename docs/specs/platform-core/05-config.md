@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.11 -->
+<!-- version: 1.13.12 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -477,7 +477,7 @@ type AttachReport struct {
 	Applied     int
 	Unknown     []Path                // retained rows for keys this binary does not declare
 	Quarantined map[Path]error        // rows ignored because their section failed to decode/validate with them
-	Ignored     map[Path]string       // rows shadowed by an operator lock -> lock reason
+	Ignored     map[Path]string       // stored values shadowed by an operator lock (rows, boot-record values) -> lock reason
 	// FailClosed: FailClosed keys whose stored value is more restrictive than their operator value and therefore
 	// effective -> the operator source; one warning per boot and health config_fail_closed_override (§1.3.5)
 	FailClosed  map[Path]string

@@ -1,5 +1,5 @@
 // file: core/config/types.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
 // last-edited: 2026-11-10
 
@@ -246,6 +246,6 @@ type AttachReport struct {
 	Applied     int
 	Unknown     []Path          // retained rows for keys this binary does not declare
 	Quarantined map[Path]error  // rows ignored because their section failed to decode/validate with them
-	Ignored     map[Path]string // rows shadowed by an operator lock -> lock reason
+	Ignored     map[Path]string // stored values shadowed by an operator lock (rows, and boot-record values) -> lock reason
 	FailClosed  map[Path]string // FailClosed keys whose stored value wins (F3-02)
 }
