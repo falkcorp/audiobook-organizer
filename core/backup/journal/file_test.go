@@ -1,0 +1,406 @@
+// file: core/backup/journal/file_test.go
+// version: 1.0.0
+// guid: b7a073e7-211a-4d06-8bf4-6befeb60e0d3
+// last-edited: 2026-11-10
+
+package journal
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/falkcorp/mediacore/archtest"
+	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/storage"
+)
+
+// authOwner stands in for core/auth, the revoking subsystem whose batch the
+// journal joins.
+const authOwner storage.Owner = "core/auth"
+
+// fixture is a store with c/backup/ and c/auth/, booted the way the kernel's
+// P2, P4a and P4b do (as coretest.Store does; coretest is not imported
+// because it imports kernel, which will import this package).
+type fixture struct {
+	db   *storage.DB
+	ks   storage.Keyspace // c/backup/
+	auth storage.Keyspace // c/auth/
+	path string           // the journal file
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path: filepath.Join(dir, "storage", "main.pebble"), Build: "batcomputer-1", FreeSpaceMargin: 1,
+		Owners: []storage.OwnerSpec{
+			{Owner: Owner, Spec: StorageSpec(), Enabled: true},
+			{Owner: authOwner, Spec: storage.Spec{Keyspace: true}, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatal(errors.Join(err, o.Close()))
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ks, _ := db.Keyspace(Owner)
+	auth, _ := db.Keyspace(authOwner)
+	return &fixture{db: db, ks: ks, auth: auth, path: filepath.Join(dir, "backups", "gotham_revocations.journal")}
+}
+
+func (fx *fixture) open(t *testing.T) *File {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(fx.path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks, Source: "batcomputer-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	return j
+}
+
+// head reads the committed c/backup/journal_head seq (0 when absent).
+func (fx *fixture) head(t *testing.T) uint64 {
+	t.Helper()
+	raw, err := fx.ks.Get(context.Background(), []byte(headKey))
+	if errors.Is(err, storage.ErrNotFound) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := decodeSeq(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seq
+}
+
+// lines reads the journal file's lines.
+func (fx *fixture) lines(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile(fx.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+}
+
+// revoke is a revoking batch of core/auth: the user row and the journal line.
+func (fx *fixture) revoke(t *testing.T, j RevocationJournal, user string) *storage.Batch {
+	t.Helper()
+	b := fx.auth.NewBatch()
+	if err := b.Set([]byte("user/"+user), []byte("disabled")); err != nil {
+		t.Fatal(err)
+	}
+	r := Revocation{At: time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC), Kind: UserDisabled,
+		Subject: entity.Ref{Module: "core", Kind: "user", ID: user}}
+	if err := j.Append(context.Background(), b, r); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestStorageSpec_SerializedKeysAndPrefixes: c/backup/ is a keyspace whose
+// journal_head and served_boot are Serialized (exact keys) and whose gap
+// family is not.
+func TestStorageSpec_SerializedKeysAndPrefixes(t *testing.T) {
+	s := StorageSpec()
+	if !s.Keyspace || !slices.Equal(s.Serialized, []string{"journal_head", "served_boot"}) || len(s.Migrations) != 0 {
+		t.Fatalf("StorageSpec() = %+v", s)
+	}
+	fx := newFixture(t)
+	b := fx.ks.NewBatch()
+	for _, k := range []string{headKey, servedBootKey} {
+		if err := b.Expect(fx.ks, []byte(k), nil); err != nil {
+			t.Errorf("%s is not Serialized: %v", k, err)
+		}
+	}
+	b2 := fx.ks.NewBatch()
+	if err := b2.Expect(fx.ks, gapKey(time.Now()), nil); !errors.Is(err, storage.ErrNotSerialized) {
+		t.Errorf("journal_gap/ Expect: err = %v, want ErrNotSerialized", err)
+	}
+	if got := string(gapKey(time.Date(2026, 11, 10, 3, 4, 5, 6, time.FixedZone("MT", -7*3600)))); got != "journal_gap/2026-11-10T10:04:05.000000006Z" {
+		t.Errorf("gapKey = %q", got)
+	}
+}
+
+// TestJournal_AppendBeforeCommitHeadMonotone: each line is on disk before its
+// revocation commits; two revocations committing out of append order never
+// move the head backwards (the later commit conflicts and its retry appends
+// again: a duplicate line is harmless, DATA4-7).
+func TestJournal_AppendBeforeCommitHeadMonotone(t *testing.T) {
+	fx := newFixture(t)
+	j := fx.open(t)
+	ctx := context.Background()
+
+	joker := fx.revoke(t, j, "joker")
+	if got := fx.lines(t); len(got) != 2 || got[0] != `{"seq":0}` || !strings.Contains(got[1], `"seq":1`) {
+		t.Fatalf("before commit the file holds %q, want the header and line 1", got)
+	}
+	penguin := fx.revoke(t, j, "penguin")
+	must(t, penguin.Commit(ctx, storage.Sync))
+	if h := fx.head(t); h != 2 {
+		t.Fatalf("head = %d after seq 2 committed, want 2", h)
+	}
+	if err := joker.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("the out-of-order commit: err = %v, want ErrConflict (the head moved since it was read)", err)
+	}
+	if h := fx.head(t); h != 2 {
+		t.Fatalf("head = %d after the stale commit, want still 2", h)
+	}
+	// The caller retries the revoking batch, appending again.
+	must(t, storage.RetryOnConflict(ctx, 3, func(ctx context.Context) error {
+		return fx.revoke(t, j, "joker").Commit(ctx, storage.Sync)
+	}))
+	if h := fx.head(t); h != 3 {
+		t.Fatalf("head = %d after the retry, want 3", h)
+	}
+	if v, err := fx.auth.Get(ctx, []byte("user/joker")); err != nil || string(v) != "disabled" {
+		t.Errorf("the revocation itself: %q, %v", v, err)
+	}
+	got := fx.lines(t)
+	if len(got) != 4 {
+		t.Fatalf("file holds %d lines, want the header and 3", len(got))
+	}
+	r, err := decodeLine([]byte(got[3]))
+	must(t, err)
+	if r.Seq != 3 || r.Kind != UserDisabled || r.Subject != (entity.Ref{Module: "core", Kind: "user", ID: "joker"}) || r.Source != "batcomputer-1" {
+		t.Errorf("line 3 = %+v", r)
+	}
+
+	// A head already past a line's seq is kept (max), never lowered.
+	b := fx.ks.NewBatch()
+	_, err = b.GetForUpdate(ctx, fx.ks, []byte(headKey))
+	must(t, err)
+	must(t, b.Set([]byte(headKey), []byte(`{"seq":99}`)))
+	must(t, b.Commit(ctx, storage.Sync))
+	must(t, fx.revoke(t, j, "riddler").Commit(ctx, storage.Sync))
+	if h := fx.head(t); h != 99 {
+		t.Errorf("head = %d, want 99 kept", h)
+	}
+
+	// Reopening continues the numbering.
+	must(t, j.Close())
+	j2 := fx.open(t)
+	must(t, fx.revoke(t, j2, "bane").Commit(ctx, storage.Sync))
+	if got := fx.lines(t); !strings.Contains(got[len(got)-1], `"seq":5`) {
+		t.Errorf("after reopen the last line is %s, want seq 5", got[len(got)-1])
+	}
+	if err := j.Append(ctx, fx.auth.NewBatch(), Revocation{Kind: UserDeleted}); !errors.Is(err, ErrClosed) {
+		t.Errorf("Append after Close: err = %v, want ErrClosed", err)
+	}
+}
+
+// failingFile wraps the real file: failWrite writes half of a line and then
+// fails (a full disk); failSync refuses fsync.
+type failingFile struct {
+	lineFile
+	failWrite, failSync bool
+}
+
+func (f *failingFile) Write(p []byte) (int, error) {
+	if f.failWrite {
+		n, _ := f.lineFile.Write(p[:len(p)/2])
+		return n, errors.New("the Batcave's disk is full")
+	}
+	return f.lineFile.Write(p)
+}
+
+func (f *failingFile) Sync() error {
+	if f.failSync {
+		return errors.New("the Batcave's disk is flooded")
+	}
+	return f.lineFile.Sync()
+}
+
+// TestJournal_AppendFailureStagesNothing: a failed append records no line
+// (the partial write is cut back) and stages nothing into the revoking batch;
+// the revocation still commits with Gap's journal_gap/<since> record, and the
+// next append numbers on without a gap.
+func TestJournal_AppendFailureStagesNothing(t *testing.T) {
+	fx := newFixture(t)
+	j := fx.open(t)
+	ctx := context.Background()
+	before, err := os.ReadFile(fx.path)
+	must(t, err)
+
+	ff := &failingFile{lineFile: j.f, failWrite: true}
+	j.f = ff
+	b := fx.auth.NewBatch()
+	must(t, b.Set([]byte("user/joker"), []byte("disabled")))
+	at := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC)
+	if err := j.Append(ctx, b, Revocation{At: at, Kind: UserDisabled}); err == nil {
+		t.Fatal("Append succeeded on a failing disk")
+	}
+	after, err := os.ReadFile(fx.path)
+	must(t, err)
+	if !bytes.Equal(before, after) {
+		t.Errorf("the failed append left %q in the file, want it unchanged", after[len(before):])
+	}
+	if b.Count() != 1 || !slices.Equal(b.Participants(), []storage.Owner{authOwner}) {
+		t.Errorf("the failed append staged into the batch: count %d, participants %v", b.Count(), b.Participants())
+	}
+
+	must(t, j.Gap(b, at))
+	must(t, b.Commit(ctx, storage.Sync))
+	if v, err := fx.auth.Get(ctx, []byte("user/joker")); err != nil || string(v) != "disabled" {
+		t.Errorf("the revocation did not commit: %q, %v", v, err)
+	}
+	if v, err := fx.ks.Get(ctx, gapKey(at)); err != nil || !strings.Contains(string(v), `"reason":"append_failed"`) {
+		t.Errorf("journal_gap record: %q, %v", v, err)
+	}
+	if h := fx.head(t); h != 0 {
+		t.Errorf("head = %d, want none", h)
+	}
+
+	ff.failWrite = false
+	must(t, fx.revoke(t, j, "penguin").Commit(ctx, storage.Sync))
+	if got := fx.lines(t); len(got) != 2 || !strings.Contains(got[1], `"seq":1`) {
+		t.Errorf("after the failure the file holds %q, want line 1 next", got)
+	}
+
+	// A failure that cannot be cut back durably (the cut fails, or the
+	// fsync after it, the disk's state then unknown) breaks the journal:
+	// every later Append fails (the callers record gaps) rather than risk
+	// reusing a seq; reopening the file recovers.
+	for name, broken := range map[string]lineFile{
+		"truncate fails": &truncFails{failingFile: failingFile{lineFile: ff.lineFile, failSync: true}},
+		"fsync fails":    &failingFile{lineFile: ff.lineFile, failSync: true},
+	} {
+		j.broken = nil
+		j.f = broken
+		if err := j.Append(ctx, fx.auth.NewBatch(), Revocation{Kind: UserDeleted}); err == nil {
+			t.Fatalf("%s: Append succeeded", name)
+		}
+		if j.broken == nil {
+			t.Errorf("%s: the journal is not marked broken", name)
+		}
+	}
+	j.f = ff
+	if err := j.Append(ctx, fx.auth.NewBatch(), Revocation{Kind: UserDeleted}); err == nil || !strings.Contains(err.Error(), "could not be cut back") {
+		t.Errorf("Append on a broken journal: err = %v", err)
+	}
+}
+
+type truncFails struct{ failingFile }
+
+func (f *truncFails) Truncate(int64) error { return errors.New("read-only filesystem") }
+
+// TestOpenFile_HeaderAndRecovery: a new journal is created 0600 with the
+// header line; an incomplete last line is cut off; a seq out of order is
+// ErrCorrupt; a keyspace other than c/backup/ is refused.
+func TestOpenFile_HeaderAndRecovery(t *testing.T) {
+	fx := newFixture(t)
+	j := fx.open(t)
+	st, err := os.Stat(fx.path)
+	must(t, err)
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", st.Mode().Perm())
+	}
+	must(t, fx.revoke(t, j, "joker").Commit(context.Background(), storage.Sync))
+	must(t, j.Close())
+
+	f, err := os.OpenFile(fx.path, os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = f.WriteString(`{"seq":2,"kind":"user.dis`)
+	must(t, errors.Join(err, f.Close()))
+	j2 := fx.open(t)
+	if got := fx.lines(t); len(got) != 2 {
+		t.Errorf("the incomplete line was not cut: %q", got)
+	}
+	must(t, fx.revoke(t, j2, "penguin").Commit(context.Background(), storage.Sync))
+	must(t, j2.Close())
+
+	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\n{\"seq\":2}\n"), 0o600))
+	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("seq gap: err = %v, want ErrCorrupt", err)
+	}
+	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\nnot json\n"), 0o600))
+	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("garbage line: err = %v, want ErrCorrupt", err)
+	}
+	if _, err := OpenFile(FileOptions{Path: fx.path, Keyspace: fx.auth}); err == nil {
+		t.Error("OpenFile accepted another owner's keyspace")
+	}
+	if _, err := OpenFile(FileOptions{Keyspace: fx.ks}); err == nil {
+		t.Error("OpenFile accepted an empty path")
+	}
+	empty := filepath.Join(t.TempDir(), "empty.journal")
+	must(t, os.WriteFile(empty, nil, 0o600))
+	j3, err := OpenFile(FileOptions{Path: empty, Keyspace: fx.ks})
+	must(t, err)
+	must(t, j3.Close())
+	if b, _ := os.ReadFile(empty); string(b) != "{\"seq\":0}\n" {
+		t.Errorf("an empty file got %q, want the header", b)
+	}
+}
+
+// TestJournalImportsOnlyAllowed: backup/journal imports only entity, storage
+// and storage/restorejournal of core (and the standard library), so auth ->
+// journal and rbac -> journal close no cycle; its transitive closure adds
+// nothing beyond what storage itself imports (05-backup §5B.3.2; the brief's
+// go list -deps allow-list).
+func TestJournalImportsOnlyAllowed(t *testing.T) {
+	wd, err := os.Getwd()
+	must(t, err)
+	root, err := archtest.ModuleRoot(wd)
+	must(t, err)
+	pkgs, err := archtest.Load(archtest.LoadOptions{Dir: root, Patterns: []string{"./backup/journal"}, TagSets: archtest.TagSets()})
+	must(t, err)
+	const mod = "github.com/falkcorp/mediacore/"
+	allowed := map[string]bool{mod + "entity": true, mod + "storage": true, mod + "storage/restorejournal": true}
+	p := pkgs[mod+"backup/journal"]
+	if p == nil {
+		t.Fatal("the loader did not return backup/journal")
+	}
+	for _, imp := range p.Imports {
+		if strings.Contains(strings.SplitN(imp, "/", 2)[0], ".") && !allowed[imp] {
+			t.Errorf("backup/journal imports %s; only entity, storage, storage/restorejournal and the standard library are allowed", imp)
+		}
+	}
+
+	deps := func(pkg string) map[string]bool {
+		cmd := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", pkg)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		set := map[string]bool{}
+		for _, l := range strings.Fields(string(out)) {
+			set[l] = true
+		}
+		return set
+	}
+	storageDeps := deps("./storage")
+	for d := range deps("./backup/journal") {
+		if !storageDeps[d] && !allowed[d] && d != mod+"backup/journal" {
+			t.Errorf("backup/journal depends on %s, which storage does not import", d)
+		}
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
