@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -321,7 +321,7 @@ type keyVal struct {
 // ProtectOperator keys read neither stored layer (05-config §1.3.5).
 func (s *Store) resolve(c ckey, v view) keyVal {
 	if o, ok := s.op[c.p]; ok {
-		return keyVal{raw: o.raw, src: o.src, by: o.by}
+		return keyVal(o)
 	}
 	k := c.k
 	switch {
