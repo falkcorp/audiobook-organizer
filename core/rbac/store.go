@@ -1,5 +1,5 @@
 // file: core/rbac/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b8f4d2e-61c7-4a95-8e3b-7d2c5a19f640
 // last-edited: 2026-11-10
 
@@ -38,9 +38,21 @@ type Role struct {
 	PendingSeed     []Permission // restricted seed additions held for admin acceptance (§4.8, SEC-25)
 	Added           []Permission // custom roles: the role's whole set (patterns allowed); on seed roles the operator diff is deferred-build (§3.6)
 	Locked          bool         // "admin": immutable, undeletable, outside the seed merge (§4.8)
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Version         int64
+	// Confined is seed bookkeeping coined by F4-01 (not in §3.4): sticky
+	// confinement. The merge sets it when a release's seed for the role is
+	// confining (it names a concrete Confining scope, or is Confined through
+	// a wildcard), and only an AcceptSeed that lands a non-Confining scope
+	// clears it. While it is set the merge holds every addition that is not a
+	// concrete Confining scope. It is a stored fact rather than a reading of
+	// the current permissions against the current catalog, so a release that
+	// empties the role, stops declaring its worker scope or flips that scope
+	// to non-Confining cannot unconfine it, and a plain role whose scopes a
+	// release renames is not mistaken for a confined one. Never set on a
+	// custom role.
+	Confined  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Version   int64
 	// Removed and Tombstone are deferred-build members (§3.6).
 }
 

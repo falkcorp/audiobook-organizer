@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-10
 
@@ -241,7 +241,7 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 //     rbac.ErrFrozen): the cutover runs before rbac.Service.Freeze;
 //   - a name that is not custom.<slug> (every seed role's name is not);
 //   - an Origin other than OriginCustom, or seed bookkeeping (SeedPermissions,
-//     SeedDigest, PendingSeed, Locked) on the record;
+//     SeedDigest, PendingSeed, Locked, Confined) on the record;
 //   - an empty permission set, which no imported role holds (the cutover
 //     quarantines a role with no known atom, §6.3);
 //   - a malformed pattern or a scope the catalog does not hold (and every
@@ -268,8 +268,8 @@ func (s *Store) ImportRole(b *storage.Batch, r *rbac.Role) error {
 	if r.Origin != rbac.OriginCustom {
 		return reject(errors.New("an imported role is a custom role (OriginCustom)"))
 	}
-	if len(r.SeedPermissions) > 0 || r.SeedDigest != "" || len(r.PendingSeed) > 0 || r.Locked {
-		return reject(errors.New("an imported custom role carries no seed bookkeeping and is not locked"))
+	if len(r.SeedPermissions) > 0 || r.SeedDigest != "" || len(r.PendingSeed) > 0 || r.Locked || r.Confined {
+		return reject(errors.New("an imported custom role carries no seed bookkeeping, is not locked and is not flagged confined"))
 	}
 	if len(r.Added) == 0 {
 		return reject(errors.New("an imported role holds at least one permission"))
