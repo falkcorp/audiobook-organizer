@@ -587,7 +587,7 @@ func TestChecker_Immutable(t *testing.T) {
 	checkers := []rbac.Checker{Compile(in, cat), AuthDisabled(cat), ForSystem(sys)}
 	before := make([][]rbac.Permission, len(checkers))
 	for i, c := range checkers {
-		before[i] = c.Concrete()
+		before[i] = slices.Clone(c.Concrete())
 	}
 
 	// Mutating the inputs after the build changes nothing.
