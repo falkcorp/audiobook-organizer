@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -498,13 +498,21 @@ def record_abs(rec: Recorder, client: Any) -> None:
 _ACTIVE_STATES = frozenset({"queued", "pending", "claimed", "running", "stopping", "cancelling"})
 
 
-def wait_for_boot_runs(client: Any, auth: str, timeout: float = 300.0) -> list[dict[str, Any]]:
+DEFAULT_SETTLE_TIMEOUT = 300.0
+
+
+def wait_for_boot_runs(
+    client: Any, auth: str, timeout: float = DEFAULT_SETTLE_TIMEOUT
+) -> list[dict[str, Any]]:
     """Wait until no run is active; returns the runs as listed then.
 
     Booting the copy re-queues the corpus' quiesced scan (the resume sweep) and
     dispatches its queued scan, and run_on_startup tasks run; an answer recorded
     while they run would race them. Settled = two listings 2 s apart agree and
-    neither shows an active run.
+    neither shows an active run. A run waiting on its dependencies (F2-13's
+    overlay) is dispatched only by the registry's deps sweep, a fixed 5 minutes
+    after boot at the R0 tag, so a corpus holding one needs a timeout above
+    that (``--settle-timeout``).
     """
     deadline = time.monotonic() + timeout
     prev = None
@@ -518,7 +526,10 @@ def wait_for_boot_runs(client: Any, auth: str, timeout: float = 300.0) -> list[d
         if not active and snap == prev:
             return runs
         if time.monotonic() > deadline:
-            raise w.CorpusError(f"boot-time runs did not settle: {active}")
+            changing = "" if snap == prev else " (the run listing was still changing)"
+            raise w.CorpusError(
+                f"boot-time runs did not settle in {timeout:.0f} s: {active}{changing}"
+            )
         prev = snap
         time.sleep(2.0)
 
@@ -639,7 +650,7 @@ def record(args: argparse.Namespace) -> int:
     proc.start()
     try:
         mint_answer_key(ctx)
-        settled = wait_for_boot_runs(ctx.client, f"key:{ANSWER_KEY}")
+        settled = wait_for_boot_runs(ctx.client, f"key:{ANSWER_KEY}", timeout=args.settle_timeout)
         print(f"boot-time runs settled ({len(settled)} runs listed)")
         record_all(rec, ctx.client)
     finally:
@@ -691,6 +702,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--workdir", default=w.DEFAULT_WORKDIR)
     ap.add_argument("--port", type=int, default=w.DEFAULT_PORT)
     ap.add_argument("--out", help="write answers here instead of the committed answers/")
+    ap.add_argument(
+        "--settle-timeout",
+        type=float,
+        default=DEFAULT_SETTLE_TIMEOUT,
+        help="seconds to wait for the boot-time runs to settle (a corpus with a run waiting on "
+        "its dependencies needs more than R0's 5-minute deps sweep)",
+    )
     ap.add_argument(
         "--allow-foreign-binary",
         action="store_true",
