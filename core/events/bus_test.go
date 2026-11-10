@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -629,5 +630,43 @@ func TestKeyFilter(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.envelopes(); len(got) != 2 || got[0].Key != "joker" || got[1].Key != "joker" {
 		t.Errorf("received %+v", got)
+	}
+}
+
+// TestOnRaw_EncodeDropLogsNoPayload: a payload that fails the declared schema
+// is dropped for raw subscribers (reason=encode, counted) and the warning
+// names the topic, the subscriber, the reason and the fixed cause only: the
+// validation error, which can quote the failing value, never reaches the log.
+func TestOnRaw_EncodeDropLogsNoPayload(t *testing.T) {
+	const sentinel = "ALFRED-SECRET-7731"
+	p, sc := provider(t)
+	var lb logBuf
+	b, err := events.NewBus(events.BusOptions{Logger: lb.logger(), Metrics: sc})
+	must(t, err)
+	// A hand-built entry carries no payload type, so a Sighting publishes; its
+	// schema refuses the villain field's value.
+	must(t, b.Declare("gotham", events.TopicSpec{Name: "gotham.villain.escaped.v1", Permission: rbac.Need("gotham:view"),
+		Schema: []byte(`{"type":"object","properties":{"villain":{"type":"string","pattern":"^[a-z]+$"}}}`)}))
+	var got atomic.Int32
+	typed := newRecorder[Sighting]()
+	must(t, b.Subscribe("wayne", events.OnRaw("gotham.villain.escaped.v1", "wayne.watch", func(context.Context, events.RawEnvelope) { got.Add(1) })))
+	must(t, b.Subscribe("gotham", events.On(escaped(), "gotham.typed", typed.handle)))
+	b.Freeze()
+	must(t, b.Open())
+	closeBus(t, b)
+	events.Publish(b.Scope("gotham"), context.Background(), escaped(), "joker", Sighting{Villain: sentinel, Block: 7})
+	typed.wait(t, 1) // typed subscribers are unaffected
+	eventually(t, "the encode drop", func() bool {
+		return sample(t, p, "mediacore_events_dropped_total", map[string]string{"subscriber": "wayne.watch", "reason": "encode"}) == 1
+	})
+	if got.Load() != 0 {
+		t.Error("the raw subscriber received a payload that fails its schema")
+	}
+	out := lb.String()
+	if !strings.Contains(out, "cause=schema") || !strings.Contains(out, "subscriber=wayne.watch") {
+		t.Errorf("the drop warning lacks its cause or subscriber:\n%s", out)
+	}
+	if strings.Contains(out, sentinel) || strings.Contains(out, "ALFRED") {
+		t.Errorf("the payload value reached the log:\n%s", out)
 	}
 }

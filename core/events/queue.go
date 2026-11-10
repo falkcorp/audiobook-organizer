@@ -74,7 +74,7 @@ func (s *sub) enqueue(ev *event) {
 	if s.n == len(s.buf) {
 		if !s.cfg.dropOldest {
 			s.mu.Unlock()
-			s.drop(reasonQueueFull, nil)
+			s.drop(reasonQueueFull, "")
 			return
 		}
 		s.buf[s.head] = nil
@@ -86,7 +86,7 @@ func (s *sub) enqueue(ev *event) {
 	s.n++
 	s.mu.Unlock()
 	if evicted {
-		s.drop(reasonQueueFull, nil)
+		s.drop(reasonQueueFull, "")
 	}
 	select {
 	case s.signal <- struct{}{}:
@@ -140,8 +140,10 @@ func (s *sub) dropQueued() int {
 	return n
 }
 
-// drop counts one dropped event and warns at most once per minute.
-func (s *sub) drop(reason string, err error) {
+// drop counts one dropped event and warns at most once per minute. The
+// warning carries the subscriber, the topic, the reason and, for an encode
+// drop, a fixed cause word: never an error's text or a payload value.
+func (s *sub) drop(reason, cause string) {
 	s.b.inst.dropped(s, reason)
 	now := time.Now().UnixNano()
 	last := s.lastWarn.Load()
@@ -152,8 +154,8 @@ func (s *sub) drop(reason string, err error) {
 		return
 	}
 	args := []any{"subscriber", s.name, "topic", s.topic, "reason", reason, "queue_size", len(s.buf)}
-	if err != nil {
-		args = append(args, "err", err)
+	if cause != "" {
+		args = append(args, "cause", cause)
 	}
 	s.b.log.Warn("events: dropping events for a subscriber (counted; at most one warning per minute)", args...)
 }
@@ -282,11 +284,14 @@ func (s *sub) call(ctx context.Context, ev *event) {
 	reason := s.invoke(ctx, ev)
 	s.inHandler.Store(false)
 	if reason != "" {
-		var err error
-		if reason == reasonEncode && s.raw {
-			_, err = ev.json()
+		cause := ""
+		if reason == reasonEncode {
+			cause = causePayloadType
+			if s.raw {
+				_, cause = ev.json()
+			}
 		}
-		s.drop(reason, err)
+		s.drop(reason, cause)
 		return
 	}
 	s.b.inst.delivered(s, time.Since(start))
