@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.10
+// version: 2.64.11
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-11-10
 
@@ -273,12 +273,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// wire-time runs), so resolve it at request time. Guard inside the
 		// closure so a nil *scheduler.TaskScheduler is not boxed into a non-nil
 		// interface (which would defeat the handler's nil check).
-		func() operations.Scheduler {
-			if ts := s.scheduler.Load(); ts != nil {
-				return ts
-			}
-			return nil
-		},
+		s.operationsSchedulerProvider(),
 		opsPipeline,
 		opsScanStore,
 		s.collectStaleOperations,
@@ -316,12 +311,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// func() handlers.Scheduler is expected.
 	schedulerH := handlers.NewSchedulerHandler(
 		s.storeForWiring(),
-		func() handlers.Scheduler {
-			if ts := s.scheduler.Load(); ts != nil {
-				return ts
-			}
-			return nil
-		},
+		s.handlersSchedulerProvider(),
 	)
 
 	// System domain handler (health/status/announcements/storage/logs/
@@ -860,4 +850,32 @@ func (s *Server) collectionHandler() *handlers.CollectionHandler {
 			s.storeForWiring(), s.SearchIndex)
 	})
 	return s.collectionHV
+}
+
+// operationsSchedulerProvider is the operations handler's lazy scheduler
+// provider: s.scheduler is stored by afterListen on its own goroutine, after
+// the handlers are wired, so it is resolved atomically at request time. A nil
+// *scheduler.TaskScheduler is not boxed into a non-nil interface, which would
+// defeat the handler's nil check.
+func (s *Server) operationsSchedulerProvider() func() operations.Scheduler {
+	return func() operations.Scheduler {
+		if ts := s.scheduler.Load(); ts != nil {
+			return ts
+		}
+		return nil
+	}
+}
+
+// handlersSchedulerProvider is operationsSchedulerProvider for the scheduler
+// handler: a separate method because handlers.Scheduler and
+// operations.Scheduler are distinct (structurally identical) types, so a
+// func() operations.Scheduler cannot be passed where func() handlers.Scheduler
+// is expected.
+func (s *Server) handlersSchedulerProvider() func() handlers.Scheduler {
+	return func() handlers.Scheduler {
+		if ts := s.scheduler.Load(); ts != nil {
+			return ts
+		}
+		return nil
+	}
 }

@@ -1,0 +1,7 @@
+### Fixed
+
+#### Server stop: the clean-stop marker waits for work the post-listen start enrolled late
+
+When the stop gave up on the post-listen start and the background-goroutine wait timed out with nothing running, the start could still finish afterwards and enroll more background goroutines (the backfills, the HNSW snapshotter). The final recheck dropped the "post-listen start" entry as soon as the start had returned, so the HNSW clean-stop marker was written while those goroutines still ran. The entry is now dropped only when the start has returned and no background goroutine is left running; otherwise the marker is withheld and the next boot reconciles the snapshot.
+
+The start-time config capture now reads one `config.Snapshot()` under the config lock instead of the global directly. `TestScheduler_StoreAndProviderLoadDoNotRace` now exercises the real scheduler providers (extracted from the handler wiring) against a concurrent store, and the source guard that keeps the post-listen path off `config.AppConfig` covers every function that path calls.

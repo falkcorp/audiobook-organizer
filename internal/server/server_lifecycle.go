@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.2
+// version: 4.69.3
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-10
 
@@ -425,23 +425,24 @@ type startConfig struct {
 	databasePath string
 }
 
-// captureStartConfig reads those settings from the process-global config. It
-// is called once, by StartHook, before anything runs concurrently.
+// captureStartConfig reads those settings from one config.Snapshot (taken under
+// the config lock). It is called once, by StartHook, before anything runs concurrently.
 func captureStartConfig() startConfig {
+	cfg := config.Snapshot()
 	c := startConfig{
-		autoScanEnabled:         config.AppConfig.AutoScanEnabled,
+		autoScanEnabled:         cfg.AutoScanEnabled,
 		autoScanDebounce:        5 * time.Second,
-		writeStartupReadOnlyKey: config.AppConfig.WriteStartupReadOnlyKey,
-		databasePath:            config.AppConfig.DatabasePath,
-		acoustIDBackfill:        config.AppConfig.Maintenance.AcoustIDBackfill,
+		writeStartupReadOnlyKey: cfg.WriteStartupReadOnlyKey,
+		databasePath:            cfg.DatabasePath,
+		acoustIDBackfill:        cfg.Maintenance.AcoustIDBackfill,
 		maintenance: scheduler.MaintenanceSettings{
-			Enabled:     config.AppConfig.Maintenance.Enabled,
-			WindowStart: config.AppConfig.Maintenance.WindowStart,
-			WindowEnd:   config.AppConfig.Maintenance.WindowEnd,
+			Enabled:     cfg.Maintenance.Enabled,
+			WindowStart: cfg.Maintenance.WindowStart,
+			WindowEnd:   cfg.Maintenance.WindowEnd,
 		},
 	}
-	if config.AppConfig.AutoScanDebounceSeconds > 0 {
-		c.autoScanDebounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
+	if cfg.AutoScanDebounceSeconds > 0 {
+		c.autoScanDebounce = time.Duration(cfg.AutoScanDebounceSeconds) * time.Second
 	}
 	return c
 }
@@ -1345,8 +1346,10 @@ func (s *Server) stopSteps(ctx context.Context) (abandoned []string) {
 
 	// The start may have finished since the seal gave up on it, behind the
 	// waits above: it is then not a step left running, and the clean-stop
-	// marker need not be withheld for it.
-	abandoned = withoutFinishedPostListen(abandoned, afterListenDone)
+	// marker need not be withheld for it. Only when the bgWG goroutines it
+	// started have ended too: the bgWG wait above may have given up before
+	// the start enrolled them.
+	abandoned = withoutFinishedPostListen(abandoned, afterListenDone, &s.bgWG)
 
 	// Last, so no step this stop waits for runs after it.
 	s.markHNSWCleanStop(abandoned)
@@ -1761,12 +1764,20 @@ const (
 // seal gave up on.
 const postListenAbandoned = "post-listen start"
 
-// withoutFinishedPostListen drops the post-listen entry from abandoned when
-// done has closed, checked without blocking.
-func withoutFinishedPostListen(abandoned []string, done <-chan struct{}) []string {
+// withoutFinishedPostListen drops the post-listen entry from abandoned once
+// the start has finished AND the background goroutines it added to bg have
+// ended, both checked without blocking. done alone is not enough: the bgWG wait
+// StopHook ran may have timed out with bg empty, before the start (finishing
+// later) enrolled the backfills or the snapshotter, and those goroutines then
+// still run. done is read first: every Add the start makes precedes it, so a
+// bg read after it cannot miss one.
+func withoutFinishedPostListen(abandoned []string, done <-chan struct{}, bg *namedWaitGroup) []string {
 	select {
 	case <-done:
 	default:
+		return abandoned
+	}
+	if len(bg.Running()) > 0 {
 		return abandoned
 	}
 	return slices.DeleteFunc(abandoned, func(a string) bool { return a == postListenAbandoned })
