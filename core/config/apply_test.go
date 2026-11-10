@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -559,6 +559,52 @@ func TestOnChange_CoalescesUnderSynctest(t *testing.T) {
 			t.Errorf("calls = %v, want at most 2 ending with 200", got)
 		}
 		stop()
+		stop()
+		if err := r.st.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestOnChange_StalePostDropped (T4 review MINOR-7, surviving mutant M23):
+// Apply posts to OnChange after it releases the store mutex, so two Applies
+// can post out of order. Here Apply A's AfterCommit hook runs Apply B to
+// completion before A posts, so B (the newer generation) posts first and A
+// second. A's post is stale and is dropped: the subscriber never receives A's
+// snapshot, and its last delivery is the effective one.
+func TestOnChange_StalePostDropped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		var mu sync.Mutex
+		var got []int
+		stop := r.cave.OnChange(func(_ context.Context, _, next *configtest.Batcave) {
+			mu.Lock()
+			got = append(got, next.Gadget.Count)
+			mu.Unlock()
+		})
+		r.start()
+		var once sync.Once
+		var berr error
+		unhook := r.cave.AfterCommit(func(_ context.Context, _, next *configtest.Batcave) error {
+			if next.Gadget.Count == 7 {
+				once.Do(func() { _, berr = r.apply(admin(), map[config.Path]string{kCount: "9"}) })
+			}
+			return nil
+		})
+		if _, err := r.apply(admin(), map[config.Path]string{kCount: "7"}); err != nil {
+			t.Fatal(err)
+		}
+		if berr != nil {
+			t.Fatalf("Apply B inside A's hook: %v", berr)
+		}
+		unhook()
+		synctest.Wait()
+		mu.Lock()
+		deliveries := slices.Clone(got)
+		mu.Unlock()
+		if final := r.cave.Get().Gadget.Count; final != 9 || len(deliveries) == 0 || deliveries[len(deliveries)-1] != final || slices.Contains(deliveries, 7) {
+			t.Errorf("deliveries %v with Get() = %d: want them to end with B's 9 and never carry A's stale 7", deliveries, final)
+		}
 		stop()
 		if err := r.st.Close(context.Background()); err != nil {
 			t.Fatal(err)
