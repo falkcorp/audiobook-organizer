@@ -1,5 +1,5 @@
 // file: core/config/statedir_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c1e5b4a-8f0d-4d6e-9a2b-7e5c1f0a9d42
 // last-edited: 2026-11-10
 
@@ -21,7 +21,7 @@ import (
 
 // headEnsureSecureStateDir is HEAD's EnsureSecureStateDir
 // (internal/config/state_dir.go at 954f7a35a, lines 118-155) with its two
-// inputs made parameters: env is the raw ABK_STATE_DIR value, def the
+// inputs made parameters: env is the raw value of the app's state-directory variable, def the
 // DefaultSecureStateDir constant, dbPath AppConfig.DatabasePath. warned
 // reports the fallback's slog.Warn. It is the oracle, copied, not called:
 // ABO's file now delegates to config.ResolveStateDir.

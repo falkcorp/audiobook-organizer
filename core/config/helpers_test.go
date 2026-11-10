@@ -1,5 +1,5 @@
 // file: core/config/helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b5d04556-252d-45d5-96bd-ee0c3a1729aa
 // last-edited: 2026-11-10
 
@@ -40,8 +40,8 @@ const (
 	kRobin       config.Path = configtest.ModulesPath + ".robin.enabled"
 	pathsSection config.Path = "core.paths"
 	stateDir     config.Path = "core.paths.state_dir"
-	ptBaseURL    config.Path = "integrations.ai.openai.base_url"
-	ptAPIKey     config.Path = "integrations.ai.openai.api_key"
+	ptBaseURL    config.Path = "integrations.ai.wayne.base_url"
+	ptAPIKey     config.Path = "integrations.ai.wayne.api_key"
 )
 
 // logRecorder is a slog handler that keeps every record's message and
@@ -126,7 +126,7 @@ func source(kind string, vals map[config.Path]string) *config.TestSource {
 			return "file gotham.yaml"
 		}
 		if p == ptAPIKey {
-			return "env OPENAI_API_KEY"
+			return "env WAYNE_API_KEY"
 		}
 		return "env GOTHAM_" + strings.ToUpper(strings.ReplaceAll(string(p), ".", "_"))
 	}}
