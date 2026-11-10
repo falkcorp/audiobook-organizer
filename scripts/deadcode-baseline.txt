@@ -67,9 +67,6 @@ internal/itunes.ComputeLibraryIdentity
 internal/itunes.ContractVerdict.Error
 internal/itunes.ConvertTrack
 internal/itunes.DeriveEncodingTable
-core/kernel.coreSections
-core/kernel.dur
-core/kernel.hashWorkersDefault
 internal/itunes.DiffMsdhInventory
 internal/itunes.EncodeLocation
 internal/itunes.ErrLibraryModified.Error
@@ -114,7 +111,12 @@ core/kernel.configBoot.loadConfig
 core/kernel.configOwnerSpec
 core/kernel.operatorString
 core/kernel.operatorValueString
-core/kernel.pathOf
+core/kernel.kernelSecrets.close
+core/kernel.openSecrets
+core/kernel.reportSecretsHealth
+core/kernel.secretsHealth
+core/kernel.secretsMetrics
+core/kernel.secretsOwnerSpec
 internal/metadata.BookFileHashOptions
 internal/metadata.NewAudibleClientWithBaseURL
 internal/metadata.NewGoogleBooksClientWithBaseURL
