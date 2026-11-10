@@ -1,5 +1,5 @@
 // file: core/config/apply_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
 // last-edited: 2026-11-10
 
@@ -737,6 +737,33 @@ func TestApply_CommitCarriesBy(t *testing.T) {
 		}
 		if got := cms[i]; got.By != "alfred" {
 			t.Errorf("%s: Commit.By = %q, want alfred (set %d, unset %d, boot %d)", s.name, got.By, len(got.Set), len(got.Unset), len(got.Boot))
+		}
+	}
+}
+
+// TestMapEntryID_InvalidIsUnknown (T4 review MINOR-9, surviving mutant M28):
+// a map section's entry ID must be a valid segment. keyFor is the one gate
+// for every caller, so a patch naming an invalid ID is refused as an unknown
+// key and writes nothing, and a stored row naming one is reported as unknown,
+// never read as a key.
+func TestMapEntryID_InvalidIsUnknown(t *testing.T) {
+	bad := []config.Path{"core.modules.Robin.enabled", "core.modules.9lives.enabled", "core.modules.night-wing.enabled"}
+	r := started(t, rigOpts{})
+	before := r.state()
+	for _, p := range bad {
+		if _, err := r.apply(admin(), map[config.Path]string{p: "true"}); !errors.Is(err, config.ErrUnknownKey) {
+			t.Errorf("Apply %s = %v, want ErrUnknownKey", p, err)
+		}
+	}
+	refused(t, r, before, 0)
+	rows := map[config.Path]string{}
+	for _, p := range bad {
+		rows[p] = "true"
+	}
+	rep := newRig(t, rigOpts{rows: rows}).start()
+	for _, p := range bad {
+		if !slices.Contains(rep.Unknown, p) || rep.Quarantined[p] != nil {
+			t.Errorf("row %s: unknown %v, quarantined %v; want it reported as unknown", p, rep.Unknown, rep.Quarantined[p])
 		}
 	}
 }
