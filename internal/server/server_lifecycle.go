@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.3
+// version: 4.69.4
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-10
 
@@ -735,6 +735,30 @@ func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 	return nil
 }
 
+// startScheduler builds the task scheduler, stores it, registers the ops
+// schedules and starts it. It returns false, without having started the
+// scheduler, when stopping reports the stop has begun between the schedule
+// registration and Start: Start launches the RunOnStart tasks on goroutines
+// nothing tracks, so a seal that landed after afterListen's own check before
+// this call would otherwise have those tasks start during the stop. It also
+// returns false when the stop began during Start, as the step boundary the
+// caller ends the start at.
+func (s *Server) startScheduler(stopping func() bool, shutdown chan struct{}, backgroundWG *sync.WaitGroup) bool {
+	ts := scheduler.NewTaskScheduler(s.schedulerDeps())
+	s.scheduler.Store(ts)
+	// ops.Schedule declarations (05-PR8): registered before Start so the
+	// scheduler's one v3 loop and the maintenance window see them. A def that
+	// fails here is skipped and reported; the rest still schedule.
+	if err := ts.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
+		lifecycleLog.Warn("ops.Schedule registration: %v", err)
+	}
+	if stopping() {
+		return false
+	}
+	ts.Start(shutdown, backgroundWG)
+	return !stopping()
+}
+
 // afterListen is HEAD's Start after the main listener bound: R1Listener.Serve
 // runs it once, concurrently with serving, as HEAD ran these steps while its
 // serve goroutine accepted connections.
@@ -821,16 +845,7 @@ func (s *Server) afterListen() {
 	}
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
-	ts := scheduler.NewTaskScheduler(s.schedulerDeps())
-	s.scheduler.Store(ts)
-	// ops.Schedule declarations (05-PR8): registered before Start so the
-	// scheduler's one v3 loop and the maintenance window see them. A def that
-	// fails here is skipped and reported; the rest still schedule.
-	if err := ts.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
-		lifecycleLog.Warn("ops.Schedule registration: %v", err)
-	}
-	ts.Start(shutdown, backgroundWG)
-	if stopping() {
+	if !s.startScheduler(stopping, shutdown, backgroundWG) {
 		return
 	}
 

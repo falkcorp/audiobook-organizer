@@ -1,5 +1,5 @@
 // file: internal/server/afterlisten_config_capture_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7d3c5e-92a4-4f16-8e0d-6a41c7f3d825
 // last-edited: 2026-11-10
 
@@ -98,35 +98,51 @@ func TestSchedulerDeps_ReadsTheCapturedMaintenanceNotTheLiveConfig(t *testing.T)
 	wg.Wait()
 }
 
-// afterListenReaders is every function afterListen runs that could read the
-// config, directly or through seedRolesAndTokens and startBackfills, with the
-// file that declares it (relative to this package) and whether it is a *Server
-// method (otherwise a plain function). None may read the global config itself:
-// each reads s.life.startConfig, a parameter, or config.Snapshot (which takes
-// the config lock).
+// afterListenReaders is every function that runs synchronously on
+// afterListen's goroutine and could read the config, directly or through
+// seedRolesAndTokens, startBackfills and the file-op recovery, with the file
+// that declares it (relative to this package) and its receiver as written in
+// the declaration ("s *Server"; empty for a plain function). None may read the
+// global config itself: each reads s.life.startConfig, a parameter, or
+// config.Snapshot (which takes the config lock).
+//
+// Not covered here: scheduler.Start, which afterListen calls through
+// startScheduler and whose config reads the scheduler package's own race test
+// (start_config_race_test.go) pins; and the bodies of the file-op recovery
+// handlers (fn in recoverInterruptedFileOps), which run on the pool's workers,
+// not on afterListen's goroutine.
 var afterListenReaders = []struct {
-	file   string
-	name   string
-	method bool
+	file string
+	name string
+	recv string
 }{
-	{"server_lifecycle.go", "afterListen", true},
-	{"server_lifecycle.go", "seedRolesAndTokens", true},
-	{"server_lifecycle.go", "startBackfills", true},
-	{"server_lifecycle.go", "startPurgeJournalReplay", true},
-	{"server_lifecycle.go", "startHNSWSnapshotter", true},
-	{"server_lifecycle.go", "hnswSnapshotStore", true},
-	{"server_lifecycle.go", "schedulerDeps", true},
-	{"server_lifecycle.go", "enqueueBootOps", false},
-	{"server_lifecycle.go", "pruneExpiredSessions", false},
-	{"owner_rejected_rerank.go", "startOwnerRejectedRerank", true},
-	{"cache_snapshotter.go", "runCacheStatsSnapshotter", true},
-	{"bootstrap.go", "InitBootstrapToken", false},
-	{"bootstrap.go", "InitStartupReadOnlyKey", false},
+	{"server_lifecycle.go", "afterListen", "s *Server"},
+	{"server_lifecycle.go", "seedRolesAndTokens", "s *Server"},
+	{"server_lifecycle.go", "startBackfills", "s *Server"},
+	{"server_lifecycle.go", "startPurgeJournalReplay", "s *Server"},
+	{"server_lifecycle.go", "startHNSWSnapshotter", "s *Server"},
+	{"server_lifecycle.go", "hnswSnapshotStore", "s *Server"},
+	{"server_lifecycle.go", "startScheduler", "s *Server"},
+	{"server_lifecycle.go", "schedulerDeps", "s *Server"},
+	{"server_lifecycle.go", "enqueueBootOps", ""},
+	{"server_lifecycle.go", "pruneExpiredSessions", ""},
+	{"owner_rejected_rerank.go", "startOwnerRejectedRerank", "s *Server"},
+	{"cache_snapshotter.go", "runCacheStatsSnapshotter", "s *Server"},
+	// The file-op recovery afterListen runs inline, and the pool submit it
+	// makes for each replayed row.
+	{"file_io_pool.go", "RecoverInterruptedFileOps", ""},
+	{"file_io_pool.go", "recoverInterruptedFileOps", ""},
+	{"file_io_pool.go", "submitTyped", "p *FileIOPool"},
+	{"file_io_pool.go", "tryQueue", "p *FileIOPool"},
+	// The activity flush release; the flush itself runs on its own goroutine.
+	{"../activity/service.go", "StartDeferredFlush", "s *Service"},
+	{"bootstrap.go", "InitBootstrapToken", ""},
+	{"bootstrap.go", "InitStartupReadOnlyKey", ""},
 	// The state directory: afterListen passes EnsureSecureStateDir the
 	// captured database path, and its helpers read the environment, not the
 	// config.
-	{"../config/state_dir.go", "EnsureSecureStateDir", false},
-	{"../config/state_dir.go", "configuredStateDir", false},
+	{"../config/state_dir.go", "EnsureSecureStateDir", ""},
+	{"../config/state_dir.go", "configuredStateDir", ""},
 }
 
 // TestAfterListenPath_DoesNotReadTheGlobalConfig pins, by source, that the
@@ -141,8 +157,8 @@ func TestAfterListenPath_DoesNotReadTheGlobalConfig(t *testing.T) {
 		raw, err := os.ReadFile(fn.file)
 		require.NoError(t, err)
 		decl := `\nfunc ` + fn.name + `\(`
-		if fn.method {
-			decl = `\nfunc \(s \*Server\) ` + fn.name + `\(`
+		if fn.recv != "" {
+			decl = `\nfunc \(` + regexp.QuoteMeta(fn.recv) + `\) ` + fn.name + `\(`
 		}
 		body := regexp.MustCompile(`(?s)` + decl + `.*?\n}\n`).FindString(string(raw))
 		require.NotEmpty(t, body, "%s no longer declares %s; update this test", fn.file, fn.name)

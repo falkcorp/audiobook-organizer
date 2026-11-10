@@ -1,5 +1,5 @@
 // file: internal/server/afterlisten_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c0e9f1a-8d3b-4e47-9a62-3b7d1f4c2a90
 // last-edited: 2026-11-10
 
@@ -9,11 +9,16 @@ package server
 
 import (
 	"context"
+	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/watcher"
 )
 
@@ -142,6 +147,56 @@ func TestAfterListen_ReturnsAtTheFirstBoundaryOnceSealed(t *testing.T) {
 	s := &Server{}
 	require.True(t, s.life.afterGate.seal(context.Background()))
 	s.afterListen()
+}
+
+// maintenanceRunReads is a store that counts the read scheduler Start makes
+// first, synchronously (loadLastMaintenanceRun), so a test can tell whether
+// Start ran. Anything else it is asked falls through to the nil embedded Store
+// and panics, which is also a failure.
+type maintenanceRunReads struct {
+	database.Store
+	reads atomic.Int32
+}
+
+func (m *maintenanceRunReads) GetSetting(key string) (*database.Setting, error) {
+	if key == "maintenance_window_last_run" {
+		m.reads.Add(1)
+		return nil, nil
+	}
+	return m.Store.GetSetting(key)
+}
+
+// TestStartScheduler_StopBeganBeforeStartDoesNotStartTheScheduler: scheduler
+// Start launches the RunOnStart tasks on goroutines nothing tracks, so a stop
+// that sealed the gate after afterListen's check before the scheduler was
+// built must not have them start. Here the stop has begun by the time the ops
+// schedules are registered, the point between that and Start where the seal
+// can land in production. Start's first act is to read the last maintenance
+// run from the store, so a read means Start ran.
+func TestStartScheduler_StopBeganBeforeStartDoesNotStartTheScheduler(t *testing.T) {
+	store := &maintenanceRunReads{}
+	s := &Server{
+		store:      store,
+		opRegistry: opsregistry.New(nil, slog.New(slog.DiscardHandler), 1, nil),
+	}
+	var sealed atomic.Bool
+	sealed.Store(true) // the stop began before the check
+	var checks atomic.Int32
+	stopping := func() bool {
+		checks.Add(1)
+		return sealed.Load()
+	}
+
+	shutdown := make(chan struct{})
+	var wg sync.WaitGroup
+	started := s.startScheduler(stopping, shutdown, &wg)
+	close(shutdown)
+	wg.Wait()
+
+	require.False(t, started, "the start ends at this boundary")
+	require.Equal(t, int32(1), checks.Load(), "the stop is checked once, before Start")
+	require.NotNil(t, s.scheduler.Load(), "the scheduler is stored before the check, for the stop to find")
+	require.Zero(t, store.reads.Load(), "Start must not run: it reads the last maintenance run first")
 }
 
 func TestAfterListenGate(t *testing.T) {
