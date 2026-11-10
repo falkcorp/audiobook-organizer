@@ -1,5 +1,5 @@
 // file: core/rbac/service_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b9e2d17-8c5a-4f63-a1d0-6e3f7b2c8d95
 // last-edited: 2026-11-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -649,6 +650,13 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 // returns, a fresh Compile no longer grants the removed scope: the
 // generation bump and the role update are one step under the lock, so no
 // reader can cache the old patterns under the new generation.
+//
+// Each reader also compiles a role set it has never compiled before (the
+// role plus a fresh unknown role ID), so that Compile misses the checker
+// cache and reads the role map on every pass, not only on the first pass
+// after a generation bump. Without that, a Compile that read the map after
+// releasing the lock raced the writer only inside a narrow window and
+// survived some -race runs (round-2 re-run of mutant M32b).
 func TestRoleCache_ConcurrentReaders(t *testing.T) {
 	ctx := context.Background()
 	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
@@ -664,16 +672,23 @@ func TestRoleCache_ConcurrentReaders(t *testing.T) {
 		close(stop)
 		wg.Wait()
 	}()
-	for range 4 {
+	for w := range 4 {
 		actor := f.admin()
 		wg.Go(func() {
-			for {
+			for n := 0; ; n++ {
 				select {
 				case <-stop:
 					return
 				default:
 				}
 				f.svc.Compile(in)
+				fresh := rbac.CheckerInput{Roles: []rbac.RoleName{
+					"custom.oracle", rbac.RoleName("custom.ghost" + strconv.Itoa(w) + "x" + strconv.Itoa(n)),
+				}}
+				if !f.svc.Compile(fresh).Has("gotham:signal") {
+					t.Errorf("Compile(%v) lacks gotham:signal, which no cycle removes", fresh.Roles)
+					return
+				}
 				if err := f.svc.CanAssign(actor, in.Roles); err != nil {
 					t.Errorf("CanAssign by an admin: %v", err)
 					return
