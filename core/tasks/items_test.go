@@ -1,5 +1,5 @@
 // file: core/tasks/items_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
@@ -872,11 +872,11 @@ func TestRunItems_OwnFailureBeforeCancelHasNoCause(t *testing.T) {
 	}
 }
 
-// TestNestedRefLocks_SkipHeldRefs: an item holding a ref can run a nested
-// loop and call ic.LockRefs on that ref without waiting on itself; the
-// nested loop's items still exclude each other on it; an overlapping ref the
-// item does not cover is refused, not waited for.
-func TestNestedRefLocks_SkipHeldRefs(t *testing.T) {
+// TestNestedRefLocks_ItemTable: an item holding a ref locks it again
+// through ic.LockRefs and nested loops in one table of its own, so two
+// concurrent nested loops and a goroutine of the same item never hold it at
+// once; a ref the item does not hold is refused, never waited for.
+func TestNestedRefLocks_ItemTable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
 		defer cancel()
@@ -884,33 +884,102 @@ func TestNestedRefLocks_SkipHeldRefs(t *testing.T) {
 		cave := tasks.ResID("gotham", "caves", "batcave")
 		lab := tasks.ResID("gotham", "labs", "lab-1")
 		var inFlight, peak atomic.Int64
-		res, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
-			release, err := ic.LockRefs(cave)
-			if err != nil {
-				return err
+		hold := func() {
+			n := inFlight.Add(1)
+			for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
 			}
-			release()
+			time.Sleep(time.Millisecond)
+			inFlight.Add(-1)
+		}
+		res, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
 			if _, err := ic.LockRefs(tasks.Res("gotham", "caves")); !errors.Is(err, tasks.ErrHeldOverlap) {
 				return fmt.Errorf("a whole-kind lock over a held ID = %v, want ErrHeldOverlap", err)
 			}
-			_, err = tasks.ForEach(ic.Context(), tasks.Fixed(4, "four detectives"), make([]int, 4), func(context.Context, int) error {
-				n := inFlight.Add(1)
-				for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+			if _, err := ic.LockRefs(lab); !errors.Is(err, tasks.ErrNestedLockNotHeld) {
+				return fmt.Errorf("ic.LockRefs on a ref the item does not hold = %v, want ErrNestedLockNotHeld", err)
+			}
+			_, err := tasks.ForEach(ic.Context(), tasks.Sequential("one"), []int{0}, func(context.Context, int) error { return nil },
+				tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave, lab} }})
+			if !errors.Is(err, tasks.ErrNestedLockNotHeld) {
+				return fmt.Errorf("a nested loop naming an unheld ref = %v, want ErrNestedLockNotHeld", err)
+			}
+			errs := make(chan error, 3)
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Go(func() {
+					_, err := tasks.ForEach(ic.Context(), tasks.Fixed(2, "two detectives"), make([]int, 3),
+						func(context.Context, int) error { hold(); return nil },
+						tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
+					errs <- err
+				})
+			}
+			wg.Go(func() {
+				for range 3 {
+					release, err := ic.LockRefs(cave)
+					if err != nil {
+						errs <- err
+						return
+					}
+					hold()
+					release()
 				}
-				time.Sleep(time.Millisecond)
-				inFlight.Add(-1)
-				return nil
-			}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave, lab} }})
-			return err
+				errs <- nil
+			})
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
 		if err != nil || res.Done != 1 {
-			t.Fatalf("result %+v err %v (a nested lock waited on its own item?)", res, err)
+			t.Fatalf("result %+v err %v", res, err)
 		}
 		if peak.Load() != 1 {
-			t.Fatalf("nested items sharing a held ref ran %d at once, want 1", peak.Load())
+			t.Fatalf("holders of one held ref under one item peaked at %d, want 1", peak.Load())
 		}
 		if _, err := tasks.LockRefs(run.RC().Context(), cave, lab); err != nil {
 			t.Fatalf("a ref stayed locked after the run: %v", err)
 		}
 	})
+}
+
+// TestNestedRefLocks_CrossHoldRefused: item 0 holds the cave and nests a lock
+// on the lab while item 1 holds the lab and nests a lock on the cave. Staged
+// locks would deadlock; both nested locks are refused instead.
+func TestNestedRefLocks_CrossHoldRefused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+		defer cancel()
+		run := taskstest.NewFakeRun(ctx, caseKind)
+		refs := []entity.Ref{tasks.ResID("gotham", "caves", "batcave"), tasks.ResID("gotham", "labs", "lab-1")}
+		res, err := tasks.RunItems(run.RC(), tasks.Fixed(2, "two cases"), []int{0, 1}, func(ic *tasks.ItemRC, i int) error {
+			time.Sleep(time.Second) // both items hold their ref
+			_, err := tasks.ForEach(ic.Context(), tasks.Sequential("one"), []int{0}, func(context.Context, int) error { return nil },
+				tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{refs[1-i]} }})
+			return err
+		}, tasks.ItemsOptions[int]{OnError: tasks.Collect, ExclusiveRefs: func(i int) []entity.Ref { return []entity.Ref{refs[i]} }})
+		if !errors.Is(err, tasks.ErrNestedLockNotHeld) || res.Failed != 2 || ctx.Err() != nil {
+			t.Fatalf("result %+v err %v ctx %v; want both nested locks refused, no wait", res, err, ctx.Err())
+		}
+	})
+}
+
+// TestRunItems_NestedPanicLoggedOnce: a panic inside a nested loop surfaces
+// in the outer item's error too, but its stack is logged once.
+func TestRunItems_NestedPanicLoggedOnce(t *testing.T) {
+	logs := &syncBuffer{}
+	h := logHost{FakeRun: taskstest.NewFakeRun(t.Context(), caseKind), log: slog.New(slog.NewTextHandler(logs, nil))}
+	_, err := tasks.RunItems(tasks.NewRC(h), tasks.Sequential("in order"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
+		_, err := tasks.ForEach(ic.Context(), tasks.Sequential("in order"), []int{0}, func(context.Context, int) error { panic("bane") })
+		return err
+	})
+	if _, ok := errors.AsType[*tasks.PanicError](err); !ok {
+		t.Fatalf("err = %v, want the nested *PanicError", err)
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 {
+		t.Fatalf("the nested panic was logged %d times, want 1: %q", n, logs.String())
+	}
 }

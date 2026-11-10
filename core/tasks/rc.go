@@ -1,5 +1,5 @@
 // file: core/tasks/rc.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
 // last-edited: 2026-11-10
 
@@ -269,6 +269,11 @@ func (rc *RC) Await(ref RunRef) (Outcome, error) { return rc.h.Await(ref) }
 func (rc *RC) StandDown(key Key) (Hold, error) { return rc.h.StandDown(key) }
 
 // LockRefs takes the executor's keyed ref locks, sorted, all-or-wait (5T.3.4).
+//
+// Inside a RunItems/RunSeq/ForEach item, use ic.LockRefs (or LockRefs with
+// the item's context) instead: rc's context carries no item hold, so
+// rc.LockRefs on a ref the item holds waits on the item itself, and on any
+// other ref it takes locks in stages (see ForEach).
 func (rc *RC) LockRefs(refs ...entity.Ref) (release func(), err error) {
 	return rc.h.LockRefs(rc.ctx, refs...)
 }
