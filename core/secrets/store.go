@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-10
 
@@ -18,7 +18,9 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -107,10 +109,12 @@ func validAppID(id string) bool {
 	return true
 }
 
-// Open opens the store: it checks c/secrets/meta against AppID, resolves the
-// keyring (05-config §2.4 step 1), then writes c/secrets/meta when absent.
-// It deletes nothing, ever. The kernel calls it in 06 P4b, after the P4a
-// checkpoint and before the migration list.
+// Open opens the store: it checks c/secrets/meta against AppID, removes the
+// keyring's stale temporary files, resolves the keyring (05-config §2.4 step
+// 1), then writes c/secrets/meta when absent or when the keyring holds a key
+// number above the one it records. It deletes no record and no key, ever.
+// The kernel calls it in 06 P4b, after the P4a checkpoint and before the
+// migration list, with the store lock held.
 func Open(ctx context.Context, o Options) (*Store, error) {
 	if o.StateDir == nil {
 		return nil, errors.New("secrets: Open needs the state directory")
@@ -142,22 +146,21 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	if s.now == nil {
 		s.now = time.Now
 	}
-	metaAbsent, err := s.checkMeta(ctx)
+	meta, metaRaw, err := s.checkMeta(ctx)
 	if err != nil {
 		return nil, err
 	}
-	f, err := s.resolveKeyring(ctx, o)
+	s.removeStaleTemps()
+	f, err := s.resolveKeyring(ctx, o, meta)
 	if err != nil {
 		return nil, err
 	}
 	if s.ring, err = buildRing(f); err != nil {
 		return nil, err
 	}
-	if metaAbsent {
-		if err := s.writeMeta(ctx); err != nil {
-			s.ring.wipe()
-			return nil, err
-		}
+	if err := s.recordKeyNumbers(ctx, meta, metaRaw, f.maxIDNumber()); err != nil {
+		s.ring.wipe()
+		return nil, err
 	}
 	if o.Metrics != nil {
 		if err := s.Instrument(o.Metrics); err != nil {
@@ -168,36 +171,47 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	return s, nil
 }
 
-// checkMeta reads c/secrets/meta: absent reports true; another app ID is
-// ErrAppIDMismatch naming both.
-func (s *Store) checkMeta(ctx context.Context) (absent bool, err error) {
+// checkMeta reads c/secrets/meta and its bytes (nil, nil when absent);
+// another app ID is ErrAppIDMismatch naming both.
+func (s *Store) checkMeta(ctx context.Context) (*storeMeta, []byte, error) {
 	raw, err := s.ks.Get(ctx, metaKey())
 	if errors.Is(err, storage.ErrNotFound) {
-		return true, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("secrets: read c/secrets/meta: %w", err)
+		return nil, nil, fmt.Errorf("secrets: read c/secrets/meta: %w", err)
 	}
 	m, err := decodeStoreMeta(raw)
 	if err != nil {
-		return false, err
+		return nil, nil, err
 	}
 	if m.AppID != s.appID {
-		return false, fmt.Errorf("%w: c/secrets/meta names app %q, this binary is app %q", ErrAppIDMismatch, m.AppID, s.appID)
+		return nil, nil, fmt.Errorf("%w: c/secrets/meta names app %q, this binary is app %q", ErrAppIDMismatch, m.AppID, s.appID)
 	}
-	return false, nil
+	return m, raw, nil
 }
 
-// writeMeta writes c/secrets/meta, expecting it absent. A concurrent first
-// Open that wrote it already is accepted when its app ID matches.
-func (s *Store) writeMeta(ctx context.Context) (err error) {
-	raw, err := encodeJSON(storeMeta{AppID: s.appID, KeyringFormat: keyringFormat, Created: s.now().UTC()})
+// recordKeyNumbers keeps c/secrets/meta's max_key_id at or above the
+// keyring's highest key number n: it writes meta when absent, and rewrites
+// it (expecting the bytes read) when n is higher than it records. Every key
+// a running service derived or sealed under was in a keyring some Open
+// loaded, so a regenerated keyring that numbers past max_key_id never gives
+// an old key's ID to new material, exported or not.
+func (s *Store) recordKeyNumbers(ctx context.Context, m *storeMeta, old []byte, n int) (err error) {
+	if m != nil && m.MaxKeyID >= n {
+		return nil
+	}
+	next := storeMeta{AppID: s.appID, KeyringFormat: keyringFormat, Created: s.now().UTC(), MaxKeyID: n}
+	if m != nil {
+		next.KeyringFormat, next.Created = m.KeyringFormat, m.Created
+	}
+	raw, err := encodeJSON(next)
 	if err != nil {
 		return err
 	}
 	b := s.ks.NewBatch()
 	defer func() { err = errors.Join(err, b.Close()) }()
-	if err := b.Expect(s.ks, metaKey(), nil); err != nil {
+	if err := b.Expect(s.ks, metaKey(), old); err != nil {
 		return fmt.Errorf("secrets: write c/secrets/meta: %w", err)
 	}
 	if err := b.Set(metaKey(), raw); err != nil {
@@ -205,8 +219,16 @@ func (s *Store) writeMeta(ctx context.Context) (err error) {
 	}
 	err = b.Commit(ctx, storage.Sync)
 	if errors.Is(err, storage.ErrConflict) {
-		_, err = s.checkMeta(ctx)
-		return err
+		// Another Open wrote meta first: accepted when it names this app
+		// and records at least n.
+		cur, _, cerr := s.checkMeta(ctx)
+		if cerr != nil {
+			return cerr
+		}
+		if cur == nil || cur.MaxKeyID < n {
+			return fmt.Errorf("secrets: c/secrets/meta changed under Open and records key number %d, below the keyring's %d", maxKeyID(cur), n)
+		}
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("secrets: write c/secrets/meta: %w", err)
@@ -214,12 +236,71 @@ func (s *Store) writeMeta(ctx context.Context) (err error) {
 	return nil
 }
 
+// maxKeyID is m's max_key_id, 0 for no meta.
+func maxKeyID(m *storeMeta) int {
+	if m == nil {
+		return 0
+	}
+	return m.MaxKeyID
+}
+
+// removeStaleTemps removes the keyring's leftover temporary files
+// (<key file>.tmp-<12 hex>, 0600, holding key material) that a crash
+// between create and rename left. Only the keyring's own writers make them
+// (Open, rotate-derive and set-install-id), and all three run under the
+// store lock Open's caller holds, so any found now is stale. Only regular
+// files of that exact name shape are removed; the export record's
+// temporaries are left, because export-keyring runs without the lock. A
+// failure is logged, never fatal.
+func (s *Store) removeStaleTemps() {
+	dir, base := filepath.Split(s.keyFile)
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := fs.ReadDir(s.root.FS(), filepath.ToSlash(filepath.Clean(dir)))
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			s.log.Warn("secrets: could not list the keyring directory for stale temporary files", "key_file", s.keyFile, "error", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		suffix, ok := strings.CutPrefix(e.Name(), base+".tmp-")
+		if !ok || !isTempSuffix(suffix) || !e.Type().IsRegular() {
+			continue
+		}
+		name := filepath.Join(dir, e.Name())
+		if err := s.root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.log.Warn("secrets: could not remove a stale keyring temporary file", "file", name, "error", err)
+			continue
+		}
+		s.log.Info("secrets: removed a stale keyring temporary file", "file", name)
+	}
+}
+
+// isTempSuffix reports whether s is writeFileAtomic's temporary suffix: 12
+// lower-case hex characters.
+func isTempSuffix(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // resolveKeyring is §2.4 step 1's keyring half: load a present keyring
 // (fixing its mode or failing closed), generate a first one, or refuse with
 // ErrKeyMissing when sealed records exist (AllowKeyRegen generates new keys
 // and keeps them). It writes install_id into the header when absent, and
-// rewrites it on a reset boot only.
-func (s *Store) resolveKeyring(ctx context.Context, o Options) (*keyringFile, error) {
+// rewrites it on a reset boot only. A new keyring is k<n> and d<n> with n
+// past every key number known: the sealed records' key IDs, c/secrets/meta's
+// max_key_id (m) and the export record's IDs. It is created exclusively,
+// never over a keyring that appeared meanwhile.
+func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*keyringFile, error) {
 	_, statErr := s.root.Stat(s.keyFile)
 	switch {
 	case statErr == nil:
@@ -232,15 +313,23 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options) (*keyringFile, er
 		return nil, err
 	}
 	now := s.now().UTC()
+	known := max(maxKID, maxKeyID(m), s.exportedMaxID())
 	if sealed == 0 {
-		f, err := newKeyringFile(1, o.InstallID, now)
+		f, err := newKeyringFile(known+1, o.InstallID, now)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeKeyring(s.root, s.keyFile, f); err != nil {
+		if err := writeKeyringNew(s.root, s.keyFile, f); err != nil {
 			return nil, err
 		}
-		s.log.Info("secrets: created a new keyring", "key_file", s.keyFile, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID})
+		if known == 0 {
+			s.log.Info("secrets: created a new keyring", "key_file", s.keyFile, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID})
+		} else {
+			s.log.Warn("secrets: the keyring was missing; no stored secret needs it, so a new one was created. "+
+				"What was signed or encrypted under the old derive keys (backup MACs, archives, sign-in state) no longer verifies "+
+				"until the old keyring is put back",
+				"key_file", s.keyFile, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID}, "highest_known_key_number", known)
+		}
 		return f, nil
 	}
 	if !o.AllowKeyRegen {
@@ -249,17 +338,31 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options) (*keyringFile, er
 			"or set core.secrets.allow_key_regen=true to start a new keyring and re-enter those secrets",
 			ErrKeyMissing, s.keyFile, sealed)
 	}
-	f, err := newKeyringFile(maxKID+1, o.InstallID, now)
+	f, err := newKeyringFile(known+1, o.InstallID, now)
 	if err != nil {
 		return nil, err
 	}
-	if err := writeKeyring(s.root, s.keyFile, f); err != nil {
+	if err := writeKeyringNew(s.root, s.keyFile, f); err != nil {
 		return nil, err
 	}
 	s.log.Warn("secrets: the keyring was missing; core.secrets.allow_key_regen generated a new one. "+
 		"The stored secrets under the old keys are kept and read as \"must be re-entered\" until the old keyring is put back",
 		"key_file", s.keyFile, "kept_records", sealed, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID})
 	return f, nil
+}
+
+// exportedMaxID is the highest key number the export record names, 0 when
+// there is none. A record that cannot be read is logged and counts as none:
+// c/secrets/meta's max_key_id still bounds the numbering.
+func (s *Store) exportedMaxID() int {
+	r, err := readExportRecord(s.root, exportedRecordName(s.keyFile))
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			s.log.Warn("secrets: the export record cannot be read; numbering a new keyring without it", "key_file", s.keyFile, "error", err)
+		}
+		return 0
+	}
+	return r.maxIDNumber()
 }
 
 // loadKeyring reads a present keyring: its mode fixed to 0600 or
@@ -787,16 +890,49 @@ func (s *Store) KeyIDs() []string {
 	return s.ring.ids()
 }
 
+// String names the store's app and keyring file, never a value or a key:
+// the operator values and the keyring sit in unexported fields, which fmt
+// would print raw.
+func (s *Store) String() string {
+	if s == nil {
+		return "secrets.Store(nil)"
+	}
+	return "secrets.Store(app " + s.appID + ", keyring " + s.keyFile + ", " + redacted + ")"
+}
+
+// GoString is String.
+func (s *Store) GoString() string { return s.String() }
+
+// Format prints String for every verb.
+func (s *Store) Format(f fmt.State, _ rune) { writeRedacted(f, s.String()) }
+
+// LogValue renders the store's app and keyring file only.
+func (s *Store) LogValue() slog.Value {
+	if s == nil {
+		return slog.StringValue("secrets.Store(nil)")
+	}
+	return slog.GroupValue(slog.String("app_id", s.appID), slog.String("key_file", s.keyFile))
+}
+
 // UnexportedKeys is the key IDs of the loaded keyring that the export record
-// (<key file>.exported, written by secrets export-keyring) does not name
-// (05-health secrets_keyring_not_exported; a name coined by F3-03). It reads
+// (<key file>.exported, written by secrets export-keyring) does not hold with
+// the same material digest (05-health secrets_keyring_not_exported; a name
+// coined by F3-03). Comparing the digest, not only the ID, keeps a record
+// written for a keyring since lost from vouching for a new k1. It reads
 // the record on every call, since export-keyring runs while the server
 // serves. An absent record leaves every key unexported; a record that cannot
 // be read does too, and its error is returned beside them.
 func (s *Store) UnexportedKeys() ([]string, error) {
-	ids := s.KeyIDs()
-	if ids == nil {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
 		return nil, errClosed
+	}
+	keys := slices.Clone(s.ring.file.Keys)
+	s.mu.RUnlock()
+	ids := make([]string, len(keys))
+	for i, k := range keys {
+		ids[i] = k.ID
 	}
 	exported, err := readExportRecord(s.root, exportedRecordName(s.keyFile))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -806,9 +942,9 @@ func (s *Store) UnexportedKeys() ([]string, error) {
 		return ids, err
 	}
 	var out []string
-	for _, id := range ids {
-		if !slices.Contains(exported.KeyIDs, id) {
-			out = append(out, id)
+	for i := range keys {
+		if !exported.covers(&keys[i]) {
+			out = append(out, keys[i].ID)
 		}
 	}
 	return out, nil

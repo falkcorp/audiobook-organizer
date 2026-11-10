@@ -1,11 +1,14 @@
 // file: core/secrets/offline.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
 // last-edited: 2026-11-10
 
 package secrets
 
 import (
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,24 +30,69 @@ import (
 // exportFormat is the export record's format.
 const exportFormat = "mediacore-keyring-export/1"
 
-// exportRecord is <key file>.exported: the key IDs the last export carried
-// and when. It holds no key material.
+// exportDigestPrefix domain-separates an exported key's digest from any
+// other hash of the same material.
+const exportDigestPrefix = "mediacore/secrets/export-digest/v1\x00"
+
+// exportRecord is <key file>.exported: the keys the last export carried, by
+// ID and material digest, and when. It holds no key material: a digest is
+// SHA-256 over exportDigestPrefix and 32 random bytes, which reveals nothing
+// of them, and it is what tells a regenerated k1 from the exported k1.
 type exportRecord struct {
-	Format string    `json:"format"`
-	KeyIDs []string  `json:"key_ids"`
-	At     time.Time `json:"at"`
+	Format string        `json:"format"`
+	Keys   []exportedKey `json:"keys"`
+	At     time.Time     `json:"at"`
+}
+
+// exportedKey is one key of an export record.
+type exportedKey struct {
+	ID     string `json:"id"`
+	SHA256 string `json:"sha256"`
+}
+
+// keyDigest is the export record's digest of a key's material.
+func keyDigest(m keyMaterial) string {
+	h := sha256.New()
+	h.Write([]byte(exportDigestPrefix))
+	h.Write(m)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// covers reports whether r holds key k: the same ID and the same material.
+func (r *exportRecord) covers(k *keyringKey) bool {
+	d := keyDigest(k.Material)
+	return slices.ContainsFunc(r.Keys, func(e exportedKey) bool { return e.ID == k.ID && e.SHA256 == d })
+}
+
+// maxIDNumber is the highest key number the record names (0 for none).
+func (r *exportRecord) maxIDNumber() int {
+	n := 0
+	for _, e := range r.Keys {
+		n = max(n, idNumber(e.ID))
+	}
+	return n
 }
 
 // readExportRecord reads the export record name under root (fs.ErrNotExist
-// when absent).
+// when absent). It must be a regular file of at most maxKeyringBytes.
 func readExportRecord(root *os.Root, name string) (*exportRecord, error) {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("secrets: %s is not a regular file", name)
+	}
 	fh, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	raw, rerr := io.ReadAll(io.LimitReader(fh, maxKeyringBytes))
+	raw, rerr := io.ReadAll(io.LimitReader(fh, maxKeyringBytes+1))
 	if err := errors.Join(rerr, fh.Close()); err != nil {
 		return nil, fmt.Errorf("secrets: read %s: %w", name, err)
+	}
+	if len(raw) > maxKeyringBytes {
+		return nil, fmt.Errorf("secrets: %s is larger than %d bytes", name, maxKeyringBytes)
 	}
 	var r exportRecord
 	if err := json.Unmarshal(raw, &r); err != nil {
@@ -109,11 +157,14 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 		return ExportResult{}, err
 	}
 	ids := make([]string, 0, len(f.Keys))
+	keys := make([]exportedKey, 0, len(f.Keys))
 	for _, k := range f.Keys {
 		ids = append(ids, k.ID)
+		keys = append(keys, exportedKey{ID: k.ID, SHA256: keyDigest(k.Material)})
 	}
 	slices.Sort(ids)
-	rec, err := encodeJSON(exportRecord{Format: exportFormat, KeyIDs: ids, At: now.UTC()})
+	slices.SortFunc(keys, func(a, b exportedKey) int { return cmp.Compare(a.ID, b.ID) })
+	rec, err := encodeJSON(exportRecord{Format: exportFormat, Keys: keys, At: now.UTC()})
 	if err != nil {
 		return ExportResult{}, err
 	}

@@ -1,5 +1,5 @@
 // file: core/secrets/value_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: adb6b331-c577-44b6-8aa4-93c55c31c6e3
 // last-edited: 2026-11-10
 
@@ -8,6 +8,7 @@ package secrets
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +89,50 @@ func TestKeyMaterial_NeverFormats(t *testing.T) {
 	for path, s := range formatted(k) {
 		if strings.Contains(strings.ToLower(s), "b4b4b4") || strings.Contains(s, "180 180") || strings.Contains(s, b64) || strings.Contains(s, raw) {
 			t.Errorf("a keyring key formatted with %s leaks its material", path)
+		}
+	}
+}
+
+// encodings is every form of b a formatting path could leak: the raw bytes,
+// hex, fmt's decimal byte list and base64 (encoding/json's []byte form).
+func encodings(b []byte) []string {
+	return []string{
+		string(b), hex.EncodeToString(b), strings.Trim(fmt.Sprint(b), "[]"),
+		base64.StdEncoding.EncodeToString(b), base64.StdEncoding.EncodeToString(b)[:12],
+	}
+}
+
+// TestStore_NeverFormatsSecrets (a test name coined by F3-03): an open
+// *Store holding an operator value, its keyring and the keyring's keys
+// print no value and no key material on any formatting path (every verb,
+// Sprint, errors, slog's text and JSON handlers). fmt prints unexported
+// fields raw, bypassing Value's and keyMaterial's own redaction, so each of
+// these types redacts itself.
+func TestStore_NeverFormatsSecrets(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t, nil)
+	mustPut(t, s, nameModule, valueSerious)
+	s.Ephemeral(nameGate, NewValue(valueVengeance), SourceEnv)
+	var leaks []string
+	for _, v := range []string{valueVengeance, valueSerious} {
+		leaks = append(leaks, encodings([]byte(v))...)
+	}
+	for _, m := range [][]byte{s.ring.data.Material, s.ring.derive.Material, s.ring.fp} {
+		leaks = append(leaks, encodings(m[:8])...)
+	}
+	for name, v := range map[string]any{
+		"*Store": s, "keyring": s.ring, "data key": s.ring.data, "derive key": s.ring.derive,
+	} {
+		for path, out := range formatted(v) {
+			for _, l := range leaks {
+				if strings.Contains(out, l) {
+					t.Errorf("%s formatted with %s leaks a value or key material", name, path)
+					break
+				}
+			}
+			if !strings.Contains(out, redacted) && !strings.Contains(out, "app_id") && !strings.Contains(out, "id=") && !strings.Contains(out, `"id"`) {
+				t.Errorf("%s formatted with %s = %q, want a redacted rendering", name, path, out)
+			}
 		}
 	}
 }
