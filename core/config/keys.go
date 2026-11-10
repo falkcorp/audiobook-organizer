@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -273,13 +273,21 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 // 05-config §1.3.1 lets a nested tag only make a key stricter and says
 // nothing of tags inside a key's value, so Register fails closed with
 // ErrInvalid and the declarer tags the key itself (F3-01's choice, recorded
-// in seams.d/F3-01.md). It walks element types, map values and every field of
-// a struct, the self-encoding ones included, once per type. A malformed tag
-// there fails as it would on a key.
+// in seams.d/F3-01.md). It walks element types, map keys and values (a
+// struct key encodes itself as text, and its fields' tags are still inside
+// the key's value) and every field of a struct, the self-encoding ones and
+// the embedded unexported ones included, once per type. A malformed tag there
+// fails as it would on a key.
 func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
 	for {
 		switch t.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		case reflect.Map:
+			if err := checkNested(where, key, t.Key(), own, seen); err != nil {
+				return err
+			}
+			t = t.Elem()
+			continue
+		case reflect.Pointer, reflect.Slice, reflect.Array:
 			t = t.Elem()
 			continue
 		}
