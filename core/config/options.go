@@ -1,5 +1,5 @@
 // file: core/config/options.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e9c571c-9236-40b5-8f6f-60cdc5d93911
 // last-edited: 2026-11-10
 
@@ -8,7 +8,10 @@ package config
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Reload says when a change takes effect.
@@ -56,7 +59,7 @@ type failClosed struct {
 	order []json.RawMessage
 }
 
-// sectionSpec is what Define's options record. F3-01's Register validates it.
+// sectionSpec is what Define's options record. Register validates it.
 type sectionSpec struct {
 	path        Path
 	defaults    any
@@ -66,6 +69,12 @@ type sectionSpec struct {
 	waivers     map[Path]string
 	envBindings []envBinding
 	failClosed  []failClosed
+
+	// Set by Register[T], which is the one place T is known: the section's
+	// Go type and its reflected JSON Schema (jsonschemax with config's
+	// overrides).
+	typ       reflect.Type
+	schemaFor func() (*jsonschema.Schema, error)
 }
 
 // SectionOption configures a Section at Define time.
