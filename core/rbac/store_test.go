@@ -8,11 +8,13 @@ package rbac_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"os"
 	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/archtest"
+	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/rbac/rbactest"
 	"github.com/falkcorp/mediacore/storage"
@@ -99,6 +101,95 @@ func TestImporter_RejectsBrokenRole(t *testing.T) {
 	r := g.role("custom.alfred")
 	if r.Origin != rbac.OriginCustom || r.Version != 1 || r.CreatedAt.IsZero() {
 		t.Errorf("imported role = %+v, want a custom role at version 1 with timestamps", r)
+	}
+}
+
+// sealProbe is the native store with ScanRoles wrapped: while Freeze loads
+// the role cache it tries one import on the same store and records the
+// result, so the test sees whether the seal is already on at that point.
+type sealProbe struct {
+	*rbacstore.Store
+	scanImport error
+	scanned    bool
+}
+
+func (p *sealProbe) ScanRoles(ctx context.Context) iter.Seq2[*rbac.Role, error] {
+	if !p.scanned {
+		p.scanned = true
+		b := p.NewBatch()
+		p.scanImport = p.ImportRole(b, &rbac.Role{Name: "custom.robin", Origin: rbac.OriginCustom, Added: perms("gotham:signal")})
+		if err := b.Close(); err != nil && p.scanImport == nil {
+			p.scanImport = err
+		}
+	}
+	return p.Store.ScanRoles(ctx)
+}
+
+// TestImporter_SealedAtFreeze (§6.3, review MINOR-D): the cutover imports at
+// P4b, before Freeze; Freeze seals the store it was given before it loads
+// the role cache, so an import that would land after the load is refused
+// with ErrImportRejected wrapping ErrFrozen and stages nothing, and one the
+// cutover made before Freeze is loaded.
+func TestImporter_SealedAtFreeze(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	boot(t, e, setup{modules: []module{gotham()}})
+	cat := boot(t, e, setup{modules: []module{gotham()}}).cat()
+
+	probe := &sealProbe{Store: e.store(t, cat)}
+	b := probe.NewBatch()
+	if err := probe.ImportRole(b, &rbac.Role{Name: "custom.alfred", Origin: rbac.OriginCustom, Added: perms("gotham:patrol")}); err != nil {
+		t.Fatalf("ImportRole before Freeze: %v", err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	comp := &compiler{}
+	svc, err := rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
+		Store: probe, Compile: comp.compile, Audit: &auditLog{}, Revocations: &revJournal{},
+		NewBatch: probe.NewBatch, Holders: &users{e: e},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := gotham()
+	d := svc.Declarer(m.id, m.imported...)
+	if err := d.Permissions(m.specs...); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Roles(m.seeds...); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Freeze(ctx); err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	if !probe.scanned {
+		t.Fatal("Freeze never scanned the store")
+	}
+	errIs(t, "import while the role cache loads", probe.scanImport, rbac.ErrImportRejected)
+	errIs(t, "import while the role cache loads", probe.scanImport, rbac.ErrFrozen)
+
+	b = probe.NewBatch()
+	err = probe.ImportRole(b, &rbac.Role{Name: "custom.batgirl", Origin: rbac.OriginCustom, Added: perms("gotham:signal")})
+	errIs(t, "import after Freeze", err, rbac.ErrImportRejected)
+	errIs(t, "import after Freeze", err, rbac.ErrFrozen)
+	if n := b.Count(); n != 0 {
+		t.Errorf("a sealed import staged %d writes", n)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"custom.alfred"}})
+	wantPerms(t, "role imported before Freeze", comp.last(t).RolePatterns, "gotham:patrol")
+	for _, name := range []rbac.RoleName{"custom.robin", "custom.batgirl"} {
+		if _, err := probe.GetRole(ctx, name); !errors.Is(err, rbac.ErrUnknownRole) {
+			t.Errorf("GetRole(%s) after a sealed import = %v, want ErrUnknownRole", name, err)
+		}
 	}
 }
 

@@ -84,6 +84,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"ImportRejectsBrokenRole", importRejects},
 		{"ImportRejectedStagesNothing", importStagesNothing},
 		{"ImportWithoutCatalogRefuses", importNoCatalog},
+		{"ImportRefusedOnceSealed", importSealed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.run(t, h) })
@@ -495,4 +496,38 @@ func importNoCatalog(t *testing.T, h Harness) {
 	if err := b.Close(); err != nil {
 		t.Error(err)
 	}
+}
+
+// importSealed: an importer that implements rbac.ImportSealer refuses every
+// import once sealed, with an error wrapping ErrImportRejected and ErrFrozen,
+// staging nothing; a role imported before the seal stays. An importer that
+// does not implement it skips the case (the service then has nothing to
+// seal, and the kernel's boot order alone keeps imports before Freeze).
+func importSealed(t *testing.T, h Harness) {
+	fx := h.New(t, Catalog(t))
+	sealer, ok := fx.Importer.(rbac.ImportSealer)
+	if !ok {
+		t.Skip("the importer does not implement rbac.ImportSealer")
+	}
+	if err := commit(t, fx, func(b *storage.Batch) error {
+		return fx.Importer.ImportRole(b, &rbac.Role{Name: "custom.alfred", Origin: rbac.OriginCustom, Added: []rbac.Permission{"gotham:patrol"}})
+	}); err != nil {
+		t.Fatalf("ImportRole before the seal: %v", err)
+	}
+	sealer.SealImports()
+	b := fx.NewBatch()
+	err := fx.Importer.ImportRole(b, &rbac.Role{Name: "custom.robin", Origin: rbac.OriginCustom, Added: []rbac.Permission{"gotham:signal"}})
+	if !errors.Is(err, rbac.ErrImportRejected) || !errors.Is(err, rbac.ErrFrozen) {
+		t.Errorf("ImportRole once sealed = %v, want ErrImportRejected wrapping ErrFrozen", err)
+	}
+	if n := b.Count(); n != 0 {
+		t.Errorf("a sealed import staged %d writes", n)
+	}
+	if err := b.Close(); err != nil {
+		t.Error(err)
+	}
+	if _, err := fx.Store.GetRole(context.Background(), "custom.robin"); !errors.Is(err, rbac.ErrUnknownRole) {
+		t.Errorf("a sealed import is readable: %v", err)
+	}
+	get(t, fx, "custom.alfred")
 }

@@ -126,6 +126,19 @@ type Importer interface {
 // ErrImportRejected is ImportRole's refusal; nothing was staged.
 var ErrImportRejected = errors.New("rbac: imported role breaks a role store invariant")
 
+// ImportSealer is implemented by a role store whose Importer half refuses
+// every import once the service is frozen (coined by F4-01). The cutover
+// steps run at P4b, before Service.Freeze at P5 (06 §6.5.1), and Freeze loads
+// the role cache, so a role imported later would sit in the store unseen by
+// Compile, CanAssign and Dominates until a restart. Freeze calls SealImports
+// on Deps.Store when it implements this interface; after that, ImportRole
+// returns an error wrapping ErrImportRejected and ErrFrozen and stages
+// nothing. The kernel must hand the same store instance to Deps.Store and to
+// the cutover as Importers.Roles.
+type ImportSealer interface {
+	SealImports()
+}
+
 // customPrefix is the namespace of operator-created role names.
 const customPrefix = "custom."
 
