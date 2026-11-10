@@ -1,7 +1,7 @@
 // file: core/storage/batch.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package storage
 
@@ -307,6 +307,12 @@ func (b *Batch) Len() int {
 
 // Count is the number of entries.
 func (b *Batch) Count() int { return b.writes }
+
+// Indexed reports whether b reads its own writes (Keyspace.NewIndexedBatch).
+// GetForUpdate on a batch that is not indexed reads only the committed state,
+// so a caller that reads a key, stages a write to it and reads it again in
+// the same batch must check this first.
+func (b *Batch) Indexed() bool { return b != nil && b.indexed }
 
 // stage applies one Set or Delete through h after resolving and checking it.
 func (b *Batch) stage(h Handle, op opKind, key, value []byte) error {

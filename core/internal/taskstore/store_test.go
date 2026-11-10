@@ -1,5 +1,5 @@
 // file: core/internal/taskstore/store_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2d78def0-3849-42b2-8b19-419c3bee7249
 // last-edited: 2026-11-10
 
@@ -98,7 +98,7 @@ func TestStorageSpec_SerializedIsExactlyTheGuardFamilies(t *testing.T) {
 func TestDeletePrefix_RefusedOverGuardFamilies(t *testing.T) {
 	st := boot(t)
 	ctx := t.Context()
-	for _, p := range [][]byte{RunPrefix(), DebouncePrefix(""), keys.Prefix(keys.Str(famSched)), IdemPrefix()} {
+	for _, p := range [][]byte{RunPrefix(), DebouncePrefix(""), keys.Prefix(keys.Str(famSched)), IdemPrefix("")} {
 		b := st.NewBatch()
 		if err := st.DeletePrefix(b, p); !errors.Is(err, storage.ErrBlindWrite) {
 			t.Errorf("DeleteRange over %q: %v, want ErrBlindWrite", p, err)
@@ -311,12 +311,26 @@ func TestScanIDsAndDoneBefore(t *testing.T) {
 	if !slices.Equal(got, []string{"a", "b", "c", "d"}) {
 		t.Fatalf("IDs = %v", got)
 	}
-	ids, err := st.DoneBefore(ctx, t0().Add(150*time.Minute), 10)
-	if err != nil || !slices.Equal(ids, []string{"a", "b", "c"}) {
-		t.Fatalf("DoneBefore = %v, %v", ids, err)
+	idsOf := func(es []DoneEntry) []string {
+		var out []string
+		for _, e := range es {
+			out = append(out, e.ID)
+		}
+		return out
 	}
-	if ids, _ := st.DoneBefore(ctx, t0().Add(150*time.Minute), 2); !slices.Equal(ids, []string{"a", "b"}) {
-		t.Fatalf("DoneBefore limit 2 = %v", ids)
+	cutoff := t0().Add(150 * time.Minute)
+	es, err := st.DoneBefore(ctx, cutoff, nil, 10)
+	if err != nil || !slices.Equal(idsOf(es), []string{"a", "b", "c"}) {
+		t.Fatalf("DoneBefore = %v, %v", idsOf(es), err)
+	}
+	if !es[1].Finished.Equal(t0().Add(time.Hour)) || !bytes.Equal(es[1].Key, DoneIndexKey(t0().Add(time.Hour), "b")) {
+		t.Fatalf("DoneBefore entry = %+v", es[1])
+	}
+	if es, _ := st.DoneBefore(ctx, cutoff, nil, 2); !slices.Equal(idsOf(es), []string{"a", "b"}) {
+		t.Fatalf("DoneBefore limit 2 = %v", idsOf(es))
+	}
+	if es, _ := st.DoneBefore(ctx, cutoff, es[0].Key, 10); !slices.Equal(idsOf(es), []string{"b", "c"}) {
+		t.Fatalf("DoneBefore after a = %v", idsOf(es))
 	}
 }
 
@@ -338,7 +352,8 @@ func TestNextStrike_Unique(t *testing.T) {
 	}
 }
 
-// TestReadForUpdate: absent and present guard keys, and a nil batch.
+// TestReadForUpdate: absent and present guard keys, a nil batch and a
+// batch that is not indexed.
 func TestReadForUpdate(t *testing.T) {
 	st := boot(t)
 	ctx := t.Context()
@@ -355,6 +370,11 @@ func TestReadForUpdate(t *testing.T) {
 	}
 	if _, _, err := st.ReadForUpdate(ctx, nil, RunKey("x")); !errors.Is(err, ErrNilBatch) {
 		t.Fatalf("nil batch: %v", err)
+	}
+	plain := st.Keyspace().NewBatch()
+	defer func() { _ = plain.Close() }()
+	if _, _, err := st.ReadForUpdate(ctx, plain, RunKey("somebody")); !errors.Is(err, ErrNotIndexed) {
+		t.Fatalf("plain batch: %v, want ErrNotIndexed", err)
 	}
 	for _, f := range []func() error{
 		func() error { return st.Set(nil, PauseKey(), nil) },
@@ -392,17 +412,55 @@ func TestNewULID(t *testing.T) {
 	}
 }
 
-// TestSegments: Segments is keys.Split, and a malformed key yields no last
-// segment.
-func TestSegments(t *testing.T) {
-	segs, err := Segments(ReqRevKey("gotham.patrol", Subject{Module: "gotham", Kind: "villains", ID: "joker"}))
-	if err != nil || len(segs) != 5 || string(segs[4]) != "joker" {
-		t.Fatalf("Segments = %q, %v", segs, err)
+// TestKeyParsers: every Parse* inverts its builder, and refuses a key of
+// another family or shape.
+func TestKeyParsers(t *testing.T) {
+	joker := Subject{Module: "gotham", Kind: "villains", ID: "joker"}
+	if k, id, err := ParseKindIndexKey(KindIndexKey("gotham.patrol", "p1")); err != nil || k != "gotham.patrol" || id != "p1" {
+		t.Errorf("ParseKindIndexKey = %q %q %v", k, id, err)
+	}
+	if s, id, err := ParseStateIndexKey(StateIndexKey("queued", "p1")); err != nil || s != "queued" || id != "p1" {
+		t.Errorf("ParseStateIndexKey = %q %q %v", s, id, err)
+	}
+	for _, at := range []time.Time{t0(), time.Date(1966, 7, 30, 0, 0, 0, 1, time.UTC)} {
+		if f, id, err := ParseDoneIndexKey(DoneIndexKey(at, "p1")); err != nil || !f.Equal(at) || id != "p1" {
+			t.Errorf("ParseDoneIndexKey(%v) = %v %q %v", at, f, id, err)
+		}
+	}
+	if id, p, c, err := ParsePageKey(PageKey("p1", PageLog, SeqSeg(42))); err != nil || id != "p1" || p != PageLog {
+		t.Errorf("ParsePageKey = %q %q %v", id, p, err)
+	} else if n, err := ParseSeqSeg(c); err != nil || n != 42 {
+		t.Errorf("ParseSeqSeg = %d %v", n, err)
+	}
+	if k, s, err := ParseReqRevKey(ReqRevKey("gotham.patrol", joker)); err != nil || k != "gotham.patrol" || s != joker {
+		t.Errorf("ParseReqRevKey = %q %+v %v", k, s, err)
+	}
+	if k, key, err := ParseIdemKey(IdemKey("gotham.patrol", "bat-signal")); err != nil || k != "gotham.patrol" || key != "bat-signal" {
+		t.Errorf("ParseIdemKey = %q %q %v", k, key, err)
+	}
+	for name, err := range map[string]error{
+		"kind index from a state key": func() error { _, _, err := ParseKindIndexKey(StateIndexKey("queued", "p1")); return err }(),
+		"state index from a run key":  func() error { _, _, err := ParseStateIndexKey(RunKey("p1")); return err }(),
+		"done index, short time": func() error {
+			_, _, err := ParseDoneIndexKey(keys.Join(keys.Str(famIndex), keys.Str(ixDone), keys.Str("x"), keys.Str("p1")))
+			return err
+		}(),
+		"page from a ckpt key": func() error { _, _, _, err := ParsePageKey(CheckpointKey("p1", "c")); return err }(),
+		"short seq":            func() error { _, err := ParseSeqSeg(keys.Str("x")); return err }(),
+		"rev from a req key":   func() error { _, _, err := ParseReqRevKey(ReqKey(joker, "gotham.patrol")); return err }(),
+		"idem from no key":     func() error { _, _, err := ParseIdemKey([]byte("no terminator")); return err }(),
+	} {
+		if !errors.Is(err, ErrMalformedKey) {
+			t.Errorf("%s: %v, want ErrMalformedKey", name, err)
+		}
 	}
 	if lastSeg([]byte("no terminator")) != nil {
 		t.Fatal("lastSeg of a malformed key")
 	}
 	if !bytes.Equal(StateIndexPrefix(""), keys.Prefix(keys.Str(famIndex), keys.Str(ixState))) {
 		t.Fatal("StateIndexPrefix(\"\")")
+	}
+	if !bytes.Equal(IdemPrefix("gotham.patrol"), keys.Prefix(keys.Str(famIdem), keys.Str("gotham.patrol"))) {
+		t.Fatal("IdemPrefix(kind)")
 	}
 }

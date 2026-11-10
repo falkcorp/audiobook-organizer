@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -1262,6 +1262,11 @@ type Expect struct {
 // chunked batches and never join a multi-owner commit (COR5-12, DATA9-7).
 // Every caller that builds such a batch builds it inside Executor.WriteRuns or
 // Stager.WriteRuns, which commits it (5T.7, R9-1).
+// That batch is indexed (Keyspace.NewIndexedBatch, or a participant's
+// indexed batch), so a later read of a build sees an earlier write of the
+// same build: a method that reads before it writes refuses a plain batch
+// with ErrBatchNotIndexed, because GetForUpdate through a plain batch reads
+// only the committed state and the commit would lose the earlier write.
 //
 // No write may land on a run that changed since it was read: a progress tick
 // cannot revert a cancel, and a chunk-ledger commit cannot land on a run that
@@ -1317,11 +1322,15 @@ type RunStore interface {
 	ReplaceRows(ctx context.Context, id RunID, prefix string, n int, at func(i int) (Row, error)) error
 	Rows(ctx context.Context, id RunID) iter.Seq2[Row, error]
 	MarkRow(ctx context.Context, b *storage.Batch, id RunID, rowID string) error
+	// Marks yields the row IDs of a run's applied-row marks in row-ID order:
+	// the resume evidence of an apply run, which re-applies only unmarked rows.
+	Marks(ctx context.Context, id RunID) iter.Seq2[string, error]
 
 	// Debounce buckets and watchdog strikes.
 	Debounce(ctx context.Context, b *storage.Batch, d DebounceBucket) error
 	DebounceBuckets(ctx context.Context) iter.Seq2[DebounceBucket, error]
 	Strike(ctx context.Context, b *storage.Batch, id RunID, s Strike) error
+	Strikes(ctx context.Context, id RunID) iter.Seq2[Strike, error] // in the order staged; the watchdog's input
 
 	// Delete stages the removal of one run and every record it owns (row,
 	// queue entry, indexes, pages, checkpoints, chunks, rows, errors); only
@@ -1433,6 +1442,9 @@ var (
 	// ErrRunActive: Discard of a run that is not terminal or that a live
 	// worker holds (409; FIN12-3).
 	ErrRunActive = errors.New("tasks: run is active")
+	// ErrBatchNotIndexed: a method that reads before it writes was handed a
+	// batch that is not indexed (see RunStore).
+	ErrBatchNotIndexed = errors.New("tasks: batch is not indexed")
 )
 ```
 
@@ -2462,3 +2474,9 @@ Round 16 (2026-11-05): review fixes X1 (5T.8.4, the Core group and F5 rows, conv
 Round 16 (2026-11-05): review fixes X4 (5T.8.1 `internal/database` row: `UpgradeFloor{InstallFirst: <R2 tag>}`).
 
 Owner answers (2026-11-05): D15 / 14 Q-C — 5T.2 gains the fact that a `TaskDefinition` fires 14 of the 15 defs carrying a dead `Schedule` string and the protected-path cache's TTL; 5T.3.8 "What replaces v2 cron strings" and the T7 row: the strings are deleted, 14 defs keep their real cadence, `deluge.protected-paths-sync` stays manual; 5T.12 item 1 closed.
+
+F2-02 review (2026-11-10): 5T.3.13 `RunStore` gains `Marks` and `Strikes`, the readers of the applied-row marks
+(an apply run's resume evidence) and the watchdog strikes, which no method read; a batch handed to a method
+that reads before it writes is indexed, and a plain one is refused with the new `ErrBatchNotIndexed`, because
+`GetForUpdate` through a plain batch reads only the committed state and the commit would lose an earlier write
+of the same build.

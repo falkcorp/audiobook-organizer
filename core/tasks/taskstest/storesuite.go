@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/storesuite.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 95c1b2be-e2c3-4c7c-86d6-8670bf9fd4cf
 // last-edited: 2026-11-10
 
@@ -23,9 +23,10 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// BatchOpener is what StoresSuite opens its batches with: Stores.Runs must
-// implement it. The batch must be indexed (a later read of one build sees an
-// earlier write of it) and of the same store as the Stores.
+// BatchOpener is what StoresSuite opens its batches with: Stores.Runs
+// implements it (NativeStores does). The batch must be indexed (a later read
+// of one build sees an earlier write of it) and of the same store as the
+// Stores. A Stores whose Runs does not skips every case that writes.
 type BatchOpener interface {
 	NewBatch() *storage.Batch
 }
@@ -35,14 +36,6 @@ type BatchOpener interface {
 // Stores whose Runs does not skips the importer cases.
 type ImporterProvider interface {
 	Importer() tasks.Importer
-}
-
-// RecordReader reads the two run families that no RunStore method reads:
-// the applied-row marks (the executor's resume evidence) and the watchdog
-// strikes. Stores.Runs must implement it.
-type RecordReader interface {
-	Marks(ctx context.Context, id tasks.RunID) iter.Seq2[string, error]
-	Strikes(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Strike, error]
 }
 
 // Crasher simulates a crash: CrashClone returns Stores over the state a
@@ -73,9 +66,8 @@ const commitAttempts = 64
 // a synctest bubble.
 //
 // The suite reaches past the four interfaces only by type assertion on
-// Stores.Runs: BatchOpener (required: the suite needs batches of the
-// store's own DB), RecordReader (required: marks and strikes have no
-// RunStore reader), ImporterProvider (the importer cases: an imported run
+// Stores.Runs: BatchOpener (the suite needs batches of the store's own DB;
+// without it every case that writes skips with t.Skip), ImporterProvider (the importer cases: an imported run
 // keeps its ID, kind, state and Seq; a second import fails with
 // ErrRunConflict; RunData lands only on an imported run; RenameKind rewrites
 // runs, clock, buckets and stamps and is idempotent; without it they skip
@@ -90,6 +82,16 @@ const commitAttempts = 64
 // non-terminal under the same attempt and fence.
 func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores) {
 	t.Helper()
+	// One probe Stores, built outside any bubble, says whether the cases
+	// that write can run; a skip inside a synctest bubble would not reach
+	// the case's own result.
+	batchless := newFixture(t, newStores).open == nil
+	needBatches := func(t *testing.T) {
+		t.Helper()
+		if batchless {
+			t.Skip("Stores.Runs does not implement taskstest.BatchOpener; a case that writes needs batches of the store's own DB")
+		}
+	}
 	cases := []struct {
 		name   string
 		fn     func(t *testing.T, f *fixture)
@@ -114,26 +116,32 @@ func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores) {
 		{"ReplaceRows", testReplaceRows, false},
 		{"DebounceMergeAndFlush", testDebounce, false},
 		{"ClockPauseStandDownStamps", testClockPauseStandDownStamps, false},
+		{"TerminalNeedsFinishTime", testTerminalNeedsFinish, false},
 		{"NewIDUnique", testNewID, false},
 	}
 	t.Run("CAS", func(t *testing.T) {
 		for _, e := range executorEdges() {
 			t.Run(fmt.Sprintf("%s->%s", e.from, e.to), func(t *testing.T) {
+				needBatches(t)
 				testEdge(t, newFixture(t, newStores), e)
 			})
 		}
 	})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.name != "NewIDUnique" {
+				needBatches(t)
+			}
+			run := func(t *testing.T) { c.fn(t, newFixture(t, newStores)) }
 			if !c.bubble {
-				c.fn(t, newFixture(t, newStores))
+				run(t)
 				return
 			}
 			// The store is opened inside the bubble, so the engine's own
 			// goroutines belong to it: a goroutine of the bubble may not
 			// be woken by one outside it, and t's cleanups (which close
 			// the store) run inside the bubble before it ends.
-			synctest.Test(t, func(t *testing.T) { c.fn(t, newFixture(t, newStores)) })
+			synctest.Test(t, run)
 		})
 	}
 	t.Run("Importer", func(t *testing.T) {
@@ -148,6 +156,7 @@ func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores) {
 			{"RenameKindRewritesAndIsIdempotent", testRenameKind},
 		} {
 			t.Run(c.name, func(t *testing.T) {
+				needBatches(t)
 				f := newFixture(t, newStores)
 				if f.imp == nil {
 					t.Skip("Stores.Runs does not implement taskstest.ImporterProvider; importer cases skipped")
@@ -161,8 +170,7 @@ func StoresSuite(t *testing.T, newStores func(*testing.T) tasks.Stores) {
 // fixture is one fresh Stores and what the suite found on its Runs.
 type fixture struct {
 	tasks.Stores
-	open func() *storage.Batch
-	rd   RecordReader
+	open func() *storage.Batch // nil when Runs is no BatchOpener
 	imp  tasks.Importer
 }
 
@@ -176,15 +184,10 @@ func fixtureOf(t *testing.T, s tasks.Stores) *fixture {
 	if s.Runs == nil || s.Clocks == nil || s.Pause == nil || s.StandDown == nil {
 		t.Fatalf("Stores has a nil member: %+v", s)
 	}
-	bo, ok := s.Runs.(BatchOpener)
-	if !ok {
-		t.Fatalf("Stores.Runs (%T) does not implement taskstest.BatchOpener", s.Runs)
+	f := &fixture{Stores: s}
+	if bo, ok := s.Runs.(BatchOpener); ok {
+		f.open = bo.NewBatch
 	}
-	rd, ok := s.Runs.(RecordReader)
-	if !ok {
-		t.Fatalf("Stores.Runs (%T) does not implement taskstest.RecordReader", s.Runs)
-	}
-	f := &fixture{Stores: s, open: bo.NewBatch, rd: rd}
 	if ip, ok := s.Runs.(ImporterProvider); ok {
 		f.imp = ip.Importer()
 	}
@@ -579,7 +582,7 @@ func testLedgerCommitAfterTerminalRefused(t *testing.T, f *fixture) {
 	if _, ok, err := f.Runs.Checkpoint(ctx, r.ID, "watermark"); err != nil || ok {
 		t.Errorf("checkpoint on the terminal run: ok=%v err=%v", ok, err)
 	}
-	if got := collect(t, f.rd.Marks(ctx, r.ID)); len(got) != 0 {
+	if got := collect(t, f.Runs.Marks(ctx, r.ID)); len(got) != 0 {
 		t.Errorf("marks on the terminal run: %v", got)
 	}
 	if got := f.get(t, r.ID); got.State != tasks.StateSucceeded {
@@ -905,7 +908,7 @@ func testFixerMarksLandDuringQuiesce(t *testing.T, f *fixture) {
 		t.Fatal(err)
 	}
 	marked := map[string]bool{}
-	for _, id := range collect(t, f.rd.Marks(ctx, r.ID)) {
+	for _, id := range collect(t, f.Runs.Marks(ctx, r.ID)) {
 		marked[id] = true
 	}
 	var applied []string
@@ -1076,8 +1079,8 @@ func (f *fixture) runSnapshot(t *testing.T, runIDs []tasks.RunID) string {
 		p("  checkpoint %q %v %v", cp, ok, err)
 		p("  chunks %+v", collect(t, f.Runs.Chunks(ctx, id)))
 		p("  rows %+v", collect(t, f.Runs.Rows(ctx, id)))
-		p("  marks %v", collect(t, f.rd.Marks(ctx, id)))
-		p("  strikes %+v", collect(t, f.rd.Strikes(ctx, id)))
+		p("  marks %v", collect(t, f.Runs.Marks(ctx, id)))
+		p("  strikes %+v", collect(t, f.Runs.Strikes(ctx, id)))
 	}
 	return sb.String()
 }
@@ -1350,7 +1353,7 @@ func testDeleteRemovesEveryRecord(t *testing.T, f *fixture) {
 		t.Errorf("checkpoint of the deleted run (found=%v, err=%v)", ok, err)
 	}
 	if len(collect(t, f.Runs.Chunks(ctx, gone.ID))) != 0 || len(collect(t, f.Runs.Rows(ctx, gone.ID))) != 0 ||
-		len(collect(t, f.rd.Marks(ctx, gone.ID))) != 0 || len(collect(t, f.rd.Strikes(ctx, gone.ID))) != 0 {
+		len(collect(t, f.Runs.Marks(ctx, gone.ID))) != 0 || len(collect(t, f.Runs.Strikes(ctx, gone.ID))) != 0 {
 		t.Error("resume state or strikes of the deleted run remain")
 	}
 	if c := f.counts(t); c[tasks.StateFailed] != 0 || c[tasks.StateRunning] != 1 {
@@ -1694,6 +1697,26 @@ func testClockPauseStandDownStamps(t *testing.T, f *fixture) {
 }
 
 // testNewID: NewID returns distinct, well-formed IDs.
+// testTerminalNeedsFinish: a terminal record without its finish time is
+// refused, by Insert and by Transition, so the done index never holds a run
+// before every retention cutoff.
+func testTerminalNeedsFinish(t *testing.T, f *fixture) {
+	ctx := t.Context()
+	done := rec("patrol-unfinished", kindPatrol, tasks.StateSucceeded)
+	done.Finished = time.Time{}
+	if err := f.once(ctx, func(b *storage.Batch) error { return f.Runs.Insert(ctx, b, done) }); err == nil {
+		t.Error("Insert of a terminal run without Finished: no error")
+	}
+	r := rec("patrol-running", kindPatrol, tasks.StateRunning)
+	f.insert(t, r)
+	if _, err := f.transition(ctx, r, tasks.StateFailed, func(n *tasks.RunRecord) { n.Finished = time.Time{} }); err == nil {
+		t.Error("Transition to a terminal state without Finished: no error")
+	}
+	if got := f.get(t, r.ID); got.State != tasks.StateRunning {
+		t.Errorf("run after the refused Transition is %s", got.State)
+	}
+}
+
 func testNewID(t *testing.T, f *fixture) {
 	seen := map[tasks.RunID]bool{}
 	for range 200 {
@@ -1820,7 +1843,7 @@ func testImportRunData(t *testing.T, f *fixture) {
 	if n := len(collect(t, f.Runs.Rows(ctx, r.ID))); n != 2 {
 		t.Errorf("imported rows = %d", n)
 	}
-	if m := collect(t, f.rd.Marks(ctx, r.ID)); !slices.Equal(m, []string{"plan:joker"}) {
+	if m := collect(t, f.Runs.Marks(ctx, r.ID)); !slices.Equal(m, []string{"plan:joker"}) {
 		t.Errorf("imported marks = %v", m)
 	}
 }
@@ -1877,7 +1900,7 @@ func imported(t *testing.T, s tasks.Stores) (have, total int) {
 		check(err == nil)
 		check(len(collect(t, s.Runs.Pages(ctx, id, tasks.PageQuery{Page: tasks.PageLog}))) == 1)
 		check(len(collect(t, s.Runs.Rows(ctx, id))) == 1)
-		check(len(collect(t, f.rd.Marks(ctx, id))) == 1)
+		check(len(collect(t, f.Runs.Marks(ctx, id))) == 1)
 	}
 	c, ok, err := s.Clocks.Get(ctx, kindCase)
 	check(err == nil && ok && c.ScheduleHash == "")
