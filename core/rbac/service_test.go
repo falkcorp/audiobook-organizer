@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -523,34 +524,42 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 		f.users.put(t, "lucius", userRec{Roles: []rbac.RoleName{"custom.fox"}, Active: true})
 		f.users.put(t, "alfred", userRec{Roles: []rbac.RoleName{rbac.RoleAdmin}, Active: false})
 
-		// The barrier lets both writers meet inside HoldersOf if nothing
-		// serialises them; it gives up after a while, so a serialised service
-		// still finishes.
-		var arrived sync.WaitGroup
-		arrived.Add(2)
+		// The barrier sits inside HoldersOf, after each writer read the role
+		// cache and before it reads the holders. The first writer to get
+		// there waits for the second; the second releases it. If nothing
+		// serialises the writers, both are inside at once and both decide on
+		// the same holder snapshot, so both narrowings pass the rule and
+		// every admin role is gone: the race is forced, not sampled. If the
+		// service serialises them, the second writer cannot arrive while
+		// the first waits, so the first gives up after the timeout, commits,
+		// and the second then reads the committed state.
+		var calls atomic.Int32
 		met := make(chan struct{})
-		go func() { arrived.Wait(); close(met) }()
 		f.users.mu.Lock()
 		f.users.wait = func() {
-			select {
-			case <-met:
-			case <-time.After(200 * time.Millisecond):
+			switch calls.Add(1) {
+			case 1:
+				select {
+				case <-met:
+				case <-time.After(300 * time.Millisecond):
+				}
+			case 2:
+				close(met)
 			}
 		}
 		f.users.mu.Unlock()
 
-		start := make(chan struct{})
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
 		for i, r := range []*rbac.Role{wayne, fox} {
 			wg.Go(func() {
-				<-start
-				arrived.Done()
 				_, errs[i] = f.svc.UpdateRole(ctx, f.admin(), r.Name, rbac.RoleInput{Permissions: perms("gotham:patrol")}, r.Version)
 			})
 		}
-		close(start)
 		wg.Wait()
+		if n := calls.Load(); n < 2 {
+			t.Fatalf("HoldersOf ran %d times, want both writers to read the holders", n)
+		}
 		won, lost := 0, 0
 		for _, err := range errs {
 			switch {
