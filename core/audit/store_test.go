@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -499,4 +500,63 @@ func TestAudit_QueryFilters(t *testing.T) {
 			break
 		}
 	})
+}
+
+// TestAudit_ConcurrentUse: Record, RecordIn, Emit and Query are safe from many
+// goroutines at once (run under -race), every seq is unique and nothing
+// written is lost.
+func TestAudit_ConcurrentUse(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	s := newStoreOn(t, e, Options{AsyncBuffer: 1024, BatchWait: time.Millisecond}, Deps{})
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const workers, each = 8, 25
+	var wg sync.WaitGroup
+	errc := make(chan error, workers*each*2)
+	for w := range workers {
+		wg.Go(func() {
+			for i := range each {
+				ev := Event{Action: "core.auth.login", Outcome: Success, Actor: Actor{UserID: fmt.Sprintf("robin_%d", w)}}
+				switch i % 3 {
+				case 0:
+					errc <- s.Record(ctx, ev)
+				case 1:
+					b := e.ks.NewBatch()
+					err := s.RecordIn(ctx, b, ev)
+					if err == nil {
+						err = b.Commit(ctx, storage.Sync)
+					}
+					_ = b.Close()
+					errc <- err
+				default:
+					ev.Outcome = Failure
+					s.Emit(ctx, ev)
+				}
+				for _, err := range s.Query(ctx, Filter{Limit: 5}) {
+					if err != nil {
+						errc <- err
+					}
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(errc)
+	for err := range errc {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := all(t, s, Filter{})
+	if want := workers * each; len(got) != want {
+		t.Fatalf("%d records, want %d (none dropped: %d)", len(got), want, s.ctr.dropped.Load())
+	}
+	if !sortedDesc(seqs(got)) {
+		t.Error("seqs are not unique and descending")
+	}
 }
