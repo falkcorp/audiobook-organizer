@@ -1,5 +1,5 @@
 // file: core/tasks/items_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
@@ -982,4 +982,95 @@ func TestRunItems_NestedPanicLoggedOnce(t *testing.T) {
 	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 {
 		t.Fatalf("the nested panic was logged %d times, want 1: %q", n, logs.String())
 	}
+}
+
+// TestItemLockRefs_OneCallAtATime: sibling items with no ExclusiveRefs that
+// lock the cave then the lab, and the lab then the cave, get
+// ErrLockAlreadyHeld (or ErrNestedLockNotHeld for a nested loop) instead of
+// deadlocking; release-then-relock works; a nested loop on refs the item's
+// call covers runs, its items excluding each other.
+func TestItemLockRefs_OneCallAtATime(t *testing.T) {
+	cave := tasks.ResID("gotham", "caves", "batcave")
+	lab := tasks.ResID("gotham", "labs", "lab-1")
+	pair := [][]entity.Ref{{cave, lab}, {lab, cave}}
+	t.Run("opposite order refused", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+			defer cancel()
+			run := taskstest.NewFakeRun(ctx, caseKind)
+			res, err := tasks.RunItems(run.RC(), tasks.Fixed(2, "two cases"), []int{0, 1}, func(ic *tasks.ItemRC, i int) error {
+				release, err := ic.LockRefs(pair[i][0])
+				if err != nil {
+					return err
+				}
+				defer release()
+				time.Sleep(time.Second) // both items hold their first ref
+				_, err = ic.LockRefs(pair[i][1])
+				return err
+			}, tasks.ItemsOptions[int]{OnError: tasks.Collect})
+			if !errors.Is(err, tasks.ErrLockAlreadyHeld) || res.Failed != 2 || ctx.Err() != nil {
+				t.Fatalf("result %+v err %v ctx %v; want both second locks refused, no wait", res, err, ctx.Err())
+			}
+		})
+	})
+	t.Run("lock then nested loop on another ref refused", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+			defer cancel()
+			run := taskstest.NewFakeRun(ctx, caseKind)
+			res, err := tasks.RunItems(run.RC(), tasks.Fixed(2, "two cases"), []int{0, 1}, func(ic *tasks.ItemRC, i int) error {
+				release, err := ic.LockRefs(pair[i][0])
+				if err != nil {
+					return err
+				}
+				defer release()
+				time.Sleep(time.Second)
+				_, err = tasks.ForEach(ic.Context(), tasks.Sequential("one"), []int{0}, func(context.Context, int) error { return nil },
+					tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{pair[i][1]} }})
+				return err
+			}, tasks.ItemsOptions[int]{OnError: tasks.Collect})
+			if !errors.Is(err, tasks.ErrNestedLockNotHeld) || res.Failed != 2 || ctx.Err() != nil {
+				t.Fatalf("result %+v err %v ctx %v; want both nested locks refused, no wait", res, err, ctx.Err())
+			}
+		})
+	})
+	t.Run("release then relock, and a covered nested loop", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+			defer cancel()
+			run := taskstest.NewFakeRun(ctx, caseKind)
+			var inFlight, peak atomic.Int64
+			res, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
+				release, err := ic.LockRefs(cave)
+				if err != nil {
+					return err
+				}
+				release()
+				release() // idempotent
+				release, err = ic.LockRefs(cave, lab)
+				if err != nil {
+					return fmt.Errorf("relock after release: %w", err)
+				}
+				defer release()
+				if _, err := tasks.LockRefs(ic.Context(), cave); !errors.Is(err, tasks.ErrLockAlreadyHeld) {
+					return fmt.Errorf("a second call through LockRefs = %v, want ErrLockAlreadyHeld", err)
+				}
+				_, err = tasks.ForEach(ic.Context(), tasks.Fixed(3, "three detectives"), make([]int, 6), func(context.Context, int) error {
+					n := inFlight.Add(1)
+					for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+					}
+					time.Sleep(time.Millisecond)
+					inFlight.Add(-1)
+					return nil
+				}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
+				return err
+			})
+			if err != nil || res.Done != 1 || peak.Load() != 1 {
+				t.Fatalf("result %+v err %v peak %d; want Done 1, nested items one at a time", res, err, peak.Load())
+			}
+			if _, err := tasks.LockRefs(run.RC().Context(), cave, lab); err != nil {
+				t.Fatalf("a ref stayed locked after the run: %v", err)
+			}
+		})
+	})
 }
