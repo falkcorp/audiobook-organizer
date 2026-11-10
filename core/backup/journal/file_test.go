@@ -274,7 +274,7 @@ func TestJournal_AppendFailureStagesNothing(t *testing.T) {
 	// every later Append fails (the callers record gaps) rather than risk
 	// reusing a seq; reopening the file recovers.
 	for name, broken := range map[string]lineFile{
-		"truncate fails": &truncFails{failingFile: failingFile{lineFile: ff.lineFile, failSync: true}},
+		"truncate fails": &truncFails{lineFile: ff.lineFile, failSync: true},
 		"fsync fails":    &failingFile{lineFile: ff.lineFile, failSync: true},
 	} {
 		j.broken = nil
@@ -379,7 +379,7 @@ func TestJournalImportsOnlyAllowed(t *testing.T) {
 			t.Fatalf("go list -deps %s: %v", pkg, err)
 		}
 		set := map[string]bool{}
-		for _, l := range strings.Fields(string(out)) {
+		for l := range strings.FieldsSeq(string(out)) {
 			set[l] = true
 		}
 		return set
