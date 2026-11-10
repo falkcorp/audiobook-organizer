@@ -343,13 +343,16 @@ func TestRenameKind_EdgeCases(t *testing.T) {
 				return err
 			}
 		}
-		// from's bucket arrived last, so its parameters win the merge.
-		for k, d := range map[Kind]DebounceBucket{
-			from: {Last: later, Params: json.RawMessage(`{"district":"east-end"}`)},
-			to:   {Last: early, Params: json.RawMessage(`{"district":"the-narrows"}`)},
+		// In bucket "east" from's bucket arrived last, in "west" to's did:
+		// the later bucket's parameters win the merge either way.
+		for _, d := range []DebounceBucket{
+			{Kind: from, Bucket: "east", Last: later, Params: json.RawMessage(`{"district":"east-end"}`)},
+			{Kind: to, Bucket: "east", Last: early, Params: json.RawMessage(`{"district":"the-narrows"}`)},
+			{Kind: from, Bucket: "west", Last: early, Params: json.RawMessage(`{"district":"crime-alley"}`)},
+			{Kind: to, Bucket: "west", Last: later, Params: json.RawMessage(`{"district":"diamond-district"}`)},
 		} {
-			d.Kind, d.First = k, early
-			d.Subjects = []entity.Ref{{Module: "gotham", Kind: "villains", ID: string(k)}}
+			d.First = early
+			d.Subjects = []entity.Ref{{Module: "gotham", Kind: "villains", ID: string(d.Kind)}}
 			if err := e.runs.Debounce(ctx, b, d); err != nil {
 				return err
 			}
@@ -410,9 +413,14 @@ func TestRenameKind_EdgeCases(t *testing.T) {
 		}
 		buckets = append(buckets, d)
 	}
-	if len(buckets) != 1 || buckets[0].Kind != to || len(buckets[0].Subjects) != 2 ||
-		string(buckets[0].Params) != `{"district":"east-end"}` || !buckets[0].Last.Equal(later) {
-		t.Errorf("buckets after the rename = %+v, want one merged bucket of %s with the later bucket's params", buckets, to)
+	wantParams := map[string]string{"east": `{"district":"east-end"}`, "west": `{"district":"diamond-district"}`}
+	if len(buckets) != 2 {
+		t.Errorf("buckets after the rename = %+v, want two merged buckets of %s", buckets, to)
+	}
+	for _, d := range buckets {
+		if d.Kind != to || len(d.Subjects) != 2 || string(d.Params) != wantParams[d.Bucket] || !d.Last.Equal(later) {
+			t.Errorf("bucket %s after the rename = %+v, want a merged bucket of %s with params %s", d.Bucket, d, to, wantParams[d.Bucket])
+		}
 	}
 	for k, want := range map[string]string{"bat-signal": "run-cave", "batarang": "run-new"} {
 		v, err := e.ks.Get(ctx, taskstore.IdemKey(string(to), k))
