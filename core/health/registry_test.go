@@ -1,5 +1,5 @@
 // file: core/health/registry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e0849cfa-c877-4bf8-98f6-53c0658eea4c
 // last-edited: 2026-11-10
 
@@ -233,7 +233,7 @@ func TestRegistry_ReadyTokens(t *testing.T) {
 // the fixed token invalid_reason, never stored, so a path or secret in a
 // Reason cannot reach a probe. Detail is never copied into the token.
 func TestRegistry_ReasonGrammar(t *testing.T) {
-	good := []string{"a", "storage_quarantine", "secrets_keyring_not_exported", strings.Repeat("x", 40), "r2d2"}
+	good := []string{"a", "storage_quarantine", "secrets_keyring_not_exported", strings.Repeat("x", 40), "oracle"}
 	bad := []string{"Upper", "has space", "dash-ed", "../vault/key", "tok\nen", strings.Repeat("x", 41), "bärman", "tok=secret"}
 	for _, reason := range good {
 		if !validReason(reason) {
