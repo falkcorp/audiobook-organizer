@@ -1,5 +1,5 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
 // last-edited: 2026-11-10
 
@@ -48,11 +48,11 @@ type specBlock struct {
 	Text string
 }
 
-// specGroup is the blocks that make one package directory.
 // specImport is one import of a block: its path and the name the file
 // refers to it by (the alias, else the last path element).
 type specImport struct{ path, name string }
 
+// specGroup is the blocks that make one package directory.
 type specGroup struct {
 	dir   string            // relative to the core module root: examples/hello
 	pkg   string            // package name of its non-test files
