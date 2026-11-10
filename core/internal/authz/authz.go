@@ -1,5 +1,5 @@
 // file: core/internal/authz/authz.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9ab14091-8ae1-439c-ad61-28782f1e547d
 // last-edited: 2026-11-10
 
@@ -313,12 +313,17 @@ func (c *checker) Satisfies(r rbac.Requirement) bool {
 	}
 }
 
-// holds is the per-scope test of Satisfies: Has, or literal membership for a
-// Confined() principal (§4.10).
+// holds is the per-scope test of Satisfies: Has, and for a Confined()
+// principal also literal membership (§4.10). The confined path still goes
+// through Has, so its rules hold there too: an undeclared scope is refused,
+// and so is a Sensitive scope for a non-interactive principal (§4.4 rule 1),
+// even when the catalog makes that scope Confining as well. A confined
+// principal is never admin, so Has adds no reach beyond the set.
 func (c *checker) holds(p rbac.Permission) bool {
 	if c.confined {
-		_, ok := c.set[p]
-		return ok
+		if _, ok := c.set[p]; !ok {
+			return false
+		}
 	}
 	return c.Has(p)
 }

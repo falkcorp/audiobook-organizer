@@ -968,6 +968,30 @@
     "expected": true
   },
   {
+    "name": "a confined non-interactive key fails its Sensitive scope",
+    "catalog": [
+      {"name": "gotham:batcave", "sensitive": true, "auth_required": false, "confining": true, "implies": []},
+      {"name": "gotham:patrol", "sensitive": false, "auth_required": false, "confining": true, "implies": []}
+    ],
+    "roles": ["gotham:batcave", "gotham:patrol"],
+    "key_scopes": ["gotham:batcave", "gotham:patrol"],
+    "interactive": false,
+    "check": {"op": "satisfies", "requirement": {"kind": "all_of", "scopes": ["gotham:batcave"]}},
+    "expected": false
+  },
+  {
+    "name": "a confined interactive session holds its Sensitive scope",
+    "catalog": [
+      {"name": "gotham:batcave", "sensitive": true, "auth_required": false, "confining": true, "implies": []},
+      {"name": "gotham:patrol", "sensitive": false, "auth_required": false, "confining": true, "implies": []}
+    ],
+    "roles": ["gotham:batcave", "gotham:patrol"],
+    "key_scopes": null,
+    "interactive": true,
+    "check": {"op": "satisfies", "requirement": {"kind": "all_of", "scopes": ["gotham:batcave"]}},
+    "expected": true
+  },
+  {
     "name": "a confined principal fails an AllOf naming another scope",
     "catalog": [
       {"name": "core:admin", "sensitive": false, "auth_required": true, "confining": false, "implies": []},
