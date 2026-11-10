@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -299,6 +299,43 @@ func TestBootRecord_ValueUnderOperatorLockReported(t *testing.T) {
 	}
 	if !strings.Contains(string(r.record()), `"day"`) {
 		t.Errorf("record = %s: the shadowed entry was dropped", r.record())
+	}
+}
+
+// TestBootRecord_OperatorKeyIgnored (T4 review MINOR-8, surviving mutants
+// M11 and M12; 05-config §1.3.5): core.paths.state_dir is ProtectOperator, so
+// a boot-record entry for it is never read. It is classified as unknown (the
+// record keeps it and config_boot_record_unknown_keys is raised), BootView
+// and Lookup report the registered default, and no root moves to it.
+func TestBootRecord_OperatorKeyIgnored(t *testing.T) {
+	rec := `{"format":"mediacore-boot/1","gen":1,"values":{"core.paths.state_dir":"/srv/joker"}}`
+	r := newRig(t, rigOpts{bootRecord: rec, stateDir: "/var/lib/gotham"})
+	bv, err := r.st.Boot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, src, ok := bv.Raw(stateDir); !ok || string(raw) != `"/var/lib/gotham"` || src != config.SourceDefault {
+		t.Errorf("BootView %s = %s from %v (%v), want the default", stateDir, raw, src, ok)
+	}
+	if err := r.st.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.Attach(context.Background(), r.mem, r.cm); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(r.st.HealthTokens(), "config_boot_record_unknown_keys") {
+		t.Errorf("health %v: the operator key's entry was not reported as unknown", r.st.HealthTokens())
+	}
+	if ks, _ := r.st.Lookup(stateDir); string(ks.Effective) != `"/var/lib/gotham"` || ks.Source != config.SourceDefault {
+		t.Errorf("Effective %s from %v, want the default", ks.Effective, ks.Source)
+	}
+	for _, d := range r.roots {
+		if d == "/srv/joker" {
+			t.Errorf("BootRecordRoot was handed the boot record's value")
+		}
+	}
+	if !strings.Contains(string(r.record()), "/srv/joker") {
+		t.Errorf("record = %s: the unknown entry was dropped", r.record())
 	}
 }
 
