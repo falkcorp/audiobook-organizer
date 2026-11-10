@@ -1538,6 +1538,7 @@
    "scripts/r2corpus/overlay/",
    "internal/books/testdata/r2corpus/overlay/",
    "internal/books/testdata/r2corpus/blockers/",
+   "internal/books/testdata/r2corpus/answers/overlay/",
    "internal/books/testdata/r2corpus/manifest.json",
    "scripts/tests/test_build_overlay.py"
   ],
