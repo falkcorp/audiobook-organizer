@@ -48,13 +48,13 @@ type Actor struct {
 
 // Event is what callers submit.
 type Event struct {
-	Action     string         // "<ns>.<noun>.<verb>", present tense (03 §3.6, COR2-19): "core.auth.login", "core.role.update", "books.user.merge"
+	Action     string // "<ns>.<noun>.<verb>", present tense (03 §3.6, COR2-19): "core.auth.login", "core.role.update", "books.user.merge"
 	Outcome    Outcome
-	Actor      Actor          // filled from ctx principal when zero
-	Target     entity.Ref     // the one entity reference type (03 §3.3, COR-17)
-	Permission string         // scope that was checked, for denials and approvals
-	Route      string         // "POST /api/core/v1/roles/{id}" (pattern, not raw path)
-	RequestID  string         // filled from ctx when empty
+	Actor      Actor      // filled from ctx principal when zero
+	Target     entity.Ref // the one entity reference type (03 §3.3, COR-17)
+	Permission string     // scope that was checked, for denials and approvals
+	Route      string     // "POST /api/core/v1/roles/{id}" (pattern, not raw path)
+	RequestID  string     // filled from ctx when empty
 	TraceID    string
 	Reason     string         // short machine reason: "scope_escalation", "bad_password"
 	Details    map[string]any // redacted by key name + value scan, capped at 4 KiB JSON
@@ -62,9 +62,9 @@ type Event struct {
 
 // Record is what is stored and returned.
 type Record struct {
-	Seq       uint64    // unique, increasing in allocation order; may have gaps (§7.2)
-	ID        string    // ULID
-	Time      time.Time // UTC
+	Seq  uint64    // unique, increasing in allocation order; may have gaps (§7.2)
+	ID   string    // ULID
+	Time time.Time // UTC
 	Event
 	Coalesced uint32 // >1 when identical denials were folded (§7.3)
 }

@@ -1,5 +1,5 @@
 // file: core/audit/async.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9cae4d73-00cd-4cab-8d23-e3d19b224b56
 // last-edited: 2026-11-10
 
@@ -136,9 +136,13 @@ func (s *Store) run(startCtx context.Context) {
 	}
 }
 
-// foldKey is what makes two denials identical (05-rbac §7.3): the action,
-// the actor (user, credential and address, so anonymous callers are told
-// apart), the route, the permission checked and the outcome.
+// foldKey is what makes two denials identical. 05-rbac §7.3 names "same
+// actor, route, permission, outcome": the key is those four, with the actor
+// as user, credential and address (so anonymous callers are told apart) and
+// the action beside them (a login denial and a role denial never fold). It
+// does not hold Target or Reason: §7.3 does not name them, so a run of
+// denials of one route that differ only by target is one record, carrying the
+// first one's target. See seams.d/F2-07.md.
 type foldKey struct {
 	action, userID, credential, addr, route, permission string
 	outcome                                             Outcome
@@ -200,9 +204,23 @@ func (w *writer) accept(ctx context.Context, rec Record) {
 			f.n++
 			return
 		}
+		// The open folds are bounded by AsyncBuffer, so memory stays bounded
+		// whatever the cardinality of the keys (a flood of distinct addresses,
+		// credentials or routes): at the cap the oldest fold ends early and is
+		// written as it stands. That loses no record; it only folds fewer
+		// denials into it.
+		for len(w.foldQ) >= s.opts.AsyncBuffer {
+			oldest := w.foldQ[0]
+			w.foldQ[0] = nil
+			w.foldQ = w.foldQ[1:]
+			w.finish(oldest)
+		}
 		f := &fold{rec: rec, n: 1, deadline: rec.Time.Add(s.opts.CoalesceWindow)}
 		w.folds[k] = f
 		w.foldQ = append(w.foldQ, f)
+		if len(w.ready) >= s.opts.BatchMax {
+			w.flush(ctx)
+		}
 		return
 	}
 	w.ready = append(w.ready, rec)

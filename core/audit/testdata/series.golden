@@ -1,0 +1,14 @@
+# file: core/audit/testdata/series.golden
+# version: 1.0.0
+# guid: 5d2e8b7f-1c60-4a93-b4e8-7a9f0c3d6e12
+# last-edited: 2026-11-10
+#
+# The mediacore.audit scope's series (05-rbac §11): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestAuditSeries_Golden. The families
+# are observable instruments over the store's counters; audit_pruned_total
+# stays 0 until the tasks flip registers core.audit.prune.
+mediacore_audit_dropped_total	counter	
+mediacore_audit_pruned_total	counter	
+mediacore_audit_queue_depth	gauge	
+mediacore_audit_records_total	counter	namespace,outcome
+mediacore_audit_write_errors_total	counter	path
