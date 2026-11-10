@@ -1,3 +1,5 @@
+core/kernel.buildHealth
+core/kernel.enginePing
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
 internal/ai.modelLabelSet.setConfigured
@@ -115,6 +117,7 @@ internal/server.NotifyDelugeAfterOrganize
 internal/server.NotifyDelugeMoveStorage
 internal/server/handlers/abs.Handler.SetClock
 internal/server/handlers/abs.Handler.SetSleep
+internal/server/handlers/system.HealthPostureTokens
 internal/server/middleware.ABSIdentityResolver.Config
 internal/startup.Class.String
 internal/telemetry.AttributeKeys
