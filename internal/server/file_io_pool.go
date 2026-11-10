@@ -1,5 +1,5 @@
 // file: internal/server/file_io_pool.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-10
 //
@@ -183,6 +183,7 @@ func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn
 	select {
 	case p.overflow <- struct{}{}:
 	case <-stop:
+		p.dropPending(bookID, opType)
 		clearPending()
 		lifecycleLog.Warn("file I/O submit abandoned at stop, the pending row stays for the next start: book %s (op %s)", logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(opType))
 		return false
@@ -196,6 +197,7 @@ func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn
 		// the recovery mechanism, so the work is picked up on next start
 		// rather than silently lost.
 		<-p.overflow
+		p.dropPending(bookID, opType)
 		clearPending()
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 		return false
@@ -210,6 +212,16 @@ func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn
 		p.removePendingFileOp(bookID, opType)
 	})
 	return true
+}
+
+// dropPending forgets the in-memory tracking entry tryQueue stored for a job
+// that was then dropped without running. Only the entry: the persisted
+// pending_file_op row stays, because it is what the next start replays. Left
+// behind, the entry would report the book busy to PendingJobs and
+// PendingBookIDs for the rest of the process, since no worker will ever run
+// the job that would have removed it.
+func (p *FileIOPool) dropPending(bookID, opType string) {
+	p.pending.Delete(pendingKey(bookID, opType))
 }
 
 // tryQueue records the job and attempts a non-blocking send onto the worker

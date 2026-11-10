@@ -1,7 +1,7 @@
 // file: internal/server/scheduler_maintenance_window_op.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 2a4b6c8d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -57,7 +57,7 @@ func (s *Server) RegisterMaintenanceWindowOp(reg *opsregistry.Registry) error {
 				opID = p.LegacyOpID
 			}
 			ignoreWindow := p.IgnoreWindow
-			ts := s.scheduler
+			ts := s.scheduler.Load()
 
 			store := s.Ops()
 			if store == nil {

@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.22.3
+// version: 1.22.4
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
@@ -44,7 +43,23 @@ type SchedulerStore interface {
 	ListActiveOperationsV2() ([]database.OperationV2Row, error)
 }
 
+// MaintenanceSettings is the maintenance window's configuration as Start
+// needs it to decide whether to run the window checker at all. The caller
+// captures it from the config once, before anything runs concurrently, so
+// Start does not read the process-global config on the post-listen start's
+// path (a stop that abandons that start would otherwise race a later config
+// edit). The checker's own per-minute window test still reads the live config.
+type MaintenanceSettings struct {
+	Enabled     bool
+	WindowStart int
+	WindowEnd   int
+}
+
 type SchedulerDeps struct {
+	// Maintenance is what Start reads of the maintenance window. The zero
+	// value is a disabled window.
+	Maintenance MaintenanceSettings
+
 	// Store returns the live store. May return nil before the DB is fully
 	// initialised; callers must nil-check.
 	Store func() SchedulerStore
@@ -438,11 +453,11 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 	ts.startV3(shutdown, wg)
 
 	// Maintenance window checker — runs every 60 seconds
-	if config.AppConfig.Maintenance.Enabled {
+	if maint := ts.deps.Maintenance; maint.Enabled {
 		wg.Go(func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
-			slog.Info("Maintenance window enabled", "windowStart", config.AppConfig.Maintenance.WindowStart, "windowEnd", config.AppConfig.Maintenance.WindowEnd)
+			slog.Info("Maintenance window enabled", "windowStart", maint.WindowStart, "windowEnd", maint.WindowEnd)
 			for {
 				select {
 				case <-ticker.C:

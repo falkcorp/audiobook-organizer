@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.0
+// version: 4.69.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-10
 
@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -394,15 +395,50 @@ type lifecycleRun struct {
 	closeShutdown sync.Once
 	backgroundWG  sync.WaitGroup
 	watchers      *watcher.Supervisor
-	// autoScanEnabled and autoScanDebounce are config.AppConfig's auto-scan
-	// settings as StartHook read them. afterListen runs concurrently with
-	// serving, and after a stop that ran out of budget it may still be
-	// running: reading the process-global config there is a race against
-	// whatever reconfigures the process next, so it reads these instead.
-	autoScanEnabled  bool
-	autoScanDebounce time.Duration
+	// startConfig is the slice of config.AppConfig that afterListen and what
+	// it starts read, as StartHook captured it (captureStartConfig).
+	// afterListen runs concurrently with serving, and after a stop that ran
+	// out of budget it may still be running: reading the process-global config
+	// there is a race against whatever reconfigures the process next, so the
+	// steps on its path read this instead. It is written once, before the
+	// listener exists, and only read after.
+	startConfig startConfig
 	// afterGate orders afterListen against the stop: see afterListenGate.
 	afterGate afterListenGate
+}
+
+// startConfig is every config.AppConfig setting the post-listen start reads
+// directly on its own path: the auto-scan watchers' gate and debounce,
+// the startup read-only key, the acoustid backfill gate and the maintenance
+// window the scheduler's Start reads. The tasks' own IsEnabled/RunOnStart
+// closures inside scheduler.Start read the live config at call time and are
+// not captured here.
+type startConfig struct {
+	autoScanEnabled         bool
+	autoScanDebounce        time.Duration
+	writeStartupReadOnlyKey bool
+	acoustIDBackfill        bool
+	maintenance             scheduler.MaintenanceSettings
+}
+
+// captureStartConfig reads those settings from the process-global config. It
+// is called once, by StartHook, before anything runs concurrently.
+func captureStartConfig() startConfig {
+	c := startConfig{
+		autoScanEnabled:         config.AppConfig.AutoScanEnabled,
+		autoScanDebounce:        5 * time.Second,
+		writeStartupReadOnlyKey: config.AppConfig.WriteStartupReadOnlyKey,
+		acoustIDBackfill:        config.AppConfig.Maintenance.AcoustIDBackfill,
+		maintenance: scheduler.MaintenanceSettings{
+			Enabled:     config.AppConfig.Maintenance.Enabled,
+			WindowStart: config.AppConfig.Maintenance.WindowStart,
+			WindowEnd:   config.AppConfig.Maintenance.WindowEnd,
+		},
+	}
+	if config.AppConfig.AutoScanDebounceSeconds > 0 {
+		c.autoScanDebounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
+	}
+	return c
 }
 
 // afterListenGate orders the post-listen start (afterListen) against the
@@ -613,11 +649,7 @@ func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 	cfg.StartupSteps = steps
 	s.life.cfg = cfg
 	s.life.shutdown = make(chan struct{})
-	s.life.autoScanEnabled = config.AppConfig.AutoScanEnabled
-	s.life.autoScanDebounce = 5 * time.Second
-	if config.AppConfig.AutoScanDebounceSeconds > 0 {
-		s.life.autoScanDebounce = time.Duration(config.AppConfig.AutoScanDebounceSeconds) * time.Second
-	}
+	s.life.startConfig = captureStartConfig()
 	logBasicGateAtStartup()
 
 	// Refuse to serve with a hole in the operations registry, before touching
@@ -783,14 +815,15 @@ func (s *Server) afterListen() {
 	}
 
 	// Start unified task scheduler (replaces individual iTunes sync and purge tickers)
-	s.scheduler = scheduler.NewTaskScheduler(s.schedulerDeps())
+	ts := scheduler.NewTaskScheduler(s.schedulerDeps())
+	s.scheduler.Store(ts)
 	// ops.Schedule declarations (05-PR8): registered before Start so the
 	// scheduler's one v3 loop and the maintenance window see them. A def that
 	// fails here is skipped and reported; the rest still schedule.
-	if err := s.scheduler.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
+	if err := ts.RegisterSchedules(s.opRegistry.Catalog()); err != nil {
 		lifecycleLog.Warn("ops.Schedule registration: %v", err)
 	}
-	s.scheduler.Start(shutdown, backgroundWG)
+	ts.Start(shutdown, backgroundWG)
 	if stopping() {
 		return
 	}
@@ -860,8 +893,8 @@ func (s *Server) afterListen() {
 	// fsnotify does not see writes made by remote NFS/SMB clients and can
 	// exhaust the inotify watch limit on a large tree, so it must never be
 	// the only discovery mechanism.
-	if s.life.autoScanEnabled && s.Ops() != nil {
-		debounce := s.life.autoScanDebounce
+	if s.life.startConfig.autoScanEnabled && s.Ops() != nil {
+		debounce := s.life.startConfig.autoScanDebounce
 		watchLog := logger.NewWithActivityLog("auto-scan", s.storeForWiring())
 		// The same callback is reused across watchers because each watcher
 		// invokes it with its own root path, so the scan target is correct
@@ -1093,7 +1126,7 @@ func (s *Server) stopSteps(ctx context.Context) (abandoned []string) {
 	afterListenDone := s.life.afterGate.done()
 	if !afterListenFinished {
 		lifecycleLog.Warn("The post-listen start is still running at its share of the shutdown budget; stopping around it")
-		abandoned = append(abandoned, "post-listen start")
+		abandoned = append(abandoned, postListenAbandoned)
 	}
 
 	// No more scrapes can arrive; drop the pebble metrics closures so they stop
@@ -1304,6 +1337,11 @@ func (s *Server) stopSteps(ctx context.Context) (abandoned []string) {
 	}) {
 		abandoned = append(abandoned, "scheduler tasks")
 	}
+
+	// The start may have finished since the seal gave up on it, behind the
+	// waits above: it is then not a step left running, and the clean-stop
+	// marker need not be withheld for it.
+	abandoned = withoutFinishedPostListen(abandoned, afterListenDone)
 
 	// Last, so no step this stop waits for runs after it.
 	s.markHNSWCleanStop(abandoned)
@@ -1714,6 +1752,21 @@ const (
 	afterListenSealReserve = 10 * time.Second
 )
 
+// postListenAbandoned is the abandoned-list entry for a post-listen start the
+// seal gave up on.
+const postListenAbandoned = "post-listen start"
+
+// withoutFinishedPostListen drops the post-listen entry from abandoned when
+// done has closed, checked without blocking.
+func withoutFinishedPostListen(abandoned []string, done <-chan struct{}) []string {
+	select {
+	case <-done:
+	default:
+		return abandoned
+	}
+	return slices.DeleteFunc(abandoned, func(a string) bool { return a == postListenAbandoned })
+}
+
 // afterListenSealShare is StopHook's wait on the post-listen start within ctx.
 func afterListenSealShare(ctx context.Context) time.Duration {
 	return budgeted(ctx, afterListenSealWait, afterListenSealReserve)
@@ -2044,7 +2097,7 @@ func (s *Server) seedRolesAndTokens() {
 		if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
 			slog.Info("Failed to init bootstrap token", "err", err)
 		}
-		if config.AppConfig.WriteStartupReadOnlyKey {
+		if s.life.startConfig.writeStartupReadOnlyKey {
 			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {
 				slog.Info("Failed to init startup read-only key", "err", err)
 			}
@@ -2152,7 +2205,7 @@ func (s *Server) startBackfills() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
 		}
-		if !config.AppConfig.Maintenance.AcoustIDBackfill {
+		if !s.life.startConfig.acoustIDBackfill {
 			slog.Info("startup: acoustid.backfill skipped (maintenance.acoustid_backfill=false)",
 				"reason", "load phase holds the full book table in memory; see config.go")
 			return
@@ -3317,6 +3370,8 @@ func (s *Server) stopASINBackfillQueue() {
 // would leave a nil hook, and nil means always enqueue).
 func (s *Server) schedulerDeps() scheduler.SchedulerDeps {
 	return scheduler.SchedulerDeps{
+		// What Start reads of the maintenance window, as StartHook captured it.
+		Maintenance: s.life.startConfig.maintenance,
 		// Adapter, not a plain method value: function types must be identical
 		// for assignment, so a func() database.Store cannot be assigned to a
 		// func() scheduler.SchedulerStore even though the interface satisfies

@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.115.7
+// version: 2.115.8
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -236,7 +236,11 @@ type Server struct {
 	itunesSvc       *itunesservice.Service
 	updater         *updater.Updater
 	updateScheduler *updater.Scheduler
-	scheduler       *scheduler.TaskScheduler
+	// scheduler is assigned by afterListen, on its own goroutine, after the
+	// routes were wired, and read per request by the lazy providers (wire_*.go)
+	// and by the maintenance-window op: an atomic pointer, not a plain field,
+	// so those reads need no lock and do not race the assignment.
+	scheduler       atomic.Pointer[scheduler.TaskScheduler]
 	aiScanStore     *database.AIScanStore
 	pipelineManager *aiscan.PipelineManager
 	// operationsHandler is the migrated operations-domain handler (instantiated

@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 3393014a-b734-46f4-9b8d-64fb73c1a547
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -48,7 +48,7 @@ func (s *Server) wireOpsV3Routes(protected *gin.RouterGroup) {
 	// this, so a value captured here would always be nil and every def would
 	// read manual (the operations handler's provider in wire_handlers.go has
 	// the same shape).
-	d.Sched = opsV3Sched{ts: func() *scheduler.TaskScheduler { return s.scheduler }}
+	d.Sched = opsV3Sched{ts: func() *scheduler.TaskScheduler { return s.scheduler.Load() }}
 	// No Approver: nothing in the runner records an approval against a run yet
 	// (05-PR9 report), so POST .../approve answers 501 after its checks.
 	if d.Runs != nil && s.opHub != nil {

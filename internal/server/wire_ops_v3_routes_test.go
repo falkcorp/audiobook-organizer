@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -458,7 +458,7 @@ func TestOpsV3Routes_NoPreviewOpRefusesPreview(t *testing.T) {
 func TestOpsV3Routes_DefsShowTheSchedulerStartAssigns(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
-	require.Nil(t, s.scheduler, "the test server must not have a scheduler before the routes are built")
+	require.Nil(t, s.scheduler.Load(), "the test server must not have a scheduler before the routes are built")
 
 	yes := func() bool { return true }
 	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
@@ -470,8 +470,8 @@ func TestOpsV3Routes_DefsShowTheSchedulerStartAssigns(t *testing.T) {
 		HasBatchPoller:      yes,
 	})
 	require.NoError(t, ts.RegisterSchedules(s.opRegistry.Catalog()))
-	s.scheduler = ts
-	t.Cleanup(func() { s.scheduler = nil })
+	s.scheduler.Store(ts)
+	t.Cleanup(func() { s.scheduler.Store(nil) })
 
 	want := map[string]scheduler.ScheduleStatus{}
 	withNext := 0
