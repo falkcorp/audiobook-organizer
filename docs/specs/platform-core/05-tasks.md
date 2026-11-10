@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -341,7 +341,13 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // one without being covered by it is refused with ErrHeldOverlap; any other
 // ref with ErrNestedLockNotHeld, because locks taken in stages can deadlock
 // against a sibling item. An item declares every ref it needs in its own
-// ExclusiveRefs. Inside an item, use ic.LockRefs, not rc.LockRefs. Both marks
+// ExclusiveRefs. The same holds for an item with no ExclusiveRefs: it takes
+// all its refs in one ic.LockRefs call. While that call's refs are held, a
+// second call (from any goroutine of the item) is refused with
+// ErrLockAlreadyHeld and a nested loop may lock only refs it covers, else
+// ErrNestedLockNotHeld; release-then-relock is fine. Concurrent work inside
+// an item that needs its own locks belongs in a nested loop, whose items
+// each take one call. Inside an item, use ic.LockRefs, not rc.LockRefs. Both marks
 // live on in contexts derived from the item's, so a goroutine must not
 // outlive its item.
 func ForEach[T any](ctx context.Context, par Parallelism, items []T,
