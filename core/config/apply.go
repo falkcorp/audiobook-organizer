@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -97,23 +97,27 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 		case c.secret != nil:
 			writes = append(writes, *c.secret)
 		case c.ck.k.reload == ReloadBoot:
+			// A quarantined entry never matches: the same bytes are written
+			// again and validated, so Apply clears the quarantine or refuses,
+			// and never succeeds while the key stays quarantined.
 			cur, had := s.boot[pth]
 			switch {
 			case c.unset && had:
 				delete(newBootAll, pth)
 				delete(newBoot, pth)
 				bootChg = append(bootChg, pth)
-			case !c.unset && (!had || !bytes.Equal(cur, c.value)):
+			case !c.unset && (!had || s.bootQuar[pth] != nil || !bytes.Equal(cur, c.value)):
 				newBootAll[pth], newBoot[pth] = c.value, c.value
 				bootChg = append(bootChg, pth)
 			}
 		default:
+			// A quarantined row never matches either (see the boot case).
 			row, had := s.db[pth]
 			switch {
 			case c.unset && had:
 				delete(newDB, pth)
 				unset = append(unset, pth)
-			case !c.unset && (!had || !bytes.Equal(row.Value, c.value)):
+			case !c.unset && (!had || s.quar[pth] != nil || !bytes.Equal(row.Value, c.value)):
 				newDB[pth] = c.value
 				set = append(set, Override{Path: pth, Value: c.value, Gen: gen, At: now, By: a.Subject})
 			}
