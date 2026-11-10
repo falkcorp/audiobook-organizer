@@ -1,0 +1,235 @@
+{
+  "_header": {
+    "file": "internal/books/testdata/r2corpus/p1_counts.json",
+    "version": "1.0.0",
+    "guid": "7ffe5228-7abc-4291-8654-c42508513e27",
+    "last-edited": "2026-11-10"
+  },
+  "source": "OWNER-04 P1",
+  "recorded": "2026-11-10",
+  "unregistered_keys": 0,
+  "families": [
+    {
+      "prefix": "act:change:",
+      "keys": 191853,
+      "raw_key_bytes": 11127474,
+      "raw_value_bytes": 67098504
+    },
+    {
+      "prefix": "act:debug:",
+      "keys": 28,
+      "raw_key_bytes": 1596,
+      "raw_value_bytes": 15388
+    },
+    {
+      "prefix": "act:digest:",
+      "keys": 154,
+      "raw_key_bytes": 8932,
+      "raw_value_bytes": 24267453
+    },
+    {
+      "prefix": "act:info:",
+      "keys": 7,
+      "raw_key_bytes": 392,
+      "raw_value_bytes": 2476
+    },
+    {
+      "prefix": "act:lvl:",
+      "keys": 192043,
+      "raw_key_bytes": 12866892,
+      "raw_value_bytes": 10370280
+    },
+    {
+      "prefix": "act:op:",
+      "keys": 20314,
+      "raw_key_bytes": 1645434,
+      "raw_value_bytes": 1096918
+    },
+    {
+      "prefix": "act:src:",
+      "keys": 192043,
+      "raw_key_bytes": 13263229,
+      "raw_value_bytes": 10370280
+    },
+    {
+      "prefix": "act:typ:",
+      "keys": 192043,
+      "raw_key_bytes": 13340477,
+      "raw_value_bytes": 10370280
+    },
+    {
+      "prefix": "apikey:",
+      "keys": 584,
+      "raw_key_bytes": 19272,
+      "raw_value_bytes": 269439
+    },
+    {
+      "prefix": "idx:",
+      "keys": 4839,
+      "raw_key_bytes": 301695,
+      "raw_value_bytes": 19836
+    },
+    {
+      "prefix": "invite:",
+      "keys": 1,
+      "raw_key_bytes": 71,
+      "raw_value_bytes": 288
+    },
+    {
+      "prefix": "oauthid:",
+      "keys": 1,
+      "raw_key_bytes": 34,
+      "raw_value_bytes": 231
+    },
+    {
+      "prefix": "opv2:act:",
+      "keys": 1,
+      "raw_key_bytes": 35,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv2:def:",
+      "keys": 277,
+      "raw_key_bytes": 10122,
+      "raw_value_bytes": 189736
+    },
+    {
+      "prefix": "opv2:done:",
+      "keys": 23304,
+      "raw_key_bytes": 1328328,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv2:err:",
+      "keys": 54878,
+      "raw_key_bytes": 3073168,
+      "raw_value_bytes": 12493222
+    },
+    {
+      "prefix": "opv2:log:",
+      "keys": 43745789,
+      "raw_key_bytes": 2930967930,
+      "raw_value_bytes": 11934321749
+    },
+    {
+      "prefix": "opv2:op:",
+      "keys": 23305,
+      "raw_key_bytes": 792370,
+      "raw_value_bytes": 131302081
+    },
+    {
+      "prefix": "opv2:open:",
+      "keys": 1,
+      "raw_key_bytes": 36,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv2:row:",
+      "keys": 141002,
+      "raw_key_bytes": 9090200,
+      "raw_value_bytes": 146669252
+    },
+    {
+      "prefix": "opv2:rowix:",
+      "keys": 141002,
+      "raw_key_bytes": 9372204,
+      "raw_value_bytes": 3999922
+    },
+    {
+      "prefix": "opv2:state:",
+      "keys": 791,
+      "raw_key_bytes": 29267,
+      "raw_value_bytes": 4687105
+    },
+    {
+      "prefix": "opv2:strike:",
+      "keys": 3622,
+      "raw_key_bytes": 328917,
+      "raw_value_bytes": 933467
+    },
+    {
+      "prefix": "opv3:ckpt:",
+      "keys": 503,
+      "raw_key_bytes": 18108,
+      "raw_value_bytes": 5949566
+    },
+    {
+      "prefix": "opv3:evt:",
+      "keys": 39942,
+      "raw_key_bytes": 2516346,
+      "raw_value_bytes": 4890275
+    },
+    {
+      "prefix": "opv3:ix:def:",
+      "keys": 23305,
+      "raw_key_bytes": 1863950,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv3:ix:done:",
+      "keys": 23304,
+      "raw_key_bytes": 1398240,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv3:ix:state:",
+      "keys": 23305,
+      "raw_key_bytes": 1163469,
+      "raw_value_bytes": 0
+    },
+    {
+      "prefix": "opv3:meta:",
+      "keys": 1,
+      "raw_key_bytes": 16,
+      "raw_value_bytes": 5449
+    },
+    {
+      "prefix": "opv3:prog:",
+      "keys": 23305,
+      "raw_key_bytes": 838980,
+      "raw_value_bytes": 9118613
+    },
+    {
+      "prefix": "opv3:run:",
+      "keys": 23305,
+      "raw_key_bytes": 815675,
+      "raw_value_bytes": 114846881
+    },
+    {
+      "prefix": "role:",
+      "keys": 4,
+      "raw_key_bytes": 46,
+      "raw_value_bytes": 1419
+    },
+    {
+      "prefix": "setting:",
+      "keys": 153,
+      "raw_key_bytes": 5325,
+      "raw_value_bytes": 29705
+    },
+    {
+      "prefix": "setting:repairs_last_apply_op:",
+      "keys": 16,
+      "raw_key_bytes": 930,
+      "raw_value_bytes": 2098
+    },
+    {
+      "prefix": "setting:repairs_last_completed_plan_op:",
+      "keys": 1,
+      "raw_key_bytes": 73,
+      "raw_value_bytes": 146
+    },
+    {
+      "prefix": "setting:repairs_last_plan_op:",
+      "keys": 23,
+      "raw_key_bytes": 1298,
+      "raw_value_bytes": 2977
+    },
+    {
+      "prefix": "u:",
+      "keys": 4,
+      "raw_key_bytes": 112,
+      "raw_value_bytes": 1380
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.7.0
+# version: 1.8.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
-# last-edited: 2026-11-09
+# last-edited: 2026-11-10
 
 # The `extraction-gates` required check (09 §9.2.1; R1-02). Parallel jobs, each
 # with `timeout-minutes` <= 30 (09 §9.2.10), and one terminal job named
@@ -17,8 +17,14 @@
 #   boot-crash-matrix-abo ABO's boot crash matrix (TestBootCrashMatrix_ABO)
 #                         and the R1 rollback check TestR0OpensR1Store, which
 #                         runs the R0 release binary (R1-23)
-# Later rows add jobs here: F2-14 and F2-15 the cutover suite. Each one must be
-# listed in the terminal job's `needs`.
+#   production-shaped-store  the current build's boot on a store grown to the
+#                         owner's P1 counts and sizes (F2-14): the boot-time
+#                         measurement, boot_time.json uploaded as an artifact.
+#                         It runs only when the change set matches
+#                         `unit-lifecycle`'s path triggers (09 §9.2.1), and
+#                         nightly from nightly.yml
+# Later rows add jobs here: F2-15 the cutover suite (over the same shaped
+# store). Each one must be listed in the terminal job's `needs`.
 #
 # Trigger: every PR to main that touches a non-doc file, decided by the same
 # `changes` classifier as ci.yml (a skipped job reports success through its
@@ -55,6 +61,7 @@ jobs:
     outputs:
       go: ${{ steps.classify.outputs.go }}
       web: ${{ steps.classify.outputs.web }}
+      shaped: ${{ steps.shaped.outputs.run }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,6 +110,42 @@ jobs:
           fi
           echo "go=$go web=$web (${range:-no range: fail open})"
           { echo "go=$go"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+
+      # The production-shaped store job's trigger (F2-14): the same path list
+      # as unit-lifecycle.yml's `Classify changed paths` (09 §9.2.1), plus this
+      # job's own files. The list is a copy, not a second list:
+      # scripts/tests/test_gen_production_shaped.py fails when the two differ,
+      # so change both together. A merge-queue run reads its own range, as
+      # unit-lifecycle.yml does; a range that cannot be read fails open.
+      - name: Classify shaped-store paths
+        id: shaped
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          MERGE_BASE: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          run=false; range=''
+          case "$EVENT" in
+            pull_request) range="origin/${BASE_REF}...HEAD" ;;
+            merge_group) range="${MERGE_BASE}...${MERGE_HEAD}" ;;
+            *) run=true ;;
+          esac
+          if [ -n "$range" ]; then
+            if files=$(git diff --name-only "$range"); then
+              while IFS= read -r f; do
+                case "$f" in
+                  deploy/*|cmd/*|main.go|internal/backup/*|internal/updater/*|internal/server/server_lifecycle*.go|internal/books/cutover/*|core/kernel/*|core/internal/restoreswap/*) run=true ;;
+                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/testdata/r2corpus/*) run=true ;;
+                esac
+              done <<<"$files"
+            else
+              run=true
+            fi
+          fi
+          echo "shaped=$run (${range:-$EVENT})"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
 
   # MOD9-5: rebase merges land every commit of a PR on main, where git bisect
   # and auto-revert see each one, so each must build. The script prints
@@ -366,12 +409,67 @@ jobs:
             fi
           done
 
+  # F2-14 (09 §9.3 item 1, "Boot time"): the third leg of the R2 corpus. The
+  # generator grows F2-12's stage-1 store to the owner's P1 counts and sizes
+  # (internal/books/testdata/r2corpus/p1_counts.json, 09 §9.7 P1) and the test
+  # boots the current build on a copy, writing every kernel_boot_phase_seconds
+  # sample and the restart-to-ready time to boot_time.json. That file sets the
+  # R2 release note's expected first-boot time and the runbook's
+  # DEPLOY_READY_TIMEOUT. The body is scripts/ci/run_production_shaped_store.sh,
+  # shared with nightly.yml. F2-15 extends this job to run the cutover suite
+  # over R2_SHAPED_STORE: keep the job name and the env names.
+  production-shaped-store:
+    name: production-shaped-store
+    needs: changes
+    if: ${{ needs.changes.outputs.shaped == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Generate the production-shaped store and measure the boot
+        env:
+          R2_SHAPED_OUT: ${{ runner.temp }}/r2-shaped-out
+        run: scripts/ci/run_production_shaped_store.sh
+
+      - name: Upload boot_time.json
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-shaped-boot-time
+          path: ${{ runner.temp }}/r2-shaped-out
+          if-no-files-found: warn
+
   # The one stable required-check name. `always()` so it reports even when a
   # gate job failed or was skipped by its job-level `if:`: a skipped job is
   # success, a failed or cancelled one fails this job.
   extraction-gates:
     name: extraction-gates
-    needs: [changes, check-commits-build, dashboard-reference, boot-crash-matrix-abo]
+    needs: [changes, check-commits-build, dashboard-reference, boot-crash-matrix-abo, production-shaped-store]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -1,5 +1,5 @@
 # file: .gitattributes
-# version: 1.1.0
+# version: 1.2.0
 # guid: 76fde732-3fdf-4034-94f3-6cc208a767b3
 # last-edited: 2026-11-10
 
@@ -36,4 +36,6 @@ internal/books/testdata/r2corpus/** -text -diff
 # The manifest and the answers are JSON a reviewer reads: keep their diffs, but
 # still never normalize them: a replay compares its answers to these bytes.
 internal/books/testdata/r2corpus/manifest.json -text diff
+# F2-14's P1 counts: JSON a reviewer checks against the owner's recorded numbers.
+internal/books/testdata/r2corpus/p1_counts.json -text diff
 internal/books/testdata/r2corpus/answers/*.json -text diff
