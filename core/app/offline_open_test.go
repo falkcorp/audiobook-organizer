@@ -1,7 +1,7 @@
 // file: core/app/offline_open_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 050b91d4-5e16-41df-8591-df020d8ac71b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package app
 
@@ -212,11 +212,14 @@ func writeSlot(t *testing.T, path string) {
 	}
 }
 
-// TestOfflineCommandsList (06 §6.4.5; R9-9): core's R1 offline commands are
+// TestOfflineCommandsList (06 §6.4.5; R9-9): core's offline commands are
 // storage prune-checkpoints (R1-24), storage restore-offline and storage
-// reset; each answers --help with its help and success, refuses arguments
+// reset (R1-25), then secrets export-keyring, secrets rotate-derive and
+// secrets set-install-id (F3-03); each answers --help with its help (which
+// says whether the service must be stopped) and success, refuses arguments
 // and unknown flags, and storage reset stages a reset with the service
-// stopped, refusing without --confirm.
+// stopped, refusing without --confirm. The secrets commands' behaviour is
+// TestExportKeyring_OpensNoStore's.
 func TestOfflineCommandsList(t *testing.T) {
 	opts := offlineOpts(t)
 	keeper := offlineKeeper()
@@ -235,7 +238,8 @@ func TestOfflineCommandsList(t *testing.T) {
 			t.Fatalf("%s accepted an argument", c.Name)
 		}
 	}
-	if !slices.Equal(names, []string{"storage prune-checkpoints", "storage restore-offline", "storage reset"}) {
+	if !slices.Equal(names, []string{"storage prune-checkpoints", "storage restore-offline", "storage reset",
+		"secrets export-keyring", "secrets rotate-derive", "secrets set-install-id"}) {
 		t.Fatalf("commands %v", names)
 	}
 	served(t, opts, keeper)

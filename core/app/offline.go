@@ -1,7 +1,7 @@
 // file: core/app/offline.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 418dd945-667d-43dc-a795-d22188dd4b58
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package app
 
@@ -32,7 +32,14 @@ type Command struct {
 // server runs (SEC10-9), and storage restore-offline (05-storage §5S.3.12)
 // and storage reset (§5S.3.15) (R1-25), which run with the service stopped
 // through the kernel's own swap path, so none needs an import of kernel or
-// core/internal/restoreswap; R2's flips add theirs (06 §6.4.10).
+// core/internal/restoreswap; then F3's three secrets commands (05-config
+// §2.4; F3-03): secrets export-keyring, which opens no store and works while
+// the server runs, and secrets rotate-derive and secrets set-install-id,
+// which go through kernel.OpenOffline with the service stopped. R2's other
+// flips add theirs (06 §6.4.10).
 func OfflineCommands(opts Options, mods ...module.Module) []Command {
-	return []Command{pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods)}
+	return []Command{
+		pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods),
+		exportKeyringCommand(opts, mods), rotateDeriveCommand(opts, mods), setInstallIDCommand(opts, mods),
+	}
 }
