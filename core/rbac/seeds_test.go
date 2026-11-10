@@ -161,6 +161,10 @@ func TestSeedMerge_RestrictedAdditionHeldPending(t *testing.T) {
 
 	_, err := again.svc.AcceptSeed(ctx, again.as("gotham:patrol", "gotham:patrol.night", "gotham:signal", "gotham:settings.manage"), "gotham.detective", det.Version)
 	errIs(t, "accept without the sensitive scope", err, rbac.ErrEscalation)
+	// Review NIT-G: the actor must hold the whole resulting set, not just
+	// what it accepts.
+	_, err = again.svc.AcceptSeed(ctx, again.as("gotham:cave.manage", "gotham:settings.manage"), "gotham.detective", det.Version)
+	errIs(t, "accept holding the pending scopes but not the role's", err, rbac.ErrEscalation)
 	_, err = again.svc.AcceptSeed(ctx, grant(again.cat(), false, rbac.CoreAdmin), "gotham.detective", det.Version)
 	errIs(t, "accept by a non-interactive admin", err, rbac.ErrEscalation)
 	_, err = again.svc.AcceptSeed(ctx, again.admin(), "gotham.detective", det.Version+1)

@@ -350,6 +350,25 @@ func TestCompileCache_GenerationInvalidates(t *testing.T) {
 	}
 }
 
+// TestCompileCache_KeyIsInjective (§9, review NIT-G): the cache key length-
+// prefixes every role ID, so two role lists whose IDs concatenate to the
+// same string are two cache entries and two Deps.Compile calls, never one
+// checker shared between them.
+func TestCompileCache_KeyIsInjective(t *testing.T) {
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	before := f.comp.calls()
+	f.svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"ab", "c"}})
+	f.svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"a", "bc"}})
+	f.svc.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{"c", "ab"}})
+	if n := f.comp.calls() - before; n != 2 {
+		t.Errorf("Deps.Compile ran %d times for [ab c], [a bc], [c ab]; want 2 (the last is the first, reordered)", n)
+	}
+	wantRoles := []rbac.RoleName{"a", "bc"}
+	if got := f.comp.last(t).Roles; !slices.Equal(got, wantRoles) {
+		t.Errorf("last Deps.Compile had roles %v, want %v", got, wantRoles)
+	}
+}
+
 // TestCompile_ResolvesRolePatterns (05-rbac §3.4 CompileInput): Service.Compile
 // hands Deps.Compile the union of the known roles' patterns, deduplicated
 // and sorted, the caller's input unchanged, and skips unknown roles.
