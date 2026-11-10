@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -105,8 +105,8 @@ func containsRef(t reflect.Type, seen map[reflect.Type]bool) bool {
 	case reflect.Map:
 		return containsRef(t.Key(), seen) || containsRef(t.Elem(), seen)
 	case reflect.Struct:
-		for i := range t.NumField() {
-			if containsRef(t.Field(i).Type, seen) {
+		for field := range t.Fields() {
+			if containsRef(field.Type, seen) {
 				return true
 			}
 		}
@@ -269,8 +269,7 @@ func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[re
 		return nil
 	}
 	seen[t] = true
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if !f.IsExported() && !f.Anonymous {
 			continue
 		}
