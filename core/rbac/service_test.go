@@ -642,6 +642,69 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 	})
 }
 
+// TestRoleCache_ConcurrentReaders (§9, review MINOR-F): under -race, four
+// readers loop Compile, CanAssign and Dominates while a writer narrows and
+// widens a role. Every reader goes through the role cache's lock (a reader
+// that skips it is a reported race on the cache map), and once a narrowing
+// returns, a fresh Compile no longer grants the removed scope: the
+// generation bump and the role update are one step under the lock, so no
+// reader can cache the old patterns under the new generation.
+func TestRoleCache_ConcurrentReaders(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	r := f.mustCreate("custom.oracle", "gotham:signal", "gotham:patrol")
+	in := rbac.CheckerInput{Roles: []rbac.RoleName{"custom.oracle"}}
+	cycles := 200
+	if testing.Short() {
+		cycles = 60
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+	for range 4 {
+		actor := f.admin()
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				f.svc.Compile(in)
+				if err := f.svc.CanAssign(actor, in.Roles); err != nil {
+					t.Errorf("CanAssign by an admin: %v", err)
+					return
+				}
+				if err := f.svc.Dominates(actor, in.Roles); err != nil {
+					t.Errorf("Dominates by an admin: %v", err)
+					return
+				}
+			}
+		})
+	}
+	v := r.Version
+	for i := range cycles {
+		n, err := f.svc.UpdateRole(ctx, f.admin(), "custom.oracle", rbac.RoleInput{Permissions: perms("gotham:signal")}, v)
+		if err != nil {
+			t.Fatalf("cycle %d: narrow: %v", i, err)
+		}
+		if f.svc.Compile(in).Has("gotham:patrol") {
+			t.Fatalf("cycle %d: Compile after the narrowing returned still grants gotham:patrol", i)
+		}
+		w, err := f.svc.UpdateRole(ctx, f.admin(), "custom.oracle", rbac.RoleInput{Permissions: perms("gotham:signal", "gotham:patrol")}, n.Version)
+		if err != nil {
+			t.Fatalf("cycle %d: widen: %v", i, err)
+		}
+		if !f.svc.Compile(in).Has("gotham:patrol") {
+			t.Fatalf("cycle %d: Compile after the widening returned lacks gotham:patrol", i)
+		}
+		v = w.Version
+	}
+}
+
 // TestRoles_ReadPaths: Roles and Role read the store.
 func TestRoles_ReadPaths(t *testing.T) {
 	ctx := context.Background()
