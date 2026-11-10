@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package cmd
 
@@ -97,7 +97,7 @@ func RunOperationRunner() {
 	// fell back to the database directory, where the swap slot and the swap
 	// lock are. Everything later in the child (the updater's slot check
 	// among them) reads the resolved directory too.
-	stateDir, err := config.EnsureSecureStateDir()
+	stateDir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: resolve the state directory %s: %v\n", stateDir, err)
 		os.Exit(2)

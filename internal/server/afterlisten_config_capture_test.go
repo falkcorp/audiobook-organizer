@@ -1,5 +1,5 @@
 // file: internal/server/afterlisten_config_capture_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7d3c5e-92a4-4f16-8e0d-6a41c7f3d825
 // last-edited: 2026-11-10
 
@@ -34,6 +34,7 @@ func TestCaptureStartConfig_IsASnapshot(t *testing.T) {
 	config.AppConfig.Maintenance.Enabled = true
 	config.AppConfig.Maintenance.WindowStart = 23
 	config.AppConfig.Maintenance.WindowEnd = 2
+	config.AppConfig.DatabasePath = "/srv/batcave/audiobooks.pebble"
 	got := captureStartConfig()
 
 	config.AppConfig.AutoScanEnabled = false
@@ -43,7 +44,10 @@ func TestCaptureStartConfig_IsASnapshot(t *testing.T) {
 	config.AppConfig.Maintenance.Enabled = false
 	config.AppConfig.Maintenance.WindowStart = 1
 	config.AppConfig.Maintenance.WindowEnd = 2
+	config.AppConfig.DatabasePath = "/srv/gotham/other.pebble"
 
+	require.Equal(t, "/srv/batcave/audiobooks.pebble", got.databasePath,
+		"the path EnsureSecureStateDir's fallback derives from")
 	require.True(t, got.autoScanEnabled)
 	require.Equal(t, 5*time.Second, got.autoScanDebounce, "the default debounce when none is configured")
 	require.True(t, got.writeStartupReadOnlyKey)

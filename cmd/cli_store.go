@@ -1,7 +1,7 @@
 // file: cmd/cli_store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bd8ce310-ae03-4f86-893a-7b69f8b973bb
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package cmd
 
@@ -133,7 +133,7 @@ func commandContext(cmd *cobra.Command) context.Context {
 // --delete) applies the owner rule to the same one
 // (storage.RefuseNotStateDirOwner).
 func refuseBusySwapSlot() (stateDir string, err error) {
-	dir, err := config.EnsureSecureStateDir()
+	dir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
 	if err != nil {
 		return "", fmt.Errorf("resolve the state directory %s, where the swap slot is: %w", dir, err)
 	}

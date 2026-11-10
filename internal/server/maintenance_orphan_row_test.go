@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_orphan_row_test.go
-// version: 3.0.1
+// version: 3.0.2
 // guid: 2d6a14f8-9c05-4e73-b8a1-3f70e2d54c69
-// last-edited: 2026-10-16
+// last-edited: 2026-11-10
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
@@ -26,8 +27,27 @@ import (
 // vacuously, but "caught by a guard" is not the same as deterministic — hence
 // this job.
 type blockingProbeJob struct {
-	id      string
+	id string
+
+	mu      sync.Mutex
 	release chan struct{}
+}
+
+// rearm installs a fresh release channel and returns it. The test, not the
+// package, owns that channel's lifetime: it closes the one it was handed, and
+// the next run (a later -count iteration) gets its own.
+func (j *blockingProbeJob) rearm() chan struct{} {
+	ch := make(chan struct{})
+	j.mu.Lock()
+	j.release = ch
+	j.mu.Unlock()
+	return ch
+}
+
+func (j *blockingProbeJob) gate() <-chan struct{} {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.release
 }
 
 func (j *blockingProbeJob) ID() string          { return j.id }
@@ -46,7 +66,7 @@ func (j *blockingProbeJob) Policy() maintenance.ExecutionPolicy {
 // down, which cancels the context.
 func (j *blockingProbeJob) Run(ctx context.Context, _ maintenance.JobStore, _ maintenance.ProgressReporter, _ bool) error {
 	select {
-	case <-j.release:
+	case <-j.gate():
 	case <-ctx.Done():
 	}
 	return nil
@@ -54,7 +74,7 @@ func (j *blockingProbeJob) Run(ctx context.Context, _ maintenance.JobStore, _ ma
 
 var probeBlocking = &blockingProbeJob{
 	id:      "test-probe-orphan-row-blocking",
-	release: make(chan struct{}),
+	release: make(chan struct{}), // replaced by rearm before any run
 }
 
 func init() {
@@ -89,9 +109,16 @@ func init() {
 func TestRunMaintenanceJob_MintsV2RowOnly(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	// Deferred AFTER cleanup so it runs BEFORE it (LIFO): a parked run must be
-	// let go before the store beneath it closes.
-	defer close(probeBlocking.release)
+	// Rearm the probe's release gate for THIS run. The registered job is
+	// package-level (maintenance.Register has no Unregister), so a gate closed
+	// by an earlier run would be closed already: `go test -count=N` panicked
+	// "close of closed channel" on the second iteration, and a closed gate
+	// would also let the parked run return at once, so the merge precondition
+	// below could race the run finishing. Deferred AFTER cleanup so the close
+	// runs BEFORE it (LIFO): a parked run must be let go before the store
+	// beneath it closes.
+	release := probeBlocking.rearm()
+	defer close(release)
 
 	jobID := probeBlocking.ID()
 
