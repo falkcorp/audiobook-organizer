@@ -1,7 +1,7 @@
 // file: internal/server/search_observer_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d7e3b1a4-6f28-4c95-b0a7-8e2f5c1d9a36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -338,7 +338,7 @@ func TestReleaseSearchAndAuthority_IsByIdentity(t *testing.T) {
 	}
 }
 
-// StopHook, and releaseUnstarted for a server that never started, must detach
+// StopHook (its body is stopSteps), and releaseUnstarted for a server that never started, must detach
 // the observer and the authority provider only after every writer this server
 // owns has stopped: a still-running op or background goroutine resolves
 // credits and writes books until then. Pinned by source order within each
@@ -363,7 +363,7 @@ func TestShutdown_ReleasesObserverAndProviderAfterWritersStop(t *testing.T) {
 		sig     string
 		earlier []string
 	}{
-		{"func (s *Server) StopHook(", []string{"s.opRegistry.Shutdown(", "s.bgCancel()", "s.bgWG.Wait()", "p.Stop()", "s.pluginRegistry.ShutdownAll("}},
+		{"func (s *Server) stopSteps(", []string{"s.opRegistry.Shutdown(", "s.bgCancel()", "s.bgWG.Wait()", "p.Stop()", "s.pluginRegistry.ShutdownAll("}},
 		{"func (s *Server) releaseUnstarted(", []string{"s.bgCancel()", "s.bgWG.Wait()"}},
 	} {
 		fn := body(c.sig)
@@ -382,9 +382,9 @@ func TestShutdown_ReleasesObserverAndProviderAfterWritersStop(t *testing.T) {
 		}
 	}
 	// What the worker did not pop is recorded only after the wait for it.
-	stop := body("func (s *Server) StopHook(")
+	stop := body("func (s *Server) stopSteps(")
 	if mark, wait := strings.Index(stop, "s.markPendingIndexDirty()"), strings.Index(stop, "s.bgWG.Wait()"); mark < 0 || mark < wait {
-		t.Fatal("StopHook must call markPendingIndexDirty after waiting for the background goroutines")
+		t.Fatal("stopSteps (StopHook's body) must call markPendingIndexDirty after waiting for the background goroutines")
 	}
 }
 

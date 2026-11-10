@@ -1,5 +1,5 @@
 // file: internal/server/afterlisten_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c0e9f1a-8d3b-4e47-9a62-3b7d1f4c2a90
 // last-edited: 2026-11-10
 
@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/watcher"
 )
 
 // TestStopHook_WaitsForARunningAfterListen reproduces the race the -race
@@ -26,8 +28,8 @@ import (
 // returned early, and the assertions fail either way.
 func TestStopHook_WaitsForARunningAfterListen(t *testing.T) {
 	s := &Server{stopped: make(chan struct{})}
-	finish, ok := s.life.afterGate.begin()
-	require.True(t, ok)
+	finish, res := s.life.afterGate.begin()
+	require.Equal(t, beginOK, res)
 
 	var written int // plain on purpose: ordered only by StopHook's wait
 	release := make(chan struct{})
@@ -59,46 +61,108 @@ func TestStopHook_WaitsForARunningAfterListen(t *testing.T) {
 }
 
 // TestStopHook_BudgetEndingDuringAfterListenIsReported: a post-listen start
-// that outlives the shutdown budget does not hold StopHook past it, and the
-// stop reports it instead of waiting on backgroundWG alongside its Adds.
+// that outlives its share of the shutdown budget does not hold StopHook past
+// it, the stop reports it as abandoned, and what afterListen writes after the
+// stop (life.watchers, backgroundWG, bgWG) is not read or waited on by
+// StopHook while it writes: the late writes below happen after StopHook
+// returned, so `go test -race` reports a data race if a step read them
+// inline.
 func TestStopHook_BudgetEndingDuringAfterListenIsReported(t *testing.T) {
 	const budget = 300 * time.Millisecond
 	s := &Server{stopped: make(chan struct{})}
-	finish, ok := s.life.afterGate.begin()
-	require.True(t, ok)
-	t.Cleanup(finish)
+	finish, res := s.life.afterGate.begin()
+	require.Equal(t, beginOK, res)
 
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	go func() {
+		defer finish()
+		// Released by its own timer, after the budget: a channel the test
+		// closed, or the budget's context (whose lock StopHook also takes),
+		// would order these writes after StopHook's reads and hide exactly
+		// the race under test.
+		time.Sleep(budget + 100*time.Millisecond)
+		s.life.watchers = watcher.NewSupervisor(
+			func() ([]string, error) { return nil, nil }, func(string) {}, time.Second, 0)
+		s.life.backgroundWG.Go(func() {})
+		s.bgWG.Go("late-backfill", func() {})
+	}()
+
 	start := time.Now()
-	require.NoError(t, s.StopHook(ctx))
+	abandoned := s.stopSteps(ctx)
 	require.Less(t, time.Since(start), budget+time.Second)
+	require.Contains(t, abandoned, "post-listen start")
+
 	select {
-	case <-s.Stopped():
-	default:
-		t.Fatal("StopHook returned without closing Stopped")
+	case <-s.life.afterGate.done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the late afterListen never finished")
 	}
+}
+
+// TestAfterListenSealShare (review MAJOR 1): the seal's wait is its own share
+// of the budget, never all of it: at most afterListenSealWait, and always
+// leaving afterListenSealReserve for the steps after it, which is not below
+// the ops registry's reserve (8 s), the largest in StopHook's ladder.
+func TestAfterListenSealShare(t *testing.T) {
+	require.GreaterOrEqual(t, afterListenSealReserve, 8*time.Second)
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration // 0: no deadline
+		want   time.Duration
+	}{
+		{"no deadline", 0, afterListenSealWait},
+		{"plenty of budget", time.Minute, afterListenSealWait},
+		{"tight budget", 14 * time.Second, 4 * time.Second},
+		{"inside the reserve", 5 * time.Second, 0},
+		{"spent", time.Millisecond, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.budget > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.budget)
+				defer cancel()
+			}
+			got := afterListenSealShare(ctx)
+			require.LessOrEqual(t, got, tc.want)
+			require.Greater(t, got+time.Second, tc.want, "share %s, want about %s", got, tc.want)
+			if tc.budget >= afterListenSealReserve {
+				require.LessOrEqual(t, got+afterListenSealReserve, tc.budget)
+			}
+		})
+	}
+}
+
+// TestAfterListen_ReturnsAtTheFirstBoundaryOnceSealed (review MAJOR 1a): a
+// stop that sealed the gate does not wait for the rest of a start it is about
+// to undo. On this bare Server the steps after the first boundary would
+// dereference nil state, so a return there is the proof.
+func TestAfterListen_ReturnsAtTheFirstBoundaryOnceSealed(t *testing.T) {
+	s := &Server{}
+	require.True(t, s.life.afterGate.seal(context.Background()))
+	s.afterListen()
 }
 
 func TestAfterListenGate(t *testing.T) {
 	t.Run("seal with nothing begun is immediate and refuses a later begin", func(t *testing.T) {
 		var g afterListenGate
 		require.True(t, g.seal(context.Background()))
-		_, ok := g.begin()
-		require.False(t, ok, "begin after seal must refuse")
+		_, res := g.begin()
+		require.Equal(t, beginSealed, res, "begin after seal must refuse")
 	})
 	t.Run("begin is single-shot", func(t *testing.T) {
 		var g afterListenGate
-		finish, ok := g.begin()
-		require.True(t, ok)
+		finish, res := g.begin()
+		require.Equal(t, beginOK, res)
 		defer finish()
-		_, ok = g.begin()
-		require.False(t, ok)
+		_, res = g.begin()
+		require.Equal(t, beginAlready, res)
 	})
 	t.Run("seal waits for a running start", func(t *testing.T) {
 		var g afterListenGate
-		finish, ok := g.begin()
-		require.True(t, ok)
+		finish, res := g.begin()
+		require.Equal(t, beginOK, res)
 		sealed := make(chan bool, 1)
 		go func() { sealed <- g.seal(context.Background()) }()
 		select {
@@ -116,12 +180,29 @@ func TestAfterListenGate(t *testing.T) {
 	})
 	t.Run("seal reports a start still running when ctx ends", func(t *testing.T) {
 		var g afterListenGate
-		finish, ok := g.begin()
-		require.True(t, ok)
-		defer finish()
+		finish, res := g.begin()
+		require.Equal(t, beginOK, res)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		require.False(t, g.seal(ctx))
+		select {
+		case <-g.done():
+			t.Fatal("done closed while the start was running")
+		default:
+		}
+		finish()
+		<-g.done()
+	})
+	t.Run("seal closes stopCh, and done is closed when nothing began", func(t *testing.T) {
+		var g afterListenGate
+		select {
+		case <-g.stopCh():
+			t.Fatal("stopCh closed before any seal")
+		default:
+		}
+		require.True(t, g.seal(context.Background()))
+		<-g.stopCh()
+		<-g.done()
 	})
 }
 
