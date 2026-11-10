@@ -1,5 +1,5 @@
 // file: core/kernel/secrets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c9a52-6e1b-4d7a-8c25-b94e1f6a0d37
 // last-edited: 2026-11-10
 
@@ -134,9 +134,63 @@ func TestOpenSecrets_ScratchStateDir(t *testing.T) {
 	}
 }
 
+// TestExportKeyring_ClearsHealthWarning (05-config §2.9): a fresh keyring
+// raises secrets_keyring_not_exported naming its keys; an export covering
+// every key clears it with the store still open; after rotate-derive the next
+// boot raises it again naming only the new derive key, and a second export
+// clears it.
+func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
+	ctx := context.Background()
+	db := bootAuditDB(t, secretsOwnerSpec())
+	state := t.TempDir()
+	s := openTestSecrets(t, db, state, nil)
+	export := func() {
+		t.Helper()
+		if _, err := secrets.ExportKeyring(s.root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := secretsHealth(ctx, s.store)
+	if r.Status != health.StatusDegraded || r.Reason != reasonKeyringNotExported || !strings.Contains(r.Detail, "d1") || !strings.Contains(r.Detail, "k1") {
+		t.Fatalf("fresh keyring: %+v, want degraded %s naming d1 and k1", r, reasonKeyringNotExported)
+	}
+	export()
+	if r := secretsHealth(ctx, s.store); r.Status != health.StatusUp || r.Reason != "" {
+		t.Fatalf("after the export: %+v, want Up", r)
+	}
+
+	if err := s.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secrets.RotateDerive(s.root, "", time.Hour, time.Now()); err == nil {
+		t.Fatal("RotateDerive through a closed root succeeded")
+	}
+	root, err := os.OpenRoot(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := secrets.RotateDerive(root, "", time.Hour, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestSecrets(t, db, state, nil)
+	r = secretsHealth(ctx, s.store)
+	if r.Status != health.StatusDegraded || r.Reason != reasonKeyringNotExported || !strings.Contains(r.Detail, "d2") {
+		t.Fatalf("after the rotation: %+v, want degraded %s naming d2", r, reasonKeyringNotExported)
+	}
+	if strings.Contains(r.Detail, "d1") || strings.Contains(r.Detail, "k1") {
+		t.Fatalf("after the rotation the warning names an exported key: %q", r.Detail)
+	}
+	export()
+	if r := secretsHealth(ctx, s.store); r.Status != health.StatusUp || r.Reason != "" {
+		t.Fatalf("after the second export: %+v, want Up", r)
+	}
+}
+
 // TestSecretsHealth_Tokens covers the kernel half of
-// TestStageUnreadable_ReadsReenter and TestExportKeyring_ClearsHealthWarning
-// (05-config §2.9): a fresh keyring raises secrets_keyring_not_exported, an
+// TestStageUnreadable_ReadsReenter (05-config §2.9) and the precedence of the
+// core.secrets tokens: a fresh keyring raises secrets_keyring_not_exported, an
 // export covering every key clears it, an unreadable marker raises
 // secrets_undecryptable (the most urgent) until a Put replaces it, and a
 // blocked retirement raises derive_key_retire_blocked. No value reaches a
