@@ -1,5 +1,5 @@
 // file: core/internal/configstore/configstore_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: cab01bd1-5d76-48c6-a4f9-4db76141c009
 // last-edited: 2026-11-10
 
@@ -230,6 +230,7 @@ func TestApply_SecretAndOverrideOneBatch(t *testing.T) {
 		Secrets: []secrets.Write{{Name: "core.batcave.api_key", Value: secrets.NewValue("wayne-tech"), By: "alfred"}},
 		Gen:     1,
 		Boot:    []config.Path{"core.batcave.mode"},
+		By:      "alfred",
 	}
 	e.stager.fail = errors.New("the vault is sealed")
 	if err := e.commit.Commit(ctx, cm); err == nil {
@@ -271,6 +272,71 @@ func TestApply_SecretAndOverrideOneBatch(t *testing.T) {
 	}
 	if strings.Contains(string(b), "wayne-tech") || strings.Contains(string(b), "warn") {
 		t.Errorf("the audit record carries a value: %s", b)
+	}
+}
+
+// TestCommitter_AuditActor (T4 review MAJOR-3, 05-config §1.3.3): the
+// core.settings.update record's actor is the request's actor on ctx, whole,
+// when it names Commit.By, and {UserID: Commit.By} without one, so a commit
+// that only unsets keys or only changes boot keys still names its writer. A
+// ctx actor naming someone else, or a row written by someone else, is refused
+// and nothing is written.
+func TestCommitter_AuditActor(t *testing.T) {
+	e := boot(t)
+	alfred := audit.Actor{UserID: "alfred", Method: "session", ClientAddr: "wayne-tower", UserAgent: "batcomputer"}
+	withAlfred := audit.WithActor(context.Background(), alfred)
+	level := config.Path("core.batcave.level")
+	steps := []struct {
+		name string
+		ctx  context.Context
+		cm   config.Commit
+		want audit.Actor
+	}{
+		{"set, request actor", withAlfred, config.Commit{Set: []config.Override{{Path: level, Value: json.RawMessage(`"warn"`), Gen: 1, At: time.Now(), By: "alfred"}}, Gen: 1, By: "alfred"}, alfred},
+		{"unset only, request actor", withAlfred, config.Commit{Unset: []config.Path{level}, Gen: 2, By: "alfred"}, alfred},
+		{"boot only, no request actor", context.Background(), config.Commit{Boot: []config.Path{"core.batcave.mode"}, Gen: 3, By: "alfred"}, audit.Actor{UserID: "alfred"}},
+	}
+	for i, s := range steps {
+		if err := e.commit.Commit(s.ctx, s.cm); err != nil {
+			t.Fatalf("%s: %v", s.name, err)
+		}
+		recs := records(t, e)
+		if len(recs) != i+1 {
+			t.Fatalf("%s: %d records, want %d", s.name, len(recs), i+1)
+		}
+		var got *audit.Record
+		for j := range recs {
+			if recs[j].Details["generation"] == float64(s.cm.Gen) || recs[j].Details["generation"] == s.cm.Gen {
+				got = &recs[j]
+			}
+		}
+		if got == nil {
+			t.Fatalf("%s: no record of generation %d in %+v", s.name, s.cm.Gen, recs)
+		}
+		if got.Actor != s.want {
+			t.Errorf("%s: actor %+v, want %+v", s.name, got.Actor, s.want)
+		}
+	}
+	refused := []struct {
+		name string
+		ctx  context.Context
+		cm   config.Commit
+	}{
+		{"request actor is someone else", audit.WithActor(context.Background(), audit.Actor{UserID: "joker"}),
+			config.Commit{Set: []config.Override{{Path: level, Value: json.RawMessage(`"debug"`), Gen: 4, At: time.Now(), By: "alfred"}}, Gen: 4, By: "alfred"}},
+		{"row written by someone else", context.Background(),
+			config.Commit{Set: []config.Override{{Path: level, Value: json.RawMessage(`"debug"`), Gen: 4, At: time.Now(), By: "joker"}}, Gen: 4, By: "alfred"}},
+	}
+	for _, r := range refused {
+		if err := e.commit.Commit(r.ctx, r.cm); err == nil {
+			t.Errorf("%s: Commit succeeded", r.name)
+		}
+	}
+	if n := len(records(t, e)); n != len(steps) {
+		t.Errorf("%d records after the refused commits, want %d", n, len(steps))
+	}
+	if rows, err := e.rows(context.Background()); err != nil || rows[level] != nil {
+		t.Errorf("rows %v (%v): a refused commit wrote", rows, err)
 	}
 }
 
