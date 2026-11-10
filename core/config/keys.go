@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -163,8 +163,17 @@ type keyWalker struct {
 	keys []*keyInfo
 }
 
-// walk adds the keys of struct type t found below rel.
-func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet) error {
+// walk adds the keys of struct type t found below rel. names holds the JSON
+// names already declared in the same JSON object, mapped to the field that
+// declared them: an embedded struct's fields are promoted into its parent's
+// object, so they share the parent's names.
+//
+// A JSON name declared twice in one object is refused with ErrDuplicate.
+// encoding/json resolves such a clash silently (the shallower field wins, or
+// at equal depth neither is decoded), while byRel would keep one keyInfo for
+// both. A non-admin could then write an owner-tagged field through its
+// untagged twin.
+func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet, names map[string]string) error {
 	for i := range t.NumField() {
 		f := t.Field(i)
 		where := fmt.Sprintf("%s field %s.%s", w.sec.path, t.Name(), f.Name)
@@ -174,14 +183,20 @@ func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet) er
 			continue
 		}
 		ix := append(slices.Clone(idx), i)
+		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct {
+			// encoding/json promotes the fields of an embedded *struct when
+			// it is set and cannot allocate one of an unexported type, so
+			// its keys would depend on a pointer config never sees.
+			return fmt.Errorf("%w: %s embeds a pointer to a struct: embed the struct by value or give the field a json name (05-config §1.3.1)", ErrInvalid, where)
+		}
 		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct && !encodesItself(f.Type) {
 			// encoding/json promotes an embedded struct's fields into the
-			// parent; the keys follow it.
+			// parent; the keys follow it, in the parent's JSON object.
 			tags, err := parseTags(where, f, inh)
 			if err != nil {
 				return err
 			}
-			if err := w.walk(f.Type, rel, ix, tags); err != nil {
+			if err := w.walk(f.Type, rel, ix, tags, names); err != nil {
 				return err
 			}
 			continue
@@ -195,13 +210,18 @@ func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet) er
 		if !validSegment(name) {
 			return fmt.Errorf("%w: %s: json name %q does not match [a-z][a-z0-9_]{0,47}", ErrInvalid, where, name)
 		}
+		if prev, dup := names[name]; dup {
+			return fmt.Errorf("%w: %s and %s both have the json name %q in one JSON object: encoding/json would decode at most one of them, so one key would stand for both (05-config §1.3.1)",
+				ErrDuplicate, prev, where, name)
+		}
+		names[name] = where
 		tags, err := parseTags(where, f, inh)
 		if err != nil {
 			return err
 		}
 		r := append(slices.Clone(rel), name)
 		if !isLeaf(f.Type) {
-			if err := w.walk(f.Type, r, ix, tags); err != nil {
+			if err := w.walk(f.Type, r, ix, tags, map[string]string{}); err != nil {
 				return err
 			}
 			continue
