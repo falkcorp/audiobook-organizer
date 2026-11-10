@@ -1,5 +1,5 @@
 // file: core/config/bootrecord.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 56fd5d59-8302-4fc6-8fb4-699e2671afa9
 // last-edited: 2026-11-10
 
@@ -78,8 +78,8 @@ func (r bootRecordIO) quarantine() error {
 	return r.syncDir()
 }
 
-// write replaces the record atomically: temp file (0600), fsync, rename,
-// directory fsync.
+// write replaces the record atomically: a new temp file (0600), fsync,
+// rename, directory fsync.
 func (r bootRecordIO) write(rec bootRecordFile) error {
 	b, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -88,9 +88,16 @@ func (r bootRecordIO) write(rec bootRecordFile) error {
 	return r.writeBytes(append(b, '\n'))
 }
 
-// writeBytes replaces the record with b atomically.
+// writeBytes replaces the record with b atomically. The temp file is always a
+// new file: a leftover one is removed first and the open is O_EXCL, so a stale
+// temp file's mode (0644) never reaches the record and a symlink planted at
+// the temp name is never followed (os.Root follows one that stays inside the
+// state directory, which would overwrite the keyring or another state file).
 func (r bootRecordIO) writeBytes(b []byte) error {
-	f, err := r.root.OpenFile(bootRecordTemp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err := r.removeTemp(); err != nil {
+		return fmt.Errorf("config: remove a leftover boot record temp file: %w", err)
+	}
+	f, err := r.root.OpenFile(bootRecordTemp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("config: boot record temp file: %w", err)
 	}

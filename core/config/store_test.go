@@ -1,5 +1,5 @@
 // file: core/config/store_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
 // last-edited: 2026-11-10
 
@@ -231,6 +231,54 @@ func (r *rig) start2(ctx context.Context) {
 // TestBootRecord_AtomicAndQuarantine (05-config §1.5): a crash between the
 // temp file and the rename keeps the previous record; an unparsable record
 // is renamed .bad and raises health; an unreadable one fails boot.
+// TestBootRecord_TempFileIsAlwaysNew (T4 review MINOR-1): a leftover
+// config.boot.json.tmp never decides the record's mode or target. A stale
+// 0644 temp file still yields a 0600 record, and a symlink planted at the temp
+// name (into the state directory's keyring) is never followed: the keyring
+// keeps its bytes and the record is a regular file.
+func TestBootRecord_TempFileIsAlwaysNew(t *testing.T) {
+	t.Run("stale 0644 temp file", func(t *testing.T) {
+		r := started(t, rigOpts{})
+		tmp := filepath.Join(r.dir, "config.boot.json.tmp")
+		if err := os.WriteFile(tmp, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(tmp, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{kMode: `"day"`}); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Lstat(filepath.Join(r.dir, "config.boot.json"))
+		if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("record = %v, %v; want a regular 0600 file", fi, err)
+		}
+	})
+	t.Run("planted symlink", func(t *testing.T) {
+		r := started(t, rigOpts{})
+		keyring := filepath.Join(r.dir, "secrets.keyring")
+		if err := os.WriteFile(keyring, []byte("LUCIUS-FOX-KEYS"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("secrets.keyring", filepath.Join(r.dir, "config.boot.json.tmp")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.apply(admin(), map[config.Path]string{kMode: `"day"`}); err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(keyring); err != nil || string(b) != "LUCIUS-FOX-KEYS" {
+			t.Errorf("keyring = %q, %v; the boot record was written through the symlink", b, err)
+		}
+		fi, err := os.Lstat(filepath.Join(r.dir, "config.boot.json"))
+		if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+			t.Errorf("record = %v, %v; want a regular 0600 file", fi, err)
+		}
+		if !strings.Contains(string(r.record()), `"day"`) {
+			t.Errorf("record = %s, want the new value", r.record())
+		}
+	})
+}
+
 func TestBootRecord_AtomicAndQuarantine(t *testing.T) {
 	ctx := context.Background()
 	prior := `{"format":"mediacore-boot/1","gen":1,"values":{"core.batcave.mode":"day","core.gotham_unknown.flag":true}}`
