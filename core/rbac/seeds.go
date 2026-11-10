@@ -114,14 +114,14 @@ func buildSeeds(cat *Catalog, decls []*moduleDecl) ([]seedDef, error) {
 	return out, nil
 }
 
-// seedDigest is the sha256 of the sorted permissions, hex.
+// seedDigest is the sha256 of the sorted permissions, one per line, hex.
 func seedDigest(perms []Permission) string {
-	h := sha256.New()
+	var buf []byte
 	for _, p := range normalize(perms) {
-		h.Write([]byte(p))    //nolint:errcheck // hash.Hash.Write never returns an error
-		h.Write([]byte{'\n'}) //nolint:errcheck // hash.Hash.Write never returns an error
+		buf = append(append(buf, p...), '\n')
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:])
 }
 
 // seedDelta is what one merge changed in a role's effective seed.

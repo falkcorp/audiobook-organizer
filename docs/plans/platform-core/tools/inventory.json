@@ -2031,7 +2031,11 @@
    "core/rbac/compile_test.go",
    "core/rbac/seeds_test.go",
    "core/rbac/store_test.go",
-   "core/internal/archtest_layers_test.go"
+   "core/internal/archtest_layers_test.go",
+   "core/storage/nobatch_test.go",
+   "core/audit/actions_test.go",
+   "core/backup/journal/file_test.go",
+   "core/backup/journal/imports_test.go"
   ],
   "spec": "05-rbac §3.4, §4 (seeds, ambient rule, confinement), §6.2; 04 §8.1 F4; 06 §6.4.10 F4",
   "notes": "Tier: the authorization engine and the ambient rule. rbac.Deps.Revocations is backup/journal's RevocationJournal (F4-04); authz is F4-09's; TestWorkerKey_Confined's route cells are F4-08's. 04 keys: F4 create mediacore/rbac (full package, leaf types since R1); F4 create mediacore/rbac/rbactest. Owns gate tests: TestWorkerKey_Confined."
