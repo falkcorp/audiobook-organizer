@@ -361,7 +361,15 @@ func (s *Service) inviteRefusal(ctx context.Context, t *OneTimeToken, now time.T
 	case creator.CredentialEpoch != t.CredentialEpoch:
 		return fmt.Errorf("%w: its creator's credentials changed since it was made", ErrInviteInvalid)
 	}
+	// The creator's epoch does not cover a demotion: role changes bump no
+	// epoch (§4.12), so this re-check is what voids an invite whose creator
+	// lost the right to make it. Creating one needs core:users.manage
+	// (mayManageUsers), and CanAssign alone does not ask for it: a creator
+	// moved to a role that still holds every scope of t.Role would pass.
 	checker := s.d.RBAC.Compile(rbac.CheckerInput{Roles: creator.Roles, Interactive: true})
+	if !checker.Has(permUsersManage) {
+		return fmt.Errorf("%w: %w: its creator no longer holds %s", ErrInviteInvalid, errCannotAssign, permUsersManage)
+	}
 	if err := s.d.RBAC.CanAssign(checker, []rbac.RoleName{t.Role}); err != nil {
 		return fmt.Errorf("%w: %w (%s): %w", ErrInviteInvalid, errCannotAssign, t.Role, err)
 	}

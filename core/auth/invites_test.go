@@ -188,7 +188,8 @@ func TestInvite_DeleteLookupAndThrottle(t *testing.T) {
 
 // TestInviteAcceptRechecksCanAssign (SEC3-2): accepting re-runs CanAssign
 // for the creator over the role, and refuses, audited core.invite.accept
-// denied, when it fails or the creator no longer exists. An invite also
+// denied, when it fails, when the creator no longer holds core:users.manage
+// (a demotion bumps no epoch, §4.12) or no longer exists. An invite also
 // dies with its creator's credential epoch, its expiry and its username
 // being taken. Every refusal spends it and creates nothing.
 func TestInviteAcceptRechecksCanAssign(t *testing.T) {
@@ -217,6 +218,14 @@ func TestInviteAcceptRechecksCanAssign(t *testing.T) {
 	demoted, _ := f.invite(f.session(gordon), detectiveInvite("harper-row"))
 	f.setRoles(gordon.ID, "relay-worker")
 	refused("the creator was demoted", demoted, "harper-row", audit.Denied)
+
+	// Demoted to the invited role itself: CanAssign still passes, since the
+	// creator holds every scope of gotham.detective, but making the invite
+	// needed core:users.manage, which it no longer holds.
+	lucius := f.user("lucius-fox", roleCommissioner)
+	unmanaged, _ := f.invite(f.session(lucius), detectiveInvite("selina-kyle"))
+	f.setRoles(lucius.ID, "gotham.detective")
+	refused("the creator lost core:users.manage", unmanaged, "selina-kyle", audit.Denied)
 
 	orphan, _ := f.invite(f.session(bullock), detectiveInvite("duke-thomas"))
 	f.commit(func(b *storage.Batch) error { return f.st.DeleteUser(b, f.reload(bullock.ID)) })
