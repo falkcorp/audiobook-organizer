@@ -390,15 +390,13 @@ func TestOIDC_ConcurrentSignInsCreateOneAccount(t *testing.T) {
 	errs := make([]error, n)
 	var wg sync.WaitGroup
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			u, err := f.resolver(nil).Resolve(context.Background(), untrusting(), claims("sub-robin", "dick@wayne.example.test"))
 			errs[i] = err
 			if u != nil {
 				ids[i] = u.ID
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	for i := range n {

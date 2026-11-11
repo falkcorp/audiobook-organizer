@@ -153,8 +153,7 @@ func newHX(t testing.TB, opts ...hxOption) *hx {
 	}
 	// A first account so sign-in is not first-run.
 	f.put(&auth.User{ID: "01JBATCAVE0000000000000001", Username: "alfred", Email: "alfred@wayne.example.test", Roles: []rbac.RoleName{rbac.RoleAdmin}})
-	var deps Deps
-	deps = Deps{
+	deps := Deps{
 		Settings: func() Settings { h.mu.Lock(); defer h.mu.Unlock(); return h.settings },
 		Keys:     h.keys, Resolver: f.resolver(nil), Sessions: f.svc,
 		HasUsers: func() bool { return h.hasUsers() }, HTTPClient: h.idp.srv.Client(),
@@ -180,17 +179,6 @@ func (h *hx) setSettings(fn func(*Settings)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	fn(&h.settings)
-}
-
-// setProvider edits one provider's config.
-func (h *hx) setProvider(id string, fn func(*ProviderConfig)) {
-	h.setSettings(func(s *Settings) {
-		for i := range s.Providers {
-			if s.Providers[i].ID == id {
-				fn(&s.Providers[i])
-			}
-		}
-	})
 }
 
 // run does Start then, with the IdP told what to issue, Callback.

@@ -501,6 +501,10 @@ func TestProviderConfigValidate(t *testing.T) {
 	for name, mod := range map[string]func(*ProviderConfig){
 		"uppercase id":       func(c *ProviderConfig) { c.ID = "Gotham" },
 		"empty id":           func(c *ProviderConfig) { c.ID = "" },
+		"digit first":        func(c *ProviderConfig) { c.ID = "9lives" },
+		"underscore first":   func(c *ProviderConfig) { c.ID = "_bat" },
+		"dash":               func(c *ProviderConfig) { c.ID = "bat-man" },
+		"49 characters":      func(c *ProviderConfig) { c.ID = strings.Repeat("a", 49) },
 		"reserved providers": func(c *ProviderConfig) { c.ID = "providers" },
 		"reserved base":      func(c *ProviderConfig) { c.ID = "redirect_base_url" },
 		"unknown kind":       func(c *ProviderConfig) { c.Kind = "saml" },
@@ -521,6 +525,13 @@ func TestProviderConfigValidate(t *testing.T) {
 			}
 			mustNot(t, err.Error(), "s\u0000")
 		})
+	}
+	for _, id := range []string{"a", "bat_cave2", strings.Repeat("a", 48)} {
+		c := ok
+		c.ID = id
+		if err := c.Validate(); err != nil {
+			t.Fatalf("id %q: %v", id, err)
+		}
 	}
 	gh := ProviderConfig{ID: "hub", Kind: KindGitHub, ClientID: "c", ClientSecret: "s"}
 	if err := gh.Validate(); err != nil {
@@ -606,6 +617,24 @@ func TestOIDC_WebSignInReturnPath(t *testing.T) {
 	o = h.signIn("gotham", StartRequest{Return: "/library"}, wayne("sub-robin", "dick@wayne.example.test"))
 	if o.err != nil || o.done.Return != "/library" {
 		t.Fatalf("return = %q, err %v", o.done.Return, o.err)
+	}
+}
+
+func TestValidChallengeBounds(t *testing.T) {
+	for n, want := range map[int]bool{42: false, 43: true, 100: true, 128: true, 129: false} {
+		if got := validChallenge(strings.Repeat("a", n)); got != want {
+			t.Errorf("validChallenge(%d chars) = %v, want %v", n, got, want)
+		}
+	}
+	for _, c := range []string{"-", "_", "Z", "0"} {
+		if !validChallenge(strings.Repeat(c, 43)) {
+			t.Errorf("validChallenge(%q x43) refused", c)
+		}
+	}
+	for _, c := range []string{"+", "/", "=", " ", ".", "\u00e9"} {
+		if validChallenge(strings.Repeat("a", 42) + c) {
+			t.Errorf("validChallenge accepted %q", c)
+		}
 	}
 }
 

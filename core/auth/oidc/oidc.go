@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -83,12 +82,23 @@ type ProviderConfig struct {
 	LinkExistingByEmail bool
 }
 
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
+// validProviderID reports whether s is [a-z][a-z0-9_]{0,47}.
+func validProviderID(s string) bool {
+	if s == "" || len(s) > 48 || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 // Validate reports why c cannot be built, without its secret in the text.
 func (c ProviderConfig) Validate() error {
 	switch {
-	case !idPattern.MatchString(c.ID):
+	case !validProviderID(c.ID):
 		return fmt.Errorf("oidc: provider id %q is not [a-z][a-z0-9_]{0,47}", c.ID)
 	case c.ID == "providers" || c.ID == "redirect_base_url":
 		return fmt.Errorf("oidc: provider id %q is a reserved key name", c.ID)
