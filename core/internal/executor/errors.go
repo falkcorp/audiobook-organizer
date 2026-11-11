@@ -1,7 +1,7 @@
 // file: core/internal/executor/errors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ee118157-68ed-4213-be77-f44028207038
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -35,8 +35,12 @@ var (
 	// ErrPlanRejected: Approve of a plan that was rejected, or an apply run
 	// of one.
 	ErrPlanRejected = errors.New("executor: the plan was rejected")
-	// ErrNoApproval: a Live run that names a plan has no approval record;
-	// it applies nothing (fail closed).
+	// ErrPlanDecided: approve or reject of a plan that was already approved.
+	// A plan is decided once (a rejected one gives ErrPlanRejected).
+	ErrPlanDecided = errors.New("executor: the plan was already approved")
+	// ErrNoApproval: a Live run that names a plan has no approval record of
+	// that plan, or the plan carries no approval; it applies nothing (fail
+	// closed).
 	ErrNoApproval = errors.New("executor: no approval recorded for this plan run; nothing applied")
 	// ErrReservedCheckpoint: a checkpoint name in the executor's reserved
 	// "core." namespace.

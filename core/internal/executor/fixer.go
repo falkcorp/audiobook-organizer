@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-11
 
@@ -126,7 +126,9 @@ func (a *attempt) evaluate(rc *tasks.RC, p any) ([]tasks.Row, tasks.ItemsResult,
 
 // approval reads the approved row IDs Approve staged with this run. It is
 // read straight from the store, past the ResumeFromZero filter: a from-zero
-// resume voids progress, never the approval. No record fails closed.
+// resume voids progress, never the approval. It fails closed: no record,
+// or a record that approves a plan other than this run's PlanRef, applies
+// nothing.
 func (a *attempt) approval(ctx context.Context) ([]string, error) {
 	raw, found, err := a.e.runs.Checkpoint(ctx, a.id, ckptApproved)
 	if err != nil {
@@ -135,11 +137,14 @@ func (a *attempt) approval(ctx context.Context) ([]string, error) {
 	if !found || len(raw) == 0 {
 		return nil, fmt.Errorf("%w: run %s (plan %s)", ErrNoApproval, a.id, a.rec.PlanRef)
 	}
-	var rows []string
-	if err := json.Unmarshal(unwrapData(raw), &rows); err != nil {
+	var rec approvalRecord
+	if err := json.Unmarshal(unwrapData(raw), &rec); err != nil {
 		return nil, fmt.Errorf("executor: approval record of %s: %w", a.id, err)
 	}
-	return rows, nil
+	if rec.Plan == "" || rec.Plan != a.rec.PlanRef {
+		return nil, fmt.Errorf("%w: run %s's approval is of plan %q, its plan is %s", ErrNoApproval, a.id, rec.Plan, a.rec.PlanRef)
+	}
+	return rec.Rows, nil
 }
 
 func guard(gs []tasks.Guard, row tasks.Row) string {
@@ -183,16 +188,17 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 		if plan, err = a.e.planRows(ctx, ref); err != nil {
 			return nil, err
 		}
-		rejected, err := a.e.planRejected(ctx, ref)
-		if err != nil {
-			return nil, err
-		}
-		if rejected {
-			return nil, fmt.Errorf("%w: %s", ErrPlanRejected, ref)
-		}
 		approved, err := a.approval(ctx)
 		if err != nil {
 			return nil, err
+		}
+		switch dec, err := a.e.planDecision(ctx, ref); {
+		case err != nil:
+			return nil, err
+		case dec == eventReject:
+			return nil, fmt.Errorf("%w: %s", ErrPlanRejected, ref)
+		case dec != eventApprove:
+			return nil, fmt.Errorf("%w: plan %s carries no approval", ErrNoApproval, ref)
 		}
 		ids = approved
 	} else {

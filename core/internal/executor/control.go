@@ -1,7 +1,7 @@
 // file: core/internal/executor/control.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -366,11 +366,22 @@ func (e *executor) DecideAs(ctx context.Context, id tasks.RunID, d tasks.Decisio
 	return err
 }
 
-// Approve answers a Fixer plan (5T.3.7): a rejection is recorded on the
-// plan run; an approval starts the Live apply run of the same kind with the
-// plan's params, PlanRef set and the approved row IDs staged with it, all
-// in one batch. Rows must belong to the plan, which must be a succeeded
-// Preview run within MaxPlanAge.
+// Approve answers a Fixer plan (5T.3.7). A plan is decided once: the
+// decision is a move on the plan run (an approve or reject event), so two
+// answers to one plan serialise on the plan's record and the second is
+// refused (ErrPlanDecided, or ErrPlanRejected for a rejected plan). An
+// approval starts the Live apply run of the same kind with the plan's
+// params, PlanRef set and an approval record naming the plan and the
+// approved row IDs, in the same batch as the decision. The apply run is
+// always a new run: it never folds into a queued run (stageStart), so it
+// shares no state with Start and takes no startMu. Rows must belong to the
+// plan, which must be a succeeded Preview run within MaxPlanAge.
+//
+// Approve and reject fail closed: they need a caller identity (a
+// Principal that resolves, with a checker) holding Perms.Approve, which
+// definition validation requires whenever Approval is set. A call with no
+// identity is refused, never treated as kernel-internal. The apply run is
+// a start, so the approver also needs Perms.Start (permitStart).
 func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.ApproveRequest) error {
 	plan, err := e.runs.Get(ctx, id)
 	if err != nil {
@@ -383,19 +394,12 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 	if d == nil || d.c.Approval == nil {
 		return fmt.Errorf("%w: %s's kind takes no approval", ErrPlanInvalid, id)
 	}
-	// 5T.3.7: approve and reject need Perms.Approve (Perms.Start when a
-	// non-Fixer kind leaves it unset, as Decide); the verified-method half
-	// is the HTTP route's (F2-05). A caller with no identity is a
-	// kernel-internal call and acts as no one: never as the plan's actor.
 	actor, who := e.caller(ctx)
-	if who != nil {
-		need := d.c.Perms.Approve
-		if need.IsZero() {
-			need = d.c.Perms.Start
-		}
-		if !who.Satisfies(need) {
-			return fmt.Errorf("%w: approve %s", ErrNotPermitted, id)
-		}
+	if who == nil {
+		return fmt.Errorf("%w: approve %s: no caller identity", ErrNotPermitted, id)
+	}
+	if need := d.c.Perms.Approve; need.IsZero() || !who.Satisfies(need) {
+		return fmt.Errorf("%w: approve %s", ErrNotPermitted, id)
 	}
 	if err := e.checkPlan(ctx, d, id); err != nil {
 		return err
@@ -404,10 +408,16 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 	if actor != (tasks.Actor{}) {
 		by = &actor
 	}
+	decide := func(event string) editFunc {
+		return func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+			if err := e.undecided(ctx, cur.ID); err != nil {
+				return cur, tasks.RunEvent{}, err
+			}
+			return cur, tasks.RunEvent{Event: event, Reason: req.Reason, Actor: by}, nil
+		}
+	}
 	if req.Reject {
-		_, err := e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
-			return cur, tasks.RunEvent{Event: eventReject, Reason: req.Reason, Actor: by}, nil
-		}, nil)
+		_, err := e.move(ctx, id, decide(eventReject), nil)
 		return err
 	}
 	inPlan, err := e.planRows(ctx, id)
@@ -427,18 +437,21 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(rows)
+	raw, err := json.Marshal(approvalRecord{Plan: id, Rows: rows})
 	if err != nil {
 		return err
 	}
-	err = e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
+	env, err := json.Marshal(ckptEnvelope{A: 1, V: raw})
+	if err != nil {
+		return err
+	}
+	_, err = e.move(ctx, id, decide(eventApprove), func(ctx context.Context, b *storage.Batch, _ tasks.RunRecord) error {
 		ref, err := e.stageStart(ctx, b, prep)
 		if err != nil {
 			return err
 		}
-		env, err := json.Marshal(ckptEnvelope{A: 1, V: raw})
-		if err != nil {
-			return err
+		if ref.Existing {
+			return fmt.Errorf("executor: approve of %s reached existing run %s; an apply run is always new", id, ref.ID)
 		}
 		return e.runs.SaveCheckpoint(ctx, b, ref.ID, ckptApproved, env)
 	})
@@ -446,6 +459,14 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 		e.wakeDispatcher()
 	}
 	return err
+}
+
+// approvalRecord is an apply run's core.approved value: the plan it
+// approves and the approved row IDs. The apply run applies the rows only
+// while Plan is its own PlanRef.
+type approvalRecord struct {
+	Plan tasks.RunID `json:"plan"`
+	Rows []string    `json:"rows"`
 }
 
 // Discard implements tasks.Client.Discard: Cancel's permission rule; a run

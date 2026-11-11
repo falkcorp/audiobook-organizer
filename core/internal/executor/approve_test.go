@@ -219,15 +219,17 @@ func result(t testing.TB, r tasks.RunRecord) fixerResult {
 
 // TestApprove_RefusesCallerWithoutApprovePermission (5T.3.7 table: approve
 // and reject need Perms.Approve; the apply run is a start, so Perms.Start
-// too). A caller with no identity is a kernel-internal call: it may
-// approve, and acts as no one, never as the plan's actor.
+// too). Both fail closed: a call with no caller identity is refused, and so
+// is every call to an executor that resolves no Principal. The apply run
+// and the reject event carry the approver, never the plan's actor.
 func TestApprove_RefusesCallerWithoutApprovePermission(t *testing.T) {
 	cells := []struct {
-		name       string
-		ctx        context.Context
-		approveErr error
-		rejectErr  error
-		wantActor  tasks.Actor
+		name        string
+		ctx         context.Context
+		noPrincipal bool
+		approveErr  error
+		rejectErr   error
+		wantActor   tasks.Actor
 	}{
 		{name: "start scope only", ctx: asUser("harley", scopeRun), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
 		{name: "view scope only", ctx: asUser("vicki", scopeTasksView), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
@@ -235,12 +237,18 @@ func TestApprove_RefusesCallerWithoutApprovePermission(t *testing.T) {
 			wantActor: tasks.Actor{UserID: "gordon", AuthMethod: "session"}},
 		{name: "approve and start", ctx: asUser("gordon", scopeApprov, scopeRun),
 			wantActor: tasks.Actor{UserID: "gordon", AuthMethod: "session"}},
-		{name: "no identity acts as no one", ctx: context.Background()},
+		{name: "no identity", ctx: context.Background(), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
+		{name: "executor without a Principal", ctx: asUser("gordon", scopeApprov, scopeRun), noPrincipal: true,
+			approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
 			log := &applyLog{}
-			h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
+			edit := withPrincipal
+			if c.noPrincipal {
+				edit = nil
+			}
+			h := newHarness(t, []tasks.Definition{fixerDef(log)}, edit)
 
 			plan := h.plan()
 			err := h.x.Approve(c.ctx, plan, tasks.ApproveRequest{Rows: []string{"joker"}})
@@ -340,9 +348,10 @@ func TestStart_PlanRefOnlyThroughApprove(t *testing.T) {
 	}
 }
 
-// TestApprove_RejectedPlanRefused: a rejected plan is never applied, whether
-// the approve comes after the reject or the apply run was approved first
-// and the reject lands before it runs.
+// TestApprove_RejectedPlanRefused: an approve after a reject is refused
+// and starts nothing. (A reject after an approve is refused by the
+// decide-once rule, TestApprove_DecidesAPlanOnce; an apply run whose plan
+// carries a reject applies nothing, TestFixer_ApplyFailsClosedWithoutApproval.)
 func TestApprove_RejectedPlanRefused(t *testing.T) {
 	gordon := asUser("gordon", scopeApprov, scopeRun)
 	t.Run("approve after reject", func(t *testing.T) {
@@ -359,69 +368,97 @@ func TestApprove_RejectedPlanRefused(t *testing.T) {
 			t.Fatalf("%d runs of a rejected plan", n)
 		}
 	})
-	t.Run("reject before the apply run runs", func(t *testing.T) {
-		log := &applyLog{}
-		defs := []tasks.Definition{fixerDef(log)}
-		fs := vfs.NewCrashableMem()
-		stores, ks := bootStores(t, fs)
-		planning := onStores(t, fs, stores, ks, defs, withPrincipal, true)
-		plan := planning.plan()
-		if err := planning.x.Shutdown(context.Background()); err != nil {
-			t.Fatal(err)
+}
+
+// stageApply stages an apply run of plan by hand, as Approve's batch would
+// but without its decision or checks, with rec as its approval record (nil:
+// none), and returns its ID. It is how a lost, forged or mismatched record
+// is put in front of the apply path.
+func (h *harness) stageApply(plan tasks.RunID, rec *approvalRecord) tasks.RunID {
+	h.t.Helper()
+	ctx := context.Background()
+	prep := prepared{d: h.e.defs[relocate], mode: tasks.ModeLive, params: json.RawMessage("null"), prio: tasks.PriorityNormal,
+		req: tasks.StartRequest{Mode: tasks.ModeRequestLive, PlanRef: plan, Trigger: tasks.TriggerManual}}
+	var id tasks.RunID
+	if err := h.e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
+		ref, err := h.e.stageStart(ctx, b, prep)
+		if err != nil {
+			return err
 		}
-		h := onStores(t, fs, stores, ks, defs, withPrincipal, false) // not dispatching yet
-		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
-			t.Fatalf("approve: %v", err)
+		id = ref.ID
+		if rec == nil {
+			return nil
 		}
-		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Reject: true, Reason: "riot in D wing"}); err != nil {
-			t.Fatalf("reject: %v", err)
+		raw, err := json.Marshal(rec)
+		if err != nil {
+			return err
 		}
-		if err := h.x.Run(context.Background()); err != nil {
-			t.Fatal(err)
+		env, err := json.Marshal(ckptEnvelope{A: 1, V: raw})
+		if err != nil {
+			return err
 		}
-		r := h.waitState(h.onlyApplyRun(plan).ID, tasks.StateFailed, tasks.StateSucceeded)
-		if r.State != tasks.StateFailed || !strings.Contains(r.Error, ErrPlanRejected.Error()) {
-			t.Fatalf("apply run of a plan rejected after approval: %s %q, want failed with ErrPlanRejected", r.State, r.Error)
-		}
-		if got := log.got(); len(got) != 0 {
-			t.Fatalf("applied %v of a rejected plan", got)
-		}
-	})
+		return h.stores.Runs.SaveCheckpoint(ctx, b, id, ckptApproved, env)
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	h.e.wakeDispatcher()
+	return id
+}
+
+// markDecided appends a decision event to plan directly, as Approve's move
+// does but without its checks.
+func (h *harness) markDecided(plan tasks.RunID, event string) {
+	h.t.Helper()
+	if _, err := h.e.move(context.Background(), plan, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+		return cur, tasks.RunEvent{Event: event}, nil
+	}, nil); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 // TestFixer_ApplyFailsClosedWithoutApproval: an apply run applies only the
-// rows its approval names. With no approval record it applies nothing and
-// fails; a ResumeFromZero resume voids progress, never the approval.
+// rows its own plan's approval names. It applies nothing, and fails, when it
+// has no approval record, when its record approves another plan (the shape
+// of a fold that lands one plan's approval on another's run), when its plan
+// carries a reject, or when its plan carries no approval at all. A
+// ResumeFromZero resume voids progress, never the approval.
 func TestFixer_ApplyFailsClosedWithoutApproval(t *testing.T) {
-	t.Run("no approval record", func(t *testing.T) {
-		log := &applyLog{}
-		h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
-		plan := h.plan()
-		// An apply run with no approval record (as a lost or never-written
-		// record would leave it): prepared as Approve does, staged without
-		// the record.
-		ctx := context.Background()
-		prep, err := h.e.prepare(ctx, relocate, tasks.StartRequest{Mode: tasks.ModeRequestLive, PlanRef: plan}, nil, modeApprove)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var id tasks.RunID
-		if err := h.e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
-			ref, err := h.e.stageStart(ctx, b, prep)
-			id = ref.ID
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		h.e.wakeDispatcher()
-		r := h.waitState(id, tasks.StateFailed, tasks.StateSucceeded)
-		if r.State != tasks.StateFailed || !strings.Contains(r.Error, ErrNoApproval.Error()) {
-			t.Fatalf("apply run without approval: %s %q, want failed with ErrNoApproval", r.State, r.Error)
-		}
-		if got := log.got(); len(got) != 0 {
-			t.Fatalf("applied %v with no approval (fail open)", got)
-		}
-	})
+	for _, c := range []struct {
+		name    string
+		setup   func(h *harness, plan, other tasks.RunID) *approvalRecord
+		wantErr error
+	}{
+		{name: "no approval record", wantErr: ErrNoApproval, setup: func(h *harness, plan, _ tasks.RunID) *approvalRecord {
+			h.markDecided(plan, eventApprove)
+			return nil
+		}},
+		{name: "approval of another plan", wantErr: ErrNoApproval, setup: func(h *harness, plan, other tasks.RunID) *approvalRecord {
+			h.markDecided(plan, eventApprove)
+			h.markDecided(other, eventApprove)
+			return &approvalRecord{Plan: other, Rows: []string{"joker"}}
+		}},
+		{name: "plan carries a reject", wantErr: ErrPlanRejected, setup: func(h *harness, plan, _ tasks.RunID) *approvalRecord {
+			h.markDecided(plan, eventReject)
+			return &approvalRecord{Plan: plan, Rows: []string{"joker"}}
+		}},
+		{name: "plan carries no decision", wantErr: ErrNoApproval, setup: func(_ *harness, plan, _ tasks.RunID) *approvalRecord {
+			return &approvalRecord{Plan: plan, Rows: []string{"joker"}}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			log := &applyLog{}
+			h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
+			plan, other := h.plan(), h.plan()
+			id := h.stageApply(plan, c.setup(h, plan, other))
+			r := h.waitState(id, tasks.StateFailed, tasks.StateSucceeded)
+			if r.State != tasks.StateFailed || !strings.Contains(r.Error, c.wantErr.Error()) {
+				t.Fatalf("apply run: %s %q, want failed with %v", r.State, r.Error, c.wantErr)
+			}
+			if got := log.got(); len(got) != 0 {
+				t.Fatalf("applied %v (fail open)", got)
+			}
+		})
+	}
 	t.Run("from-zero resume keeps the approval", func(t *testing.T) {
 		applying := make(chan string, 1)
 		first := &applyLog{}
@@ -512,4 +549,207 @@ func TestStoredName_ReservedCheckpointNames(t *testing.T) {
 			t.Errorf("storedName(%q): %v, want ErrReservedCheckpoint", name, err)
 		}
 	}
+}
+
+// TestApprove_DecidesAPlanOnce (5T.3.7): a plan is decided once. The
+// decision is a move on the plan's record, so a second approve, a reject
+// after an approve and a second reject are refused, and approves of one
+// plan made at the same time start exactly one apply run.
+func TestApprove_DecidesAPlanOnce(t *testing.T) {
+	gordon := asUser("gordon", scopeApprov, scopeRun)
+	t.Run("approve then approve or reject", func(t *testing.T) {
+		log := &applyLog{}
+		h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
+		plan := h.plan()
+		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: []string{"joker"}}); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: inmates}); !isErr(err, ErrPlanDecided) {
+			t.Fatalf("second approve: %v, want ErrPlanDecided", err)
+		}
+		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Reject: true, Reason: "too late"}); !isErr(err, ErrPlanDecided) {
+			t.Fatalf("reject after approve: %v, want ErrPlanDecided", err)
+		}
+		if _, rejected := h.rejectEvent(plan); rejected {
+			t.Fatal("a refused reject was recorded")
+		}
+		r := h.waitState(h.onlyApplyRun(plan).ID, tasks.StateSucceeded, tasks.StateFailed)
+		if r.State != tasks.StateSucceeded || !slices.Equal(log.got(), []string{"joker"}) {
+			t.Fatalf("apply run %s (%q) applied %v, want succeeded with [joker]", r.State, r.Error, log.got())
+		}
+	})
+	t.Run("reject then reject", func(t *testing.T) {
+		h := newHarness(t, []tasks.Definition{fixerDef(&applyLog{})}, withPrincipal)
+		plan := h.plan()
+		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Reject: true}); err != nil {
+			t.Fatalf("reject: %v", err)
+		}
+		if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Reject: true}); !isErr(err, ErrPlanRejected) {
+			t.Fatalf("second reject: %v, want ErrPlanRejected", err)
+		}
+	})
+	t.Run("concurrent approves", func(t *testing.T) {
+		defs := []tasks.Definition{fixerDef(&applyLog{})}
+		fs := vfs.NewCrashableMem()
+		stores, ks := bootStores(t, fs)
+		planning := onStores(t, fs, stores, ks, defs, withPrincipal, true)
+		plan := planning.plan()
+		if err := planning.x.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h := onStores(t, fs, stores, ks, defs, withPrincipal, false)
+		const n = 8
+		errs := make(chan error, n)
+		var ready sync.WaitGroup
+		ready.Add(n)
+		gate := make(chan struct{})
+		for range n {
+			go func() {
+				ready.Done()
+				<-gate
+				errs <- h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: []string{"penguin"}})
+			}()
+		}
+		ready.Wait()
+		close(gate)
+		won := 0
+		for range n {
+			switch err := <-errs; {
+			case err == nil:
+				won++
+			case !isErr(err, ErrPlanDecided):
+				t.Errorf("a losing approve: %v, want ErrPlanDecided", err)
+			}
+		}
+		if won != 1 {
+			t.Fatalf("%d approves of one plan succeeded, want 1", won)
+		}
+		if runs := h.applyRuns(plan); len(runs) != 1 {
+			t.Fatalf("%d apply runs of one plan, want 1", len(runs))
+		}
+	})
+}
+
+// Fold fixtures: gotham.lockdown is a Task kind with an Approval that does
+// not require a plan, and a Dedupe policy that merges every start into a
+// queued run of its kind and mode, so a fold is visible in params.
+const (
+	lockdown      = "gotham.lockdown"
+	scopeGothamGo = rbac.Permission("gotham:run")
+	scopeGothamOK = rbac.Permission("gotham:approve")
+)
+
+func lockdownDef() tasks.Definition {
+	return taskDef(lockdown, okBody, func(c *tasks.Common) {
+		c.Perms.Approve = rbac.Need(scopeGothamOK)
+		c.Approval = &tasks.Approval{}
+		c.Dedupe = tasks.DedupePolicy{Merge: func(_, incoming json.RawMessage) (json.RawMessage, bool, error) {
+			return incoming, true, nil
+		}}
+	})
+}
+
+// commissioner holds the lockdown kind's start and approve scopes.
+func commissioner() context.Context { return asUser("gordon", scopeGothamGo, scopeGothamOK) }
+
+// startAs starts kind as ctx's caller and returns the run reference.
+func (h *harness) startAs(ctx context.Context, kind string, req tasks.StartRequest) tasks.RunRef {
+	h.t.Helper()
+	ref, err := h.x.Start(ctx, tasks.Kind(kind), req)
+	if err != nil {
+		h.t.Fatalf("start %s: %v", kind, err)
+	}
+	return ref
+}
+
+// planned boots a running executor over fresh stores, has it finish one
+// Preview run of kind per ctx (the plans), shuts it down and returns an
+// executor over the same stores that is not dispatching, so every start
+// and approve the test makes stays queued where a fold could reach it.
+func planned(t *testing.T, defs []tasks.Definition, ctx context.Context, kind string, n int) (*harness, []tasks.RunID) {
+	t.Helper()
+	fs := vfs.NewCrashableMem()
+	stores, ks := bootStores(t, fs)
+	planning := onStores(t, fs, stores, ks, defs, withPrincipal, true)
+	var plans []tasks.RunID
+	for range n {
+		ref := planning.startAs(ctx, kind, tasks.StartRequest{Mode: tasks.ModeRequestPreview})
+		planning.waitState(ref.ID, tasks.StateSucceeded)
+		plans = append(plans, ref.ID)
+	}
+	if err := planning.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return onStores(t, fs, stores, ks, defs, withPrincipal, false), plans
+}
+
+// TestApprove_NeverFoldsIntoAnotherRun (5T.3.7, review of #4586): a plan's
+// apply run is always a new run. An approve never folds into a queued run
+// of its kind (Live or Preview), a later Start or plan run never folds into
+// a queued apply run, and two plans approved one after the other on a
+// folding Fixer each apply exactly their own rows. HEAD had a production
+// incident of this shape on 2026-08-21: one plan's approval landed on
+// another plan's run.
+func TestApprove_NeverFoldsIntoAnotherRun(t *testing.T) {
+	t.Run("approve beside queued runs of every mode", func(t *testing.T) {
+		h, plans := planned(t, []tasks.Definition{lockdownDef()}, commissioner(), lockdown, 1)
+		live := h.startAs(commissioner(), lockdown, tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, "narrows")})
+		preview := h.startAs(commissioner(), lockdown, tasks.StartRequest{Mode: tasks.ModeRequestPreview, Params: mustParams(t, "docks")})
+		if err := h.x.Approve(commissioner(), plans[0], tasks.ApproveRequest{}); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		apply := h.onlyApplyRun(plans[0])
+		if apply.ID == live.ID || apply.ID == preview.ID {
+			t.Fatalf("the approve folded into queued run %s", apply.ID)
+		}
+		for id, want := range map[tasks.RunID]string{live.ID: "narrows", preview.ID: "docks"} {
+			if r := h.get(id); r.PlanRef != "" || string(r.Params) != string(mustParams(t, want)) {
+				t.Fatalf("queued run %s became plan %q params %s", id, r.PlanRef, r.Params)
+			}
+		}
+	})
+	t.Run("later starts beside a queued apply run", func(t *testing.T) {
+		h, plans := planned(t, []tasks.Definition{lockdownDef()}, commissioner(), lockdown, 1)
+		if err := h.x.Approve(commissioner(), plans[0], tasks.ApproveRequest{}); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		apply := h.onlyApplyRun(plans[0])
+		for _, mode := range []tasks.ModeRequest{tasks.ModeRequestLive, tasks.ModeRequestPreview} {
+			ref := h.startAs(commissioner(), lockdown, tasks.StartRequest{Mode: mode, Params: mustParams(t, "bowery")})
+			if ref.ID == apply.ID || ref.Existing && h.get(ref.ID).PlanRef != "" {
+				t.Fatalf("a %v start folded into apply run %s", mode, apply.ID)
+			}
+		}
+		if r := h.get(apply.ID); r.PlanRef != plans[0] || string(r.Params) != string(apply.Params) {
+			t.Fatalf("apply run changed: plan %q params %s, was %q %s", r.PlanRef, r.Params, plans[0], apply.Params)
+		}
+	})
+	t.Run("two plans on a folding Fixer", func(t *testing.T) {
+		log := &applyLog{}
+		folding := func(s *tasks.FixerSpec[noParams, string]) { s.Dedupe = tasks.DedupePolicy{AnyParams: true} }
+		defs := []tasks.Definition{fixerDef(log, folding)}
+		h, plans := planned(t, defs, planner(), relocate, 2)
+		gordon := asUser("gordon", scopeApprov, scopeRun)
+		if err := h.x.Approve(gordon, plans[0], tasks.ApproveRequest{Rows: []string{"joker"}}); err != nil {
+			t.Fatalf("approve P1: %v", err)
+		}
+		if err := h.x.Approve(gordon, plans[1], tasks.ApproveRequest{Rows: []string{"penguin", "riddler"}}); err != nil {
+			t.Fatalf("approve P2: %v", err)
+		}
+		if err := h.x.Approve(gordon, plans[1], tasks.ApproveRequest{Reject: true}); !isErr(err, ErrPlanDecided) {
+			t.Fatalf("reject of the approved P2: %v, want ErrPlanDecided", err)
+		}
+		if err := h.x.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for i, want := range []int{1, 2} {
+			r := h.waitState(h.onlyApplyRun(plans[i]).ID, tasks.StateSucceeded, tasks.StateFailed)
+			if r.State != tasks.StateSucceeded || result(t, r).Applied != want {
+				t.Fatalf("P%d's apply run: %s (%q) %+v, want succeeded with %d applied", i+1, r.State, r.Error, result(t, r), want)
+			}
+		}
+		if got := log.got(); !slices.Equal(got, inmates) {
+			t.Fatalf("applied %v, want each plan's own rows %v", got, inmates)
+		}
+	})
 }

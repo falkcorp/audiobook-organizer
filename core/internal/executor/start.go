@@ -1,7 +1,7 @@
 // file: core/internal/executor/start.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -288,38 +288,50 @@ func (e *executor) checkPlan(ctx context.Context, d *def, ref tasks.RunID) error
 	if age := e.now().Sub(plan.Finished); age > maxAge {
 		return fmt.Errorf("%w: %s finished %s ago (max %s)", ErrPlanTooOld, ref, age.Round(time.Second), maxAge)
 	}
-	rejected, err := e.planRejected(ctx, ref)
-	if err != nil {
-		return err
-	}
-	if rejected {
-		return fmt.Errorf("%w: %s", ErrPlanRejected, ref)
-	}
-	return nil
+	return e.undecided(ctx, ref)
 }
 
-// eventReject is the event Approve records on a rejected plan.
-const eventReject = "reject"
+// The events Approve records on a plan run: its one decision.
+const (
+	eventApprove = "approve"
+	eventReject  = "reject"
+)
 
-// planRejected reports whether a plan run carries a rejection event.
-func (e *executor) planRejected(ctx context.Context, id tasks.RunID) (bool, error) {
+// planDecision is a plan run's decision: the first approve or reject event
+// on it, or "" while it is undecided.
+func (e *executor) planDecision(ctx context.Context, id tasks.RunID) (string, error) {
 	q := tasks.PageQuery{Page: tasks.PageEvents, Limit: 1000}
 	for {
 		n := 0
 		for p, err := range e.runs.Pages(ctx, id, q) {
 			if err != nil {
-				return false, err
+				return "", err
 			}
 			n++
 			q.After = p.Key
-			if p.Event.Event == eventReject {
-				return true, nil
+			if ev := p.Event.Event; ev == eventApprove || ev == eventReject {
+				return ev, nil
 			}
 		}
 		if n < 1000 {
-			return false, nil
+			return "", nil
 		}
 	}
+}
+
+// undecided refuses a plan that already carries its decision: a rejected
+// plan with ErrPlanRejected, an approved one with ErrPlanDecided.
+func (e *executor) undecided(ctx context.Context, id tasks.RunID) error {
+	dec, err := e.planDecision(ctx, id)
+	switch {
+	case err != nil:
+		return err
+	case dec == eventReject:
+		return fmt.Errorf("%w: %s", ErrPlanRejected, id)
+	case dec == eventApprove:
+		return fmt.Errorf("%w: %s", ErrPlanDecided, id)
+	}
+	return nil
 }
 
 // idemRecord is an idem/<kind>/<key> value.
@@ -349,7 +361,10 @@ func (e *executor) stageStart(ctx context.Context, b *storage.Batch, p prepared)
 			}
 		}
 	}
-	if p.d.folds() {
+	// An apply run (PlanRef set: only Approve sets it) is always a new run:
+	// it never folds into a queued run, and stageFold never folds a start
+	// into one, so one plan's approval can never land on another's run.
+	if p.d.folds() && p.req.PlanRef == "" {
 		ref, ok, err := e.stageFold(ctx, b, p)
 		if err != nil || ok {
 			if err == nil && idemKey != nil {
@@ -408,8 +423,8 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		if err != nil {
 			continue // undecodable: hidden (5T.5)
 		}
-		if cur.Kind != p.d.kind || cur.Mode != p.mode {
-			continue
+		if cur.Kind != p.d.kind || cur.Mode != p.mode || cur.PlanRef != "" {
+			continue // a plan's apply run takes no fold (stageStart)
 		}
 		if pol.SameActorOnly && cur.Actor != p.req.Actor {
 			continue
