@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.19.0 -->
+<!-- version: 1.20.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Tasks (`core/tasks`)
 
@@ -253,7 +253,8 @@ prefix is not the registering module; duplicate kinds; any constructor problem; 
 a view-class scope without `Perms.StartableByViewers` (5T.3.7, SEC-9); `Effects.Writes` naming
 another module's resource; an undeclared resource kind; `Resume == ResumeContinue` on an `Unordered`
 Batch source; a zero `Parallelism` on Batch/Fixer; both `PartitionBy` and `ExclusiveRefs` on one
-Batch; a Fixer without `Approval`; a scheduled writer whose schedule says neither `Live()` nor
+Batch; a Fixer without `Approval`, or whose `Approval` leaves `PlanRequired` false (every apply run
+applies an approved plan); a scheduled writer whose schedule says neither `Live()` nor
 `Preview()` (v3 rule D8, `pkg/ops/schedule.go:96-118`); a `ScheduleFromConfig` key that the
 registering owner has not declared with type `tasks.ScheduleConfig` in its own config namespace, or
 that another kind already uses (5T.3.8, R2-7); an `Every` schedule on any kind but
@@ -649,7 +650,7 @@ type Permissions struct {
 }
 
 type Approval struct {
-	PlanRequired bool          // Live start must name a Preview run (plan_ref) of the same kind
+	PlanRequired bool          // Live start must name a Preview run (plan_ref) of the same kind; always true for a Fixer
 	MaxPlanAge   time.Duration // 0 = 7 days (pkg/ops/approval.go:29-30)
 }
 ```
@@ -2491,3 +2492,9 @@ F2-03 (2026-11-10): 5T.3.2 `ItemsOptions` gains `PartitionBy`, and its table a P
 apply's `PartitionBy` run through it, so each item of a partition keeps its own `ItemTimeout` clock, pause gate,
 CPU slot, `Skip` and counts; the executor's first cut handed `RunItems` whole partitions as items, which timed a
 partition, not an item. `RunSeq` refuses the option.
+
+F2-03 review (2026-11-11): a Fixer whose `Approval` leaves `PlanRequired` false is refused at registration
+(5T.3.1's kernel-reject list and the `Approval` field), since a Fixer's apply run applies an approved plan and nothing else;
+`taskstest`'s conformance suite checks it. 5T.3.7's approve is recorded once per plan (the executor's
+readings, `seams.d/F2-03.md`): a second decision is refused, an approval always starts a new apply run, and
+an approve with no caller identity is refused.
