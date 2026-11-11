@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
 // last-edited: 2026-11-10
 
@@ -20,7 +20,12 @@ const core = "github.com/falkcorp/mediacore"
 // no exemptions (05-tasks §5T.8.4; core has no exemption list, so a finding
 // here is a defect of the row that introduced it).
 func TestTasklint_Core(t *testing.T) {
-	tasklint.Run(t, tasklint.Options{Packages: []string{core + "/..."}, ModulePath: core})
+	tasklint.Run(t, tasklint.Options{Packages: []string{core + "/..."}, ModulePath: core,
+		// The allowlist of //tasklint:constructor functions: exported kind
+		// constructors that other modules call. A new entry is reviewed here.
+		Constructors: []string{
+			core + "/storage/datamigrate.DerivedBuildTask", // modules pass it to Registrar.DerivedIndex (05-storage §5S.3.9)
+		}})
 }
 
 // TestTasklint_CoreGuards runs the two type-aware guards over core (05-tasks
