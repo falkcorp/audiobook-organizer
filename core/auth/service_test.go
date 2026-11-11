@@ -417,3 +417,19 @@ func TestNew_RequiresDepsAndWritesNothing(t *testing.T) {
 		t.Fatalf("New wrote: audit %d, journal %d", len(f.audit.recorded), len(f.jrnl.lines))
 	}
 }
+
+// §4.1: an imported key prefix that is empty or overlaps a native one would
+// let the key authenticator claim a session or one-time token, so New
+// refuses it; ABO's abk_ builds.
+func TestNew_RefusesAnImportedPrefixOverlappingANativeOne(t *testing.T) {
+	f := newFx(t)
+	deps := auth.Deps{Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl}
+	for _, p := range []string{"", "mcs_", "mck_", "mcb_x", "mc", "m"} {
+		if _, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_", p}}, deps); !errors.Is(err, auth.ErrBadInput) {
+			t.Errorf("imported prefix %q: New = %v, want ErrBadInput", p, err)
+		}
+	}
+	if _, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_", "mcx_"}}, deps); err != nil {
+		t.Fatalf("non-overlapping prefixes were refused: %v", err)
+	}
+}

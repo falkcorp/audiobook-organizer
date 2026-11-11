@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,6 +235,9 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 	if s.hasher == nil {
 		s.hasher = password.New(password.Options{})
 	}
+	if err := checkImportedPrefixes(opts.ImportedKeyPrefixes); err != nil {
+		return nil, err
+	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
 	s.methods = map[Method]MethodSpec{}
 	for _, e := range d.Extensions {
@@ -293,6 +297,22 @@ func (s *Service) knownMethod(m Method) bool {
 	}
 	_, ok := s.methods[m]
 	return ok
+}
+
+// checkImportedPrefixes refuses an imported key prefix that overlaps a
+// native one, either a prefix of the other (the empty prefix overlaps them
+// all): the key authenticator would then claim session, bootstrap or
+// one-time tokens as keys, or an imported value would pass for a native
+// credential (§4.1).
+func checkImportedPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
+		for _, k := range nativeKinds() {
+			if strings.HasPrefix(p, string(k)) || strings.HasPrefix(string(k), p) {
+				return fmt.Errorf("%w: imported key prefix %q overlaps the native prefix %q", ErrBadInput, p, k)
+			}
+		}
+	}
+	return nil
 }
 
 // authDisabledPrincipal is §4.11's auth-off binding; until auth-off mode

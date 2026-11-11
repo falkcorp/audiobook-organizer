@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash/crc32"
+	"slices"
 	"strings"
 )
 
@@ -55,14 +56,13 @@ func MintCredential(kind CredentialKind) (string, error) {
 	return body + "_" + checksum(body), nil
 }
 
-// native reports whether k is one of the five native prefixes.
-func (k CredentialKind) native() bool {
-	switch k {
-	case KindSession, KindAPIKey, KindBootstrap, KindInvite, KindTempLogin:
-		return true
-	}
-	return false
+// nativeKinds are the five native prefixes.
+func nativeKinds() []CredentialKind {
+	return []CredentialKind{KindSession, KindAPIKey, KindBootstrap, KindInvite, KindTempLogin}
 }
+
+// native reports whether k is one of the five native prefixes.
+func (k CredentialKind) native() bool { return slices.Contains(nativeKinds(), k) }
 
 // checksum is the base62 CRC32 (IEEE) of body, zero-padded to 6 characters.
 func checksum(body string) string {
