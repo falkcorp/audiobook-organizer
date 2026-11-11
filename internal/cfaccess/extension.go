@@ -1,5 +1,5 @@
 // file: internal/cfaccess/extension.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9381baf4-4f30-4810-b629-127b03ab2332
 // last-edited: 2026-11-11
 
@@ -73,28 +73,39 @@ type ExtensionConfig struct {
 	Clock      func() time.Time
 }
 
+// warnGate lets one log line through per warnEvery and counts the lines it held
+// back, so a flood of bad tokens is one line per window. Instance state.
+type warnGate struct {
+	mu   sync.Mutex
+	at   time.Time
+	held int
+}
+
+// allow reports whether a line may be logged at now, and how many were held back
+// since the previous one that was.
+func (g *warnGate) allow(now time.Time) (ok bool, held int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.at.IsZero() && now.Sub(g.at) < warnEvery {
+		g.held++
+		return false, 0
+	}
+	held = g.held
+	g.at, g.held = now, 0
+	return true, held
+}
+
 // extension is the auth.Authenticator.
 type extension struct {
-	c ExtensionConfig
-
-	warnMu   sync.Mutex
-	warnAt   time.Time
-	warnHeld int
+	c     ExtensionConfig
+	warns warnGate
 }
 
 // warn logs msg at most once per warnEvery, saying how many were held back.
 func (e *extension) warn(msg string) {
-	e.warnMu.Lock()
-	now := e.c.Clock()
-	if !e.warnAt.IsZero() && now.Sub(e.warnAt) < warnEvery {
-		e.warnHeld++
-		e.warnMu.Unlock()
-		return
+	if ok, held := e.warns.allow(e.c.Clock()); ok {
+		e.c.Log.Warn(msg, "suppressed", held)
 	}
-	held := e.warnHeld
-	e.warnAt, e.warnHeld = now, 0
-	e.warnMu.Unlock()
-	e.c.Log.Warn(msg, "suppressed", held)
 }
 
 // Extension returns Cloudflare Access as an identity extension for

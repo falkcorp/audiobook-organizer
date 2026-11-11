@@ -1,5 +1,5 @@
 // file: internal/cfaccess/extension_cookies_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d602357-27af-4e22-8796-d9ffa438b82f
 // last-edited: 2026-11-11
 
@@ -190,5 +190,30 @@ func TestCFAccess_BadTokenWarningIsRateLimited(t *testing.T) {
 	}
 	if strings.Contains(g.logs.String(), "secret-token-value") {
 		t.Fatal("the log carries the token")
+	}
+}
+
+// warnGate is the one limiter behind the extension's and the gin binder's
+// failure lines: one per window, with the held-back count on the next.
+func TestWarnGate_OnePerWindowWithHeldCount(t *testing.T) {
+	var g warnGate
+	t0 := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	if ok, held := g.allow(t0); !ok || held != 0 {
+		t.Fatalf("first: %v, %d", ok, held)
+	}
+	for i := range 99 {
+		if ok, _ := g.allow(t0.Add(time.Duration(i) * 100 * time.Millisecond)); ok {
+			t.Fatalf("line %d let through inside the window", i)
+		}
+	}
+	if ok, _ := g.allow(t0.Add(warnEvery - time.Nanosecond)); ok {
+		t.Fatal("let through one nanosecond early")
+	}
+	ok, held := g.allow(t0.Add(warnEvery))
+	if !ok || held != 100 {
+		t.Fatalf("after the window: %v, held %d, want true and 100", ok, held)
+	}
+	if ok, held := g.allow(t0.Add(warnEvery + time.Second)); ok || held != 0 {
+		t.Fatalf("a new window did not start: %v, %d", ok, held)
 	}
 }
