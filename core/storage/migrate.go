@@ -1,5 +1,5 @@
 // file: core/storage/migrate.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
 // last-edited: 2026-11-10
 
@@ -277,10 +277,19 @@ func compareNodes(a, b *stepNode) int {
 	return cmp.Compare(a.order(), b.order())
 }
 
+// runsDisabled reports a step that runs for a disabled owner: a cutover
+// data step (06 A5) and the level step that guards it (LevelStep), whose
+// level the cutover needs raised first. Any of the owner's other pending
+// steps still defers both through their dependencies.
+func runsDisabled(n *stepNode) bool {
+	return (n.data != nil && n.data.Cutover) || (n.mig != nil && n.mig.levelStep)
+}
+
 // planDAG computes the boot's runnable steps in order and the deferred ones.
 // A versioned step is pending when its version is above the owner's applied
 // version, a data step while its record is not done. A pending step of a
-// disabled owner is deferred (a cutover data step is not, 06 A5), and so is
+// disabled owner is deferred (a cutover data step and its level step are
+// not, 06 A5; runsDisabled), and so is
 // every pending step with an unapplied dependency that is deferred or whose
 // owner is absent; an edge to an applied step is satisfied whoever owns it.
 func (db *DB) planDAG(ctx context.Context) error {
@@ -323,7 +332,7 @@ func (db *DB) planDAG(ctx context.Context) error {
 			if deferred[k] {
 				continue
 			}
-			def := !n.owner.enabled && (n.data == nil || !n.data.Cutover)
+			def := !n.owner.enabled && !runsDisabled(n)
 			for _, d := range n.deps {
 				if def {
 					break

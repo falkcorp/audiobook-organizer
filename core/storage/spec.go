@@ -1,7 +1,7 @@
 // file: core/storage/spec.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 156e1b2e-7ad2-4241-b21e-71d4f21d472b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package storage
 
@@ -106,6 +106,10 @@ type Migration struct {
 	// exist unchanged: it reads each key first and writes only on ErrNotFound.
 	Seed bool
 	Up   func(ctx context.Context, tx *MigrationTx) error
+	// levelStep marks a step built by LevelStep: like the cutover data step
+	// it guards (06 A5), it runs for a disabled owner (planDAG). Only
+	// LevelStep sets it.
+	levelStep bool
 }
 
 // UpgradeFloor lets a build delete step code that an older store would still
