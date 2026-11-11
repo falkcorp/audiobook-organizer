@@ -21,6 +21,14 @@ import (
 // once, in IssuedSession.Token; the store keeps only its SHA-256 and the
 // public ID. u must be active.
 func (s *Service) IssueSession(ctx context.Context, u *User, origin SessionOrigin, remember bool, client ClientInfo) (*IssuedSession, error) {
+	return s.issueSession(ctx, u, origin, remember, client, nil)
+}
+
+// issueSession is IssueSession with also, when non-nil, staging into the
+// session's batch after the record (a sign-in's audit record).
+func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigin, remember bool, client ClientInfo,
+	also func(b *storage.Batch, rec *SessionRecord) error,
+) (*IssuedSession, error) {
 	if u == nil || u.ID == "" {
 		return nil, fmt.Errorf("%w: a session needs a user", ErrBadInput)
 	}
@@ -43,6 +51,11 @@ func (s *Service) IssueSession(ctx context.Context, u *User, origin SessionOrigi
 		tok, err := s.d.Store.IssueSession(b, rec)
 		if err != nil {
 			return err
+		}
+		if also != nil {
+			if err := also(b, rec); err != nil {
+				return err
+			}
 		}
 		out = &IssuedSession{Token: tok, PublicID: rec.PublicID, ExpiresAt: rec.ExpiresAt}
 		return nil
