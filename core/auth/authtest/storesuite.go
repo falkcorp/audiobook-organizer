@@ -773,7 +773,7 @@ func issueOneTime(t *testing.T, fx Fixture, tok *auth.OneTimeToken) auth.Token {
 // oneTime sets every field, so a round trip proves the store keeps each one.
 func oneTime(kind auth.OneTimeKind) *auth.OneTimeToken {
 	return &auth.OneTimeToken{
-		Kind: kind, UserID: "u-robin", CreatedBy: "u-batman", Email: "robin@gotham.example", Role: rbac.RoleViewer,
+		Kind: kind, UserID: "u-robin", CreatedBy: "u-batman", Username: "robin", Email: "robin@gotham.example", Role: rbac.RoleViewer,
 		CredentialEpoch: 3, Reset: true, ClearsRestriction: true, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour),
 	}
 }
