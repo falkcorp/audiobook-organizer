@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/offline.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d41e6b3-0a27-4c95-b13f-6e2a9c7d5f08
 // last-edited: 2026-11-11
 
@@ -142,7 +142,7 @@ func (s *Swapper) RestoreOffline(ctx context.Context, dbPath, requestedBy string
 
 // retireRewriteJournals journals retired after every KindRewrite journal
 // of the store at dbPath that ended (applied or swapped_back): restore id
-// replaced that store (§5S.3.13 "M8 never loops"; RunRewrite). A swap in
+// replaced that store (§5S.3.13 "M8"; RunRewrite). A swap in
 // flight refuses the restore before it stages anything, so no such journal
 // is in flight here.
 func (s *Swapper) retireRewriteJournals(ctx context.Context, dbPath, id string) error {
