@@ -103,6 +103,10 @@ func SetEnvFileReader(s *Store, read func(string) ([]byte, error)) {
 func FailClosedGauge(s *Store) int64 { return s.met.failClosed.Load() }
 func RetiredGauge(s *Store) int64    { return s.met.retired.Load() }
 
+// ConfigPathForTest is Options.FilePath: the name a file value's lock
+// reason carries.
+func (s *Store) ConfigPathForTest() string { return s.o.FilePath }
+
 // CanonicalEnvName is the canonical env name derivation (05-config §1.3.6).
 func CanonicalEnvName(prefix string, p Path) string { return envName(prefix, p) }
 

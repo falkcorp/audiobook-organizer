@@ -50,7 +50,7 @@ type Store struct {
 	// mu serialises Register, Boot, Load, Attach, SetSecrets, Apply and Close
 	// (05-config §1.6: Apply holds it from candidate build through publish).
 	mu       sync.Mutex
-	sections []*section     // sorted by path
+	sections []*section      // sorted by path
 	envNames map[string]Path // the sections' EnvBinding names
 	// canonNames are the registered struct keys' canonical env names;
 	// appBindings is Options.EnvBindings (05-config §1.3.6).
