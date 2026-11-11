@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b6fe429f-bf7f-4747-a83b-6a00a1ab305b
 // last-edited: 2026-11-11
 
@@ -89,5 +89,27 @@ func TestNativeGateStore_RoundTrip(t *testing.T) {
 	}
 	if err := gs.PutHold(ctx, integrations.Hold{Until: at}); err == nil {
 		t.Fatal("a hold with no scope was stored")
+	}
+}
+
+// TestNativeGateStore_EmptyScopeLeavesNoKey: PutScope with an empty scope
+// removes the key itself, not just the mapping Scopes reports (the suite sees
+// only the latter, because Scopes skips an empty row).
+func TestNativeGateStore_EmptyScopeLeavesNoKey(t *testing.T) {
+	ctx := context.Background()
+	ks := store(t)
+	gs := providerhttp.NativeGateStore(ks)
+	a := ref("alfred")
+	if err := gs.PutScope(ctx, a, "shared"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(rawKeys(t, ks)); n != 1 {
+		t.Fatalf("keys after PutScope = %d, want 1", n)
+	}
+	if err := gs.PutScope(ctx, a, ""); err != nil {
+		t.Fatal(err)
+	}
+	if raw := rawKeys(t, ks); len(raw) != 0 {
+		t.Fatalf("keys left after an empty PutScope: %v", raw)
 	}
 }

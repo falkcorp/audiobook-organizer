@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holds_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d6f3b0a-6a5c-4a43-8c3e-7d9b5b1f2e44
 // last-edited: 2026-11-11
 
@@ -246,5 +246,84 @@ func TestHolds_BootReadRetriedLazily(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(logs.String()), []byte("after an earlier failure")) {
 		t.Fatalf("the recovery must be logged: %q", logs.String())
+	}
+}
+
+// TestHolds_LateReadKeepsWhatThisProcessBuilt (N5): a store unreadable at boot
+// and read later never overwrites what this process did meanwhile. A hold
+// placed during the outage that outlasts the persisted one on the same scope
+// stays; an instance built during the outage keeps the scope it was built with
+// over a stale record, and the record is rewritten to match.
+func TestHolds_LateReadKeepsWhatThisProcessBuilt(t *testing.T) {
+	ctx := context.Background()
+	clk := newClock()
+	gs := providerhttp.NativeGateStore(store(t))
+	persistedUntil := clk.Now().Add(40 * time.Second)
+	if err := gs.PutHold(ctx, integrations.Hold{Scope: batcave.String(), Class: integrations.ClassQuota,
+		Until: persistedUntil, SetAt: clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	alfred := ref("alfred")
+	if err := gs.PutScope(ctx, alfred, "old:scope"); err != nil {
+		t.Fatal(err)
+	}
+	fs := &failingStore{GateStore: gs}
+	fs.failHolds.Store(true)
+	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = fs })
+
+	pol := providerhttp.Policy{Limits: limits(100, 100)}
+	holdOn(t, r, batcave, pol, integrations.ClassAuth) // longer than the persisted one, same scope
+	holdOn(t, r, alfred, providerhttp.Policy{Limits: limits(100, 100), Scope: "new:scope"}, integrations.ClassAuth)
+
+	fs.failHolds.Store(false)
+	clk.Advance(31 * time.Second)
+	h, ok := r.HoldFor(batcave)
+	if !ok || h.Class != integrations.ClassAuth || !h.Until.After(persistedUntil) {
+		t.Fatalf("the late read replaced a longer hold: %+v, %v (persisted until %v)", h, ok, persistedUntil)
+	}
+	h, ok = r.HoldFor(alfred)
+	if !ok || h.Scope != "new:scope" {
+		t.Fatalf("the late read replaced the scope the instance was built with: %+v, %v", h, ok)
+	}
+	if sc, err := gs.Scopes(ctx); err != nil || sc[alfred] != "new:scope" {
+		t.Fatalf("the stale record must be rewritten: %v, %v", sc, err)
+	}
+}
+
+// countingScopes counts PutScope calls.
+type countingScopes struct {
+	providerhttp.GateStore
+	puts atomic.Int64
+}
+
+func (c *countingScopes) PutScope(ctx context.Context, ref integrations.Ref, scope string) error {
+	c.puts.Add(1)
+	return c.GateStore.PutScope(ctx, ref, scope)
+}
+
+// TestScopeRecord_WrittenOnceUntilItChanges: building an instance again with
+// the scope the store already records writes nothing, and a change writes once.
+func TestScopeRecord_WrittenOnceUntilItChanges(t *testing.T) {
+	cs := &countingScopes{GateStore: providerhttp.NativeGateStore(store(t))}
+	r := newRegistry(t, newClock(), func(o *providerhttp.Options) { o.Store = cs })
+	alfred := ref("alfred")
+	custom := providerhttp.Policy{Limits: limits(100, 100), Scope: "shared:scope"}
+	for range 5 {
+		r.GateFor(alfred, custom)
+	}
+	if n := cs.puts.Load(); n != 1 {
+		t.Fatalf("PutScope called %d times for one unchanged scope, want 1", n)
+	}
+	r.GateFor(alfred, providerhttp.Policy{Limits: limits(100, 100), Scope: "other:scope"})
+	r.GateFor(alfred, providerhttp.Policy{Limits: limits(100, 100), Scope: "other:scope"})
+	if n := cs.puts.Load(); n != 2 {
+		t.Fatalf("PutScope called %d times after one change, want 2", n)
+	}
+	r.GateFor(alfred, providerhttp.Policy{Limits: limits(100, 100)}) // back to the default: the record goes
+	if n := cs.puts.Load(); n != 3 {
+		t.Fatalf("PutScope called %d times after the move to the default, want 3", n)
+	}
+	if sc, err := cs.Scopes(context.Background()); err != nil || len(sc) != 0 {
+		t.Fatalf("the default scope needs no record: %v, %v", sc, err)
 	}
 }
