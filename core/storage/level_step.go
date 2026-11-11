@@ -55,6 +55,7 @@ func LevelStep(levelOwner Owner, version, level int, after ...StepRef) Migration
 		RaisesLevel: level,
 		After:       after,
 		Up:          func(context.Context, *MigrationTx) error { return nil },
+		levelStep:   true,
 	}
 }
 
