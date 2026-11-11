@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/module/module.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e54fad2a-4a1d-444b-ab0a-75e902f993e3
 // last-edited: 2026-11-10
 
@@ -17,3 +17,7 @@ func (r *Registrar) Tasks(defs ...tasks.Definition) {}
 func (r *Registrar) DerivedIndex(name string, hooks any, build tasks.Definition) {}
 
 func (r *Registrar) Resources(kinds ...string) {}
+
+// Other takes a definition but is not a registration: only Tasks and
+// DerivedIndex register.
+func (r *Registrar) Other(def tasks.Definition) {}

@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/registration.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5baf56b2-c55e-4af1-af93-7a5c497dbcef
 // last-edited: 2026-11-10
 
@@ -26,21 +26,32 @@ import (
 // kind helper: a function or method returning tasks.Definition whose body
 // makes a kind site itself (found to a fixed point, so helpers of helpers
 // count). Every kind site must lie inside what the registration roots reach.
-// The roots are the tasks.Definition arguments of each Registrar method call
-// (Registrar.Tasks, and Registrar.DerivedIndex's build, 05-tasks §5T.2) and,
-// with ListFuncs, each list function some loaded package calls. Reachability
-// follows package-level funcs, methods and vars across packages and the
-// assignments of function-local variables. A site inside a helper that has
-// call sites is not checked itself: each of those call sites is, so a helper
-// shared by a registered and an orphan caller reports the orphan call, not
-// nothing. A helper nobody calls is checked in its own body, unless its doc
-// carries ConstructorDirective: an exported kind constructor other modules
-// call (datamigrate.DerivedBuildTask), whose call sites there are the kind
-// sites.
+// The roots are the arguments of each Registrar.Tasks call and the build
+// argument of each Registrar.DerivedIndex call (05-tasks §5T.2), and, with
+// ListFuncs, each list function some loaded package calls.
+//
+// Reachability follows what a value is built from: package-level vars, the
+// assignments of function-local variables (named results included), and,
+// for a function or method, only the results of its return statements, never
+// its whole body. So a kind built inside a reached function and discarded,
+// or kept somewhere that is not returned, is reported. Parameters, struct
+// fields, maps and channels are not followed: a kind that reaches a
+// registration only through one of them reads as unregistered.
+//
+// A helper's own body is checked against its own returns: a site that flows
+// to a return is the helper's template, checked at each of the helper's call
+// sites instead, and a site that does not (built and discarded) is reported.
+// This holds for every helper, a ConstructorDirective one included. A helper
+// nobody calls is checked in its own body, unless it carries
+// ConstructorDirective: an exported kind constructor other modules call
+// (datamigrate.DerivedBuildTask), whose call sites there are the kind sites.
+// Config.Constructors lists the functions allowed to carry the directive.
 
 // ConstructorDirective, in an exported kind helper's doc comment with a
 // reason, marks it a constructor for other modules: with no call site in the
-// loaded program its body is not a kind site. It never hides a call site.
+// loaded program, what its returns build is not a kind site. It never hides a
+// call site, nor a kind its body builds and discards. Only the functions in
+// Config.Constructors may carry it.
 const ConstructorDirective = "//tasklint:constructor"
 
 // unit is one package's non-test files and type information.
@@ -317,8 +328,10 @@ func (r *registration) eachDecl(fn func(u *unit, d ast.Decl, dk string)) {
 	}
 }
 
-// roots returns the registration roots: every tasks.Definition argument of a
-// Registrar method (a ...tasks.Definition spread included) and, with
+// roots returns the registration roots: the tasks.Definition arguments of
+// each Registrar.Tasks call (a ...tasks.Definition spread included) and of
+// each Registrar.DerivedIndex call (its build), named so that a Registrar
+// method added later registers nothing until this rule says so; and, with
 // ListFuncs, every list function some loaded package calls (a list function
 // nothing calls registers nothing).
 func (r *registration) roots() []nodeAt {
@@ -333,7 +346,7 @@ func (r *registration) roots() []nodeAt {
 			if !ok {
 				return true
 			}
-			if recv, _ := methodIn(u.info, call, r.cfg.RegistrarPath); recv == "Registrar" {
+			if recv, name := methodIn(u.info, call, r.cfg.RegistrarPath); recv == "Registrar" && (name == "Tasks" || name == "DerivedIndex") {
 				for _, a := range call.Args {
 					t := u.info.TypeOf(a)
 					if sl, ok := t.(*types.Slice); ok && call.Ellipsis.IsValid() {
@@ -372,7 +385,45 @@ func (r *registration) roots() []nodeAt {
 	return q
 }
 
-// reach returns every node the roots reach.
+// returnsOf returns what fd's return statements yield: their results, and
+// for a bare return the assignments of its named results. Returns inside a
+// function literal belong to the literal, not to fd.
+func (r *registration) returnsOf(u *unit, fd *ast.FuncDecl) []nodeAt {
+	if fd.Body == nil {
+		return nil
+	}
+	var named []types.Object
+	if fd.Type.Results != nil {
+		for _, f := range fd.Type.Results.List {
+			for _, n := range f.Names {
+				if obj := u.info.Defs[n]; obj != nil {
+					named = append(named, obj)
+				}
+			}
+		}
+	}
+	var out []nodeAt
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			if len(n.Results) == 0 {
+				for _, obj := range named {
+					out = append(out, r.locals[obj]...)
+				}
+			}
+			for _, x := range n.Results {
+				out = append(out, nodeAt{u, x})
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// reach returns every node the roots reach. A function or method declaration
+// stands for its returns (returnsOf), never its whole body.
 func (r *registration) reach(queue []nodeAt) []ast.Node {
 	seenKey := map[string]bool{}
 	seenLocal := map[types.Object]bool{}
@@ -380,6 +431,10 @@ func (r *registration) reach(queue []nodeAt) []ast.Node {
 	for len(queue) > 0 {
 		at := queue[0]
 		queue = queue[1:]
+		if fd, ok := at.n.(*ast.FuncDecl); ok {
+			queue = append(queue, r.returnsOf(at.u, fd)...)
+			continue
+		}
 		reached = append(reached, at.n)
 		ast.Inspect(at.n, func(x ast.Node) bool {
 			id, ok := x.(*ast.Ident)
@@ -405,15 +460,17 @@ func (r *registration) reach(queue []nodeAt) []ast.Node {
 	return reached
 }
 
-func (r *registration) report(reached []ast.Node) []kindFinding {
-	covered := func(p token.Pos) bool {
-		for _, n := range reached {
-			if p >= n.Pos() && p < n.End() {
-				return true
-			}
+func within(nodes []ast.Node, p token.Pos) bool {
+	for _, n := range nodes {
+		if p >= n.Pos() && p < n.End() {
+			return true
 		}
-		return false
 	}
+	return false
+}
+
+func (r *registration) report(reached []ast.Node) []kindFinding {
+	covered := func(p token.Pos) bool { return within(reached, p) }
 	why := "no Registrar call in this package"
 	if r.whole {
 		why = "no Registrar call in any loaded package"
@@ -422,6 +479,10 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 		why += " and no called list function returning []tasks.Definition"
 	}
 	var out []kindFinding
+	allowed := map[string]bool{}
+	for _, k := range r.cfg.Constructors {
+		allowed[k] = true
+	}
 	keys := make([]string, 0, len(r.constructors))
 	for k := range r.constructors {
 		keys = append(keys, k)
@@ -434,12 +495,26 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s: only an exported kind helper (a func returning tasks.Definition that builds one) is a constructor; delete the directive", ConstructorDirective, fd.Name.Name)})
 		case r.constructors[k] == "":
 			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s needs the reason: who calls it and which Registrar method takes the result", ConstructorDirective, fd.Name.Name)})
+		case !allowed[k]:
+			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s, which Config.Constructors (Options.Constructors) does not list as %q; a new constructor is a reviewed addition to that list", ConstructorDirective, fd.Name.Name, k)})
+		}
+	}
+	if r.whole {
+		for _, k := range r.cfg.Constructors {
+			if _, ok := r.constructors[k]; !ok {
+				out = append(out, kindFinding{pos: token.NoPos, msg: fmt.Sprintf("Constructors lists %s, which no loaded function carrying %s matches; delete the entry", k, ConstructorDirective)})
+			}
 		}
 	}
 	r.eachDecl(func(u *unit, d ast.Decl, dk string) {
-		valid := r.constructors[dk] != "" && r.funcs[dk] != nil && r.funcs[dk].Name.IsExported()
-		if r.helpers[dk] && (r.called[dk] || valid) {
-			return // each call site of the helper is checked instead
+		valid := r.constructors[dk] != "" && allowed[dk] && r.funcs[dk] != nil && r.funcs[dk].Name.IsExported()
+		// own: what this helper's returns reach. A site there is its
+		// template, checked at its call sites (or a constructor's, in other
+		// modules); any other site in its body is built and discarded.
+		var own []ast.Node
+		template := r.helpers[dk] && (r.called[dk] || valid)
+		if template {
+			own = r.reach(r.returnsOf(u, r.funcs[dk]))
 		}
 		ast.Inspect(d, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -447,7 +522,7 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 				return true
 			}
 			s := r.siteKey(u, call)
-			if s == "" || s == dk || covered(call.Pos()) {
+			if s == "" || s == dk || covered(call.Pos()) || (template && within(own, call.Pos())) {
 				return true
 			}
 			var what string

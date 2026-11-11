@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/unregistered_kind/unregistered.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 705d94f0-04f3-4c33-b047-d377eaebfebe
 // last-edited: 2026-11-10
 
@@ -59,7 +59,46 @@ func neverCalled() tasks.Definition {
 //
 //tasklint:constructor modules pass the result to Registrar.DerivedIndex
 func NewDerived(name string) tasks.Definition {
+	_ = tasks.Task("unreg.discarded-in-constructor", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in NewDerived is not registered`
 	return tasks.Task(tasks.Kind(name), tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common})
+}
+
+// Unlisted carries the directive with a reason, but the fixture's
+// Constructors list does not name it: the directive is refused and its body
+// is checked as any uncalled helper's.
+//
+//tasklint:constructor modules call it
+func Unlisted() tasks.Definition { // want `//tasklint:constructor on Unlisted, which Config.Constructors`
+	return tasks.Task("unreg.unlisted", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in Unlisted is not registered`
+}
+
+// withDiscard is a called helper that also builds a kind it throws away.
+func withDiscard(kind tasks.Kind) tasks.Definition {
+	_ = build("unreg.discarded-in-helper") // want `definition built by build in withDiscard is not registered`
+	return build(kind)
+}
+
+// Through a reached function, only what is returned counts.
+func reachedList() []tasks.Definition {
+	kept := []tasks.Definition{build("unreg.kept")}
+	dropped := build("unreg.dropped") // want `definition built by build in reachedList is not registered`
+	_ = dropped
+	return kept
+}
+
+// closures returns a kind; a closure's own return is not closures' return.
+func closures() tasks.Definition {
+	f := func() tasks.Definition {
+		return build("unreg.closure-only") // want `definition built by build in closures is not registered`
+	}
+	_ = f
+	return build("unreg.closure-outer")
+}
+
+// named returns through a named result and a bare return.
+func named() (d tasks.Definition) {
+	d = build("unreg.named")
+	return
 }
 
 // NoReason is an exported constructor whose directive gives no reason.
@@ -82,5 +121,9 @@ func Register(r *module.Registrar) {
 	r.Tasks(listed, viaHelper(), tasks.Task("unreg.inline", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}),
 		build("unreg.built"), rebuild("unreg.rebuilt"))
 	r.DerivedIndex("hnsw", nil, build("unreg.derived"))
+	r.Tasks(withDiscard("unreg.with-discard"))
+	r.Tasks(reachedList()...)
+	r.Tasks(named(), closures())
+	r.Other(build("unreg.other")) // want `definition built by build in Register is not registered`
 	r.Resources("unreg.resource")
 }
