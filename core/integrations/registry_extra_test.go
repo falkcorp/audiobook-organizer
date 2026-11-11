@@ -1,5 +1,5 @@
 // file: core/integrations/registry_extra_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0001123d-da59-42c5-aa6c-5ea8c12c21e2
 // last-edited: 2026-11-11
 
@@ -146,5 +146,46 @@ func TestRegistry_OperatorValuesCoerced(t *testing.T) {
 	e.out.State = integrations.GateState{Hold: &integrations.Hold{Scope: "requests", Class: integrations.ClassRateLimited}}
 	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded || h.Hold == nil {
 		t.Errorf("Health under a hold = %+v", h)
+	}
+}
+
+// TestRegistry_StoredSecretsFollowTheirOrigin (SEC3-4): a row whose
+// SecretsOrigin names another destination than the row's own, as a row
+// written outside the Registry's Put can, has its stored secrets withheld:
+// the credential is neither served nor sent, and the instance is not OK.
+func TestRegistry_StoredSecretsFollowTheirOrigin(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	mustPut(t, admin(), e.registry(t, nil, nil), signal("http://192.0.2.20/"), cred("alfred-1"))
+	row, ok := e.stored(t, signalRef)
+	if !ok || row.SecretsOrigin != "http://192.0.2.20:80" {
+		t.Fatalf("the created row = %+v", row)
+	}
+	row.SecretsOrigin = "http://192.0.2.99:80"
+	b := e.ks.NewBatch()
+	defer func() { _ = b.Close() }()
+	if _, err := integrations.NativeInstanceStore(e.ks).Put(ctx, b, row); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+
+	r := e.registry(t, nil, nil)
+	inst, release := lease(t, r, signalRef)
+	defer release()
+	if _, err := inst.Env.Secrets.Secret(ctx, "password"); err == nil {
+		t.Error("a stored secret written for another destination was served")
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status == integrations.HealthOK {
+		t.Errorf("Health with its stored secret withheld = %+v", h)
+	}
+	for _, s := range e.out.Sent() {
+		if s.Credential == "alfred-1" {
+			t.Fatalf("the withheld secret was sent: %+v", s)
+		}
+	}
+	if e.secret(t, signalRef, "password") != "alfred-1" {
+		t.Error("withholding the secret deleted it")
 	}
 }
