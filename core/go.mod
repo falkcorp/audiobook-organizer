@@ -1,7 +1,7 @@
 // file: core/go.mod
-// version: 1.0.5
+// version: 1.0.7
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 module github.com/falkcorp/mediacore
 
