@@ -88,6 +88,7 @@ type rxFx struct {
 	ctx    context.Context
 	vfs    vfs.FS
 	fs     storage.FS
+	secret bool // the c/secrets/ owner is registered (a real keyring)
 	db     *storage.DB
 	dbPath string
 	state  string
@@ -122,6 +123,14 @@ func newRxFx(t *testing.T, keys journal.Keys) *rxFx {
 	return fx
 }
 
+func (fx *rxFx) owners() []storage.OwnerSpec {
+	o := rxOwners()
+	if fx.secret {
+		o = append(o, secretsOwnerSpec())
+	}
+	return o
+}
+
 func rxOwners() []storage.OwnerSpec {
 	return []storage.OwnerSpec{
 		{Owner: journal.Owner, Spec: journal.StorageSpec(), Enabled: true},
@@ -134,7 +143,7 @@ func rxOwners() []storage.OwnerSpec {
 // openDB boots the store at path the way P2, P4a and P4b do.
 func (fx *rxFx) openDB(path string) *storage.DB {
 	fx.t.Helper()
-	o, err := storage.Open(fx.ctx, storage.OpenOptions{Path: path, Owners: rxOwners(), Build: "batcomputer-1", FreeSpaceMargin: 1, FS: fx.fs})
+	o, err := storage.Open(fx.ctx, storage.OpenOptions{Path: path, Owners: fx.owners(), Build: "batcomputer-1", FreeSpaceMargin: 1, FS: fx.fs})
 	if err != nil {
 		fx.t.Fatalf("open %s: %v", path, err)
 	}
@@ -509,5 +518,57 @@ func (fx *rxFx) setLocation(mut func(*journal.Location)) {
 	mut(&loc)
 	if err := journal.WriteLocation(fx.state, loc); err != nil {
 		fx.t.Fatal(err)
+	}
+}
+
+// newRxFxSecrets is newRxFx with the keyring the secrets store derives the
+// journal's keys from (P4b's openSecrets over c/secrets/), instead of the
+// fixture's.
+func newRxFxSecrets(t *testing.T) *rxFx {
+	t.Helper()
+	mem := vfs.NewMem()
+	fx := &rxFx{
+		t: t, ctx: context.Background(), vfs: mem, fs: storage.FSOf(mem), dbPath: "/gotham/main.pebble", secret: true,
+		state: t.TempDir(), backup: filepath.Join(t.TempDir(), "backups"),
+		clock: &rxClock{t: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)},
+	}
+	if err := os.MkdirAll(fx.backup, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db := fx.openDB(fx.dbPath)
+	fx.keys = openTestSecrets(t, db, fx.state, nil).store
+	fx.attach(db, fx.dbPath)
+	return fx
+}
+
+// editJournalLine rewrites line idx of the journal file (0 is the header),
+// replacing from with to in its text: a hand edit the MAC must catch.
+func editJournalLine(t *testing.T, path string, idx int, from, to string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	if idx >= len(lines) || !strings.Contains(lines[idx], from) {
+		t.Fatalf("line %d of the journal does not contain %q: %q", idx, from, lines)
+	}
+	lines[idx] = strings.Replace(lines[idx], from, to, 1)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// dropJournalLine deletes line idx of the journal file.
+func dropJournalLine(t *testing.T, path string, idx int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	lines = slices.Delete(lines, idx, idx+1)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
