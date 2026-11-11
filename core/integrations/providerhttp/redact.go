@@ -7,6 +7,7 @@ package providerhttp
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -31,12 +32,7 @@ func secretNames(extra []string) []string {
 
 func isSecretName(name string, names []string) bool {
 	name = strings.ToLower(name)
-	for _, n := range names {
-		if name == n {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(names, name)
 }
 
 // redactURL removes every credential from raw: userinfo, and the value of each

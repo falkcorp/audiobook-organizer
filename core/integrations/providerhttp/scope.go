@@ -8,7 +8,9 @@ package providerhttp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sync"
 	"time"
 	_ "time/tzdata" // quota zones are configuration: a container image may carry no zone database
@@ -153,12 +155,8 @@ func MergeLimits(base integrations.Limits, over *integrations.Limits) integratio
 	}
 	if len(o.Holds.Durations) > 0 {
 		merged := map[integrations.Class]time.Duration{}
-		for k, v := range base.Holds.Durations {
-			merged[k] = v
-		}
-		for k, v := range o.Holds.Durations {
-			merged[k] = v
-		}
+		maps.Copy(merged, base.Holds.Durations)
+		maps.Copy(merged, o.Holds.Durations)
 		base.Holds.Durations = merged
 	}
 	base.Holds.Persist = base.Holds.Persist || o.Holds.Persist
@@ -168,13 +166,7 @@ func MergeLimits(base integrations.Limits, over *integrations.Limits) integratio
 // counterFor is the counter name's state, nil when the limits do not declare
 // the name.
 func (s *scopeState) counterFor(name string, d *integrations.DailyLimits) *counter {
-	declared := false
-	for _, c := range d.Counters {
-		if c == name {
-			declared = true
-			break
-		}
-	}
+	declared := slices.Contains(d.Counters, name)
 	if !declared {
 		return nil
 	}

@@ -60,7 +60,10 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 		if err := s.PutHold(ctx, want); err != nil {
 			t.Fatal(err)
 		}
-		hs, _ = s.Holds(ctx)
+		hs, err = s.Holds(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(hs) != 1 || !sameHold(hs[0], want) {
 			t.Fatalf("after overwrite Holds = %+v, want %+v", hs, want)
 		}
@@ -77,7 +80,10 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 		if err := s.PutHold(ctx, integrations.Hold{Scope: "alfred"}); err != nil {
 			t.Fatal(err)
 		}
-		hs, _ := s.Holds(ctx)
+		hs, err := s.Holds(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(hs) != 1 || hs[0].Scope != "barbara" {
 			t.Fatalf("Holds = %+v, want only barbara", hs)
 		}
@@ -135,8 +141,8 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 				t.Errorf("Quota(%s,%s) = %q %d, %v; want 2039-04-01 %d", c.scope, c.counter, day, used, err, c.used)
 			}
 		}
-		if _, used, _ := s.Quota(ctx, "gotham", "other"); used != 0 {
-			t.Errorf("an unwritten counter read %d", used)
+		if _, used, err := s.Quota(ctx, "gotham", "other"); err != nil || used != 0 {
+			t.Errorf("an unwritten counter read %d, %v", used, err)
 		}
 	})
 
@@ -163,8 +169,8 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 				t.Fatal(err)
 			}
 		}
-		if _, used, _ := s.Quota(ctx, "gotham", "requests"); used != 3 {
-			t.Fatalf("used = %d, want the last write, 3", used)
+		if _, used, err := s.Quota(ctx, "gotham", "requests"); err != nil || used != 3 {
+			t.Fatalf("used = %d, %v, want the last write, 3", used, err)
 		}
 	})
 }

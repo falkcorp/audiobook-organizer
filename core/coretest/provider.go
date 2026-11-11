@@ -270,7 +270,9 @@ func ProviderHTTP(t testing.TB, mut ...func(*providerhttp.Options)) *ProviderHTT
 		h := k.handler
 		k.mu.Unlock()
 		if h == nil {
-			_, _ = w.Write([]byte("{}"))
+			if _, err := w.Write([]byte("{}")); err != nil {
+				t.Errorf("coretest.ProviderHTTP: writing the default answer: %v", err)
+			}
 			return
 		}
 		h(w, r)
