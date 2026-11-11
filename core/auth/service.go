@@ -353,9 +353,13 @@ func ref(kind, id string) entity.Ref { return entity.Ref{Module: auditModule, Ki
 // storage.ErrConflict (a concurrent writer of a record stage read), up to
 // conflictRetries times. stage re-reads everything it decides on.
 func (s *Service) commitRetrying(ctx context.Context, stage func(b *storage.Batch) error) error {
-	return storage.RetryOnConflict(ctx, conflictRetries, func(ctx context.Context) error {
+	return storage.RetryOnConflict(ctx, conflictRetries, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
-		defer func() { _ = b.Close() }()
+		defer func() {
+			if cerr := b.Close(); cerr != nil && err == nil {
+				err = cerr
+			}
+		}()
 		if err := stage(b); err != nil {
 			return err
 		}

@@ -17,7 +17,7 @@ func TestThrottle_TablesAreCappedOldestFirst(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	th.SetClock(func() time.Time { return now })
-	for i := 0; i < DefaultThrottleKeys+50; i++ {
+	for i := range DefaultThrottleKeys + 50 {
 		now = now.Add(time.Millisecond)
 		th.RecordFailure(fmt.Sprintf("acct-%d", i), fmt.Sprintf("192.0.2.%d-%d", i/250, i%250))
 	}
@@ -37,7 +37,7 @@ func TestThrottle_TablesAreCappedOldestFirst(t *testing.T) {
 // An existing key at the cap is bumped, never evicted for itself.
 func TestThrottle_BumpingAnExistingKeyAtTheCapEvictsNothing(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
-	for i := 0; i < DefaultThrottleKeys; i++ {
+	for i := range DefaultThrottleKeys {
 		th.RecordFailure("", fmt.Sprintf("k-%d", i))
 	}
 	th.RecordFailure("", "k-5")
@@ -55,7 +55,7 @@ func TestThrottle_ExpiredCountersAreSwept(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	th.SetClock(func() time.Time { return now })
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		th.RecordFailure(fmt.Sprintf("a-%d", i), fmt.Sprintf("old-%d", i))
 	}
 	now = now.Add(DefaultThrottleWindow + time.Second)
@@ -71,7 +71,7 @@ func TestThrottle_ExpiredCountersAreSwept(t *testing.T) {
 // source's budget; they just cannot be taken back by a success.
 func TestThrottle_UntrackedAccountsStillCount(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
-	for i := 0; i < maxAccountsPerSource+10; i++ {
+	for i := range maxAccountsPerSource + 10 {
 		th.RecordFailure(fmt.Sprintf("acct-%d", i), "192.0.2.9")
 	}
 	th.mu.Lock()
@@ -95,10 +95,10 @@ func TestThrottle_UntrackedAccountsStillCount(t *testing.T) {
 func TestThrottle_RefusedAccountCounterSurvivesNameRotation(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
 	th.SetSleep(func(time.Duration) {})
-	for i := 0; i < DefaultSoftThreshold; i++ {
+	for i := range DefaultSoftThreshold {
 		th.RecordFailure("batman", fmt.Sprintf("192.0.2.%d", 10+i))
 	}
-	for i := 0; i < 2*DefaultThrottleKeys; i++ {
+	for i := range 2 * DefaultThrottleKeys {
 		th.RecordFailure(fmt.Sprintf("n-%d", i), fmt.Sprintf("rot-%d", i))
 	}
 	if got := th.AccountFailures("batman"); got != DefaultSoftThreshold {
@@ -110,8 +110,8 @@ func TestThrottle_RefusedAccountCounterSurvivesNameRotation(t *testing.T) {
 func TestThrottle_WhenEveryCounterIsRefusedTheTableStaysBounded(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
 	th.SetSleep(func(time.Duration) {})
-	for i := 0; i < DefaultThrottleKeys+50; i++ {
-		for j := 0; j < DefaultSoftThreshold; j++ {
+	for i := range DefaultThrottleKeys + 50 {
+		for range DefaultSoftThreshold {
 			th.RecordFailure(fmt.Sprintf("hot-%d", i), "")
 		}
 	}
@@ -129,10 +129,10 @@ func TestThrottle_WhenEveryCounterIsRefusedTheTableStaysBounded(t *testing.T) {
 // The same holds for a source that has spent its budget.
 func TestThrottle_SpentSourceSurvivesAddressRotation(t *testing.T) {
 	th := NewThrottle(ThrottleLimits{}, nil, nil)
-	for i := 0; i < DefaultMaxFailuresPerSource; i++ {
+	for range DefaultMaxFailuresPerSource {
 		th.RecordFailure("", "192.0.2.1")
 	}
-	for i := 0; i < 2*DefaultThrottleKeys; i++ {
+	for i := range 2 * DefaultThrottleKeys {
 		th.RecordFailure("", fmt.Sprintf("rot-%d", i))
 	}
 	if !th.SourceBlocked("192.0.2.1") {
@@ -148,10 +148,10 @@ func TestThrottle_ClearRefilesASourceThatFellBelowThePinThreshold(t *testing.T) 
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	th.SetClock(func() time.Time { return now })
 	const src = "192.0.2.77"
-	for i := 0; i < DefaultMaxFailuresPerSource-DefaultSoftThreshold; i++ {
+	for range DefaultMaxFailuresPerSource - DefaultSoftThreshold {
 		th.RecordFailure("other", src)
 	}
-	for i := 0; i < DefaultSoftThreshold; i++ {
+	for range DefaultSoftThreshold {
 		th.RecordFailure("mine", src)
 	}
 	if !th.SourceBlocked(src) {
@@ -161,7 +161,7 @@ func TestThrottle_ClearRefilesASourceThatFellBelowThePinThreshold(t *testing.T) 
 	if th.SourceBlocked(src) {
 		t.Fatal("the source is back under its budget")
 	}
-	for i := 0; i < DefaultThrottleKeys+5; i++ {
+	for i := range DefaultThrottleKeys + 5 {
 		now = now.Add(time.Millisecond)
 		th.RecordFailure("", fmt.Sprintf("rot-%d", i))
 	}

@@ -209,15 +209,13 @@ func TestBootstrapLimiter_ConcurrentAttemptsHonourTheCap(t *testing.T) {
 	admitted := 0
 	var wg sync.WaitGroup
 	for range 40 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if l.Allow("k") {
 				mu.Lock()
 				admitted++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if admitted != BootstrapMaxAttempts {
