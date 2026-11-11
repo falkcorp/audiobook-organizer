@@ -1,7 +1,7 @@
 // file: core/auth/users_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d00694b-a22c-438a-82d5-31749fe5b244
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth_test
 
@@ -606,5 +606,60 @@ func TestLogin_IsAudited(t *testing.T) {
 	}
 	if emitted[0].Target.ID != string(u.ID) || emitted[1].Target.ID != "" {
 		t.Fatalf("targets %q, %q: the account only when it exists", emitted[0].Target.ID, emitted[1].Target.ID)
+	}
+}
+
+// auditDetail is the details of the newest recorded event of action naming
+// target, failing the test when there is none.
+func (f *fx) auditDetail(action string, target auth.UserID) map[string]any {
+	f.t.Helper()
+	f.audit.mu.Lock()
+	defer f.audit.mu.Unlock()
+	for _, e := range slices.Backward(f.audit.recorded) {
+		if e.Action == action && e.Target.ID == string(target) {
+			return e.Details
+		}
+	}
+	f.t.Fatalf("no %s event for %s recorded", action, target)
+	return nil
+}
+
+// A disable deletes the links its user minted; the audit record counts them,
+// as a merge and sign-out-everywhere do. An enable deletes none and says
+// nothing of them.
+func TestSetStatus_AuditCountsTheLinksItDeleted(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+	gordon := f.user("jim-gordon", roleCommissioner)
+	bullock := f.user("harvey-bullock", "gotham.detective")
+	montoya := f.user("renee-montoya", "gotham.detective")
+	f.mintTemp(f.session(gordon), bullock.ID, false)
+	f.mintTemp(f.session(gordon), montoya.ID, true)
+	f.mintTemp(f.session(bruce), bullock.ID, false) // another creator's: stays
+
+	if err := f.svc.SetStatus(ctx, f.session(bruce), gordon.ID, auth.StatusDisabled); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if got := f.auditDetail("core.user.disable", gordon.ID)["links_deleted"]; got != 2 {
+		t.Fatalf("links_deleted = %v, want 2", got)
+	}
+	if n := f.linksCreatedBy(bruce.ID); n != 1 {
+		t.Fatalf("%d of the other creator's links left, want 1", n)
+	}
+
+	// A user with no links records zero, not a missing key.
+	if err := f.svc.SetStatus(ctx, f.session(bruce), montoya.ID, auth.StatusDisabled); err != nil {
+		t.Fatalf("disable a user with no links: %v", err)
+	}
+	if got, ok := f.auditDetail("core.user.disable", montoya.ID)["links_deleted"]; !ok || got != 0 {
+		t.Fatalf("links_deleted = %v (present %v), want 0", got, ok)
+	}
+
+	if err := f.svc.SetStatus(ctx, f.session(bruce), gordon.ID, auth.StatusActive); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if d := f.auditDetail("core.user.enable", gordon.ID); len(d) != 0 {
+		t.Fatalf("an enable recorded details %v", d)
 	}
 }

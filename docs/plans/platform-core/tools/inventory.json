@@ -1723,7 +1723,8 @@
   "files": [
    "core/integrations/providerhttp/",
    "core/integrations/ai/",
-   "core/health/diagnostics/"
+   "core/health/diagnostics/",
+   "core/archtest/tasklint/core_test.go"
   ],
   "spec": "05-tasks §5T.8.2 'Three core kinds whose owners flip after F5'; 03 §3.8 'The three late-owner kinds'; 04 §8.1 F2",
   "notes": "Tier: three TaskSpecs over one-method interfaces. The interim interfaces' methods and both TaskSpecs are as 05-tasks §5T.8.2 states them (05-ai, 05-metadata, 05-health match); the batch-poll schedule key is F2-04's. 04 keys: F2 create mediacore/integrations/providerhttp (minimal); F2 create mediacore/integrations/ai (minimal); F2 create mediacore/health/diagnostics (minimal)."

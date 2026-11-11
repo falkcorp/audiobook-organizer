@@ -1,5 +1,5 @@
 // file: core/auth/templogin_creator_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d2a7c3e-9b14-4f60-8e21-3c7a9d0b6f45
 // last-edited: 2026-11-11
 
@@ -297,4 +297,105 @@ func TestTempLogin_CreatorDisabledThenReenabledStaysDead(t *testing.T) {
 	must(f.svc.SetRoles(ctx, f.session(bruce), alfred.ID, []rbac.RoleName{"gotham.detective"}))
 	_, err = f.svc.ConsumeTempLogin(ctx, fresh, "", from("192.0.2.80"))
 	wantErr(t, "a link of a demoted creator", err, auth.ErrInvalidCredentials)
+}
+
+// consumeAfter consumes a plain link for target while change commits behind
+// the consume: change runs once, after the consume has read its user and
+// staged its session, and before it commits, which is the window a guard on
+// the user's row closes.
+func (f *fx) consumeAfter(link string, change func()) (*auth.IssuedSession, error) {
+	f.t.Helper()
+	ran := false
+	f.audit.mu.Lock()
+	f.audit.hold = func(e audit.Event) {
+		if e.Action == "core.templogin.consume" && e.Outcome == audit.Success && !ran {
+			ran = true
+			change()
+		}
+	}
+	f.audit.mu.Unlock()
+	defer func() {
+		f.audit.mu.Lock()
+		f.audit.hold = nil
+		f.audit.mu.Unlock()
+	}()
+	sess, err := f.svc.ConsumeTempLogin(context.Background(), link, "", from("192.0.2.74"))
+	if !ran {
+		f.t.Fatal("the consume never reached its commit")
+	}
+	return sess, err
+}
+
+// A plain temp-login link writes no user row, so a promotion that commits
+// between the consume's read and its commit used to go unseen: the dominance
+// check ran on the old roles and the link opened a session for an
+// administrator its creator could never have minted a link for. The consume
+// guards the target's row, the commit conflicts and the retry re-runs every
+// check on the new roles.
+func TestTempLogin_PlainConsumeGuardsTheTarget(t *testing.T) {
+	f := newFx(t)
+	gordon := f.user("jim-gordon", roleCommissioner)
+	tim := f.user("tim-drake", "gotham.detective")
+	link := f.mintTemp(f.session(gordon), tim.ID, false)
+
+	sess, err := f.consumeAfter(link, func() { f.setRoles(tim.ID, rbac.RoleAdmin) })
+	if !errors.Is(err, auth.ErrInvalidCredentials) || sess != nil {
+		t.Fatalf("a link whose target was promoted mid-consume: session %v, err %v; want %v", sess, err, auth.ErrInvalidCredentials)
+	}
+	if e := f.lastConsume(); e.Outcome != audit.Denied || e.Reason != "creator_changed" {
+		t.Fatalf("audited %s/%q, want denied/creator_changed", e.Outcome, e.Reason)
+	}
+	if got := f.reload(tim.ID).Roles; !slices.Equal(got, []rbac.RoleName{rbac.RoleAdmin}) {
+		t.Fatalf("roles %v: the promotion was lost", got)
+	}
+}
+
+// The guard conflicts the commit and nothing more: a concurrent write that
+// leaves the target eligible retries into a session, not into a refusal.
+func TestTempLogin_PlainConsumeRetriesPastAHarmlessWrite(t *testing.T) {
+	f := newFx(t)
+	gordon := f.user("jim-gordon", roleCommissioner)
+	tim := f.user("tim-drake", "gotham.detective")
+	link := f.mintTemp(f.session(gordon), tim.ID, false)
+
+	sess, err := f.consumeAfter(link, func() { f.setRoles(tim.ID, "gotham.detective") })
+	if err != nil || sess == nil {
+		t.Fatalf("a harmless concurrent write refused the link: session %v, err %v", sess, err)
+	}
+	if got := f.reload(tim.ID); got.Version != tim.Version+1 {
+		t.Fatalf("target version %d, want the concurrent write's %d", got.Version, tim.Version+1)
+	}
+}
+
+// With core.auth.owner.required off, a restriction-lifting link could only be
+// refused at consume (the owner gate it was minted under is gone), so the
+// mint refuses it, before it changes anything. An actor with no owner
+// assurance is unaffected, and so is an owner-assured actor while the gate
+// holds.
+func TestResetLink_OwnerAssuredMintNeedsTheGate(t *testing.T) {
+	f := newFx(t)
+	gordon := f.user("jim-gordon", roleCommissioner)
+	lucius := f.user("lucius-fox", "gotham.detective")
+	owner := f.session(gordon)
+	owner.Assurance |= auth.AssuranceOwner
+
+	notRequired := false
+	f.setSettings(auth.Settings{OwnerRequired: &notRequired})
+	before := f.reload(lucius.ID)
+	_, err := f.svc.MintResetLink(context.Background(), owner, lucius.ID)
+	wantErr(t, "an owner-assured mint with the gate off", err, auth.ErrDenied)
+	if after := f.reload(lucius.ID); after.Version != before.Version || after.CredentialEpoch != before.CredentialEpoch {
+		t.Fatalf("the refused mint changed the target: %+v -> %+v", before, after)
+	}
+	if n := f.linksCreatedBy(gordon.ID); n != 0 {
+		t.Fatalf("%d links stored by the refused mint", n)
+	}
+	// A plain temp-login link carries no restriction lift: not refused.
+	f.mintTemp(owner, lucius.ID, false)
+	// And a reset link from an actor without owner assurance still mints.
+	f.mintTemp(f.session(gordon), lucius.ID, true)
+
+	required := true
+	f.setSettings(auth.Settings{OwnerRequired: &required})
+	f.mintTemp(owner, lucius.ID, true)
 }

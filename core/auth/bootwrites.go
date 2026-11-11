@@ -1,5 +1,5 @@
 // file: core/auth/bootwrites.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c4e0a7b3-5d18-4f92-8a6c-1b9d3e7f2054
 // last-edited: 2026-11-11
 
@@ -41,11 +41,14 @@ func defaultReadOnlyScopes() []rbac.Permission { return []rbac.Permission{"core:
 // BootWrites are auth's every-boot writes, run by the kernel in P4d step 4
 // after PostRestore (DATA3-18): seed the _system user, and
 //
-//   - when core.auth.bootstrap.enabled (default true) and a state filesystem
-//     is wired, replace any stored bootstrap token with a fresh one (ten
-//     minutes, DefaultBootstrapTokenTTL) and write it, mode 0600, to the
-//     bootstrap token file (label auth.bootstrap_token); the log names the
-//     file and the expiry, never the value; with it disabled, delete every
+//   - when core.auth.bootstrap.enabled (default true), delete every stored
+//     bootstrap token of a previous boot, so a stale token never outlives a
+//     restart; and, when a state filesystem is wired, mint a fresh one (ten
+//     minutes, DefaultBootstrapTokenTTL) in the same batch and write it, mode
+//     0600, to the bootstrap token file (label auth.bootstrap_token; with no
+//     state filesystem nothing is minted, since nothing could deliver it);
+//     the log names the file and the expiry, never the value; with it
+//     disabled, delete every
 //     stored bootstrap token and the file (a token minted while it was on
 //     must not outlive the switch), whether or not a state filesystem is
 //     wired, and RedeemBootstrap and a token-bearing Setup refuse;
@@ -98,8 +101,14 @@ func stageSystemUser(ctx context.Context, d RestoreDeps, b *storage.Batch) error
 }
 
 // bootstrapToken replaces the stored bootstrap token and writes its file.
+// Without a state filesystem nothing could deliver a new token, but a token
+// stored by an earlier boot that had one is still redeemable, so it is
+// deleted all the same.
 func bootstrapToken(ctx context.Context, d RestoreDeps) error {
 	if d.StateFiles == nil {
+		if err := deleteStoredBootstrapTokens(ctx, d); err != nil {
+			return err
+		}
 		d.log().Info("auth: no state filesystem; the bootstrap token is not minted")
 		return nil
 	}
@@ -142,13 +151,19 @@ func stageDeleteBootstrapTokens(ctx context.Context, d RestoreDeps, b *storage.B
 	return nil
 }
 
+// deleteStoredBootstrapTokens deletes every stored bootstrap token in one
+// batch.
+func deleteStoredBootstrapTokens(ctx context.Context, d RestoreDeps) error {
+	return d.commit(ctx, func(b *storage.Batch) error { return stageDeleteBootstrapTokens(ctx, d, b) })
+}
+
 // retireBootstrapToken is BootWrites' answer to core.auth.bootstrap.enabled
 // = false: the stored tokens and the token file go, so a token minted while
 // the switch was on cannot be redeemed after it was turned off. The store
 // deletion needs no state filesystem; the file removal needs one and is best
 // effort (a leftover file names a token that no longer exists).
 func retireBootstrapToken(ctx context.Context, d RestoreDeps) error {
-	if err := d.commit(ctx, func(b *storage.Batch) error { return stageDeleteBootstrapTokens(ctx, d, b) }); err != nil {
+	if err := deleteStoredBootstrapTokens(ctx, d); err != nil {
 		return err
 	}
 	if d.StateFiles == nil {

@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-11
 
@@ -383,7 +383,9 @@ func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor
 // and an invite is refused for as long as its creator is disabled and for
 // good once the re-enable's own bump has moved the epoch past it. Disabling
 // the last active core:admin holder is refused (ErrLastAdmin). Setting the
-// status a user already has writes nothing.
+// status a user already has writes nothing. A disable's audit record carries
+// links_deleted, how many links it deleted, as a merge and
+// sign-out-everywhere do.
 func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st UserStatus) error {
 	if st != StatusActive && st != StatusDisabled {
 		return fmt.Errorf("%w: status %q is not settable (active or disabled)", ErrBadInput, st)
@@ -422,15 +424,18 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 		}
 		subject := ref(refKindUser, string(id))
 		action := actionUserEnable
+		var details map[string]any
 		if st == StatusDisabled {
 			action = actionUserDisable
-			if _, err := s.deleteCreatedLinks(ctx, b, id); err != nil {
+			links, err := s.deleteCreatedLinks(ctx, b, id)
+			if err != nil {
 				return err
 			}
+			details = map[string]any{"links_deleted": links}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
-		return s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject})
+		return s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details})
 	})
 }
 
