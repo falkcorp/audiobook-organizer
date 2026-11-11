@@ -1,5 +1,5 @@
 // file: core/auth/restore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f3a9c52-0e6d-4b81-a4c7-d2158e90b6f3
 // last-edited: 2026-11-11
 
@@ -498,5 +498,133 @@ func TestRestrictedLastAdmin_SSORefused(t *testing.T) {
 	}
 	if _, err := auth.RestrictLastAdmin(ctx, f.restoreDeps(nil, nil), "u-ghost"); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("an unknown user: %v", err)
+	}
+}
+
+// bumpEpoch raises u's credential epoch to epoch in f's store, as a sign-out
+// everywhere or a password change after the archive did.
+func (f *fx) bumpEpoch(id auth.UserID, epoch int64) {
+	f.t.Helper()
+	f.edit(f.reload(id), func(u *auth.User) { u.CredentialEpoch = epoch })
+}
+
+// TestPostRestore_EpochBumpedAfterBackupSurvives: a user whose credentials
+// were killed after the archive (the pre-swap epoch is higher) keeps that
+// epoch through a staged restore, so a credential minted at an epoch the
+// restored row would otherwise reach again stays refused; the raise is
+// journaled, and a user who is only behind keeps the restored epoch.
+func TestPostRestore_EpochBumpedAfterBackupSurvives(t *testing.T) {
+	live, prev := newFx(t), newFx(t)
+	for _, f := range []*fx{live, prev} {
+		f.user("dick-grayson", "gotham.detective")
+		f.user("tim-drake", "gotham.detective")
+	}
+	dick := live.reload("u-dick-grayson")
+	old := dick.CredentialEpoch
+	prev.bumpEpoch("u-dick-grayson", old+4)
+	live.bumpEpoch("u-tim-drake", old+3)
+	prev.bumpEpoch("u-tim-drake", old+1)
+	live.jrnl.lines = nil
+
+	live.mustPostRestore(covered(), prev.st)
+
+	got := live.reload(dick.ID)
+	if got.CredentialEpoch != old+4+1 {
+		t.Fatalf("epoch %d, want the pre-swap %d plus the restore's bump", got.CredentialEpoch, old+4)
+	}
+	ctx := context.Background()
+	// A credential minted at the epoch the restored row alone would reach.
+	_, err := live.svc.PrincipalFor(ctx, got, auth.MethodSession, nil, old+1)
+	wantErr(t, "a credential killed before the restore", err, auth.ErrStaleEpoch)
+	if got := live.reload("u-tim-drake").CredentialEpoch; got != old+3+1 {
+		t.Fatalf("a user ahead of the pre-swap store has epoch %d, want %d", got, old+3+1)
+	}
+	var bumped int
+	for _, l := range live.jrnl.lines {
+		if l.Kind == journal.CredentialEpochBumped && l.Subject.ID == string(dick.ID) && l.Epoch == old+4 {
+			bumped++
+		}
+	}
+	if bumped != 1 {
+		t.Fatalf("%d epoch lines for the raised user: %+v", bumped, live.jrnl.lines)
+	}
+}
+
+// TestPostRestore_RestrictionFlagsSurvive: SignInRestricted and
+// PasswordResetRequired set after the archive stay set; a user who is not
+// restricted pre-swap is not restricted by the carry.
+func TestPostRestore_RestrictionFlagsSurvive(t *testing.T) {
+	live, prev := newFx(t), newFx(t)
+	for _, f := range []*fx{live, prev} {
+		f.user("dick-grayson", "gotham.detective")
+		f.user("tim-drake", "gotham.detective")
+		f.user("jason-todd", "gotham.detective")
+	}
+	prev.edit(prev.reload("u-dick-grayson"), func(u *auth.User) { u.SignInRestricted = true })
+	prev.edit(prev.reload("u-tim-drake"), func(u *auth.User) { u.PasswordResetRequired = true })
+
+	counts := live.mustPostRestore(covered(), prev.st)
+
+	if u := live.reload("u-dick-grayson"); !u.SignInRestricted || u.PasswordResetRequired {
+		t.Fatalf("dick: %+v", u)
+	}
+	if u := live.reload("u-tim-drake"); u.SignInRestricted || !u.PasswordResetRequired {
+		t.Fatalf("tim: %+v", u)
+	}
+	if u := live.reload("u-jason-todd"); u.SignInRestricted || u.PasswordResetRequired {
+		t.Fatalf("jason was restricted by the carry: %+v", u)
+	}
+	if counts[auth.CountUsersRestricted] != 1 {
+		t.Fatalf("counts %v", counts)
+	}
+	_, err := live.svc.PrincipalFor(context.Background(), live.reload("u-dick-grayson"), auth.MethodSession, nil, live.reload("u-dick-grayson").CredentialEpoch)
+	if err == nil {
+		t.Fatal("a sign-in-restricted user got a principal")
+	}
+}
+
+// TestPostRestore_KeyRevokedPreSwapStaysRevoked: a key revoked in the
+// pre-swap store and active in the archive is revoked afterwards, with no
+// journal entry for it, and an admin cannot re-enable it.
+func TestPostRestore_KeyRevokedPreSwapStaysRevoked(t *testing.T) {
+	live, prev := newFx(t), newFx(t)
+	live.user("dick-grayson", "gotham.detective")
+	prev.user("dick-grayson", "gotham.detective")
+	importKey(t, live, "key-redbird", "u-dick-grayson", auth.KeyActive, "gotham:patrol")
+	importKey(t, prev, "key-redbird", "u-dick-grayson", auth.KeyRevoked, "gotham:patrol")
+
+	live.mustPostRestore(covered(), prev.st)
+
+	if got := live.status("key-redbird"); got != auth.KeyRevoked {
+		t.Fatalf("key is %q", got)
+	}
+	admin := live.session(live.user("bruce-wayne", rbac.RoleAdmin))
+	wantErr(t, "re-enabling it", live.svc.SetAPIKeyStatus(context.Background(), admin, "key-redbird", auth.KeyActive), auth.ErrKeyRevoked)
+}
+
+// TestPostRestore_PreSwapNeverLowersAKey: the merge only raises a key's
+// restriction: a key revoked in the archive stays revoked over a pre-swap
+// active or disabled copy, and needs_confirmation stays over disabled.
+func TestPostRestore_PreSwapNeverLowersAKey(t *testing.T) {
+	live, prev := newFx(t), newFx(t)
+	live.user("dick-grayson", "gotham.detective")
+	prev.user("dick-grayson", "gotham.detective")
+	for id, c := range map[string][2]auth.KeyStatus{
+		"k-rev-over-active":   {auth.KeyRevoked, auth.KeyActive},
+		"k-rev-over-disabled": {auth.KeyRevoked, auth.KeyDisabled},
+		"k-nc-over-disabled":  {auth.KeyNeedsConfirmation, auth.KeyDisabled},
+		"k-disabled-over-act": {auth.KeyDisabled, auth.KeyActive},
+	} {
+		importKey(t, live, id, "u-dick-grayson", c[0], "gotham:patrol")
+		importKey(t, prev, id, "u-dick-grayson", c[1], "gotham:patrol")
+	}
+	live.mustPostRestore(covered(), prev.st)
+	for id, want := range map[string]auth.KeyStatus{
+		"k-rev-over-active": auth.KeyRevoked, "k-rev-over-disabled": auth.KeyRevoked,
+		"k-nc-over-disabled": auth.KeyNeedsConfirmation, "k-disabled-over-act": auth.KeyDisabled,
+	} {
+		if got := live.status(id); got != want {
+			t.Errorf("%s is %q, want %q", id, got, want)
+		}
 	}
 }

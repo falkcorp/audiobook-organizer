@@ -1,5 +1,5 @@
 // file: core/auth/restore.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
 // last-edited: 2026-11-11
 
@@ -265,6 +265,34 @@ func (p *restorePlan) disableUser(id UserID, epoch int64, derived bool) {
 	p.owe(derived, journal.Revocation{Kind: journal.UserDisabled, Subject: ref(refKindUser, string(id)), Epoch: u.CredentialEpoch})
 }
 
+// carryStanding carries the pre-swap user's credential epoch and sign-in
+// restrictions over the restored row, each the more restrictive of the two: a
+// user who signed out everywhere, changed a password or had a key revoked
+// after the archive must not get the older epoch back (a credential minted at
+// the higher epoch stays refused), and a restriction set after the archive
+// stays set. A raised epoch is journaled; the flags have no journal kind (the
+// PasswordChanged line of a blanked hash is the one that marks a reset).
+func (p *restorePlan) carryStanding(prev *User) {
+	u := p.users[prev.ID]
+	if u == nil || p.deleted[prev.ID] || u.Status == StatusSystem {
+		return
+	}
+	if prev.CredentialEpoch > u.CredentialEpoch {
+		u.CredentialEpoch = prev.CredentialEpoch
+		p.userDirty[u.ID] = true
+		p.owe(true, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: ref(refKindUser, string(u.ID)), Epoch: u.CredentialEpoch})
+	}
+	if prev.SignInRestricted && !u.SignInRestricted {
+		u.SignInRestricted = true
+		p.userDirty[u.ID] = true
+		p.count(CountUsersRestricted)
+	}
+	if prev.PasswordResetRequired && !u.PasswordResetRequired {
+		u.PasswordResetRequired = true
+		p.userDirty[u.ID] = true
+	}
+}
+
 // blankPassword blanks id's restored hash and requires a reset.
 func (p *restorePlan) blankPassword(id UserID, epoch int64, derived bool) {
 	u := p.users[id]
@@ -387,6 +415,7 @@ func (p *restorePlan) preSwap(ctx context.Context) error {
 		if u.Status != StatusActive && u.Status != StatusPending {
 			p.disableUser(u.ID, u.CredentialEpoch, true)
 		}
+		p.carryStanding(u)
 		then, err := prev.PasswordHash(ctx, u.ID)
 		if err != nil {
 			return fmt.Errorf("%w: pre-swap password: %w", ErrStoreUnavailable, err)
