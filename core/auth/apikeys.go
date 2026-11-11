@@ -221,8 +221,14 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 		case KeyDisabled:
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.APIKeyDisabled, Subject: ref(refKindAPIKey, k.ID)})
 		}
+		// A revocation is its own action (05-rbac §8: core.apikey.revoke);
+		// every other change is core.apikey.set_status.
+		action := actionAPIKeyStatus
+		if st == KeyRevoked {
+			action = actionAPIKeyRevoke
+		}
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
-			Action: actionAPIKeyStatus, Outcome: audit.Success, Target: ref(refKindAPIKey, k.ID),
+			Action: action, Outcome: audit.Success, Target: ref(refKindAPIKey, k.ID),
 			Details: map[string]any{"from": string(k.Status), "to": string(st)},
 		})
 	})
