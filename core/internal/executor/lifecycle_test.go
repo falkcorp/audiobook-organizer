@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -965,4 +965,150 @@ func kindStrings(ks []tasks.Kind) []string {
 		out[i] = string(k)
 	}
 	return out
+}
+
+// children lists the runs whose parent is id.
+func (h *harness) children(id tasks.RunID) []tasks.RunID {
+	h.t.Helper()
+	var out []tasks.RunID
+	for v, err := range h.x.Runs(context.Background(), tasks.RunQuery{Parent: id}) {
+		if err != nil {
+			h.t.Fatalf("children of %s: %v", id, err)
+		}
+		out = append(out, v.ID)
+	}
+	return out
+}
+
+// enqueueOnce boots defs plus gotham.dispatch, whose body makes one
+// rc.Enqueue of kind with opts and hands back its error, starts the parent
+// as Gordon (who holds gotham:run and nothing else) and returns the
+// harness, the parent's ID and the enqueue's error once the parent ended.
+func enqueueOnce(t *testing.T, defs []tasks.Definition, starts []tasks.Kind, kind tasks.Kind, opts ...tasks.StartOption) (*harness, tasks.RunID, error) {
+	t.Helper()
+	got := make(chan error, 1)
+	parent := taskDef("gotham.dispatch", func(rc *tasks.RC, _ noParams) (string, error) {
+		_, err := rc.Enqueue(kind, noParams{}, opts...)
+		got <- err
+		return "", nil
+	})
+	h := newHarness(t, append([]tasks.Definition{parent}, defs...), func(o *Options) {
+		withPrincipal(o)
+		o.Catalog = catalogWith(t, "gotham:run", "arkham:run")
+		o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: starts}}
+	})
+	ref, err := h.x.Start(asUser("gordon", "gotham:run"), "gotham.dispatch", tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	if err != nil {
+		t.Fatalf("start the parent: %v", err)
+	}
+	err = <-got
+	h.waitState(ref.ID, tasks.StateSucceeded)
+	return h, ref.ID, err
+}
+
+var gordon = tasks.Actor{UserID: "gordon", AuthMethod: "session"}
+
+// TestEnqueue_ChildBoundedByItsModule (SEC2-15, COR-21): a child start is
+// module code, so it is bounded by the reach of the module whose body makes
+// it (its own kinds plus its manifest's TaskStarts, never a kind needing
+// core:admin or an AuthRequired scope), whoever started the parent. The
+// parent here is a user's, the start that once ran no check at all: no
+// request principal reaches a body. The user's own grants are not what
+// bounds it either way: Gordon holds no arkham scope, yet a listed arkham
+// kind is enqueued. A refused enqueue creates no run.
+func TestEnqueue_ChildBoundedByItsModule(t *testing.T) {
+	purge := func(c *tasks.Common) { c.Perms.Start = rbac.Need("core:system.manage") } // AuthRequired
+	defs := []tasks.Definition{
+		taskDef("gotham.forensics", okBody),
+		taskDef("arkham.cleanup", okBody),
+		taskDef("arkham.purge", okBody, purge),
+		taskDef("arkham.transfer", okBody),
+	}
+	cells := []struct {
+		kind    tasks.Kind
+		starts  []tasks.Kind
+		allowed bool
+	}{
+		{kind: "gotham.forensics", allowed: true},
+		{kind: "arkham.cleanup"},
+		{kind: "arkham.cleanup", starts: []tasks.Kind{"arkham.cleanup"}, allowed: true},
+		{kind: "arkham.transfer", starts: []tasks.Kind{"arkham.cleanup"}},
+		{kind: "arkham.purge", starts: []tasks.Kind{"arkham.purge"}},
+	}
+	for _, c := range cells {
+		t.Run(string(c.kind)+"/"+strings.Join(kindStrings(c.starts), ","), func(t *testing.T) {
+			h, pid, err := enqueueOnce(t, defs, c.starts, c.kind)
+			kids := h.children(pid)
+			if !c.allowed {
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("enqueue %s: %v, want ErrNotPermitted", c.kind, err)
+				}
+				if len(kids) != 0 {
+					t.Fatalf("a refused enqueue created runs %v", kids)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enqueue %s: %v, want allowed", c.kind, err)
+			}
+			if len(kids) != 1 {
+				t.Fatalf("children %v, want one", kids)
+			}
+			if r := h.get(kids[0]); r.Kind != c.kind || r.Actor != gordon || r.Trigger != tasks.TriggerParent {
+				t.Fatalf("child %s actor %+v trigger %v, want %s as %+v by parent", r.Kind, r.Actor, r.Trigger, c.kind, gordon)
+			}
+		})
+	}
+}
+
+// TestEnqueue_OptionCannotRestampTheChild (COR-21): a StartOption adjusts a
+// child's mode, params or priority. One that sets the child's actor, parent,
+// trigger or idempotency key is refused and creates no run, so a body
+// cannot start a child as another user or as a system actor (whose reach is
+// another rule), unlinked from its parent, or folded into another run.
+func TestEnqueue_OptionCannotRestampTheChild(t *testing.T) {
+	defs := []tasks.Definition{taskDef("gotham.forensics", okBody)}
+	cells := []struct {
+		name    string
+		opt     tasks.StartOption
+		allowed bool
+	}{
+		{name: "priority", opt: func(r *tasks.StartRequest) { r.Priority = tasks.PriorityHigh }, allowed: true},
+		{name: "another user", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{UserID: "joker", AuthMethod: "session"} }},
+		{name: "a system actor", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{AuthMethod: systemMethod, System: "gotham"} }},
+		{name: "no parent", opt: func(r *tasks.StartRequest) { r.Parent = "" }},
+		{name: "manual trigger", opt: func(r *tasks.StartRequest) { r.Trigger = tasks.TriggerManual }},
+		{name: "idempotency key", opt: func(r *tasks.StartRequest) { r.IdempotencyKey = "bat-signal" }},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			h, pid, err := enqueueOnce(t, defs, nil, "gotham.forensics", c.opt)
+			if !c.allowed {
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("enqueue with %s: %v, want ErrNotPermitted", c.name, err)
+				}
+				var n int
+				for _, err := range h.x.Runs(context.Background(), tasks.RunQuery{Kinds: []tasks.Kind{"gotham.forensics"}}) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					n++
+				}
+				if n != 0 {
+					t.Fatalf("a refused enqueue created %d runs", n)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enqueue with %s: %v, want allowed", c.name, err)
+			}
+			kids := h.children(pid)
+			if len(kids) != 1 {
+				t.Fatalf("children %v, want one", kids)
+			}
+			if r := h.get(kids[0]); r.Priority != tasks.PriorityHigh || r.Actor != gordon {
+				t.Fatalf("child priority %v actor %+v, want high as %+v", r.Priority, r.Actor, gordon)
+			}
+		})
+	}
 }

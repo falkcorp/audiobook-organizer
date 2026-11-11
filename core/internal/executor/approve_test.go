@@ -1,5 +1,5 @@
 // file: core/internal/executor/approve_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a500492e-f488-4dcd-aaeb-3ffe778b43c1
 // last-edited: 2026-11-11
 
@@ -314,6 +314,8 @@ func TestStart_PlanRefOnlyThroughApprove(t *testing.T) {
 	h := newHarness(t, []tasks.Definition{fixerDef(log), parent}, func(o *Options) {
 		withPrincipal(o)
 		o.Catalog = arkhamCatalog(t) // arkham's system actor holds arkham:run
+		// gotham may enqueue the fixer, so the plan_ref is what refuses it.
+		o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: []tasks.Kind{relocate}}}
 	})
 	plan := h.plan()
 	both := asUser("gordon", scopeApprov, scopeRun)
@@ -459,6 +461,21 @@ func TestFixer_ApplyFailsClosedWithoutApproval(t *testing.T) {
 			}
 		})
 	}
+	// No start path makes a Live Fixer run without a plan (registration
+	// requires PlanRequired, prepare refuses the start); one staged past them
+	// applies nothing rather than evaluating and applying live.
+	t.Run("apply run naming no plan", func(t *testing.T) {
+		log := &applyLog{}
+		h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
+		id := h.stageApply("", nil)
+		r := h.waitState(id, tasks.StateFailed, tasks.StateSucceeded)
+		if r.State != tasks.StateFailed || !strings.Contains(r.Error, ErrPlanRequired.Error()) {
+			t.Fatalf("apply run: %s %q, want failed with %v", r.State, r.Error, ErrPlanRequired)
+		}
+		if got := log.got(); len(got) != 0 {
+			t.Fatalf("applied %v (fail open)", got)
+		}
+	})
 	t.Run("from-zero resume keeps the approval", func(t *testing.T) {
 		applying := make(chan string, 1)
 		first := &applyLog{}
@@ -797,4 +814,57 @@ func TestApprove_NeverFoldsIntoAnotherRun(t *testing.T) {
 			t.Fatalf("applied %v, want each plan's own rows %v", got, inmates)
 		}
 	})
+}
+
+// TestDecide_NeedsACallerWhoMayDecide: a decision is a person's, as with
+// Approve. With no caller identity (no Principal, or a context it resolves
+// to no one) Decide is refused and the run stays awaiting; a caller without
+// the kind's Perms.Approve (else Perms.Start) is refused; one who holds it
+// decides. Kernel-internal callers carry the actor through DecideAs.
+func TestDecide_NeedsACallerWhoMayDecide(t *testing.T) {
+	cells := []struct {
+		name      string
+		principal bool
+		ctx       context.Context
+		allowed   bool
+	}{
+		{name: "executor without a principal", ctx: asUser("gordon", "gotham:run")},
+		{name: "context with no identity", principal: true, ctx: context.Background()},
+		{name: "caller without the scope", principal: true, ctx: asUser("joker", "arkham:run")},
+		{name: "caller with the scope", principal: true, ctx: asUser("gordon", "gotham:run"), allowed: true},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			started := make(chan tasks.RunID, 1)
+			defs := []tasks.Definition{taskDef("gotham.stakeout", blockUntilCtx(started), withResume(tasks.ResumeAsk))}
+			edit := func(o *Options) {
+				o.Catalog = catalogWith(t, "gotham:run", "arkham:run")
+				if c.principal {
+					withPrincipal(o)
+				}
+			}
+			h := newHarness(t, defs, edit)
+			id := h.start("gotham.stakeout", tasks.StartRequest{})
+			<-started
+			if err := h.x.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			h = h.reboot(defs, edit)
+			h.waitState(id, tasks.StateAwaitingDecision)
+			err := h.x.Decide(c.ctx, id, tasks.DecideDrop)
+			if c.allowed {
+				if err != nil {
+					t.Fatalf("decide: %v, want allowed", err)
+				}
+				h.waitState(id, tasks.StateInterruptedDropped)
+				return
+			}
+			if !errors.Is(err, ErrNotPermitted) {
+				t.Fatalf("decide: %v, want ErrNotPermitted", err)
+			}
+			if r := h.get(id); r.State != tasks.StateAwaitingDecision {
+				t.Fatalf("a refused decide left the run %s", r.State)
+			}
+		})
+	}
 }

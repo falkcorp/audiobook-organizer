@@ -1,5 +1,5 @@
 // file: core/internal/executor/attempt.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
 // last-edited: 2026-11-11
 
@@ -288,6 +288,9 @@ func (a *attempt) Touch() {
 // counter.
 func (a *attempt) nextSeq() uint64 { return uint64(a.n)<<32 | a.seq.Add(1) }
 
+// Enqueue starts a child of this run (rc.Enqueue). The child runs as this
+// run's actor, in this run's mode unless an option states one, and only
+// within the reach of this run's module (permitStart, SEC2-15).
 func (a *attempt) Enqueue(kind tasks.Kind, params any, opts ...tasks.StartOption) (tasks.RunRef, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -297,6 +300,14 @@ func (a *attempt) Enqueue(kind tasks.Kind, params any, opts ...tasks.StartOption
 	for _, o := range opts {
 		o(&req)
 	}
+	// An option adjusts the child's mode, params or priority. It never
+	// changes who the child runs for, which run it hangs from or how it was
+	// triggered (COR-21), and it never sets the idempotency key, which only
+	// the HTTP start route sets. A plan_ref is refused by prepare
+	// (ErrApprovalRequired), as on every start but Approve's.
+	if req.Actor != a.rec.Actor || req.Parent != a.id || req.Trigger != tasks.TriggerParent || req.IdempotencyKey != "" {
+		return tasks.RunRef{}, fmt.Errorf("%w: enqueue %s: an option may not set the child's actor, parent, trigger or idempotency key", ErrNotPermitted, kind)
+	}
 	if _, ok := req.Mode.Mode(); !ok {
 		req.Mode = tasks.ModeRequestLive
 		if a.rec.Mode == tasks.ModePreview {
@@ -304,7 +315,7 @@ func (a *attempt) Enqueue(kind tasks.Kind, params any, opts ...tasks.StartOption
 		}
 	}
 	var ref tasks.RunRef
-	err = a.e.startLocked(a.ctx, kind, req, nil, modeRequired, func(p prepared) error {
+	err = a.e.startLocked(a.ctx, kind, req, starter{parent: a.d}, modeRequired, func(p prepared) error {
 		return a.e.write(a.ctx, func(ctx context.Context, b *storage.Batch) error {
 			var err error
 			ref, err = a.e.stageStart(ctx, b, p)
