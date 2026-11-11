@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3353e3e5-8aaf-477a-bffd-f8c6bf6de79c
 // last-edited: 2026-11-10
 
@@ -311,8 +311,9 @@ func ShrinkViolations(base, head map[string]string) []string {
 }
 
 // CheckShrinkOnly fails t when the entry files in dir (relative to the working
-// directory) gained a file or a line since the merge base with origin/main
-// (05-tasks §5T.8.4: the exemption list may only shrink). Without git or
+// directory) gained a file or a line since the merge base with origin/main, or
+// since origin/main itself in a shallow checkout (see baseEntries; 05-tasks
+// §5T.8.4: the exemption list may only shrink). Without git or
 // origin/main it skips with a message, and fails when CI is "true".
 func CheckShrinkOnly(t testing.TB, dir string) {
 	t.Helper()
@@ -335,8 +336,14 @@ func CheckShrinkOnly(t testing.TB, dir string) {
 	}
 }
 
-// baseEntries returns dir's entry files at `git merge-base HEAD origin/main`,
-// or nil when the directory did not exist there.
+// baseEntries returns dir's entry files at the base revision, or nil when the
+// directory did not exist there. The base is `git merge-base HEAD origin/main`.
+// A shallow checkout has no common ancestor to find: CI checks out the PR's
+// merge ref (or the merge-queue commit) at depth 1 and fetches origin/main at
+// depth 1, and the shallow boundary cuts HEAD's parents off. There HEAD already
+// contains origin/main, so origin/main itself is the base. If main moves between
+// the checkout and the fetch, a line main dropped in the meantime reads as gained;
+// a rerun clears it.
 func baseEntries(dir string) (map[string]string, error) {
 	git := func(args ...string) (string, error) {
 		out, err := exec.Command("git", args...).Output()
@@ -350,7 +357,13 @@ func baseEntries(dir string) (map[string]string, error) {
 	}
 	mb, err := git("merge-base", "HEAD", "origin/main")
 	if err != nil {
-		return nil, err
+		shallow, serr := git("rev-parse", "--is-shallow-repository")
+		if serr != nil || shallow != "true" {
+			return nil, err
+		}
+		if mb, err = git("rev-parse", "--verify", "--quiet", "origin/main^{commit}"); err != nil {
+			return nil, fmt.Errorf("shallow checkout without origin/main (fetch it: git fetch --no-tags --depth=1 origin main): %w", err)
+		}
 	}
 	prefix, err := git("rev-parse", "--show-prefix")
 	if err != nil {

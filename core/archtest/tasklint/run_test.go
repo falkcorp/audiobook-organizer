@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 59ad832d-2138-4515-ab39-44beaafda01b
 // last-edited: 2026-11-10
 
@@ -267,5 +267,91 @@ func TestCheckShrinkOnly_Git(t *testing.T) {
 	CheckShrinkOnly(r, "testdata/absent.d")
 	if len(r.fatals) != 1 {
 		t.Fatalf("absent directory: fatals %v", r.fatals)
+	}
+}
+
+// TestCheckShrinkOnly_ShallowCI reproduces CI's checkout: the PR's merge ref
+// at depth 1, then `git fetch --no-tags --depth=1 origin main`. No merge base
+// is reachable across the shallow boundary, so origin/main is the base. Before
+// the fetch there is no origin/main and CI fails; after it a removal passes and
+// an addition fails.
+func TestCheckShrinkOnly_ShallowCI(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	root := t.TempDir()
+	up, co := filepath.Join(root, "up"), filepath.Join(root, "co")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=Lucius Fox", "-c", "user.email=lucius@example.com",
+			"-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	ex := filepath.Join("app", "testdata", "exempt.d")
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(up, ex), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(up, ex, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(up, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(up, "init", "-q", "-b", "main")
+	write("F5-01.txt", "a.go\nb.go\n")
+	git(up, "add", "-A")
+	git(up, "commit", "-qm", "base")
+	write("F5-02.txt", "c.go\n")
+	git(up, "add", "-A")
+	git(up, "commit", "-qm", "main moves on")
+	// Two PRs branched from the first commit, each a merge ref onto main.
+	pr := func(n, text string) {
+		t.Helper()
+		git(up, "checkout", "-q", "-b", "pr"+n, "HEAD~1")
+		write("F5-01.txt", text)
+		git(up, "commit", "-qam", "pr "+n)
+		git(up, "checkout", "-q", "--detach", "main")
+		git(up, "merge", "-q", "--no-ff", "pr"+n, "-m", "merge "+n)
+		git(up, "update-ref", "refs/pull/"+n+"/merge", "HEAD")
+		git(up, "checkout", "-q", "main")
+	}
+	pr("1", "a.go\n")
+	pr("2", "a.go\nb.go\nd.go\n")
+
+	check := func(n string, fetchMain bool) *recorder {
+		t.Helper()
+		if err := os.RemoveAll(co); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(co, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(co, "init", "-q")
+		git(co, "remote", "add", "origin", "file://"+filepath.ToSlash(up))
+		git(co, "fetch", "-q", "--no-tags", "--depth=1", "origin", "+refs/pull/"+n+"/merge:refs/remotes/pull/"+n+"/merge")
+		git(co, "checkout", "-q", "--detach", "refs/remotes/pull/"+n+"/merge")
+		if fetchMain {
+			git(co, "fetch", "-q", "--no-tags", "--depth=1", "origin", "main")
+		}
+		t.Chdir(co)
+		t.Setenv("CI", "true")
+		r := &recorder{TB: t}
+		CheckShrinkOnly(r, ex)
+		return r
+	}
+	if r := check("1", false); len(r.fatals) != 1 {
+		t.Fatalf("shallow without origin/main: fatals %v errors %v", r.fatals, r.errors)
+	}
+	if r := check("1", true); len(r.errors)+len(r.fatals)+len(r.skips) != 0 {
+		t.Fatalf("shallow shrink: errors %v fatals %v skips %v", r.errors, r.fatals, r.skips)
+	}
+	if r := check("2", true); len(r.fatals) != 0 || r.count("gained d.go", r.errors) != 1 || len(r.errors) != 1 {
+		t.Fatalf("shallow growth: errors %v fatals %v, want one gained d.go", r.errors, r.fatals)
 	}
 }
