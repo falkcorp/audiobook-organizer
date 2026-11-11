@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/registration.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5baf56b2-c55e-4af1-af93-7a5c497dbcef
 // last-edited: 2026-11-10
 
@@ -85,12 +85,13 @@ func unregisteredKinds(cfg *Config, units []*unit, whole bool) []kindFinding {
 	return r.report(r.reach(r.roots()))
 }
 
-// objKey names a package-level func, method or var across separately
-// type-checked packages ("path.Name", "path.Type.Method"); "" for anything
-// else (a local, a field, an interface method). go/packages type-checks each
-// root package from source and its imports from export data, so the object
-// one package uses is not the object its declaring package defines: only the
-// key matches.
+// objKey names a package-level func, method or var by path and name
+// ("path.Name", "path.Type.Method"); "" for anything else (a local, a field,
+// an interface method). go/packages shares one *types.Package between the
+// packages of one Load, so object identity would also match today; the key
+// keeps the pass correct if a unit's imports come from export data instead
+// (another loader, or a dependency type-checked apart), where the object one
+// package uses is not the object its declaring package defines.
 func objKey(obj types.Object) string {
 	switch o := obj.(type) {
 	case *types.Func:

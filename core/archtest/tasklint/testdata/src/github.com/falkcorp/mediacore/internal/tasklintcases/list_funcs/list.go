@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/list_funcs/list.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c4628e3-0472-4d5f-b887-c1ca8e3617d1
 // last-edited: 2026-11-10
 
@@ -19,6 +19,15 @@ func build(kind tasks.Kind, sched func(tasks.Kind) *int) tasks.Definition {
 // Kinds is the list function; Wire calls it, so it is a root.
 func Kinds(sched func(tasks.Kind) *int) []tasks.Definition {
 	return []tasks.Definition{build("listf.a", sched)}
+}
+
+// Self refers only to itself: recursion is not a call from elsewhere, so it
+// registers nothing.
+func Self(n int) []tasks.Definition {
+	if n > 0 {
+		return Self(n - 1)
+	}
+	return []tasks.Definition{build("listf.self", nil)} // want `definition built by build in Self is not registered`
 }
 
 // Wire stands for books' wiring, which calls the list function.
