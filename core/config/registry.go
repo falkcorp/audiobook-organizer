@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -528,8 +528,10 @@ func (s *section) assemble(vals map[Path]json.RawMessage, ids []string) (json.Ra
 }
 
 // decode strictly decodes the section's JSON into a fresh *T, binds every
-// secrets.Ref to res and runs the type's Validator. Errors are *FieldError.
-func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error) {
+// secrets.Ref to res and runs the type's Validator. The entries of a list in
+// opLists (one an operator layer supplies) bind through operatorOnly, so they
+// read only an operator-layer secret. Errors are *FieldError.
+func (s *section) decode(raw json.RawMessage, res secrets.Resolver, opLists map[*keyInfo]bool) (any, error) {
 	v := reflect.New(s.spec.typ)
 	if err := strictDecode(raw, v.Interface()); err != nil {
 		return nil, s.redact(&FieldError{Path: s.path, Err: err}, nil)
@@ -547,7 +549,11 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 	for _, lk := range s.entryLists {
 		// The list's value is canonical, so its entries pass; binding them
 		// again here ties every Ref to its entry's ID whatever the bytes say.
-		if err := lk.bindEntries(lk.path(""), v.Elem().FieldByIndex(lk.index), res); err != nil {
+		r := res
+		if opLists[lk] && r != nil {
+			r = operatorOnly{r: r}
+		}
+		if err := lk.bindEntries(lk.path(""), v.Elem().FieldByIndex(lk.index), r); err != nil {
 			return nil, s.redact(err, nil)
 		}
 	}
@@ -558,6 +564,35 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 		}
 	}
 	return v.Interface(), nil
+}
+
+// operatorOnly is the resolver of a list entry an operator layer supplies: it
+// serves the entry's secret only from an operator layer (env, file). A stored
+// secret may predate the entry: an operator who adds an entry at boot would
+// otherwise hand it whatever an earlier entry of that ID left in the store,
+// and config writes nothing at boot to clear it (C13; seams.d/F3-03.md). A
+// stored value reads as not set, with Meta.Set false.
+type operatorOnly struct{ r secrets.Resolver }
+
+// fromOperator reports whether m's value comes from an operator layer.
+func fromOperator(m secrets.Meta) bool {
+	return m.Source == secrets.SourceEnv || m.Source == secrets.SourceFile
+}
+
+func (o operatorOnly) Get(ctx context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
+	v, m, err := o.r.Get(ctx, n)
+	if fromOperator(m) || errors.Is(err, secrets.ErrNotSet) {
+		return v, m, err
+	}
+	return secrets.Value{}, secrets.Meta{Name: n}, fmt.Errorf("%w: %s belongs to a list entry an operator layer supplies, so only an operator-layer value is used", secrets.ErrNotSet, n)
+}
+
+func (o operatorOnly) Meta(ctx context.Context, n secrets.Name) (secrets.Meta, error) {
+	m, err := o.r.Meta(ctx, n)
+	if err != nil || fromOperator(m) {
+		return m, err
+	}
+	return secrets.Meta{Name: n}, nil
 }
 
 // redact keeps a sensitive value out of a decode or Validator error of this

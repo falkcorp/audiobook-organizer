@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
 // last-edited: 2026-11-10
 
@@ -765,5 +765,32 @@ func TestCoreSections_OIDCClientSecretPerProvider(t *testing.T) {
 	}
 	if _, ok := cb.store.Lookup(google); ok {
 		t.Error("a removed provider's client secret is still a key")
+	}
+	// A kept provider keeps its client secret through a change to who may
+	// sign in, and loses it to a change of provider or client (a rebind).
+	calls := len(cm.Commits())
+	cur := strings.Replace(one, `"allowed_emails":["bruce@example.com"]`, `"allowed_emails":["alfred@example.com"]`, 1)
+	if err := applyOne(cb, proof, "core.auth.oidc.providers", cur); err != nil {
+		t.Fatal(err)
+	}
+	if len(cm.Commits()) != calls+1 || len(cm.Commits()[calls].Secrets) != 0 {
+		t.Errorf("an allowed_emails change writes %+v", cm.Commits()[len(cm.Commits())-1].Secrets)
+	}
+	for _, swap := range [][2]string{
+		{`"client_id":"bat"`, `"client_id":"joker"`},
+		{`"issuer":""`, `"issuer":"https://idp.example.org"`},
+		{`"kind":"github"`, `"kind":"oidc"`},
+	} {
+		next := strings.Replace(cur, swap[0], swap[1], 1)
+		if next == cur {
+			t.Fatalf("%s is not in %s", swap[0], cur)
+		}
+		cur = next
+		if err := applyOne(cb, proof, "core.auth.oidc.providers", cur); err != nil {
+			t.Fatalf("%s: %v", swap[1], err)
+		}
+		if w := cm.Commits()[len(cm.Commits())-1].Secrets; len(w) != 1 || w[0].Name != secrets.Name(github) || !w[0].Delete {
+			t.Errorf("%s writes %+v, want the client secret deleted", swap[1], w)
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.5
+// version: 1.0.7
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -75,11 +75,12 @@ type Store struct {
 	dbAtAttach map[Path]json.RawMessage // dbVals as Attach saw them: what restart keys are effective with
 	quar       map[Path]error
 
-	overrides    OverrideStore
-	committer    Committer
-	importTarget OverrideStore
-	resolver     secrets.Resolver
-	secretMeta   map[Path]*secrets.Meta
+	overrides     OverrideStore
+	committer     Committer
+	importTarget  OverrideStore
+	importSecrets SecretStager
+	resolver      secrets.Resolver
+	secretMeta    map[Path]*secrets.Meta
 
 	gen    atomic.Uint64
 	index  atomic.Pointer[keyIndex]
@@ -747,7 +748,8 @@ func (s *Store) reindex() {
 }
 
 // liveSecrets is every secret key the sections' last builds hold: the fixed
-// ones and each list entry's.
+// ones and each list entry's. The value is true for an entry secret whose
+// list an operator layer supplies (it reads through operatorOnly).
 func (s *Store) liveSecrets() map[Path]bool {
 	live := map[Path]bool{}
 	for _, sec := range s.sections {
@@ -757,7 +759,7 @@ func (s *Store) liveSecrets() map[Path]bool {
 			}
 			for _, c := range b.keys {
 				if c.k.secret {
-					live[c.p] = true
+					live[c.p] = live[c.p] || (c.k.list != nil && b.opLists[c.k.list])
 				}
 			}
 		}
@@ -771,7 +773,7 @@ func (s *Store) liveSecrets() map[Path]bool {
 func (s *Store) refreshSecrets(ctx context.Context, only []Path) {
 	live := s.liveSecrets()
 	for p := range s.secretMeta {
-		if !live[p] && (only == nil || slices.Contains(only, p)) {
+		if _, ok := live[p]; !ok && (only == nil || slices.Contains(only, p)) {
 			delete(s.secretMeta, p)
 		}
 	}
@@ -781,7 +783,11 @@ func (s *Store) refreshSecrets(ctx context.Context, only []Path) {
 		}
 		m := secrets.Meta{Name: secrets.Name(p)}
 		if s.resolver != nil {
-			got, err := s.resolver.Meta(ctx, secrets.Name(p))
+			var r secrets.Resolver = s.resolver
+			if live[p] {
+				r = operatorOnly{r: r}
+			}
+			got, err := r.Meta(ctx, secrets.Name(p))
 			if err != nil {
 				got = secrets.Meta{Name: secrets.Name(p), Err: err}
 			}
@@ -968,6 +974,16 @@ func (s *Store) SetImportTarget(o OverrideStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.importTarget = o
+}
+
+// SetImportSecrets gives Importer the secret stager it deletes entry secrets
+// through (name coined by F3-OIDC-SECRET): a list it stages over a stored row
+// that held other entries deletes their secrets in the same batch, and
+// without a stager such a Stage is refused.
+func (s *Store) SetImportSecrets(st SecretStager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.importSecrets = st
 }
 
 // Operator returns p's operator-layer value (flag > env > file), before or

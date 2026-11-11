@@ -1,5 +1,5 @@
 // file: core/config/importer.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2c9586e1-b071-417e-a1e0-e58dc0945411
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -79,8 +80,53 @@ func (i storeImporter) Stage(b *storage.Batch, p Path, v json.RawMessage, by str
 	if b == nil {
 		return errors.New("config: Importer.Stage needs the step's batch")
 	}
+	ctx := context.Background()
+	if len(ck.k.entrySecrets) > 0 {
+		if err := s.importClears(ctx, b, ck, c, by); err != nil {
+			return err
+		}
+	}
 	ov := Override{Path: p, Value: c, At: s.now(), By: by}
-	return s.importTarget.Stage(context.Background(), b, []Override{ov}, nil)
+	return s.importTarget.Stage(ctx, b, []Override{ov}, nil)
+}
+
+// importClears stages into b the deletion of the secrets of every entry of
+// ck's stored row that next (the list being imported) drops or rebinds, as
+// Apply does (entryClears). It deletes nothing for an entry next adds: a
+// cutover step imports an entry's secret through secrets.Importer, and must
+// import the list before or with that secret (seams.d/F3-03.md).
+func (s *Store) importClears(ctx context.Context, b *storage.Batch, ck ckey, next json.RawMessage, by string) error {
+	var old json.RawMessage
+	for ov, err := range s.importTarget.Load(ctx) {
+		if err != nil {
+			return fmt.Errorf("config: read the stored %s: %w", ck.p, err)
+		}
+		if ov.Path == ck.p {
+			old = ov.Value
+		}
+	}
+	was, now := ck.k.entryBindings(old), ck.k.entryBindings(next)
+	var writes []secrets.Write
+	for _, id := range ck.k.entryIDsOf(old) {
+		if is, ok := now[id]; ok && is == was[id] {
+			continue
+		}
+		for _, d := range ck.k.entrySecrets {
+			writes = append(writes, secrets.Write{Name: secrets.Name(d.path(id)), Delete: true, By: by})
+		}
+	}
+	if len(writes) == 0 {
+		return nil
+	}
+	if s.importSecrets == nil {
+		return fmt.Errorf("config: importing %s drops or rebinds stored entries whose secrets must be deleted, and the Importer has no secret stager: the kernel calls SetImportSecrets first", ck.p)
+	}
+	for _, w := range writes {
+		if err := s.importSecrets.Stage(ctx, b, w); err != nil {
+			return fmt.Errorf("config: delete the secret %s: %w", w.Name, err)
+		}
+	}
+	return nil
 }
 
 // Default returns p's registered default, so a step can report what a

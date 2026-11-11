@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -432,6 +432,9 @@ type built struct {
 	ids  []string
 	keys []ckey
 	vals map[Path]keyVal
+	// opLists are the entry lists whose value an operator layer supplies:
+	// their entries read only operator-layer secrets (operatorOnly).
+	opLists map[*keyInfo]bool
 }
 
 // holds reports whether the build has the concrete key p.
@@ -457,7 +460,15 @@ func (s *Store) build(sec *section, v view) (*built, error) {
 	if err != nil {
 		return nil, &FieldError{Path: sec.path, Err: err}
 	}
-	val, err := sec.decode(raw, s.resolver)
+	for _, lk := range sec.entryLists {
+		if b.vals[lk.path("")].src.operator() {
+			if b.opLists == nil {
+				b.opLists = map[*keyInfo]bool{}
+			}
+			b.opLists[lk] = true
+		}
+	}
+	val, err := sec.decode(raw, s.resolver, b.opLists)
 	if err != nil {
 		return nil, err
 	}

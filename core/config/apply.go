@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -202,7 +202,7 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 	}
 	// After install, so a removed entry's secret is dropped and an added
 	// entry's is read.
-	s.noteSecretWrites(ctx, writes, touched, a.Subject, now)
+	s.noteSecretWrites(ctx, writes, a.Subject, now)
 	s.reindex()
 	s.met.setQuarantined(len(s.quar))
 	s.met.apply(outcomeApplied)
@@ -222,27 +222,18 @@ func (s *Store) restartPending(paths []Path) []Path {
 	return out
 }
 
-// noteSecretWrites refreshes the Meta of written secrets and of every list
-// entry's secret in the touched sections (an entry this Apply added may name
-// a record already stored): through the resolver when there is one, else
-// from the writes themselves. A written secret no build holds any more (a
-// removed entry's) loses its Meta.
-func (s *Store) noteSecretWrites(ctx context.Context, writes []secrets.Write, touched []*section, by string, at time.Time) {
+// noteSecretWrites refreshes the Meta of the written secrets: through the
+// resolver when there is one, else from the writes themselves. Every entry
+// secret an Apply adds, drops or rebinds is among the writes (entryClears
+// deletes it), so no other secret's Meta can have changed. A written secret
+// no build holds any more (a removed entry's) loses its Meta.
+func (s *Store) noteSecretWrites(ctx context.Context, writes []secrets.Write, by string, at time.Time) {
+	if len(writes) == 0 {
+		return
+	}
 	only := make([]Path, 0, len(writes))
 	for _, w := range writes {
 		only = append(only, Path(w.Name))
-	}
-	for _, sec := range touched {
-		for _, b := range []*built{sec.eff, sec.pend} {
-			for _, c := range b.keys {
-				if c.k.list != nil && !slices.Contains(only, c.p) {
-					only = append(only, c.p)
-				}
-			}
-		}
-	}
-	if len(only) == 0 {
-		return
 	}
 	if s.resolver != nil {
 		s.refreshSecrets(ctx, only)
@@ -250,7 +241,7 @@ func (s *Store) noteSecretWrites(ctx context.Context, writes []secrets.Write, to
 	}
 	live := s.liveSecrets()
 	for _, w := range writes {
-		if !live[Path(w.Name)] {
+		if _, ok := live[Path(w.Name)]; !ok {
 			delete(s.secretMeta, Path(w.Name))
 			continue
 		}
@@ -369,6 +360,14 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	for _, pth := range applied {
 		if op, ok := s.op[pth]; ok {
 			refused = append(refused, &LockedError{Path: pth, By: op.by})
+			continue
+		}
+		// An entry an operator layer supplies reads only an operator-layer
+		// secret (operatorOnly), so a stored one would never be used.
+		if lk := keys[pth].k.list; lk != nil {
+			if op, ok := s.op[lk.path("")]; ok {
+				refused = append(refused, &LockedError{Path: pth, By: op.by})
+			}
 		}
 	}
 	if len(refused) > 0 {
@@ -387,24 +386,27 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	if len(verrs) > 0 {
 		return nil, nil, invalid(verrs...)
 	}
-	removals, err := s.entryRemovals(changes, p.Set, unsetSet, a)
+	clears, err := s.entryClears(changes, p.Set, unsetSet, a)
 	if err != nil {
 		return nil, nil, err
 	}
-	return append(changes, removals...), applied, nil
+	return append(changes, clears...), applied, nil
 }
 
-// entryRemovals deletes, in the same commit, the secrets of every entry a
-// list change removes: an ID in the stored list (or in its stored row, even a
-// quarantined one) that the new value lacks. A renamed entry is a removed one,
-// so its secret is deleted, never carried to the new ID. 05-config and
-// 05-authn say nothing of an entry's secret once the entry is gone; leaving it
-// stored would let a later entry that takes the ID inherit it, so config
-// fails closed (seams.d/F3-03.md). Each deletion is a write to the derived
-// key: refused when the actor does not meet its protection, when an operator
-// layer sets it (the secrets store refuses to write a locked name), and when
-// the patch also sets it. A patch that unsets it already deletes it.
-func (s *Store) entryRemovals(changes []change, set map[Path]json.RawMessage, unset map[Path]bool, a Actor) ([]change, error) {
+// entryClears deletes, in the same commit, the secrets of every list entry a
+// list change does not keep as it was: an entry removed, renamed (the old ID
+// goes), added (an ID not in the stored list, the IDs of a quarantined stored
+// row included), or rebound (a secret:"bind" field changed, such as an OIDC
+// provider's kind, issuer or client_id). 05-config and 05-authn say nothing
+// of an entry's secret beyond its entry; a secret left stored would be
+// handed to whatever entry next holds the ID, or to an entry now pointing at
+// another identity provider, so config fails closed and a changed entry's
+// secret always starts unset (seams.d/F3-03.md). Each deletion is a write to
+// the derived key: refused when the actor does not meet its protection, when
+// an operator layer sets it (the secrets store refuses to write a locked
+// name), and when the patch also sets it. A patch that unsets it already
+// deletes it.
+func (s *Store) entryClears(changes []change, set map[Path]json.RawMessage, unset map[Path]bool, a Actor) ([]change, error) {
 	var out []change
 	var protected, locked, bad []error
 	for _, c := range changes {
@@ -416,14 +418,18 @@ func (s *Store) entryRemovals(changes []change, set map[Path]json.RawMessage, un
 		if c.unset {
 			next = c.ck.def()
 		}
-		keep := lk.entryIDsOf(next)
-		gone := lk.entryIDsOf(lk.sec.pend.vals[c.ck.p].raw)
+		kept := lk.entryBindings(lk.sec.pend.vals[c.ck.p].raw)
+		now := lk.entryBindings(next)
+		ids := lk.entryIDsOf(lk.sec.pend.vals[c.ck.p].raw)
 		if row, ok := s.db[c.ck.p]; ok {
-			gone = append(gone, lk.entryIDsOf(row.Value)...)
+			ids = append(ids, lk.entryIDsOf(row.Value)...)
 		}
-		slices.Sort(gone)
-		for _, id := range slices.Compact(gone) {
-			if slices.Contains(keep, id) {
+		ids = append(ids, lk.entryIDsOf(next)...)
+		slices.Sort(ids)
+		for _, id := range slices.Compact(ids) {
+			was, wasOK := kept[id]
+			is, isOK := now[id]
+			if wasOK && isOK && was == is {
 				continue
 			}
 			for _, d := range lk.entrySecrets {
@@ -432,7 +438,7 @@ func (s *Store) entryRemovals(changes []change, set map[Path]json.RawMessage, un
 					continue
 				}
 				if _, both := set[pth]; both {
-					bad = append(bad, &FieldError{Path: pth, Err: errors.New("set in the patch that removes its list entry")})
+					bad = append(bad, &FieldError{Path: pth, Err: errors.New("set in the patch that adds, removes, renames or rebinds its list entry: set it in a later patch")})
 					continue
 				}
 				if !s.meets(a, d.protect) {
