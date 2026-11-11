@@ -76,7 +76,7 @@ func TestRetryHonoursRetryAfterAndClamp(t *testing.T) {
 			if hits.Load() != int64(tc.fails+1) {
 				t.Fatalf("hits = %d, want %d", hits.Load(), tc.fails+1)
 			}
-			if _, held := r.HeldScope(batcave); held {
+			if _, held := r.HoldFor(batcave); held {
 				t.Fatal("a request that recovered by retry must not hold the scope")
 			}
 		})
@@ -219,7 +219,7 @@ func TestRetrySpendsQuotaPerAttempt(t *testing.T) {
 	if hits.Load() != 3 {
 		t.Fatalf("hits = %d, want exactly the 3 units of quota", hits.Load())
 	}
-	if _, held := r.HeldScope(batcave); !held {
+	if _, held := r.HoldFor(batcave); !held {
 		t.Fatal("the failures the retries saw must still hold the scope")
 	}
 }
@@ -388,7 +388,7 @@ func TestAttemptTimeoutOutlivesRoundTrip(t *testing.T) {
 	if err == nil || integrations.ClassOf(context.Background(), err) != integrations.ClassTransient {
 		t.Fatalf("hung attempt: %v (class %v), want transient", err, integrations.ClassOf(context.Background(), err))
 	}
-	if _, held := r.HeldScope(ref("alfred")); !held {
+	if _, held := r.HoldFor(ref("alfred")); !held {
 		t.Fatal("a hung provider must hold the scope")
 	}
 }
