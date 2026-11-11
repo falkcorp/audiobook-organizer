@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/types.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b7f3a52-6c1e-4d0a-9b84-3f2a7e51c9d4
 // last-edited: 2026-11-11
 
@@ -614,19 +614,22 @@ func fieldsOfSchema(schema json.RawMessage) *fieldInfo {
 //
 //   - a field an operator value locks (its type is not known to the view):
 //     the aggressive text check, every "//" and whitespace included;
-//   - a URL-typed field (format "uri"): the Registry's own rule, url.Parse and
-//     User != nil, with a value that does not parse withheld;
-//   - every field of an adapter this binary does not have (fi nil): the
-//     URL-typed rule. Such an instance cannot be edited, so no round trip is
-//     lost.
+//   - a URL-typed field (format "uri"): the Registry's own rule (urlUnsafe,
+//     checkURL's): a value that does not parse, has no scheme or host, or has
+//     userinfo is withheld, so opaque and relative shapes (http:u:p@h, u:p@h,
+//     tok@host) cannot be shown either; an empty string is answered;
+//   - every field of an adapter this binary does not have (fi nil): the text
+//     check and the userinfo half of the URL rule (carriesUserinfo, parseUnsafe),
+//     not the whole URL predicate, which would withhold every plain string.
+//     Such an instance cannot be edited, so no round trip is lost.
 //
 // A field that is both locked and URL-typed gets both checks.
 func screenedOut(f string, val any, locked bool, fi *fieldInfo) bool {
-	uriTyped := fi == nil || fi.uri[f]
-	if !locked && !uriTyped {
+	uriTyped := fi != nil && fi.uri[f]
+	if !locked && !uriTyped && fi != nil {
 		return false
 	}
-	w := screener{left: maxScreenNodes, text: locked, parse: uriTyped}
+	w := screener{left: maxScreenNodes, text: locked || fi == nil, parse: fi == nil, url: uriTyped}
 	return w.value(val, 0)
 }
 
@@ -712,27 +715,41 @@ const (
 // of a map, that bad reports; any value of a kind that cannot be walked (a
 // struct, a channel, a function, a map not keyed by strings); and anything
 // nested deeper than maxScreenDepth or larger than maxScreenNodes. It fails
-// closed. text selects the aggressive check (carriesUserinfo) and parse the
-// Registry's URL rule (parseUnsafe); either flags a string.
+// closed. text selects the aggressive check (carriesUserinfo), parse the
+// userinfo test of a parsed string (parseUnsafe) and url the Registry's whole
+// URL rule (urlUnsafe); any of them flags a string.
 //
 // The Registry refuses userinfo when a URL-typed field is written, but an
 // operator-layer value is not a Put, and the settings answer is read with
 // core:integrations.read.
 type screener struct {
-	left        int
-	text, parse bool
+	left             int
+	text, parse, url bool
 }
 
 // bad reports a string the walk must withhold.
 func (w *screener) bad(s string) bool {
-	return (w.text && carriesUserinfo(s)) || (w.parse && parseUnsafe(s))
+	return (w.text && carriesUserinfo(s)) || (w.parse && parseUnsafe(s)) || (w.url && urlUnsafe(s))
 }
 
-// parseUnsafe is the Registry's URL rule (checkURL): a value that does not
-// parse, or that parses with userinfo.
+// parseUnsafe reports a string that does not parse as a URL or parses with
+// userinfo. It is half of the Registry's rule: an opaque or relative value
+// (http:u:p@h, u:p@h) passes it, so it is used only where every string is
+// screened and plain text must survive.
 func parseUnsafe(s string) bool {
 	u, err := url.Parse(s)
 	return err != nil || u.User != nil
+}
+
+// urlUnsafe is the Registry's URL rule (checkURL) for a non-empty string: a
+// value that does not parse, has no scheme or no host, or carries userinfo
+// cannot be shown not to hold credentials. An empty string is fine.
+func urlUnsafe(s string) bool {
+	if s == "" {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil
 }
 
 // value is the walk for the JSON shapes (strings, lists, maps), by type

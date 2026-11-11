@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c8a14f73-2d6b-4e90-b5a7-91f0e3d2864b
 // last-edited: 2026-11-11
 
@@ -1982,22 +1982,23 @@ func TestInstanceView_UnknownAdapterScreensEveryString(t *testing.T) {
 	cfg := integrations.InstanceConfig{
 		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
 		Settings: map[string]any{
-			"url":    "http://u:p@192.0.2.40/",
-			"other":  "https://a:b@192.0.2.40",
-			"list":   []any{"https://192.0.2.40/", "https://c:d@192.0.2.40/"},
-			"nested": map[string]any{"hook": "https://e:f@192.0.2.40/"},
-			"note":   "hello // @world", // not a URL with userinfo: kept
-			"clean":  "https://192.0.2.40/cb?next=https://u@x.example",
-			"num":    float64(5),
+			"url":     "http://u:p@192.0.2.40/",
+			"other":   "https://a:b@192.0.2.40",
+			"list":    []any{"https://192.0.2.40/", "https://c:d@192.0.2.40/"},
+			"nested":  map[string]any{"hook": "https://e:f@192.0.2.40/"},
+			"note":    "hello",
+			"badport": "http://192.0.2.40:badport/", // does not parse
+			"spaced":  "hello // @world",            // the text check withholds it: harmless in an instance nobody can edit
+			"num":     float64(5),
 		},
 	}
 	v := instanceView(cfg, nil)
-	for _, k := range []string{"url", "other", "list", "nested"} {
+	for _, k := range []string{"url", "other", "list", "nested", "spaced", "badport"} {
 		if _, ok := v.Settings[k]; ok {
 			t.Errorf("%s was answered: %v", k, v.Settings[k])
 		}
 	}
-	for _, k := range []string{"note", "clean", "num"} {
+	for _, k := range []string{"note", "num"} {
 		if _, ok := v.Settings[k]; !ok {
 			t.Errorf("%s was withheld", k)
 		}
@@ -2112,5 +2113,92 @@ func TestIntegrationHTTP_LegacyUserinfoURLIsWithheldAndNeverClearedByOmission(t 
 	}
 	if e.secretValue(t, kindNotify, roofID, "password") != "alfred-1" {
 		t.Error("the clean PUT lost the stored secret")
+	}
+}
+
+// opaqueCredentialShapes are values the Registry's checkURL refuses (no scheme
+// or no host, or userinfo) that url.Parse accepts with no User set, or that
+// carry a credential in a shape no "//" check sees. A URL-typed field holding
+// one must not be answered.
+var opaqueCredentialShapes = []string{
+	`http:bruce:wayne1@192.0.2.40`,
+	`http:/bruce:wayne1@192.0.2.40`,
+	`http:\\bruce:wayne1@192.0.2.40/`,
+	`http:\\\\bruce:wayne1@192.0.2.40/`,
+	`http:///bruce:wayne1@192.0.2.40/`,
+	`http:////bruce:wayne1@192.0.2.40`,
+	`bruce:wayne1@192.0.2.40`,
+	`bruce@wayne1.example`,
+	`wayne1@bruce`,
+}
+
+// TestUrlUnsafe: the URL-typed rule is checkURL's, whole.
+func TestUrlUnsafe(t *testing.T) {
+	for _, s := range opaqueCredentialShapes {
+		if !urlUnsafe(s) {
+			t.Errorf("urlUnsafe(%q) = false", s)
+		}
+	}
+	for _, s := range []string{"https://bruce:wayne1@192.0.2.40/", "//bruce:wayne1@192.0.2.40/", "http://192.0.2.40:badport/", "/relative/path", "192.0.2.40", "https:///nohost", "//192.0.2.40/scheme-relative"} {
+		if !urlUnsafe(s) {
+			t.Errorf("urlUnsafe(%q) = false", s)
+		}
+	}
+	for _, s := range []string{"", "https://192.0.2.40/", "http://192.0.2.40:8080/x?y=1", "https://192.0.2.40/cb?next=https://u@x.example", "https://192.0.2.40/a//b@c", "https://[2001:db8::1]:8443/"} {
+		if urlUnsafe(s) {
+			t.Errorf("urlUnsafe(%q) = true", s)
+		}
+	}
+}
+
+// TestInstanceView_URLTypedFieldWithholdsOpaqueShapes: each shape in a URL
+// typed field is left out of the view, alone and inside a list, and an empty
+// string is answered.
+func TestInstanceView_URLTypedFieldWithholdsOpaqueShapes(t *testing.T) {
+	fi := &fieldInfo{secret: map[string]bool{}, uri: map[string]bool{"empty": true, "ok": true}}
+	cfg := integrations.InstanceConfig{
+		Ref:      integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
+		Settings: map[string]any{"empty": "", "ok": "https://192.0.2.40/"},
+	}
+	for i, shape := range opaqueCredentialShapes {
+		f := fmt.Sprintf("shape%d", i)
+		fi.uri[f], fi.uri[f+"-list"] = true, true
+		cfg.Settings[f] = shape
+		cfg.Settings[f+"-list"] = []any{"https://192.0.2.40/", shape}
+	}
+	v := instanceView(cfg, fi)
+	assertNoLeak(t, "the view", mustJSON(t, v), "wayne1")
+	if len(v.Settings) != 2 || v.Settings["empty"] != "" || v.Settings["ok"] != "https://192.0.2.40/" {
+		t.Errorf("settings = %v", v.Settings)
+	}
+}
+
+// TestWithheldURLFields_OpaqueShapes: a stored opaque credential shape is a
+// withheld field a PUT may not omit.
+func TestWithheldURLFields_OpaqueShapes(t *testing.T) {
+	fi := &fieldInfo{secret: map[string]bool{}, uri: map[string]bool{"empty": true}}
+	cfg := integrations.InstanceConfig{Settings: map[string]any{"empty": ""}}
+	var want []string
+	for i, shape := range opaqueCredentialShapes {
+		f := fmt.Sprintf("shape%d", i)
+		fi.uri[f] = true
+		cfg.Settings[f] = shape
+		want = append(want, f)
+	}
+	if got := withheldURLFields(cfg, fi); !slices.Equal(got, want) {
+		t.Errorf("withheld = %v, want %v", got, want)
+	}
+	err := withheldOmitted(cfg, fi, map[string]any{})
+	he, _ := errors.AsType[*httpapi.Error](err)
+	if he == nil || len(he.Fields) != len(want) || he.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("err = %+v", err)
+	}
+	assertNoLeak(t, "the 422", errBlob(t, err), "wayne1")
+	named := map[string]any{}
+	for _, f := range want {
+		named[f] = "https://192.0.2.40/"
+	}
+	if err := withheldOmitted(cfg, fi, named); err != nil {
+		t.Errorf("all named: %v", err)
 	}
 }
