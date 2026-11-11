@@ -415,7 +415,7 @@ func (s *Server) wireABSRoutes() {
 	// buildOAuthWiring's verifier so the ABS group is not coupled to the /api/v1
 	// passthrough, and with context.Background() because the remote keyset refreshes
 	// lazily in the background as Cloudflare rotates signing keys.
-	var verifier servermiddleware.CFAssertionVerifier
+	var verifier cfaccess.CFAssertionVerifier
 	oauthCfg := legacyoauth.New(legacyoauth.Config{
 		AllowedEmails:    legacyoauth.ParseAllowedEmails(snap.OAuthAllowedEmails),
 		DefaultRole:      snap.OAuthDefaultRole,

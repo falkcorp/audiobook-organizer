@@ -1,7 +1,7 @@
 // file: internal/server/client_trust.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: aaef6f46-d2c0-4e29-aaf4-2b93e15c6c37
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package server
 
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -820,7 +822,7 @@ func trustedClientIP(c *gin.Context, t clientTrust) (ip string, ok bool) {
 	// (both branches below treat a connector the same whether or not it is
 	// local), so it is asked only for other peers.
 	local := !isConnector && t.isLocalPeer(c.Request.RemoteAddr)
-	if isConnector || (servermiddleware.CFAccessVerified(c) && local) {
+	if isConnector || (cfaccess.CFAccessVerified(c) && local) {
 		if parsed := net.ParseIP(strings.TrimSpace(c.GetHeader("CF-Connecting-IP"))); parsed != nil {
 			return parsed.String(), true
 		}

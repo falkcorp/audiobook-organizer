@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -48,7 +48,7 @@ const (
 	// contextUserKey is LOAD-BEARING for auth: RequireAuth treats a request that
 	// already has this key set as authenticated (it skips its own session check —
 	// see the early-out below). Only a trusted upstream stage that has FULLY verified
-	// an identity (RequireAuth itself, handleAPIKeyAuth, or CloudflareAccessAuth after
+	// an identity (RequireAuth itself, handleAPIKeyAuth, or cfaccess.CloudflareAccessAuth after
 	// JWT verification + allowlist) may set it. Never set it from unvalidated input.
 	contextUserKey    = "auth_user"
 	contextSessionKey = "auth_session"
@@ -175,7 +175,7 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 			return
 		}
 
-		// An earlier stage (e.g. CloudflareAccessAuth) may have already resolved and
+		// An earlier stage (e.g. cfaccess.CloudflareAccessAuth) may have already resolved and
 		// bound the user for this request; if so, don't require a session token.
 		if u, ok := c.Get(contextUserKey); ok && u != nil {
 			if abortWorkerOnlyOutsideWorkerAPI(c) {
@@ -389,7 +389,7 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	c.Set(contextUserKey, user)
 	c.Set(contextAPIKeyKey, key)
 
-	// The key replaces anything an earlier stage bound (CloudflareAccessAuth
+	// The key replaces anything an earlier stage bound (cfaccess.CloudflareAccessAuth
 	// skips a request that presents a key, but this does not rely on it).
 	ctx := auth.WithUser(c.Request.Context(), user)
 	ctx = auth.WithPermissions(ctx, effectivePerms)

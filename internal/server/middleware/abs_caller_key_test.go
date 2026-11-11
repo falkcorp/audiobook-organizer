@@ -17,7 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
-// verifierFunc adapts a function to CFAssertionVerifier.
+// verifierFunc adapts a function to cfaccess.CFAssertionVerifier.
 type verifierFunc func(raw string) (*legacyoauth.IdentityClaims, error)
 
 func (f verifierFunc) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {

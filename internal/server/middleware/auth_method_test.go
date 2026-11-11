@@ -138,12 +138,12 @@ func TestCloudflareAccess_HumanIsInteractive_ServiceTokenIsNot(t *testing.T) {
 		},
 		nonIdentity: map[string]bool{"svc": true},
 	}
-	cf := &CFAccessAuthenticator{verifier: verifier, cfg: legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), cfStore, CFAccessHooks(cfStore))
 
 	run := func(assertion, token string) (int, auth.Method) {
 		r := gin.New()
 		var got auth.Method
-		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+		r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 		r.GET("/protected", func(c *gin.Context) {
 			got = CurrentAuthMethod(c)
 			c.Status(http.StatusOK)
@@ -190,7 +190,7 @@ func TestCloudflareAccess_APIKeyWins(t *testing.T) {
 	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{
 		"human": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
 	}}
-	cf := &CFAccessAuthenticator{verifier: verifier, cfg: legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), cfStore, CFAccessHooks(cfStore))
 	cases := map[string]func(r *http.Request){
 		"bearer key":                func(r *http.Request) { r.Header.Set("Authorization", "Bearer abk_secret") },
 		"key in the session cookie": func(r *http.Request) { r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "abk_secret"}) },
@@ -208,7 +208,7 @@ func TestCloudflareAccess_APIKeyWins(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := gin.New()
 			var got auth.Method
-			r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+			r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 			r.GET("/protected", func(c *gin.Context) {
 				got = CurrentAuthMethod(c)
 				c.Status(http.StatusOK)
@@ -278,13 +278,13 @@ func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
 		"kelvin-jwt": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-kelvin", Email: "\u212Aate@example.com", EmailVerified: true},
 		"kate-jwt":   {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-kate", Email: "kate@example.com", EmailVerified: true},
 	}}
-	cf := &CFAccessAuthenticator{verifier: verifier,
-		cfg: legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com", "kate@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier,
+		legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com", "kate@example.com"}}), cfStore, CFAccessHooks(cfStore))
 	ownerEmail := "owner@example.com"
 	run := func(set func(r *http.Request)) string {
 		r := gin.New()
 		why := "unreached"
-		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+		r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 		r.GET("/x", func(c *gin.Context) {
 			why = auth.OwnerProofWhyNot(c.Request.Context(), ownerEmail, "books.example.com")
 			c.Status(http.StatusOK)

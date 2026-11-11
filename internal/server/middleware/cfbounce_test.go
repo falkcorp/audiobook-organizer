@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
@@ -76,7 +78,7 @@ func runBounce(t *testing.T, r bounceReq) (*httptest.ResponseRecorder, bool) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	reached := false
-	router.Use(CFServiceTokenRecovery(NewCFServiceTokenBouncer(bounceTestVerifier()), bounceEligible))
+	router.Use(cfaccess.CFServiceTokenRecovery(cfaccess.NewCFServiceTokenBouncer(bounceTestVerifier(), KeyPresented), bounceEligible))
 	router.NoRoute(func(c *gin.Context) { reached = true; c.String(http.StatusOK, "spa") })
 	method := r.method
 	if method == "" {
@@ -278,7 +280,7 @@ func TestCFServiceTokenRecovery_UntouchedRequests(t *testing.T) {
 func TestCFServiceTokenRecovery_NilBouncerIsPassThrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(CFServiceTokenRecovery(NewCFServiceTokenBouncer(nil), bounceEligible))
+	router.Use(cfaccess.CFServiceTokenRecovery(cfaccess.NewCFServiceTokenBouncer(nil, KeyPresented), bounceEligible))
 	router.NoRoute(func(c *gin.Context) { c.String(http.StatusOK, "spa") })
 	req := httptest.NewRequest(http.MethodGet, "/library", nil)
 	for k, v := range with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader) {
@@ -309,7 +311,7 @@ func TestCFRecoveryURL(t *testing.T) {
 	}
 	// url.Parse reads "//evil.example/p" as a HOST; a request line can still carry
 	// it as a PATH, so build that one by hand.
-	if got, ok := CFRecoveryURL(&url.URL{Path: "//evil.example/p"}, true); ok || got != "" {
+	if got, ok := cfaccess.CFRecoveryURL(&url.URL{Path: "//evil.example/p"}, true); ok || got != "" {
 		t.Errorf("scheme-relative path must be refused, got %q, %v", got, ok)
 	}
 	for _, tc := range tests {
@@ -317,9 +319,9 @@ func TestCFRecoveryURL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ok := CFRecoveryURL(u, tc.marker)
+		got, ok := cfaccess.CFRecoveryURL(u, tc.marker)
 		if got != tc.want || ok != tc.ok {
-			t.Errorf("CFRecoveryURL(%q, %v) = %q, %v; want %q, %v", tc.in, tc.marker, got, ok, tc.want, tc.ok)
+			t.Errorf("cfaccess.CFRecoveryURL(%q, %v) = %q, %v; want %q, %v", tc.in, tc.marker, got, ok, tc.want, tc.ok)
 		}
 	}
 }
@@ -331,17 +333,17 @@ func TestWriteCFBouncePage_EscapesTarget(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-	WriteCFBouncePage(c, `/x?a="><script>alert(1)</script>`, false)
+	cfaccess.WriteCFBouncePage(c, `/x?a="><script>alert(1)</script>`, false)
 	if strings.Contains(w.Body.String(), "<script") || !strings.Contains(w.Body.String(), "&#34;&gt;&lt;script&gt;") {
 		t.Fatalf("target was not escaped:\n%s", w.Body.String())
 	}
 }
 
 func TestCFLogName_TruncatesAndSanitizes(t *testing.T) {
-	if got := CFLogName("0123456789abcdef.access"); got != "01234567..." {
+	if got := cfaccess.CFLogName("0123456789abcdef.access"); got != "01234567..." {
 		t.Fatalf("got %q", got)
 	}
-	if got := CFLogName("short"); got != "short" {
+	if got := cfaccess.CFLogName("short"); got != "short" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -350,7 +352,7 @@ func TestCFLogName_TruncatesAndSanitizes(t *testing.T) {
 // the middleware) when it passes over a page-looking request only for lack of them.
 func TestInspect_ReportsSkipForMissingSecFetch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	b := cfaccess.NewCFServiceTokenBouncer(bounceTestVerifier(), KeyPresented)
 	tests := []struct {
 		name    string
 		headers map[string]string
@@ -369,7 +371,7 @@ func TestInspect_ReportsSkipForMissingSecFetch(t *testing.T) {
 				c.Request.Header.Set(k, v)
 			}
 			ins := b.Inspect(c)
-			if ins.SkippedNoSecFetch != tc.want || ins.Kind != CFNavSkip {
+			if ins.SkippedNoSecFetch != tc.want || ins.Kind != cfaccess.CFNavSkip {
 				t.Fatalf("got kind=%v skipped=%v, want skip with skipped=%v", ins.Kind, ins.SkippedNoSecFetch, tc.want)
 			}
 		})
@@ -379,20 +381,20 @@ func TestInspect_ReportsSkipForMissingSecFetch(t *testing.T) {
 // InspectBrowserHop needs no Sec-Fetch headers, but keeps the other exclusions.
 func TestInspectBrowserHop_NoSecFetchRequired(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	b := cfaccess.NewCFServiceTokenBouncer(bounceTestVerifier(), KeyPresented)
 	tests := []struct {
 		name    string
 		method  string
 		headers map[string]string
-		want    CFNavKind
+		want    cfaccess.CFNavKind
 	}{
-		{"no sec-fetch", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, CFNavServiceToken},
-		{"with sec-fetch", http.MethodGet, with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader), CFNavServiceToken},
-		{"api key", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "Authorization": "Bearer abk_0123456789"}, CFNavSkip},
-		{"AppleCoreMedia", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "User-Agent": "AppleCoreMedia/1.0"}, CFNavSkip},
-		{"POST", http.MethodPost, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, CFNavSkip},
-		{"person", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bouncePerson}, CFNavPerson},
-		{"no assertion", http.MethodGet, nil, CFNavSkip},
+		{"no sec-fetch", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, cfaccess.CFNavServiceToken},
+		{"with sec-fetch", http.MethodGet, with(navHeaders, "Cf-Access-Jwt-Assertion", bounceSvcHeader), cfaccess.CFNavServiceToken},
+		{"api key", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "Authorization": "Bearer abk_0123456789"}, cfaccess.CFNavSkip},
+		{"AppleCoreMedia", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader, "User-Agent": "AppleCoreMedia/1.0"}, cfaccess.CFNavSkip},
+		{"POST", http.MethodPost, map[string]string{"Cf-Access-Jwt-Assertion": bounceSvcHeader}, cfaccess.CFNavSkip},
+		{"person", http.MethodGet, map[string]string{"Cf-Access-Jwt-Assertion": bouncePerson}, cfaccess.CFNavPerson},
+		{"no assertion", http.MethodGet, nil, cfaccess.CFNavSkip},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,7 +412,7 @@ func TestInspectBrowserHop_NoSecFetchRequired(t *testing.T) {
 
 func TestInspect_SecFetchLogValuesAreCapped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	b := cfaccess.NewCFServiceTokenBouncer(bounceTestVerifier(), KeyPresented)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodGet, "/auth/openid/browser", nil)
 	c.Request.Header.Set("Cf-Access-Jwt-Assertion", bounceSvcHeader)
@@ -425,7 +427,7 @@ func TestInspect_SecFetchLogValuesAreCapped(t *testing.T) {
 // never CookiePoisoned.
 func TestInspect_ReportsCookieIsPerson(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	b := NewCFServiceTokenBouncer(bounceTestVerifier())
+	b := cfaccess.NewCFServiceTokenBouncer(bounceTestVerifier(), KeyPresented)
 	for cookie, want := range map[string][2]bool{
 		bouncePerson:    {false, true},
 		bounceSvcCookie: {true, false},

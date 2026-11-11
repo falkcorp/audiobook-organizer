@@ -20,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -247,7 +246,7 @@ func loginCeilingMiddleware(l *coreauth.LoginCeiling, exempt func(*gin.Context) 
 // deliver) that verifier accepts (signature, issuer, expiry, AUD) for a verified
 // email cfg allows. A service-token assertion names no person and is not exempt.
 // The answer is kept on the request.
-func newAccessExemption(verifier servermiddleware.CFAssertionVerifier, cfg *legacyoauth.Config) func(*gin.Context) bool {
+func newAccessExemption(verifier cfaccess.CFAssertionVerifier, cfg *legacyoauth.Config) func(*gin.Context) bool {
 	const ctxKey = "login_ceiling_access_exempt"
 	if verifier == nil || cfg == nil {
 		return nil

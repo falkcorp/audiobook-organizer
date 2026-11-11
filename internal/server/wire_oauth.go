@@ -23,12 +23,12 @@ import (
 // the Access middleware. Set only by tests in this package (before
 // NewServer), so the real router can be driven with Access identities
 // without Cloudflare's keys; production never assigns it.
-var cfAccessVerifierOverride servermiddleware.CFAssertionVerifier
+var cfAccessVerifierOverride cfaccess.CFAssertionVerifier
 
 // buildOAuthWiring constructs the OAuth login handler and the Cloudflare Access
 // middleware from config. Returns (nil-safe handler, cfMiddleware-or-nil,
 // recoveryMiddleware-or-nil). The recovery middleware is the web UI's
-// service-token browser recovery (servermiddleware.CFServiceTokenRecovery) built
+// service-token browser recovery (cfaccess.CFServiceTokenRecovery) built
 // on the same verifier as cfMW, so it exists exactly when cfMW does; it belongs on
 // the SPA page routes, not the API. Nothing is enabled unless configured, and a
 // provider/verifier that fails to initialize is logged and skipped rather than
@@ -93,14 +93,14 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	// discovery timeout context above.
 	var cfMW, cfRecoveryMW gin.HandlerFunc
 	if cfAccessVerifierOverride != nil {
-		cfMW = servermiddleware.CloudflareAccessAuth(
-			servermiddleware.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring()))
+		cfMW = cfaccess.CloudflareAccessAuth(
+			cfaccess.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
 		cfRecoveryMW = newCFRecoveryMiddleware(cfAccessVerifierOverride)
 		s.loginCeilingExempt = newAccessExemption(cfAccessVerifierOverride, cfg)
 	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
-			cfMW = servermiddleware.CloudflareAccessAuth(
-				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))
+			cfMW = cfaccess.CloudflareAccessAuth(
+				cfaccess.NewCFAccessAuthenticator(v, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
 			cfRecoveryMW = newCFRecoveryMiddleware(v)
 			s.loginCeilingExempt = newAccessExemption(v, cfg)
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)

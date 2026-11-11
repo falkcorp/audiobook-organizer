@@ -247,7 +247,7 @@ func activeUser(id, username string) *database.User {
 // ── MANDATED SECURITY TEST: no fail-open on the ABS surface ─────────────────
 
 // TestABSAuth_InvalidAssertionIsHard401_NotFailOpen is the mandated security test
-// (spec §3.0.1 final bullet). The existing CloudflareAccessAuth middleware on
+// (spec §3.0.1 final bullet). The existing cfaccess.CloudflareAccessAuth middleware on
 // /api/v1 is FAIL-OPEN by design: an unverifiable assertion simply falls through.
 // On the ABS surface that behaviour would be an authentication bypass, because there
 // is no second gate behind it. A malformed, forged, expired or wrong-AUD assertion
