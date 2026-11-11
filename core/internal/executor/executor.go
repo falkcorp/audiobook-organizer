@@ -1,5 +1,5 @@
 // file: core/internal/executor/executor.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a39876a5-3dce-4f6d-9003-f07fdeb8a28d
 // last-edited: 2026-11-10
 
@@ -58,7 +58,7 @@ type erased interface {
 		task *tasks.TaskSpec[any, json.RawMessage], batch *tasks.BatchSpec[any, any, json.RawMessage], fixer *tasks.FixerSpec[any, any])
 }
 
-// Shape default timeouts (5T.3.6; HEAD pkg/ops/definition.go's).
+// Shape default timeouts (5T.3.6; HEAD's definition.go defaults).
 const (
 	defaultTaskTimeout  = 30 * time.Minute
 	defaultBatchTimeout = 24 * time.Hour

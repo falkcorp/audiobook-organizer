@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-10
 
@@ -258,6 +258,10 @@ func TestStandDown_MarkerAtBootDefersQuiescedRun(t *testing.T) {
 	h.start("gotham.compact", tasks.StartRequest{})
 	<-holding
 	h.waitState(s, tasks.StateInterruptedQuiesced)
+	// While the hold lives, a new run of the stood-down key waits (the
+	// holder's own key and writes are disjoint from it).
+	another := h.start("gotham.scan", tasks.StartRequest{Params: mustParams(t, "night")})
+	h.stays(another, tasks.StateQueued, 300*time.Millisecond)
 
 	defs := []tasks.Definition{scan(okBody), holder}
 	second := h.crashBoot(defs, nil)
@@ -273,6 +277,56 @@ func TestStandDown_MarkerAtBootDefersQuiescedRun(t *testing.T) {
 	}
 	third := second.reboot(defs, nil)
 	third.waitState(s, tasks.StateSucceeded)
+}
+
+// TestResume_RestartGuardFailsCrashLoop (5T.3.6, HEAD worker.go's
+// infinite-restart guard; added for the resume invariants): a run that was
+// executing at boot after MaxAttempts claims is failed, not resumed again.
+func TestResume_RestartGuardFailsCrashLoop(t *testing.T) {
+	started := make(chan tasks.RunID, 4)
+	defs := []tasks.Definition{taskDef("gotham.crashloop", blockUntilCtx(started))}
+	cfg := func(o *Options) { o.Config = testConfig(); o.Config.MaxAttempts = 2 }
+	h := newHarness(t, defs, cfg)
+	id := h.start("gotham.crashloop", tasks.StartRequest{})
+	<-started
+	second := h.crashBoot(defs, cfg)
+	<-started
+	if r := second.get(id); r.Attempt != 2 || r.State != tasks.StateRunning {
+		t.Fatalf("after one crash: %s attempt %d, want running attempt 2", r.State, r.Attempt)
+	}
+	third := second.crashBoot(defs, cfg)
+	r := third.waitState(id, tasks.StateFailed, tasks.StateRunning)
+	if r.State != tasks.StateFailed || r.Reason != "restart_loop" {
+		t.Fatalf("after %d attempts: %s/%q, want failed/restart_loop", r.Attempt, r.State, r.Reason)
+	}
+}
+
+// TestShutdown_StoppingCancelEndsCanceled (5T.4 step 4; added for the
+// shutdown invariants): a run already stopping for a cancel when Shutdown
+// abandons it ends canceled, not interrupted, so it is never resumed.
+func TestShutdown_StoppingCancelEndsCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{}, 1)
+		release := make(chan struct{})
+		def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
+			started <- struct{}{}
+			<-release
+			return "talked", nil
+		}, withCancel(tasks.Cooperative(time.Hour)))
+		h := newHarness(t, []tasks.Definition{def}, func(o *Options) { synctestConfig(o); o.Config.ShutdownDrain = time.Second })
+		id := h.start("gotham.interrogation", tasks.StartRequest{})
+		<-started
+		if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.x.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if r := h.get(id); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Fatalf("after Shutdown: %s/%q, want canceled/cancel", r.State, r.Reason)
+		}
+		close(release)
+	})
 }
 
 // TestUnknownKindRun_DroppedAtResume (5T.3.6, D10): at boot, an unfinished
@@ -333,21 +387,24 @@ func TestOnTerminal_NotificationStagedInTerminalBatch(t *testing.T) {
 				}
 			})
 			id := h.start("gotham.closecase", tasks.StartRequest{})
-			waitFor(t, "OnTerminal", func() bool { mu.Lock(); defer mu.Unlock(); return calls > 0 })
-			r := h.waitState(id, tasks.StateSucceeded, tasks.StateRunning)
-			_, stamped, err := h.stores.Runs.Stamped(context.Background(), subject, "gotham.closecase")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !fail && (r.State != tasks.StateSucceeded || !stamped) {
-				t.Fatalf("run %s, stamp %v; want succeeded and stamped together", r.State, stamped)
-			}
-			if fail {
-				time.Sleep(100 * time.Millisecond)
-				r = h.get(id)
-				if r.State.Terminal() || stamped {
-					t.Fatalf("OnTerminal failed but the run is %s and stamp %v; want neither committed", r.State, stamped)
+			stampedNow := func() bool {
+				_, ok, err := h.stores.Runs.Stamped(context.Background(), subject, "gotham.closecase")
+				if err != nil {
+					t.Fatal(err)
 				}
+				return ok
+			}
+			if !fail {
+				h.waitState(id, tasks.StateSucceeded)
+				if !stampedNow() {
+					t.Fatal("run succeeded without the stamp OnTerminal staged in its batch")
+				}
+				return
+			}
+			waitFor(t, "OnTerminal", func() bool { mu.Lock(); defer mu.Unlock(); return calls > 0 })
+			time.Sleep(100 * time.Millisecond) // the aborted commit has returned
+			if r := h.get(id); r.State.Terminal() || stampedNow() {
+				t.Fatalf("OnTerminal failed but the run is %s and stamp %v; want neither committed", r.State, stampedNow())
 			}
 		})
 	}

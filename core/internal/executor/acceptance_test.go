@@ -1,5 +1,5 @@
 // file: core/internal/executor/acceptance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d06a72a-c352-44d0-b19d-3122c4700486
 // last-edited: 2026-11-10
 
@@ -169,6 +169,7 @@ func TestCancel_GraceThenFenceRevoked(t *testing.T) {
 		if r := h.get(id); r.State != tasks.StateStopping || r.Reason != reasonCancel {
 			t.Fatalf("after cancel: %s/%q, want stopping/cancel", r.State, r.Reason)
 		}
+		synctest.Wait() // every goroutine idle: a zero grace would have abandoned the attempt by now
 		if err := write(); err != nil {
 			t.Fatalf("write inside the grace: %v, want nil (fence intact)", err)
 		}
@@ -231,6 +232,7 @@ func TestResume_PolicyMatrix(t *testing.T) {
 					h := newHarness(t, defs, cfg)
 					id := h.start("gotham.patrol", tasks.StartRequest{})
 					<-started
+					firstFence := h.get(id).FenceEpoch
 					var next *harness
 					switch scen {
 					case "shutdown":
@@ -269,6 +271,9 @@ func TestResume_PolicyMatrix(t *testing.T) {
 						}
 						if r.Attempt != 2 {
 							t.Fatalf("attempt %d, want 2 (same run, one more attempt)", r.Attempt)
+						}
+						if r.FenceEpoch <= firstFence {
+							t.Fatalf("fence epoch %d after the second claim, want above the first attempt's %d", r.FenceEpoch, firstFence)
 						}
 					} else if calls.Load() != 1 {
 						t.Fatalf("body ran %d times under %s, want 1", calls.Load(), pol)

@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f380a3d2-0261-42b8-82c6-72a942b58624
 // last-edited: 2026-11-10
 
@@ -148,37 +148,63 @@ func TestContinueInPlace_SameRunIDFreshTimeout(t *testing.T) {
 
 // TestZombieCapBlocksModule (5T.4, core.tasks.zombie_cap): once a module
 // has zombie_cap abandoned attempts still alive, its new runs wait; other
-// modules dispatch; the module dispatches again when a zombie exits.
+// modules dispatch; the module dispatches again when a zombie exits. Below
+// the cap the module dispatches, except a kind sharing the zombie's
+// ConcurrencyKey: a zombie keeps its key until its goroutine exits (D6).
+// The fixture kinds write resources disjoint from the zombie's, so neither
+// wait is the write-set gate's.
 func TestZombieCapBlocksModule(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		started := make(chan struct{}, 1)
-		release := make(chan struct{})
-		stubborn := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
-			started <- struct{}{}
-			<-release // ignores the cancel: becomes a zombie after its grace
-			return "talked", nil
-		}, withCancel(tasks.Cooperative(time.Second)))
-		h := newHarness(t, []tasks.Definition{stubborn, taskDef("gotham.paperwork", okBody), taskDef("arkham.paperwork", okBody)}, func(o *Options) {
-			synctestConfig(o)
-			o.Config.ZombieCap = 1
+	writes := func(r string) func(*tasks.Common) {
+		return func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", r)) }
+	}
+	for _, c := range []struct {
+		name string
+		cap  int
+	}{{"at the cap", 1}, {"below the cap", 4}} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan struct{}, 1)
+				release := make(chan struct{})
+				stubborn := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
+					started <- struct{}{}
+					<-release // ignores the cancel: becomes a zombie after its grace
+					return "talked", nil
+				}, withCancel(tasks.Cooperative(time.Second)))
+				followup := taskDef("gotham.followup", okBody, writes("notes"),
+					func(cm *tasks.Common) { cm.ConcurrencyKey = "gotham.interrogation" })
+				h := newHarness(t, []tasks.Definition{stubborn, followup, taskDef("gotham.paperwork", okBody, writes("lab")),
+					taskDef("arkham.paperwork", okBody)}, func(o *Options) {
+					synctestConfig(o)
+					o.Config.ZombieCap = c.cap
+				})
+				z := h.start("gotham.interrogation", tasks.StartRequest{})
+				<-started
+				if err := h.x.Cancel(context.Background(), z); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				if r := h.get(z); r.State != tasks.StateCanceled {
+					t.Fatalf("after the grace: %s, want canceled (abandoned, goroutine still alive)", r.State)
+				}
+				same := h.start("gotham.paperwork", tasks.StartRequest{})
+				other := h.start("arkham.paperwork", tasks.StartRequest{})
+				h.waitState(other, tasks.StateSucceeded)
+				if c.cap == 1 {
+					h.stays(same, tasks.StateQueued, 5*time.Second)
+				} else {
+					h.waitState(same, tasks.StateSucceeded)
+					keyed := h.start("gotham.followup", tasks.StartRequest{})
+					h.stays(keyed, tasks.StateQueued, 5*time.Second)
+					close(release)
+					h.waitState(keyed, tasks.StateSucceeded)
+					return
+				}
+				close(release)
+				h.waitState(same, tasks.StateSucceeded)
+			})
 		})
-		z := h.start("gotham.interrogation", tasks.StartRequest{})
-		<-started
-		if err := h.x.Cancel(context.Background(), z); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(2 * time.Second)
-		synctest.Wait()
-		if r := h.get(z); r.State != tasks.StateCanceled {
-			t.Fatalf("after the grace: %s, want canceled (abandoned, goroutine still alive)", r.State)
-		}
-		same := h.start("gotham.paperwork", tasks.StartRequest{})
-		other := h.start("arkham.paperwork", tasks.StartRequest{})
-		h.waitState(other, tasks.StateSucceeded)
-		h.stays(same, tasks.StateQueued, 5*time.Second)
-		close(release)
-		h.waitState(same, tasks.StateSucceeded)
-	})
+	}
 }
 
 // caseSubjects is a per-run write set from params: "" none, "*" every case,
