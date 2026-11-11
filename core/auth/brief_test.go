@@ -1,7 +1,7 @@
 // file: core/auth/brief_test.go
 // version: 1.0.0
 // guid: 068d005d-674b-4819-93ce-0a8377ecd7b3
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth_test
 
@@ -27,7 +27,7 @@ import (
 // test files do not already carry, and the service-level guards the F4-02a
 // mutant sweep found unpinned.
 
-var nativeKinds = []auth.CredentialKind{auth.KindSession, auth.KindAPIKey, auth.KindBootstrap, auth.KindInvite, auth.KindTempLogin}
+var nativeKinds = []auth.CredentialKind{auth.KindSession, auth.KindKey, auth.KindBootstrap, auth.KindInvite, auth.KindTempLogin}
 
 // crcOracle is the checksum written out independently of credential.go, as a
 // secret scanner would compute it: the CRC32 (IEEE) of everything before the
@@ -68,17 +68,18 @@ func TestCredentialFormat_ChecksumAndPrefix(t *testing.T) {
 	}
 	const b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	for _, kind := range nativeKinds {
-		raw, err := auth.MintCredential(kind)
+		tok, err := auth.MintCredential(kind)
 		if err != nil {
 			t.Fatal(err)
 		}
+		raw := string(tok)
 		if !wellFormed(kind, raw) {
 			t.Fatalf("%s: minted %q does not match the format a scanner checks", kind, raw)
 		}
 		if err := auth.ParseCredential(kind, raw); err != nil {
 			t.Fatalf("%s: a minted credential does not parse: %v", kind, err)
 		}
-		if again, _ := auth.MintCredential(kind); again == raw {
+		if again, _ := auth.MintCredential(kind); string(again) == raw {
 			t.Fatalf("%s: two mints gave the same value", kind)
 		}
 		for _, other := range nativeKinds {
@@ -115,7 +116,8 @@ func TestCredentialFormat_ChecksumAndPrefix(t *testing.T) {
 			}
 		}
 	}
-	key, _ := auth.MintCredential(auth.KindAPIKey)
+	minted, _ := auth.MintCredential(auth.KindKey)
+	key := string(minted)
 	for name, raw := range map[string]string{
 		"empty":             "",
 		"short of a prefix": "mc",
@@ -123,7 +125,7 @@ func TestCredentialFormat_ChecksumAndPrefix(t *testing.T) {
 		"an imported key":   "abk_batcave",
 		"a bearer header":   "Bearer " + key,
 	} {
-		if err := auth.ParseCredential(auth.KindAPIKey, raw); !errors.Is(err, auth.ErrNoCredential) {
+		if err := auth.ParseCredential(auth.KindKey, raw); !errors.Is(err, auth.ErrNoCredential) {
 			t.Fatalf("%s: %v, want ErrNoCredential", name, err)
 		}
 	}
@@ -144,7 +146,8 @@ func TestCredentialFormat_ChecksumAndPrefix(t *testing.T) {
 // oracle calls well formed, and ErrInvalidCredentials otherwise.
 func FuzzParseCredential(f *testing.F) {
 	for i, k := range nativeKinds {
-		raw, err := auth.MintCredential(k)
+		rawTok, err := auth.MintCredential(k)
+		raw := string(rawTok)
 		if err != nil {
 			f.Fatal(err)
 		}
@@ -390,7 +393,8 @@ func TestCookie_SiblingAppCookieDoesNotBlockLogin(t *testing.T) {
 	gotham := f.withSettings(t, auth.Settings{SessionCookie: "gotham_session"})
 	arkham := f.withSettings(t, auth.Settings{SessionCookie: "arkham_session"})
 	is := f.issue(t, dick)
-	stale, _ := auth.MintCredential(auth.KindSession)
+	staleTok, _ := auth.MintCredential(auth.KindSession)
+	stale := string(staleTok)
 	for https, prefix := range map[bool]string{true: "__Host-", false: ""} {
 		c := auth.ClientInfo{HTTPS: https}
 		g, a := gotham.SessionCookie(c, is.Token, is.ExpiresAt), arkham.SessionCookie(c, is.Token, is.ExpiresAt)

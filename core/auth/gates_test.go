@@ -1,7 +1,7 @@
 // file: core/auth/gates_test.go
 // version: 1.0.0
 // guid: ee01bbff-d4fe-4a64-9053-998f722fa081
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth_test
 
@@ -81,7 +81,7 @@ func TestSessions_ListNeverReturnsToken(t *testing.T) {
 		if !strings.HasPrefix(is.Token, "mcs_") || is.PublicID == "" || strings.Contains(is.Token, is.PublicID) {
 			t.Fatalf("issued session %q / %q", is.Token, is.PublicID)
 		}
-		secrets = append(secrets, is.Token, auth.HashHex(is.Token))
+		secrets = append(secrets, is.Token, auth.HashHex(auth.Token(is.Token)))
 		if open[u.ID] == nil {
 			open[u.ID] = map[string]bool{}
 		}

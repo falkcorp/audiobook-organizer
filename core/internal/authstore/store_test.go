@@ -1,7 +1,7 @@
 // file: core/internal/authstore/store_test.go
 // version: 1.0.0
 // guid: ff601fd8-fd3d-4cde-82ec-c1c09c875e1a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authstore
 
@@ -194,22 +194,22 @@ func TestNoRawCredentialStored(t *testing.T) {
 	b := st.NewBatch()
 	exp := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	u := &auth.User{ID: "01JBRUCE", Username: "bruce", Status: auth.StatusActive, Version: 1}
-	var raws []string
-	steps := []func() (string, error){
-		func() (string, error) { return "", st.PutUser(b, u) },
-		func() (string, error) {
+	var raws []auth.Token
+	steps := []func() (auth.Token, error){
+		func() (auth.Token, error) { return "", st.PutUser(b, u) },
+		func() (auth.Token, error) {
 			return st.IssueSession(b, &auth.SessionRecord{UserID: u.ID, Origin: auth.OriginPassword, ExpiresAt: exp})
 		},
-		func() (string, error) {
-			return st.IssueAPIKey(b, &auth.APIKey{Owner: u.ID, Scopes: []rbac.Permission{"gotham:patrol"}, Status: auth.KeyActive, ExpiresAt: exp})
+		func() (auth.Token, error) {
+			return st.IssueKey(b, &auth.APIKey{Owner: u.ID, Scopes: []rbac.Permission{"gotham:patrol"}, Status: auth.KeyActive, ExpiresAt: exp})
 		},
-		func() (string, error) {
+		func() (auth.Token, error) {
 			return st.IssueOneTime(b, &auth.OneTimeToken{Kind: auth.OneTimeInvite, ExpiresAt: exp})
 		},
-		func() (string, error) {
+		func() (auth.Token, error) {
 			return st.IssueOneTime(b, &auth.OneTimeToken{Kind: auth.OneTimeTempLogin, UserID: u.ID, ExpiresAt: exp})
 		},
-		func() (string, error) {
+		func() (auth.Token, error) {
 			return st.IssueOneTime(b, &auth.OneTimeToken{Kind: auth.OneTimeBootstrap, ExpiresAt: exp})
 		},
 	}
@@ -248,7 +248,7 @@ func TestNoRawCredentialStored(t *testing.T) {
 
 // issueOneSession commits a user and one session for it and returns the raw
 // token and the record as issued.
-func issueOneSession(t *testing.T, st *Store) (string, *auth.SessionRecord) {
+func issueOneSession(t *testing.T, st *Store) (auth.Token, *auth.SessionRecord) {
 	t.Helper()
 	ctx := context.Background()
 	b := st.NewBatch()
@@ -277,7 +277,7 @@ func issueOneSession(t *testing.T, st *Store) (string, *auth.SessionRecord) {
 func TestSession_TokenNeverStored(t *testing.T) {
 	st := newStore(t)
 	tok, _ := issueOneSession(t, st)
-	if err := auth.ParseCredential(auth.KindSession, tok); err != nil {
+	if err := auth.ParseCredential(auth.KindSession, string(tok)); err != nil {
 		t.Fatalf("the issued token is not a session credential: %v", err)
 	}
 	rows := 0
@@ -308,7 +308,7 @@ func TestSession_NativeOnlyRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SessionByToken: %v", err)
 	}
-	if got.PublicID != rec.PublicID || strings.Contains(got.PublicID, tok[4:47]) {
+	if got.PublicID != rec.PublicID || strings.Contains(got.PublicID, string(tok[4:47])) {
 		t.Fatalf("read back %+v", got)
 	}
 	byID, err := st.SessionByPublicID(ctx, rec.PublicID)

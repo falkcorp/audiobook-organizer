@@ -1,7 +1,7 @@
 // file: core/auth/middleware_test.go
 // version: 1.0.0
 // guid: d0f1edfd-530e-47d8-b256-7194b9109d0f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth_test
 
@@ -128,7 +128,8 @@ func TestStage12_InvalidKeyPlusValidSessionIs401(t *testing.T) {
 	f := newFx(t)
 	dick := f.user("dick", "gotham.detective")
 	is := f.issue(t, dick)
-	forged, err := auth.MintCredential(auth.KindAPIKey) // well formed, never stored
+	forgedTok, err := auth.MintCredential(auth.KindKey) // well formed, never stored
+	forged := string(forgedTok)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +284,8 @@ func TestStage12_Sessions(t *testing.T) {
 			t.Fatalf("%s: bound %+v", name, got.p)
 		}
 	}
-	stale, _ := auth.MintCredential(auth.KindSession)
+	staleTok, _ := auth.MintCredential(auth.KindSession)
+	stale := string(staleTok)
 	_, got := serve(t, f.svc, request("", stale))
 	if got.p != nil || !got.failed || got.fail.Code != auth.CodeInvalidCredential || !got.fail.Cookie {
 		t.Fatalf("stale cookie: principal %v failure %+v", got.p, got.fail)
@@ -347,7 +349,7 @@ func TestImportedKey_AbkVerifies(t *testing.T) {
 		return f.st.ImportAPIKey(b, &auth.APIKey{
 			ID: "key-oracle", Owner: dick.ID, Name: "Oracle relay", Scopes: []rbac.Permission{"gotham:patrol"},
 			Status: auth.KeyActive, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(time.Hour), Imported: true,
-		}, auth.HashCredential(raw))
+		}, auth.HashCredential(auth.Token(raw)))
 	})
 	_, got := serve(t, f.svc, request(raw, ""))
 	if got.p == nil || got.p.Method != auth.MethodAPIKey || got.p.CredentialID != "key-oracle" {
@@ -359,7 +361,8 @@ func TestImportedKey_AbkVerifies(t *testing.T) {
 // presented: stage 13 then admits only Public and setup routes (§4.2 item 1).
 func TestFirstRun_OnlyPublicAndSetupReachable(t *testing.T) {
 	f := newFx(t)
-	key, _ := auth.MintCredential(auth.KindAPIKey)
+	keyTok, _ := auth.MintCredential(auth.KindKey)
+	key := string(keyTok)
 	_, got := serve(t, f.svc, request(key, ""))
 	if !got.called || got.p != nil || got.failed {
 		t.Fatalf("first run: principal %v failure %v", got.p, got.failed)
@@ -372,11 +375,11 @@ type failingStore struct{ auth.Store }
 
 var errDiskOnFire = errors.New("the Batcave's disks are on fire")
 
-func (failingStore) APIKeyByToken(context.Context, string) (*auth.APIKey, error) {
+func (failingStore) APIKeyByToken(context.Context, auth.Token) (*auth.APIKey, error) {
 	return nil, errDiskOnFire
 }
 
-func (failingStore) SessionByToken(context.Context, string) (*auth.SessionRecord, error) {
+func (failingStore) SessionByToken(context.Context, auth.Token) (*auth.SessionRecord, error) {
 	return nil, errDiskOnFire
 }
 
@@ -390,7 +393,8 @@ func TestStage12_StoreErrorIs503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, _ := auth.MintCredential(auth.KindAPIKey)
+	keyTok, _ := auth.MintCredential(auth.KindKey)
+	key := string(keyTok)
 	for name, r := range map[string]*http.Request{"key": request(key, ""), "session": request("", is.Token)} {
 		w, got := serve(t, svc, r)
 		if got.called || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"code":"auth_unavailable"`) {

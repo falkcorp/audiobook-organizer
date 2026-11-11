@@ -1,7 +1,7 @@
 // file: core/auth/sessions.go
 // version: 1.0.0
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -57,7 +57,7 @@ func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigi
 				return err
 			}
 		}
-		out = &IssuedSession{Token: tok, PublicID: rec.PublicID, ExpiresAt: rec.ExpiresAt}
+		out = &IssuedSession{Token: string(tok), PublicID: rec.PublicID, ExpiresAt: rec.ExpiresAt}
 		return nil
 	})
 	if err != nil {

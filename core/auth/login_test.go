@@ -1,7 +1,7 @@
 // file: core/auth/login_test.go
 // version: 1.0.0
 // guid: 2f3c7225-aeb7-459b-bb79-e61a022bc09a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth_test
 
@@ -108,7 +108,7 @@ func TestLogin_SucceedsAndStampsTheVerifiedEpoch(t *testing.T) {
 	if n := th.AccountFailures(auth.AccountKey("brucewayne")); n != 0 {
 		t.Fatalf("success left %d failures on the account", n)
 	}
-	rec, err := f.st.SessionByToken(context.Background(), sess.Token)
+	rec, err := f.st.SessionByToken(context.Background(), auth.Token(sess.Token))
 	if err != nil {
 		t.Fatal(err)
 	}

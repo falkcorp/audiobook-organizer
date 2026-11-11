@@ -1,7 +1,7 @@
 // file: core/auth/middleware.go
 // version: 1.0.0
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -279,7 +279,7 @@ func (s *Service) SessionCookie(c ClientInfo, token string, expires time.Time) *
 
 // isKey reports whether raw is shaped like an API key: native or imported.
 func (s *Service) isKey(raw string) bool {
-	return strings.HasPrefix(raw, string(KindAPIKey)) || hasImportedPrefix(s.opts.ImportedKeyPrefixes, raw)
+	return strings.HasPrefix(raw, string(KindKey)) || hasImportedPrefix(s.opts.ImportedKeyPrefixes, raw)
 }
 
 // authenticateKey is core's API-key authenticator (Order 100): a key
@@ -305,13 +305,15 @@ func (s *Service) authenticateKey(r *http.Request, c ClientInfo) (*Principal, *F
 	fail := func(code string) (*Principal, *Failure, error) {
 		return nil, &Failure{Code: code, Cookie: cred.cookie}, nil
 	}
-	if strings.HasPrefix(cred.raw, string(KindAPIKey)) {
-		if err := ParseCredential(KindAPIKey, cred.raw); err != nil {
+	if strings.HasPrefix(cred.raw, string(KindKey)) {
+		if err := ParseCredential(KindKey, cred.raw); err != nil {
 			return fail(CodeInvalidCredential)
 		}
 	}
 	ctx := r.Context()
-	k, err := s.d.Store.APIKeyByToken(ctx, cred.raw)
+	// A native key parsed above; an imported one matched its prefix in
+	// isKey. Either is now a bearer Token, looked up by its SHA-256.
+	k, err := s.d.Store.APIKeyByToken(ctx, Token(cred.raw))
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUndecodableRecord) {
 		return fail(CodeInvalidCredential)
 	}
@@ -359,7 +361,7 @@ func (s *Service) authenticateSession(r *http.Request, c ClientInfo) (*Principal
 		return fail(CodeInvalidCredential)
 	}
 	ctx := r.Context()
-	rec, err := s.d.Store.SessionByToken(ctx, cred.raw)
+	rec, err := s.d.Store.SessionByToken(ctx, Token(cred.raw)) // parsed as an mcs_ token above
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUndecodableRecord) {
 		return fail(CodeInvalidCredential)
 	}
