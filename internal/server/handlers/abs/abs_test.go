@@ -451,7 +451,7 @@ func (h *harness) seedPasswordUser(t *testing.T, id, username, password string) 
 
 func (h *harness) seedUser(t *testing.T, id, username, email, password string) *database.User {
 	t.Helper()
-	algo, hash, err := authpw.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -603,15 +603,15 @@ func TestStatus_RateLimitMatchesRealThrottle(t *testing.T) {
 	}
 
 	advertised := int64(settings["rateLimitLoginRequests"].(float64))
-	if advertised != int64(coreauth.MaxFailuresPerIP) {
-		t.Errorf("rateLimitLoginRequests: got %d, want %d (coreauth.MaxFailuresPerIP)",
-			advertised, coreauth.MaxFailuresPerIP)
+	if advertised != int64(coreauth.DefaultMaxFailuresPerSource) {
+		t.Errorf("rateLimitLoginRequests: got %d, want %d (coreauth.DefaultMaxFailuresPerSource)",
+			advertised, coreauth.DefaultMaxFailuresPerSource)
 	}
 
 	window := int64(settings["rateLimitLoginWindow"].(float64))
-	expectedWindow := coreauth.Window.Milliseconds()
+	expectedWindow := coreauth.DefaultThrottleWindow.Milliseconds()
 	if window != expectedWindow {
-		t.Errorf("rateLimitLoginWindow: got %d, want %d (coreauth.Window.Milliseconds())",
+		t.Errorf("rateLimitLoginWindow: got %d, want %d (coreauth.DefaultThrottleWindow.Milliseconds())",
 			window, expectedWindow)
 	}
 }
@@ -852,7 +852,7 @@ func TestLogin_BcryptUserIsRehashedToArgon2id(t *testing.T) {
 	if u.PasswordHashAlgo != authpw.AlgoArgon2id {
 		t.Fatalf("expected rehash to argon2id, algo is %q", u.PasswordHashAlgo)
 	}
-	if ok, rehash := authpw.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
+	if ok, rehash := absauth.Passwords.Verify(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
 		t.Fatalf("rehashed credential must verify cleanly (ok=%v rehash=%v)", ok, rehash)
 	}
 	// And the user can still log in afterwards.
@@ -880,7 +880,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 func TestLogin_ThrottleIs429AndNeverLocksTheAccount(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range coreauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
 			body: map[string]any{"username": "owner", "password": "wrong"}})
 		if w.Code != http.StatusUnauthorized {

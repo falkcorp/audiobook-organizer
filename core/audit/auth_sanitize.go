@@ -1,5 +1,5 @@
 // file: core/audit/auth_sanitize.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d7ab1b1-eb09-4602-8324-5a3f06413949
 // last-edited: 2026-11-10
 
@@ -7,20 +7,12 @@ package audit
 
 import "strings"
 
-// logSanitizer carries the moved auth attempt record's log barrier under the
-// name it was called by in ABO (logger.SanitizeLogValue), so the move commit
-// changes no call site; F4-02's next commit passes a logger in instead.
-type logSanitizer int
-
-// logger is the barrier's receiver: a constant, so it holds no state.
-const logger logSanitizer = 0
-
-// SanitizeLogValue escapes CR, LF and the other C0 controls and DEL in a value
+// sanitizeLogValue escapes CR, LF and the other C0 controls and DEL in a value
 // an auth attempt record logs, so a submitted username or user agent cannot
 // forge a log line (go/log-injection). It is ABO's internal/logger
 // SanitizeLogValue, which the auth attempt record used before it moved here
 // (F4-02); tab is kept verbatim.
-func (logSanitizer) SanitizeLogValue(s string) string {
+func sanitizeLogValue(s string) string {
 	s = strings.ReplaceAll(s, "\r", `\r`)
 	s = strings.ReplaceAll(s, "\n", `\n`)
 	if !strings.ContainsFunc(s, isLogControl) {

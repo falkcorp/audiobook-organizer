@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+
 	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -30,7 +32,7 @@ import (
 // handler hashed the submitted password with the shared policy.
 func hashOf(plain string) any {
 	return mock.MatchedBy(func(hash string) bool {
-		ok, _ := authpw.VerifyPassword(authpw.AlgoArgon2id, hash, plain)
+		ok, _ := absauth.Passwords.Verify(authpw.AlgoArgon2id, hash, plain)
 		return ok
 	})
 }

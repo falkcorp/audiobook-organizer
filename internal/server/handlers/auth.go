@@ -15,7 +15,6 @@ import (
 	"time"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
-	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -127,11 +126,11 @@ type AuthHandler struct {
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.
 func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
-	authpw.WarmLoginDummy() // so the first login for an unknown name costs what any other does
+	absauth.Passwords.Warm() // so the first login for an unknown name costs what any other does
 	return &AuthHandler{
 		store:       store,
 		enableAuth:  enableAuth,
-		throttle:    coreauth.NewThrottle(),
+		throttle:    coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil),
 		absSessions: ResolveABSSessionRevoker(store),
 		creds:       ResolveUserCredentialWriter(store),
 	}
@@ -296,7 +295,7 @@ func (h *AuthHandler) SetupInitialAdmin(c *gin.Context) {
 		httputil.RespondWithConflict(c, "initial setup already completed")
 		return
 	}
-	algo, hash, err := authpw.HashPassword(req.Password)
+	algo, hash, err := absauth.Passwords.Hash(req.Password)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
@@ -337,7 +336,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	ip := h.throttleKey(c)
 	// Per-IP throttle first: a source that has burned through its failure budget
 	// is rejected before any credential work, so it can't keep probing (HIGH-3).
-	if h.throttle.IPBlocked(ip) {
+	if h.throttle.SourceBlocked(ip) {
 		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later", "TOO_MANY_REQUESTS")
 		return
@@ -367,12 +366,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		// does not exist, so username guessing can't dodge the throttle and an
 		// unknown name slows down exactly like a real one. The same password work
 		// is spent first, so the response time does not give the name away either.
-		authpw.SpendVerification(req.Password)
+		absauth.Passwords.SpendVerification(req.Password)
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if ok, _ := authpw.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
+	if ok, _ := absauth.Passwords.VerifyLogin(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
 		// real user with the correct password is never denied (HIGH-3). An account
 		// with no password credential at all spends the same verification work.
@@ -649,12 +648,12 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "current_password is required")
 			return
 		}
-		if ok, _ := authpw.VerifyPassword(target.PasswordHashAlgo, target.PasswordHash, req.CurrentPassword); !ok {
+		if ok, _ := absauth.Passwords.Verify(target.PasswordHashAlgo, target.PasswordHash, req.CurrentPassword); !ok {
 			httputil.RespondWithUnauthorized(c, "current password is incorrect")
 			return
 		}
 	}
-	newAlgo, newHash, err := authpw.HashPassword(req.NewPassword)
+	newAlgo, newHash, err := absauth.Passwords.Hash(req.NewPassword)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return

@@ -242,8 +242,8 @@ func (h *Handler) buildServerSettings() serverSettings {
 		// token burns login attempts. That makes this an upper bound: a client can
 		// hit the 429 before its Nth login. The names say "requests" because they are
 		// an upstream ABS wire contract we do not control.
-		RateLimitLoginRequests: coreauth.MaxFailuresPerIP,
-		RateLimitLoginWindow:   coreauth.Window.Milliseconds(),
+		RateLimitLoginRequests: coreauth.DefaultMaxFailuresPerSource,
+		RateLimitLoginWindow:   coreauth.DefaultThrottleWindow.Milliseconds(),
 		ScannerCoverProvider:   "google",
 		SortingPrefixes:        []string{"the", "a"},
 		TimeFormat:             "HH:mm",

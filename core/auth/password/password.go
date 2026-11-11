@@ -1,42 +1,55 @@
-// file: internal/server/absauth/password.go
-// version: 1.8.0
+// file: core/auth/password/password.go
+// version: 2.0.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-11-06
+// last-edited: 2026-11-10
 
+// Package password is core's one password-hashing policy (05-authn §4.5),
+// moved from ABO's internal/server/absauth/password.go (04 §8.1 F4): argon2id
+// m=64 MiB, t=3, p=2, 16-byte salt, PHC string; bcrypt verify-only with a
+// transparent rehash; an "oauth" or empty hash never authenticates.
+//
+// Every argon2id derivation, hashing and verifying, runs under the Hasher's
+// bounded semaphore, because each one allocates the hash's m= cost: an
+// unbounded login burst would exhaust memory before any throttle tripped
+// (TestPasswordHash_BoundedConcurrency). HEAD held the semaphore, the cost
+// and the dummy hash in package variables; core forbids package state (03
+// R5), so they are fields of a Hasher, and an app builds one per process.
+//
+// Layer L4 with auth; it imports only the standard library and x/crypto.
 package password
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Password-hash algorithm identifiers as stored on database.User.PasswordHashAlgo.
+// Password-hash algorithm identifiers (HEAD's database.User.PasswordHashAlgo
+// values).
 const (
-	// AlgoArgon2id is what every NEW or rehashed password uses (spec §3.5).
+	// AlgoArgon2id is what every new or rehashed password uses.
 	AlgoArgon2id = "argon2id"
-	// AlgoBcrypt is what existing users have. Verification keeps working and a
-	// successful login triggers a transparent rehash, so the migration needs no
-	// flag day and no password reset.
+	// AlgoBcrypt is what HEAD's older users have. Verification keeps working
+	// and a successful login triggers a transparent rehash.
 	AlgoBcrypt = "bcrypt"
-	// AlgoOAuth marks a user with NO password credential — created by the OAuth
-	// login or by ABS Cloudflare-Access JIT provisioning. Such a user must never
-	// authenticate by password.
+	// AlgoOAuth marks a user with no password credential (an OAuth or
+	// Cloudflare-Access-provisioned account). It never authenticates by
+	// password.
 	AlgoOAuth = "oauth"
 )
 
-// argon2id parameters. m=64 MiB / t=3 / p=2 is the OWASP-recommended baseline and
-// costs a few tens of milliseconds per login, which is acceptable because logins are
-// rare (access tokens last 30 days).
+// The production argon2id parameters (OWASP baseline; HEAD's values).
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024 // KiB
@@ -44,262 +57,273 @@ const (
 	argonKeyLen  uint32 = 32
 	argonSaltLen        = 16
 	argonVersion        = argon2.Version
+	// argonMaxMemory is the largest m= (KiB) a stored hash may ask for: room to
+	// raise argonMemory later while one hostile row cannot allocate gigabytes
+	// on every verify.
+	argonMaxMemory = 4 * argonMemory
 )
 
-// hashTime and hashMemory are the cost HashPassword writes (and so the cost of
-// the dummy hash a login for an unknown name verifies against). They are the
-// production parameters above; only SetHashCostForTest, called from a test
-// binary's TestMain, lowers them. Verification never reads them: it uses the
-// parameters stored in the hash it is given.
-var (
-	hashTime   = argonTime
-	hashMemory = argonMemory
-)
+// ErrBusy is returned by the bounded calls when the semaphore was not free
+// within the wait (05-authn §6: 503 busy).
+var ErrBusy = errors.New("password: hashing busy")
 
-// isTestBinary reports whether this process is a test binary. It is a variable
-// only so a test can stand in for a production binary.
-var isTestBinary = testing.Testing
+// ErrEmpty refuses to hash an empty password.
+var ErrEmpty = errors.New("password: refusing to hash an empty password")
 
-// SetHashCostForTest lowers the argon2id cost HashPassword writes for the rest
-// of the process.
-//
-// Under -race one production-cost derivation (64 MiB, t=3) takes 1-2 s, and a
-// failed login for an unknown name pays one on the dummy hash. A test that
-// drives a login throttle to its budget makes 16-32 such logins; in
-// internal/server that was 7 tests of ~26 s each and a package that overran its
-// 25 minute timeout (pipeline 1823, 2026-10-29). Those tests assert on the
-// status codes and the throttle's accounting, never on the cost, and the
-// parameters stored in each hash are still honoured by verification, so a
-// hash written at the lowered cost verifies and fails exactly as before.
-//
-// Call it once from TestMain, before any test starts and before anything
-// builds the dummy hash: the variables are read without synchronization. It
-// panics outside a test binary (testing.Testing is false there), so a call
-// that reached a production binary, from any file the repo's static guard
-// (internal/arch, TestHashCostSeamStaysInTests) could miss, still cannot lower
-// a real password's cost; and it panics once the dummy hash exists, because
-// that hash would keep the cost it was built at and the call would silently do
-// less than it says. argon2 panics on a time of 0, so pass at least 1.
-//
-// The tests of the cost itself (absauth's own: they pin m=65536 and count the
-// derivations) never call it, apart from the ones that prove its guards, which
-// panic before changing anything.
-func SetHashCostForTest(time, memoryKiB uint32) {
-	if !isTestBinary() {
-		panic("absauth.SetHashCostForTest called outside a test binary")
+// Options configures a Hasher. The zero value is production.
+type Options struct {
+	// Permits is how many argon2id derivations may run at once; 0 is
+	// GOMAXPROCS (HEAD's sizing: it follows a container's CPU quota, which
+	// NumCPU does not, and never exceeds NumCPU, 05-authn §4.5).
+	Permits int
+	// Time and MemoryKiB lower the cost Hash writes, for tests only: a hash
+	// written at a lowered cost verifies exactly as before, because
+	// verification reads the parameters stored in the hash. Zero means the
+	// production value.
+	Time      uint32
+	MemoryKiB uint32
+	// Compute replaces argon2.IDKey (the concurrency test observes how many
+	// derivations overlap). Nil is argon2.IDKey.
+	Compute func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte
+}
+
+// Hasher hashes and verifies passwords under one bounded semaphore. Safe for
+// concurrent use; build one per process.
+type Hasher struct {
+	sem     chan struct{}
+	time    uint32
+	memory  uint32
+	compute func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte
+
+	derivations, cost atomic.Uint64
+
+	dummyOnce sync.Once
+	dummy     string
+	dummyOK   atomic.Bool
+}
+
+// New returns a Hasher.
+func New(o Options) *Hasher {
+	permits := o.Permits
+	if permits <= 0 {
+		permits = max(1, runtime.GOMAXPROCS(0))
 	}
-	if dummyBuilt.Load() {
-		panic("absauth.SetHashCostForTest called after the dummy hash was built; call it first thing in TestMain")
+	h := &Hasher{sem: make(chan struct{}, permits), time: o.Time, memory: o.MemoryKiB, compute: o.Compute}
+	if h.time == 0 {
+		h.time = argonTime
 	}
-	hashTime, hashMemory = time, memoryKiB
+	if h.memory == 0 {
+		h.memory = argonMemory
+	}
+	if h.compute == nil {
+		h.compute = argon2.IDKey
+	}
+	return h
 }
 
-// argonSem caps how many argon2id computations run at once, process-wide. Each one
-// allocates the m= cost of the hash it derives (argonMemory, 64 MiB, for every hash
-// this server writes; verifyArgon2id refuses anything above argonMaxMemory), so
-// unbounded concurrent logins would allocate that many times over: 100 parallel
-// sign-ins by one rehashed user is about 6.4 GB. It is sized to GOMAXPROCS, not
-// NumCPU, because GOMAXPROCS follows a container's CPU quota while NumCPU counts the
-// host's cores. The acquire is a plain blocking one: neither HashPassword nor
-// VerifyPassword takes a context.
-var argonSem = make(chan struct{}, max(1, runtime.GOMAXPROCS(0)))
+// Permits is the semaphore's size.
+func (h *Hasher) Permits() int { return cap(h.sem) }
 
-// argonMaxMemory is the largest m= (KiB) a stored hash may ask for. It leaves room to
-// raise argonMemory later while keeping one malformed or hostile row from
-// allocating gigabytes on every verify.
-const argonMaxMemory = 4 * argonMemory
-
-// argonCompute is the raw argon2id derivation. It is a variable only so the
-// concurrency test can observe how many computations overlap inside argonIDKey.
-var argonCompute = argon2.IDKey
-
-// derivations counts every argon2id derivation argonIDKey has run in this
-// process, and derivationCost sums their cost in KiB-passes (time × memory, the
-// two parameters that decide how long one takes). They only ever grow.
-// DerivationsForTest reads them.
-var derivations, derivationCost atomic.Uint64
-
-// argonIDKey is argon2.IDKey run under argonSem. Every argon2id derivation in this
-// package, hashing and verifying, goes through it.
-func argonIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
-	argonSem <- struct{}{}
-	defer func() { <-argonSem }()
-	derivations.Add(1)
-	derivationCost.Add(uint64(time) * uint64(memory))
-	return argonCompute(password, salt, time, memory, threads, keyLen)
+// Derivations reports how many argon2id derivations this Hasher has run and
+// their summed cost in KiB-passes (time × memory). Both only grow: a test
+// reads them around the code it measures (a failed login for an unknown name
+// pays the same derivation a wrong password does).
+func (h *Hasher) Derivations() (count, kibPasses uint64) {
+	return h.derivations.Load(), h.cost.Load()
 }
 
-// DerivationsForTest reports how many argon2id derivations this process has
-// run and their summed cost in KiB-passes (time × memory). Both only grow, so a
-// caller reads them before and after the code it measures and takes the
-// difference.
-//
-// It is a read-only test seam (the name carries ForTest, which the dead-code
-// ratchet exempts) for tests in other packages that must prove a code path
-// spends the password work it claims to: the login handlers' tests read it
-// around one failed login per path, to show that an unknown name and an account
-// without a password pay the same derivation a wrong password for a real
-// account does. Response time cannot prove that on a shared CI agent: a
-// wall-clock comparison of those logins failed at load ~29 under -race
-// (2026-11-06) while every path did identical work. It exposes counts only,
-// nothing a caller could use to change the cost.
-func DerivationsForTest() (count, kibPasses uint64) {
-	return derivations.Load(), derivationCost.Load()
+// acquire takes a permit. wait < 0 blocks until one is free or ctx ends;
+// wait >= 0 fails ErrBusy after wait.
+func (h *Hasher) acquire(ctx context.Context, wait time.Duration) error {
+	if wait < 0 {
+		select {
+		case h.sem <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	select {
+	case h.sem <- struct{}{}:
+		return nil
+	default:
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case h.sem <- struct{}{}:
+		return nil
+	case <-t.C:
+		return ErrBusy
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-// HashPassword hashes a new password with argon2id and returns the algorithm
-// identifier alongside the PHC-encoded hash.
-//
-// It is the ONE hashing policy: every writer of a password (web setup and change,
-// invite acceptance, the generated bootstrap admin, the ABS rehash) stores the
-// algo and hash it returns. TestNoDirectBcrypt bans bcrypt.GenerateFromPassword
-// elsewhere.
-func HashPassword(plain string) (algo string, hash string, err error) {
+func (h *Hasher) release() { <-h.sem }
+
+// derive runs one argon2id derivation; the caller holds a permit.
+func (h *Hasher) derive(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	h.derivations.Add(1)
+	h.cost.Add(uint64(time) * uint64(memory))
+	return h.compute(password, salt, time, memory, threads, keyLen)
+}
+
+// Hash hashes a new password with argon2id and returns the algorithm
+// identifier with the PHC-encoded hash. It blocks for a permit.
+func (h *Hasher) Hash(plain string) (algo, hash string, err error) {
+	return h.HashWithin(context.Background(), -1, plain)
+}
+
+// HashWithin is Hash with a bounded wait for a permit (wait < 0: unbounded).
+func (h *Hasher) HashWithin(ctx context.Context, wait time.Duration, plain string) (algo, hash string, err error) {
 	if plain == "" {
-		return "", "", fmt.Errorf("absauth: refusing to hash an empty password")
+		return "", "", ErrEmpty
 	}
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
-		return "", "", fmt.Errorf("absauth: read password salt: %w", err)
+		return "", "", fmt.Errorf("password: read salt: %w", err)
 	}
-	key := argonIDKey([]byte(plain), salt, hashTime, hashMemory, argonThreads, argonKeyLen)
+	if err := h.acquire(ctx, wait); err != nil {
+		return "", "", err
+	}
+	key := h.derive([]byte(plain), salt, h.time, h.memory, argonThreads, argonKeyLen)
+	h.release()
 	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argonVersion, hashMemory, hashTime, argonThreads,
+		argonVersion, h.memory, h.time, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	)
 	return AlgoArgon2id, encoded, nil
 }
 
-// VerifyPassword checks plain against a stored hash.
-//
-// This is the ONE password verifier: the ABS sign-in, the web sign-in and the web
-// password change all call it. The ABS sign-in rehashes bcrypt users to argon2id, so
-// a caller that compares with bcrypt directly (as the web handlers once did) locks
-// that user out; TestNoDirectBcrypt keeps new callers from doing so.
-//
-// ok reports whether the password is correct. needsRehash reports whether the caller
-// should re-store the password with HashPassword after a successful login — true for
-// every legacy bcrypt hash, which is how spec §3.5's "rehash-on-successful-login"
-// migration to argon2id happens without a flag day.
-//
-// SECURITY: a user with an EMPTY stored hash never authenticates, whatever the
-// algorithm or supplied password. That is the case for OAuth and
-// Cloudflare-Access-JIT users, who have no password credential at all — treating an
-// empty hash as "matches empty password" would make every such account trivially
-// loginable. Likewise an explicit "oauth" algorithm never authenticates by password.
-func VerifyPassword(algo, hash, plain string) (ok bool, needsRehash bool) {
+// AlgoOf derives the algorithm of a stored hash from its format: a PHC
+// argon2id string, a bcrypt string ($2a$, $2b$, $2y$), or "" for an empty
+// hash. Anything else is reported as "unknown", which never verifies. Core's
+// store keeps only the hash (05-authn §3.4 ImportUser), so it derives the
+// algorithm here.
+func AlgoOf(hash string) string {
+	h := strings.TrimSpace(hash)
+	switch {
+	case h == "":
+		return ""
+	case strings.HasPrefix(h, "$argon2id$"):
+		return AlgoArgon2id
+	case strings.HasPrefix(h, "$2a$"), strings.HasPrefix(h, "$2b$"), strings.HasPrefix(h, "$2y$"):
+		return AlgoBcrypt
+	}
+	return "unknown"
+}
+
+// Verify checks plain against a stored hash. ok reports a match; needsRehash
+// is true after a successful bcrypt verify (the caller re-stores with Hash).
+// An empty hash never authenticates, whatever the algorithm; "oauth" and an
+// unknown algorithm never authenticate (fail closed). It blocks for a permit.
+func (h *Hasher) Verify(algo, hash, plain string) (ok, needsRehash bool) {
+	ok, needsRehash, _ = h.VerifyWithin(context.Background(), -1, algo, hash, plain)
+	return ok, needsRehash
+}
+
+// VerifyWithin is Verify with a bounded wait for a permit; err is ErrBusy or
+// the context's error, and ok is false with it.
+func (h *Hasher) VerifyWithin(ctx context.Context, wait time.Duration, algo, hash, plain string) (ok, needsRehash bool, err error) {
 	if strings.TrimSpace(hash) == "" {
-		return false, false
+		return false, false, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(algo)) {
 	case AlgoOAuth:
-		return false, false
+		return false, false, nil
 	case AlgoArgon2id:
-		return verifyArgon2id(hash, plain), false
+		ok, err := h.verifyArgon2id(ctx, wait, hash, plain)
+		return ok, false, err
 	case AlgoBcrypt, "":
-		// An empty algo predates the column being populated; those rows are bcrypt.
-		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)); err != nil {
-			return false, false
+		// An empty algo predates HEAD's column being populated; those rows
+		// are bcrypt.
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) != nil {
+			return false, false, nil
 		}
-		return true, true
+		return true, true, nil
 	default:
-		// An unknown algorithm is a fail-closed condition, not a fallback.
-		return false, false
+		return false, false, nil
 	}
 }
 
-// verifyArgon2id parses a PHC-encoded argon2id hash and compares in constant time.
-// Any malformed field is a verification failure, never a panic and never a pass.
-func verifyArgon2id(encoded, plain string) bool {
+// verifyArgon2id parses a PHC argon2id hash and compares in constant time.
+// Any malformed field is a failure, never a panic and never a pass.
+func (h *Hasher) verifyArgon2id(ctx context.Context, wait time.Duration, encoded, plain string) (bool, error) {
 	parts := strings.Split(encoded, "$")
 	// ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
 	if len(parts) != 6 || parts[0] != "" || parts[1] != AlgoArgon2id {
-		return false
+		return false, nil
 	}
 	var version int
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argonVersion {
-		return false
+		return false, nil
 	}
 	var memory, time uint32
 	var threads uint8
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
-		return false
+		return false, nil
 	}
 	if memory == 0 || time == 0 || threads == 0 || memory > argonMaxMemory {
-		return false
+		return false, nil
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil || len(salt) == 0 {
-		return false
+		return false, nil
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil || len(want) == 0 {
-		return false
+		return false, nil
 	}
-	got := argonIDKey([]byte(plain), salt, time, memory, threads, uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1
+	if err := h.acquire(ctx, wait); err != nil {
+		return false, err
+	}
+	got := h.derive([]byte(plain), salt, time, memory, threads, uint32(len(want)))
+	h.release()
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
-// The work a login does for a name that has no usable password.
-//
-// A login for a username that does not exist (or whose account has no password
-// credential: an OAuth user, an empty hash) would otherwise skip the argon2id
-// derivation a real account costs, and the difference in response time, tens of
-// milliseconds against microseconds, tells a caller which names are real however
-// carefully the status codes and the throttle charges are kept identical. So such a
-// login verifies the submitted password against a fixed dummy argon2id hash built
-// once with the production parameters (HashPassword), under the same argonSem as
-// every other derivation, and discards the answer.
-//
-// The dummy is derived from a random secret nobody holds, so the verification
-// cannot succeed. Legacy bcrypt rows (which still cost a bcrypt compare, not an
-// argon2id derivation, until their first successful login rehashes them) are the
-// one place a timing difference could remain.
-var (
-	dummyOnce  sync.Once
-	dummyHash  string
-	dummyBuilt atomic.Bool // set once dummyHash holds a usable hash; read by LoginDummyReadyForTest
-)
-
-func dummyArgon2idHash() string {
-	dummyOnce.Do(func() {
+// dummyHash is a fixed argon2id hash of a random secret nobody holds, built
+// once at this Hasher's cost. A login for a name with no usable password
+// verifies against it and discards the answer, so that case costs what a
+// wrong password for a real account costs (equal timing, §3.2).
+func (h *Hasher) dummyHash() string {
+	h.dummyOnce.Do(func() {
 		secret := make([]byte, 32)
-		// crypto/rand.Read never fails (Go 1.24: it crashes the program if the system
-		// source is unavailable), so there is no error path to fall back from.
-		_, _ = rand.Read(secret)
-		_, h, err := HashPassword(base64.RawStdEncoding.EncodeToString(secret))
-		if err != nil {
-			return
+		_, _ = rand.Read(secret) // crypto/rand.Read never fails (Go 1.24+)
+		if _, d, err := h.Hash(base64.RawStdEncoding.EncodeToString(secret)); err == nil {
+			h.dummy = d
+			h.dummyOK.Store(true)
 		}
-		dummyHash = h
-		dummyBuilt.Store(true)
 	})
-	return dummyHash
+	return h.dummy
 }
 
-// WarmLoginDummy builds the dummy hash now, so the first login for an unknown
-// name does not pay for building it as well. Constructors of the login handlers
-// call it; it is idempotent.
-func WarmLoginDummy() { _ = dummyArgon2idHash() }
+// Warm builds the dummy hash now, so the first login for an unknown name
+// does not pay for building it as well. Idempotent.
+func (h *Hasher) Warm() { _ = h.dummyHash() }
 
-// LoginDummyReadyForTest reports whether the dummy hash has been built. It is a
-// test seam (the name carries ForTest, which the dead-code ratchet exempts): the
-// constructor-warm tests live in other packages, so an export_test.go here cannot
-// serve them. It exposes nothing but that fact.
-func LoginDummyReadyForTest() bool { return dummyBuilt.Load() }
+// Warmed reports whether the dummy hash has been built.
+func (h *Hasher) Warmed() bool { return h.dummyOK.Load() }
 
-// SpendVerification does the work of one password verification against the dummy
-// hash and discards the result. A login for a name that does not exist calls it.
-func SpendVerification(plain string) {
-	if h := dummyArgon2idHash(); h != "" {
-		_ = verifyArgon2id(h, plain)
+// SpendVerification does one verification's work against the dummy hash and
+// discards the result.
+func (h *Hasher) SpendVerification(plain string) {
+	_, _ = h.spendWithin(context.Background(), -1, plain)
+}
+
+func (h *Hasher) spendWithin(ctx context.Context, wait time.Duration, plain string) (bool, error) {
+	if d := h.dummyHash(); d != "" {
+		_, err := h.verifyArgon2id(ctx, wait, d, plain)
+		return false, err
 	}
+	return false, nil
 }
 
-// hasPasswordCredential reports whether a stored (algo, hash) pair is one
-// VerifyPassword will do real work for.
-func hasPasswordCredential(algo, hash string) bool {
+// HasCredential reports whether a stored (algo, hash) pair is one Verify does
+// real work for.
+func HasCredential(algo, hash string) bool {
 	if strings.TrimSpace(hash) == "" {
 		return false
 	}
@@ -310,14 +334,19 @@ func hasPasswordCredential(algo, hash string) bool {
 	return false
 }
 
-// VerifyLoginPassword is VerifyPassword for the login handlers: when the account
-// has no password credential at all (no hash, an OAuth user, an unknown algorithm)
-// it spends the same verification work on the dummy hash before answering false,
-// so that case costs what a wrong password for a real account costs.
-func VerifyLoginPassword(algo, hash, plain string) (ok bool, needsRehash bool) {
-	if !hasPasswordCredential(algo, hash) {
-		SpendVerification(plain)
-		return false, false
+// VerifyLogin is Verify for the login paths: when the account has no password
+// credential (no hash, an OAuth user, an unknown algorithm) it spends the
+// same work on the dummy hash before answering false.
+func (h *Hasher) VerifyLogin(algo, hash, plain string) (ok, needsRehash bool) {
+	ok, needsRehash, _ = h.VerifyLoginWithin(context.Background(), -1, algo, hash, plain)
+	return ok, needsRehash
+}
+
+// VerifyLoginWithin is VerifyLogin with a bounded wait for a permit.
+func (h *Hasher) VerifyLoginWithin(ctx context.Context, wait time.Duration, algo, hash, plain string) (ok, needsRehash bool, err error) {
+	if !HasCredential(algo, hash) {
+		_, err := h.spendWithin(ctx, wait, plain)
+		return false, false, err
 	}
-	return VerifyPassword(algo, hash, plain)
+	return h.VerifyWithin(ctx, wait, algo, hash, plain)
 }
