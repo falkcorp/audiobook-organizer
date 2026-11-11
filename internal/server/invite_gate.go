@@ -1,7 +1,7 @@
-// file: internal/server/invite_rate_limit.go
-// version: 1.24.1
+// file: internal/server/invite_gate.go
+// version: 2.0.0
 // guid: 660fd56e-7850-420a-8302-5290684460cf
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package server
 
@@ -24,6 +24,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// The gin gate in front of ABO's legacy public invite routes. Unlike the
+// login and bootstrap gates (login_gate.go, bootstrap_gate.go), nothing of it
+// moved to core at F4-02: its layers are ABO perimeter token buckets
+// (servermiddleware.IPRateLimiter, reserved together through ReserveKeys)
+// over keys only the gin perimeter can derive, and core's invite lookup and
+// accept are throttled by the auth service's one Throttle instance instead
+// (05-authn §4.9), not by a port of these buckets. Until F4-02 this file was
+// invite_rate_limit.go; it goes with the legacy invite routes at F4-08.
+//
 // Public invite endpoints (GET /auth/invite/:token and POST
 // /auth/accept-invite) are bounded by three layers and a request must pass each
 // one that applies to it. The token space is 256 bits, so this is about load and about
