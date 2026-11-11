@@ -128,7 +128,6 @@ var layerOf = map[string]int{
 	"internal/policy":                0, // computed: imports no module package
 	"internal/querygrammar":          0, // table: leaf
 	"internal/scanlock":              0, // computed: imports no module package
-	"internal/security/safehttp":     0, // computed: imports no module package
 	"internal/seqnum":                0, // table: leaf
 	"internal/serverdecode":          0, // computed: imports no module package
 	"internal/serviceregistry":       0, // computed: imports no module package
@@ -173,7 +172,7 @@ var layerOf = map[string]int{
 	"internal/boilerplate":              3, // computed: max of imports=0, floored at 3
 	"internal/bookfiles":                3, // computed: max of imports=2, floored at 3
 	"internal/bookfileaudio":            3, // computed: max of imports=3, floored at 3
-	"internal/covers":                   3, // computed: max of imports=0, floored at 3
+	"internal/covers":                   0, // computed: imports no module package (its safehttp guard moved to core/integrations/providerhttp, F7-02)
 	"internal/books/store/storetest":    3, // computed: max of imports=2, floored at 3
 	"internal/books/store/mocks":        3, // computed: max of imports=2, floored at 3
 	"internal/decisions":                3, // computed: max of imports=2, floored at 3

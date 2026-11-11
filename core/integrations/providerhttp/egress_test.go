@@ -1,9 +1,9 @@
-// file: internal/security/safehttp/safehttp_test.go
-// version: 1.0.1
+// file: core/integrations/providerhttp/egress_test.go
+// version: 1.1.0
 // guid: 23c60e98-8378-4efd-9fe1-69d3ae85b3e9
-// last-edited: 2026-09-10
+// last-edited: 2026-11-11
 
-package safehttp
+package providerhttp
 
 import (
 	"context"
