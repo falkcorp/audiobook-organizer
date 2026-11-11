@@ -213,7 +213,12 @@ func (in restoreHooksInput) run(ctx context.Context, report *hookReport) (map[st
 		if err != nil {
 			return nil, fmt.Errorf("kernel: open the pre-swap store: %w", err)
 		}
-		defer func() { _ = p.Close() }()
+		defer func() {
+			// The pre-swap store was only read: a failed close loses nothing, but is not silent.
+			if err := p.Close(); err != nil {
+				in.log().Warn("kernel: the pre-swap store did not close cleanly", "err", err)
+			}
+		}()
 		prev = p
 	}
 	rc, err := in.context(ctx, prev)
