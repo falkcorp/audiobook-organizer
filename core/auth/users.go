@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-11
 
@@ -591,6 +591,39 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 	})
 }
 
+// adminHolds returns the holder predicate of the last-admin rule and of
+// bootstrap's admin pick: whether a user with these roles and this status
+// holds core:admin, meaning status active and a role whose permissions
+// rbac.GrantsAdmin (an unknown role grants nothing). Each role is read once
+// per returned function.
+func (s *Service) adminHolds(ctx context.Context) func(roles []rbac.RoleName, st UserStatus) (bool, error) {
+	grants := map[rbac.RoleName]bool{}
+	return func(roles []rbac.RoleName, st UserStatus) (bool, error) {
+		if st != StatusActive {
+			return false, nil
+		}
+		for _, name := range roles {
+			g, seen := grants[name]
+			if !seen {
+				r, err := s.d.RBAC.Role(ctx, name)
+				switch {
+				case errors.Is(err, rbac.ErrUnknownRole):
+					g = false
+				case err != nil:
+					return false, fmt.Errorf("auth: admin check: read role %s: %w", name, err)
+				default:
+					g = rbac.GrantsAdmin(r.Permissions())
+				}
+				grants[name] = g
+			}
+			if g {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
+
 // keepAnAdmin is the last-admin rule (05-rbac §4.6): when u is an active
 // core:admin holder and, with roles after and status after, would not be
 // one, some other active holder must exist. That holder is guarded in b
@@ -613,31 +646,7 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 // this read and this commit is not seen here. rbac's own rule reads holders
 // through its batch, so the reverse order is caught there.
 func (s *Service) keepAnAdmin(ctx context.Context, b *storage.Batch, u *User, after []rbac.RoleName, afterStatus UserStatus) error {
-	grants := map[rbac.RoleName]bool{}
-	isAdmin := func(roles []rbac.RoleName, st UserStatus) (bool, error) {
-		if st != StatusActive {
-			return false, nil
-		}
-		for _, name := range roles {
-			g, seen := grants[name]
-			if !seen {
-				r, err := s.d.RBAC.Role(ctx, name)
-				switch {
-				case errors.Is(err, rbac.ErrUnknownRole):
-					g = false
-				case err != nil:
-					return false, fmt.Errorf("auth: last-admin rule: read role %s: %w", name, err)
-				default:
-					g = rbac.GrantsAdmin(r.Permissions())
-				}
-				grants[name] = g
-			}
-			if g {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
+	isAdmin := s.adminHolds(ctx)
 	was, err := isAdmin(u.Roles, u.Status)
 	if err != nil || !was {
 		return err
