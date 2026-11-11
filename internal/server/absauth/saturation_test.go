@@ -1,7 +1,7 @@
 // file: internal/server/absauth/saturation_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b91b557-13ea-4dba-b0b6-03391d4ac1bd
-// last-edited: 2026-10-22
+// last-edited: 2026-11-10
 
 package absauth
 
@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 func TestSaturationPolicy(t *testing.T) {
@@ -21,9 +23,9 @@ func TestSaturationPolicy(t *testing.T) {
 	}{
 		{0, SaturationDelayBase, false},
 		{1, SaturationDelayBase + SaturationDelayStep, false},
-		{SoftThreshold - 1, min(SaturationDelayBase+time.Duration(SoftThreshold-1)*SaturationDelayStep, SaturationDelayMax), false},
-		{SoftThreshold, 0, true},
-		{SoftThreshold + 10, 0, true},
+		{coreauth.DefaultSoftThreshold - 1, min(SaturationDelayBase+time.Duration(coreauth.DefaultSoftThreshold-1)*SaturationDelayStep, SaturationDelayMax), false},
+		{coreauth.DefaultSoftThreshold, 0, true},
+		{coreauth.DefaultSoftThreshold + 10, 0, true},
 	}
 	for _, tt := range tests {
 		d, refuse := SaturationPolicy(tt.failures)
@@ -48,22 +50,6 @@ func TestLoginSaturatedMark(t *testing.T) {
 	}
 }
 
-func TestThrottle_AccountFailuresReadsWithoutCharging(t *testing.T) {
-	th := NewThrottle()
-	if th.AccountFailures("u1") != 0 || th.AccountFailures("") != 0 {
-		t.Fatal("unknown account should have 0 failures")
-	}
-	th.RecordFailure("u1", "192.0.2.1")
-	th.RecordFailure("u1", "192.0.2.2")
-	if got := th.AccountFailures("u1"); got != 2 {
-		t.Fatalf("AccountFailures = %d, want 2", got)
-	}
-	_ = th.AccountFailures("u1")
-	if got := th.AccountFailures("u1"); got != 2 {
-		t.Fatalf("reading changed the count: %d", got)
-	}
-}
-
 // RefuseSaturatedLogin delays an account under the threshold and refuses (and
 // records the refusal on the request) at it, whatever the name.
 func TestRefuseSaturatedLogin(t *testing.T) {
@@ -77,7 +63,7 @@ func TestRefuseSaturatedLogin(t *testing.T) {
 	if len(slept) != 1 || slept[0] != SaturationDelayBase {
 		t.Fatalf("slept %v", slept)
 	}
-	if !RefuseSaturatedLogin(c, SoftThreshold, delay) || !LoginSaturationRefused(c) {
+	if !RefuseSaturatedLogin(c, coreauth.DefaultSoftThreshold, delay) || !LoginSaturationRefused(c) {
 		t.Fatal("a name at the threshold must be refused and the refusal recorded")
 	}
 	if len(slept) != 1 {

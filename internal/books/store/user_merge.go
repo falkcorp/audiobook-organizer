@@ -1,7 +1,7 @@
 // file: internal/books/store/user_merge.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 5d0a7e3c-91b4-4f26-8c1d-e7a2b6f40935
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 

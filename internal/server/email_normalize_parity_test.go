@@ -1,7 +1,7 @@
 // file: internal/server/email_normalize_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 63fee68c-3136-4644-8c3c-272f2a9b335b
-// last-edited: 2026-10-20
+// last-edited: 2026-11-10
 
 package server
 

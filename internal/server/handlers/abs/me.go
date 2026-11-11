@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_login_timing_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2fc86d12-0fda-4c10-920b-0b83f4b2f534
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 

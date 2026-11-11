@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 

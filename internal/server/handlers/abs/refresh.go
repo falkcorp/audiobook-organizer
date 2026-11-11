@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 

@@ -1,7 +1,7 @@
 // file: internal/books/store/oauth_identity.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b3e9c1a7-5f42-4d80-9c16-0a7e2b6d4f38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 

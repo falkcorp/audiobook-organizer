@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_invite_delivery.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 

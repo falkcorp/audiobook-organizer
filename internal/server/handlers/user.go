@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.4
+// version: 1.15.5
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.

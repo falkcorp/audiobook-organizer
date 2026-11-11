@@ -1,5 +1,5 @@
 // file: scripts/r2corpus/overlay/identity.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0c7d4e2a-6b19-4f58-8e3d-2a9c5b1f7d64
 // last-edited: 2026-11-10
 

@@ -1,7 +1,7 @@
-// file: internal/util/email_test.go
-// version: 1.0.0
+// file: core/auth/email_test.go
+// version: 1.0.1
 // guid: bb606c60-2e28-48c8-900c-950f0c43fb1e
-// last-edited: 2026-10-20
+// last-edited: 2026-11-10
 
 package auth
 
