@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c8a14f73-2d6b-4e90-b5a7-91f0e3d2864b
 // last-edited: 2026-11-11
 
@@ -14,13 +14,16 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -72,9 +75,22 @@ func wantStatus(t testing.TB, err error, status int, code string) {
 	}
 }
 
+// replaceOf is body as a complete PUT body: every replace-required field is
+// present (limits {} when body sets none, as GET answers).
+func replaceOf(body IntegrationInstanceBody) IntegrationInstanceReplace {
+	r := IntegrationInstanceReplace{
+		ID: body.ID, Adapter: body.Adapter, Name: &body.Name, Enabled: body.Enabled, Priority: &body.Priority, Local: &body.Local,
+		Settings: body.Settings, Secrets: body.Secrets, Limits: body.Limits, Version: body.Version,
+	}
+	if r.Limits == nil {
+		r.Limits = &IntegrationLimits{}
+	}
+	return r
+}
+
 // update replaces an instance through the handler.
 func (e *env) update(ctx context.Context, kind, id string, body IntegrationInstanceBody) (IntegrationInstance, error) {
-	req := updateReq{Kind: kind, ID: id, Body: body}
+	req := updateReq{Kind: kind, ID: id, Body: replaceOf(body)}
 	if err := req.Validate(); err != nil {
 		return IntegrationInstance{}, err
 	}
@@ -114,7 +130,7 @@ var wantRoutes = []struct {
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/test", "testIntegration", "core:integrations.manage", true},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances/{id}/test", "testIntegrationInstance", "core:integrations.manage", true},
 	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}/health", "getIntegrationInstanceHealth", "core:integrations.read", true},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "core:integrations.manage", false},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "core:integrations.manage", true},
 }
 
 func registered(t *testing.T) *httpapi.Router {
@@ -609,17 +625,48 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 	e := newEnv(t)
 	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}
 	ir := instanceReq{Kind: kindNotify, ID: roofID}
-
-	// No hold: 204 and nothing released.
-	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
-		t.Fatalf("release with no hold: %v", err)
+	var probes atomic.Int64
+	e.fake.HealthFn = func(ctx context.Context, i *integrationstest.FakeInstance) integrations.Health {
+		probes.Add(1)
+		return integrations.Health{Status: integrations.HealthOK}
 	}
+	sent := len(e.out.Sent())
+
+	// No hold: 404 no_hold, nothing released, nothing probed or sent.
+	_, err := e.api.releaseHold(ctx, in(ctx, ir))
+	wantStatus(t, err, http.StatusNotFound, "no_hold")
 	if got := e.holds.released(); len(got) != 0 {
 		t.Fatalf("ReleaseHold called with no hold: %v", got)
 	}
+	if probes.Load() != 0 || len(e.out.Sent()) != sent {
+		t.Errorf("a release with no hold probed %d times and sent %d requests", probes.Load(), len(e.out.Sent())-sent)
+	}
 
-	// An active hold: released once, by the scope the Registry reports.
+	// An empty scope is no scope: it could mean "every hold".
+	e.holds.holdOn(ref, "")
+	_, err = e.api.releaseHold(ctx, in(ctx, ir))
+	wantStatus(t, err, http.StatusNotFound, "no_hold")
+	if got := e.holds.released(); len(got) != 0 {
+		t.Fatalf("an empty scope was released: %q", got)
+	}
+
+	// An active hold: released once, by the scope the holds registry reports,
+	// without a probe.
+	e.holds.holdOn(ref, "gotham-quota")
+	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := e.holds.released(); !slices.Equal(got, []string{"gotham-quota"}) {
+		t.Errorf("ReleaseHold calls = %v, want one for gotham-quota", got)
+	}
+	if probes.Load() != 0 || len(e.out.Sent()) != sent {
+		t.Errorf("a release probed %d times and sent %d requests", probes.Load(), len(e.out.Sent())-sent)
+	}
+
+	// The health view of a held instance still carries the hold, without its
+	// remote text.
 	e.out.State.Hold = &integrations.Hold{
 		Scope: "gotham-quota", Class: integrations.ClassQuota, Detail: "<html>The Joker's plan</html>",
 		Until: e.clock.now().Add(time.Hour), SetAt: e.clock.now(),
@@ -632,12 +679,6 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 		t.Errorf("health = %+v", h)
 	}
 	assertNoLeak(t, "health", mustJSON(t, h), "Joker")
-	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	if got := e.holds.released(); !slices.Equal(got, []string{"gotham-quota"}) {
-		t.Errorf("ReleaseHold calls = %v, want one for gotham-quota", got)
-	}
 
 	// A failing release is a plain error: httpapi answers 500 without text.
 	e.holds.err = errors.New("keel over")
@@ -646,10 +687,97 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 		t.Errorf("a failed release = %v, want a plain error", err)
 	}
 
-	// No releaser mounted: 503, and nothing is probed or released.
+	// No releaser mounted: 503, and nothing is released.
 	e.api.holds = nil
 	_, err = e.api.releaseHold(ctx, in(ctx, ir))
 	wantStatus(t, err, http.StatusServiceUnavailable, "unavailable")
+}
+
+// TestIntegrationHTTP_HoldOfUnprobableInstanceIsReleased: a hold on a
+// disabled instance, and on a misconfigured one, is released. Registry.Health
+// answers those with a static finding and no hold, so a route that read the
+// hold from it could not release either.
+func TestIntegrationHTTP_HoldOfUnprobableInstanceIsReleased(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	var probes atomic.Int64
+	e.fake.HealthFn = func(ctx context.Context, i *integrationstest.FakeInstance) integrations.Health {
+		probes.Add(1)
+		return integrations.Health{Status: integrations.HealthOK}
+	}
+	disabled := signalBody("gcpd-basement", "http://192.0.2.21/", "alfred-1")
+	disabled.Enabled = new(bool)
+	e.create(t, ctx, kindNotify, disabled)
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-2"))
+	e.sec.setDown(true)
+	t.Cleanup(func() { e.sec.setDown(false) })
+
+	for id, want := range map[string]string{"gcpd-basement": "disabled", roofID: "misconfigured"} {
+		ref := integrations.Ref{Kind: integrations.KindNotify, Instance: integrations.InstanceID(id)}
+		h, err := e.reg.Health(ctx, ref)
+		if err != nil || h.Status.String() != want || h.Hold != nil {
+			t.Fatalf("%s: Registry.Health = %+v, %v; want a static %s finding with no hold", id, h, err, want)
+		}
+		scope := "gotham-quota-" + id
+		e.holds.holdOn(ref, scope)
+		if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: id})); err != nil {
+			t.Fatalf("%s: release: %v", id, err)
+		}
+		if got := e.holds.released(); !slices.Contains(got, scope) {
+			t.Errorf("%s: released %v, want %s", id, got, scope)
+		}
+	}
+	if probes.Load() != 0 {
+		t.Errorf("the releases probed %d times", probes.Load())
+	}
+}
+
+// TestIntegrationHTTP_HoldRouteChecksManage: the hold route turns away a
+// principal without core:integrations.manage itself, in addition to the
+// router, before it looks at the instance or the holds. The permission it
+// checks is the one the Registry's writes check.
+func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}
+	e.holds.holdOn(ref, "gotham-quota")
+
+	reader := integrationstest.As(context.Background(), auth.MethodSession, "core:integrations.read")
+	noPerms := &auth.Principal{Method: auth.MethodSession}
+	cases := map[string]*httpapi.In[instanceReq]{
+		"read only":              in(reader, instanceReq{Kind: kindNotify, ID: roofID}),
+		"no checker":             {Req: instanceReq{Kind: kindNotify, ID: roofID}, Principal: noPerms},
+		"no instance, read only": in(reader, instanceReq{Kind: kindNotify, ID: "no-such-instance"}),
+	}
+	for name, req := range cases {
+		_, err := e.api.releaseHold(ctx, req)
+		if err == nil {
+			t.Errorf("%s: released", name)
+			continue
+		}
+		wantStatus(t, err, http.StatusForbidden, "permission_denied")
+	}
+	if got := e.holds.released(); len(got) != 0 {
+		t.Errorf("a caller without manage released %v", got)
+	}
+	if e.holds.heldScopeCalls() != 0 {
+		t.Error("the holds were read for a caller without manage")
+	}
+
+	// The constant matches the Registry's: a principal holding exactly
+	// permManage can write through it.
+	only := integrationstest.As(context.Background(), auth.MethodSession, permManage)
+	if _, err := e.update(only, kindNotify, roofID, func() IntegrationInstanceBody {
+		b := signalBody("", "http://192.0.2.20/", "")
+		b.Version = 1
+		return b
+	}()); err != nil {
+		t.Errorf("a principal holding permManage cannot write: %v", err)
+	}
+	if _, err := e.api.releaseHold(only, in(only, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
+		t.Errorf("a principal holding permManage cannot release: %v", err)
+	}
 }
 
 // ---- I5: audit ------------------------------------------------------------
@@ -703,8 +831,8 @@ func TestIntegrationHTTP_AuditOncePerAction(t *testing.T) {
 	if _, err := e.api.getHealth(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
-		t.Fatal(err)
+	if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err == nil {
+		t.Fatal("a release with no hold succeeded")
 	}
 	e.get(t, ctx, kindNotify, roofID)
 	bad := signalBody("", "http://192.0.2.77/", "")
@@ -907,7 +1035,7 @@ func TestIntegrationHTTP_ReplaceRules(t *testing.T) {
 		otherID := signalBody("riddler", "http://192.0.2.20/", "")
 		otherID.Version = 1
 		for name, b := range map[string]IntegrationInstanceBody{"enabled": noEnabled, "version": noVersion, "id": otherID} {
-			err := (&updateReq{Kind: kindNotify, ID: roofID, Body: b}).Validate()
+			err := (&updateReq{Kind: kindNotify, ID: roofID, Body: replaceOf(b)}).Validate()
 			wantStatus(t, err, http.StatusUnprocessableEntity, "validation_failed")
 			if he, _ := errors.AsType[*httpapi.Error](err); he == nil || !strings.HasSuffix(he.Fields[0].Field, "/"+name) {
 				t.Errorf("%s: fields = %+v", name, he)
@@ -915,7 +1043,7 @@ func TestIntegrationHTTP_ReplaceRules(t *testing.T) {
 		}
 		same := signalBody(roofID, "http://192.0.2.20/", "")
 		same.Version = 1
-		if err := (&updateReq{Kind: kindNotify, ID: roofID, Body: same}).Validate(); err != nil {
+		if err := (&updateReq{Kind: kindNotify, ID: roofID, Body: replaceOf(same)}).Validate(); err != nil {
 			t.Errorf("a body naming its own ID = %v", err)
 		}
 	})
@@ -1198,5 +1326,259 @@ func TestHealthView_BoundsAdapterText(t *testing.T) {
 		if got := breakerName(in); got != want {
 			t.Errorf("breakerName(%d) = %s", in, got)
 		}
+	}
+}
+
+// ---- PUT: required fields and the GET round trip --------------------------
+
+// TestUpdateRoute_IsLenient pins what makes a GET answer a valid PUT body:
+// the route accepts the read-only keys it carries.
+func TestUpdateRoute_IsLenient(t *testing.T) {
+	rt := updateRoute(rbac.Need(permManage), nil)
+	if !rt.Lenient || rt.MaxBody != maxBody || rt.Method != http.MethodPut {
+		t.Errorf("update route = lenient %v, max body %d, %s", rt.Lenient, rt.MaxBody, rt.Method)
+	}
+}
+
+// TestIntegrationHTTP_ReplaceRequiresEveryField: a replace that leaves out
+// name, enabled, priority, local or limits, or sends one as null, is a 422
+// naming it, never a silent reset to a zero value.
+func TestIntegrationHTTP_ReplaceRequiresEveryField(t *testing.T) {
+	full := func() IntegrationInstanceReplace {
+		b := signalBody("", "http://192.0.2.20/", "")
+		b.Version = 1
+		return replaceOf(b)
+	}
+	if err := (&updateReq{Kind: kindNotify, ID: roofID, Body: full()}).Validate(); err != nil {
+		t.Fatalf("a complete body = %v", err)
+	}
+	drops := map[string]func(*IntegrationInstanceReplace){
+		"name":     func(r *IntegrationInstanceReplace) { r.Name = nil },
+		"enabled":  func(r *IntegrationInstanceReplace) { r.Enabled = nil },
+		"priority": func(r *IntegrationInstanceReplace) { r.Priority = nil },
+		"local":    func(r *IntegrationInstanceReplace) { r.Local = nil },
+		"limits":   func(r *IntegrationInstanceReplace) { r.Limits = nil },
+	}
+	for field, drop := range drops {
+		r := full()
+		drop(&r)
+		err := (&updateReq{Kind: kindNotify, ID: roofID, Body: r}).Validate()
+		wantStatus(t, err, http.StatusUnprocessableEntity, "validation_failed")
+		he, _ := errors.AsType[*httpapi.Error](err)
+		if he == nil || len(he.Fields) != 1 || he.Fields[0].Field != "/body/"+field || he.Fields[0].Code != "required" {
+			t.Errorf("without %s: %+v", field, he)
+		}
+	}
+	// Absent and null are the same to a pointer: both are refused.
+	var r IntegrationInstanceReplace
+	raw := `{"name":"GCPD roof","enabled":true,"priority":0,"local":false,"limits":null,"version":1}`
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatal(err)
+	}
+	wantStatus(t, (&updateReq{Kind: kindNotify, ID: roofID, Body: r}).Validate(), http.StatusUnprocessableEntity, "validation_failed")
+}
+
+// TestIntegrationHTTP_GetEditPutRoundTrip: the JSON GET answers, edited and
+// sent back, is a valid PUT body, with and without limits overrides and with
+// an operator-locked field whose value the view leaves out.
+func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	plain := signalBody(roofID, "http://192.0.2.20/", "alfred-1")
+	withLimits := signalBody("gcpd-basement", "http://192.0.2.21/", "alfred-2")
+	withLimits.Limits = &IntegrationLimits{RPS: 3, Timeout: "9s"}
+	e.create(t, ctx, kindNotify, plain)
+	e.create(t, ctx, kindNotify, withLimits)
+
+	for _, id := range []string{roofID, "gcpd-basement"} {
+		blob := mustJSON(t, e.get(t, ctx, kindNotify, id))
+		for _, key := range []string{`"kind"`, `"origin"`, `"secrets_set"`, `"stored"`, `"updated"`, `"limits"`} {
+			if !strings.Contains(blob, key) {
+				t.Errorf("%s: the answer lacks %s: %s", id, key, blob)
+			}
+		}
+		var body IntegrationInstanceReplace
+		if err := json.Unmarshal([]byte(blob), &body); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		name := "edited " + id
+		body.Name = &name
+		req := updateReq{Kind: kindNotify, ID: id, Body: body}
+		if err := req.Validate(); err != nil {
+			t.Fatalf("%s: the answer sent back is invalid: %v", id, err)
+		}
+		got, err := e.api.updateInstance(ctx, in(ctx, req))
+		if err != nil {
+			t.Fatalf("%s: PUT of the answer: %v", id, err)
+		}
+		if got.Name != name || !got.SecretsSet["password"] {
+			t.Errorf("%s: after the round trip: %+v", id, got)
+		}
+	}
+	// {} limits stored nothing: the instance still inherits.
+	if cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}); cfg.Limits != nil {
+		t.Errorf("limits {} stored %+v, want none", cfg.Limits)
+	}
+	if cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: "gcpd-basement"}); cfg.Limits == nil || cfg.Limits.RPS != 3 {
+		t.Errorf("limits were not kept: %+v", cfg.Limits)
+	}
+
+	// A locked field holding a URL with userinfo is left out of the view and
+	// the answer still round-trips.
+	const leaked = "http://robin:grayson@192.0.2.30/"
+	if err := e.reg.SetOverlay(context.Background(), overlay("integrations.notify.gcpd-roof.channel", leaked)); err != nil {
+		t.Fatal(err)
+	}
+	cur := e.get(t, ctx, kindNotify, roofID)
+	blob := mustJSON(t, cur)
+	assertNoLeak(t, "a locked field's URL", blob, "robin", "grayson")
+	if _, ok := cur.Settings["channel"]; ok || cur.Locked["channel"] == "" {
+		t.Errorf("channel = %v, locked %v: want it left out of settings and still marked locked", cur.Settings["channel"], cur.Locked)
+	}
+	var body IntegrationInstanceReplace
+	if err := json.Unmarshal([]byte(blob), &body); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&updateReq{Kind: kindNotify, ID: roofID, Body: body}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body})); err != nil {
+		t.Errorf("PUT of an answer with a withheld locked value: %v", err)
+	}
+	list, err := e.api.listInstances(ctx, in(ctx, listInstancesReq{Kind: kindNotify, Limit: 50}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoLeak(t, "the list", mustJSON(t, list), "robin", "grayson")
+}
+
+// TestInstanceView_WithholdsUserinfoURLs: a URL carrying userinfo is left out
+// wherever it sits in settings; clean URLs and text that only looks similar
+// stay. The settings the view reads are not edited.
+func TestInstanceView_WithholdsUserinfoURLs(t *testing.T) {
+	nested := map[string]any{"hook": "https://oracle:secret@192.0.2.40/x", "ok": "https://192.0.2.40/"}
+	cfg := integrations.InstanceConfig{
+		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
+		Settings: map[string]any{
+			"url":       "https://alfred:hunter2@192.0.2.40:8443/path?x=1",
+			"relative":  "//alfred:hunter2@192.0.2.40/",
+			"unparsed":  "http://alfred:hunter2@192.0.2.40:badport/",
+			"clean":     "https://192.0.2.40/path?next=//a@b",
+			"text":      "ask //alfred about it @ noon",
+			"email":     "alfred@wayne.example",
+			"plainport": "http://192.0.2.40:8080/",
+			"nested":    nested,
+			"list":      []any{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
+			"strings":   []string{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
+		},
+	}
+	v := instanceView(cfg, nil)
+	blob := mustJSON(t, v)
+	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "oracle", "secret@", "a:b")
+	for _, k := range []string{"url", "relative", "unparsed"} {
+		if _, ok := v.Settings[k]; ok {
+			t.Errorf("%s was answered", k)
+		}
+	}
+	for _, k := range []string{"clean", "text", "email", "plainport"} {
+		if _, ok := v.Settings[k]; !ok {
+			t.Errorf("%s was dropped", k)
+		}
+	}
+	if got := v.Settings["nested"].(map[string]any); len(got) != 1 || got["ok"] != "https://192.0.2.40/" {
+		t.Errorf("nested = %v", got)
+	}
+	if got := v.Settings["list"].([]any); len(got) != 1 || got[0] != "https://192.0.2.41/" {
+		t.Errorf("list = %v", got)
+	}
+	if got := v.Settings["strings"].([]string); len(got) != 1 || got[0] != "https://192.0.2.41/" {
+		t.Errorf("strings = %v", got)
+	}
+	if len(nested) != 2 {
+		t.Errorf("the view edited the Registry's settings: %v", nested)
+	}
+}
+
+// TestIntegrationHTTP_PermissionBeforeExistence: PUT and the instance test
+// turn away a caller without core:integrations.manage with 403 whether or not
+// the instance exists, so a 404 says nothing to such a caller.
+func TestIntegrationHTTP_PermissionBeforeExistence(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, adminCtx(), kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	reader := integrationstest.As(context.Background(), auth.MethodSession, "core:integrations.read")
+	noPerms := &auth.Principal{Method: auth.MethodSession}
+	body := signalBody("", "http://192.0.2.20/", "")
+	body.Version = 1
+	for _, id := range []string{roofID, "no-such-instance"} {
+		for who, p := range map[string]*auth.Principal{"reader": mustPrincipal(reader), "no checker": noPerms} {
+			_, err := e.api.updateInstance(reader, &httpapi.In[updateReq]{Req: updateReq{Kind: kindNotify, ID: id, Body: replaceOf(body)}, Principal: p})
+			if err == nil {
+				t.Fatalf("%s updated %s", who, id)
+			}
+			wantStatus(t, err, http.StatusForbidden, "permission_denied")
+			_, err = e.api.testInstance(reader, &httpapi.In[testInstanceReq]{Req: testInstanceReq{Kind: kindNotify, ID: id, Body: body}, Principal: p})
+			if err == nil {
+				t.Fatalf("%s tested %s", who, id)
+			}
+			wantStatus(t, err, http.StatusForbidden, "permission_denied")
+		}
+	}
+	if len(e.out.Sent()) != 0 {
+		t.Errorf("a refused caller sent %d requests", len(e.out.Sent()))
+	}
+}
+
+func mustPrincipal(ctx context.Context) *auth.Principal {
+	p, _ := auth.PrincipalFrom(ctx)
+	return p
+}
+
+// ---- small things ---------------------------------------------------------
+
+// TestListAdapters_KindMessageNamesEveryKind: the message of a bad ?kind= is
+// built from the kinds there are.
+func TestListAdapters_KindMessageNamesEveryKind(t *testing.T) {
+	err := (&listAdaptersReq{Kind: "gadgets"}).Validate()
+	wantStatus(t, err, http.StatusUnprocessableEntity, "validation_failed")
+	he, _ := errors.AsType[*httpapi.Error](err)
+	if he == nil || len(he.Fields) != 1 {
+		t.Fatalf("err = %+v", he)
+	}
+	msg := he.Fields[0].Message
+	for _, k := range integrations.Kinds() {
+		if !strings.Contains(msg, string(k)) {
+			t.Errorf("the message %q omits kind %s", msg, k)
+		}
+	}
+	if want := "must be one of " + kindList(); msg != want {
+		t.Errorf("message = %q, want %q", msg, want)
+	}
+}
+
+// TestIntegrationHTTP_ScopedTestAuditNamesStoredAdapter: the record of a test
+// of a stored instance names that instance's adapter even when the body leaves
+// the adapter out; an unscoped test names the body's.
+func TestIntegrationHTTP_ScopedTestAuditNamesStoredAdapter(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	scoped := signalBody("", "http://192.0.2.20/", "")
+	scoped.Adapter = ""
+	if _, err := e.testScoped(ctx, kindNotify, roofID, scoped); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.testUnscoped(ctx, kindNotify, signalBody("", "http://192.0.2.78/", "alfred-3")); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rec, err := range e.audit.Query(ctx, auditFilterTest()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprint(rec.Details["scoped"], " ", rec.Details["adapter"]))
+	}
+	slices.Sort(got)
+	if want := []string{"false " + string(batsignal), "true " + string(batsignal)}; !slices.Equal(got, want) {
+		t.Errorf("recorded (scoped adapter) = %q, want %q", got, want)
 	}
 }

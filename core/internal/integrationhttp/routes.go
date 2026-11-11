@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c5d7e2-3a84-4b1f-b6d0-58e2a4c7f193
 // last-edited: 2026-11-11
 
@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -60,10 +61,13 @@ type api struct {
 // CoreGroup(). reg serves every route; holds releases a hold for the hold
 // route (providerhttp's *Registry at F7-09; nil makes that route answer 503);
 // auditLog records core.integration.test, the one action in 05-rbac §7.1 the
-// Registry does not record itself (a nil auditLog makes the test routes
-// answer 503: a probe that sends a credential is never unaudited). Create,
-// update, change_url, write_secret and delete are the Registry's, recorded
-// in the batch that commits the change.
+// Registry does not record itself. The test is recorded after it ran, because
+// the record carries its result, so the credentialed probe has already been
+// sent when the record is written: a failed record answers 503 and
+// withholds the result, it cannot unsend the probe. A nil auditLog makes the
+// test routes answer 503 before any probe is sent. Create, update,
+// change_url, write_secret and delete are the Registry's, recorded in the
+// batch that commits the change.
 func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, auditLog audit.Logger) {
 	a := &api{reg: reg, holds: holds, audit: auditLog, base: g.Base()}
 	tags := []string{"integrations"}
@@ -89,11 +93,7 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}", Name: "getIntegrationInstance", Perm: read, Tags: tags,
 		Summary: "Read an instance",
 	}, a.getInstance)
-	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: manage, Tags: tags,
-		MaxBody: maxBody, Summary: "Replace an instance's editable fields",
-		Doc: "The body carries the stored version. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
-	}, a.updateInstance)
+	httpapi.Handle(g, updateRoute(manage, tags), a.updateInstance)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}", Name: "deleteIntegrationInstance", Perm: manage, Tags: tags,
 		Summary: "Delete an instance and its secrets",
@@ -114,9 +114,20 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 	}, a.getHealth)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: manage, Tags: tags,
-		Summary: "Release the instance's active hold",
-		Doc:     "204 whether or not a hold was active.",
+		RateClass: httpapi.RateExpensive, Summary: "Release the instance's active hold",
+		Doc: "204 once the hold is released; 404 no_hold when the instance has none. Sends nothing to the remote.",
 	}, a.releaseHold)
+}
+
+// updateRoute is PUT's route. It is Lenient so the read-only keys of a GET
+// answer are accepted and ignored on the way back (see
+// IntegrationInstanceReplace); it is a function so a test can pin that.
+func updateRoute(manage rbac.Requirement, tags []string) httpapi.Route {
+	return httpapi.Route{
+		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: manage, Tags: tags,
+		MaxBody: maxBody, Lenient: true, Summary: "Replace an instance's editable fields",
+		Doc: "The body carries the stored version and every editable field (name, enabled, priority, local, limits; {} limits inherit), so a GET answer edited and sent back is a valid body: the read-only keys it carries (kind, origin, secrets_set, locked, stored, updated) are accepted and ignored. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
+	}
 }
 
 // ---- requests -------------------------------------------------------------
@@ -129,7 +140,7 @@ type listAdaptersReq struct {
 // Validate refuses a ?kind= that is not a kind.
 func (r *listAdaptersReq) Validate() error {
 	if r.Kind != "" && !integrations.Kind(r.Kind).Valid() {
-		return httpapi.Invalid(httpapi.Field("/query/kind", "invalid_enum", "must be one of ai, download, indexer, metadata, notify"))
+		return httpapi.Invalid(httpapi.Field("/query/kind", "invalid_enum", "must be one of "+kindList()))
 	}
 	return nil
 }
@@ -153,13 +164,13 @@ type createReq struct {
 func (r *createReq) Validate() error { return invalid(r.Body.validate(modeCreate, "")) }
 
 type updateReq struct {
-	Kind string                  `path:"kind"`
-	ID   string                  `path:"id"`
-	Body IntegrationInstanceBody `body:"json"`
+	Kind string                     `path:"kind"`
+	ID   string                     `path:"id"`
+	Body IntegrationInstanceReplace `body:"json"`
 }
 
 // Validate checks the body for a replace.
-func (r *updateReq) Validate() error { return invalid(r.Body.validate(modeReplace, r.ID)) }
+func (r *updateReq) Validate() error { return invalid(r.Body.validate(r.ID)) }
 
 type testNewReq struct {
 	Kind string                  `path:"kind"`
@@ -177,6 +188,15 @@ type testInstanceReq struct {
 
 // Validate checks the body for the instance-scoped test.
 func (r *testInstanceReq) Validate() error { return invalid(r.Body.validate(modeTest, r.ID)) }
+
+// kindList is the kinds, comma separated, for a message.
+func kindList() string {
+	names := make([]string, 0, len(integrations.Kinds()))
+	for _, k := range integrations.Kinds() {
+		names = append(names, string(k))
+	}
+	return strings.Join(names, ", ")
+}
 
 // invalid is errs as one 422, or nil for none.
 func invalid(errs []httpapi.FieldError) error {
@@ -325,7 +345,9 @@ func (a *api) createInstance(ctx context.Context, in *httpapi.In[createReq]) (ht
 }
 
 func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (IntegrationInstance, error) {
-	if err := a.guard(in.Principal); err != nil {
+	// The permission comes before the existence check below, so a caller
+	// without it learns nothing about which instances exist.
+	if err := a.guardManage(in.Principal); err != nil {
 		return IntegrationInstance{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -338,7 +360,8 @@ func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (In
 	if _, ok := a.reg.Config(ref); !ok {
 		return IntegrationInstance{}, errNoInstance()
 	}
-	inst, secretsIn, err := in.Req.Body.config(ref, in.Req.Body.Version)
+	body := in.Req.Body.body()
+	inst, secretsIn, err := body.config(ref, body.Version)
 	if err != nil {
 		return IntegrationInstance{}, err
 	}
@@ -388,11 +411,12 @@ func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (Integrat
 	}
 	// The unscoped form: an empty instance ID names no stored instance, so
 	// the Registry can use no stored secret (M1.3 Test).
-	return a.runTest(ctx, integrations.Ref{Kind: kind}, &in.Req.Body, "POST "+a.base+"/integrations/{kind}/test")
+	return a.runTest(ctx, integrations.Ref{Kind: kind}, &in.Req.Body, in.Req.Body.Adapter, "POST "+a.base+"/integrations/{kind}/test")
 }
 
 func (a *api) testInstance(ctx context.Context, in *httpapi.In[testInstanceReq]) (IntegrationTestResult, error) {
-	if err := a.guard(in.Principal); err != nil {
+	// The permission comes before the existence check below (see updateInstance).
+	if err := a.guardManage(in.Principal); err != nil {
 		return IntegrationTestResult{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -401,19 +425,25 @@ func (a *api) testInstance(ctx context.Context, in *httpapi.In[testInstanceReq])
 	}
 	// A test of an instance that does not exist would silently become the
 	// unscoped form; it is 404 instead.
-	if _, ok := a.reg.Config(ref); !ok {
+	cfg, ok := a.reg.Config(ref)
+	if !ok {
 		return IntegrationTestResult{}, errNoInstance()
 	}
-	return a.runTest(ctx, ref, &in.Req.Body, "POST "+a.base+"/integrations/{kind}/instances/{id}/test")
+	// A test of a stored instance runs that instance's adapter (the Registry
+	// refuses a body naming another), so the record names the stored one and
+	// does not depend on the body repeating it.
+	return a.runTest(ctx, ref, &in.Req.Body, string(cfg.Adapter), "POST "+a.base+"/integrations/{kind}/instances/{id}/test")
 }
 
 // runTest hands the body and ref to Registry.Test unchanged and records
-// core.integration.test. The record follows the test (it carries the
-// result) and is the route's own because the Registry audits only its
-// writes. A failed record answers 503 and withholds the result: a test whose
-// outcome cannot be recorded tells its caller nothing. Registry refusals
-// (403, 409, 422) ran no test and record nothing.
-func (a *api) runTest(ctx context.Context, ref integrations.Ref, body *IntegrationInstanceBody, route string) (IntegrationTestResult, error) {
+// core.integration.test; adapter is the adapter the test ran. The record
+// follows the test (it carries the result) and is the route's own because the
+// Registry audits only its writes. The probe has therefore already been sent
+// when the record is written: a failed record answers 503 and withholds the
+// result, so an unrecorded outcome is not handed to the caller, but it cannot
+// undo the probe. Only a nil audit logger stops a test before it is sent.
+// Registry refusals (403, 409, 422) ran no test and record nothing.
+func (a *api) runTest(ctx context.Context, ref integrations.Ref, body *IntegrationInstanceBody, adapter, route string) (IntegrationTestResult, error) {
 	if a.audit == nil {
 		return IntegrationTestResult{}, httpapi.Unavailable("tests cannot be audited right now", 5*time.Second)
 	}
@@ -429,7 +459,7 @@ func (a *api) runTest(ctx context.Context, ref integrations.Ref, body *Integrati
 		Action: "core.integration.test", Outcome: audit.Success,
 		Target: entity.Ref{Module: "core", Kind: "integration", ID: ref.String()}, Route: route,
 		Details: map[string]any{
-			"instance": ref.String(), "adapter": body.Adapter, "scoped": ref.Instance != "",
+			"instance": ref.String(), "adapter": adapter, "scoped": ref.Instance != "",
 			"ok": res.OK, "class": res.Class.String(), "status": res.Status,
 		},
 	}
