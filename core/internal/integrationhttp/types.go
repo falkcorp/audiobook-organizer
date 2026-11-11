@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b7f3a52-6c1e-4d0a-9b84-3f2a7e51c9d4
 // last-edited: 2026-11-11
 
@@ -165,10 +165,13 @@ type IntegrationInstanceBody struct {
 // the route requires (like enabled): an absent or null name, priority, local
 // or limits is a 422, never a silent reset to a zero value. limits is
 // required because nil would erase every override; {} says "inherit
-// everything" and is what GET answers for an instance without overrides. The
-// route is Lenient so the read-only keys a GET answer carries (kind, origin,
-// secrets_set, locked, stored, updated) are accepted and ignored: an answer
-// edited and sent back is a valid body.
+// everything" and is what GET answers for an instance without overrides.
+//
+// The route decodes strictly: an unknown key, also inside limits, is a 400, so
+// a misspelt "secrets" is never silently dropped. A GET answer edited and sent
+// back is still a valid body because the keys it carries that are not
+// editable (kind, origin, secrets_set, locked, stored, updated) are declared
+// here as read-only members: accepted, never read.
 type IntegrationInstanceReplace struct {
 	ID       string             `json:"id,omitempty"`
 	Adapter  string             `json:"adapter,omitempty"`
@@ -180,6 +183,14 @@ type IntegrationInstanceReplace struct {
 	Secrets  map[string]string  `json:"secrets,omitempty"`
 	Limits   *IntegrationLimits `json:"limits"`
 	Version  uint64             `json:"version"`
+
+	// Read-only: what GET answers and PUT ignores.
+	Kind       string            `json:"kind,omitempty"`
+	Origin     string            `json:"origin,omitempty"`
+	SecretsSet map[string]bool   `json:"secrets_set,omitempty"`
+	Locked     map[string]string `json:"locked,omitempty"`
+	Stored     bool              `json:"stored,omitempty"`
+	Updated    time.Time         `json:"updated,omitzero"`
 }
 
 // validate checks the body against the path's instance ID.
@@ -519,26 +530,39 @@ func durString(d time.Duration) string {
 
 // ---- views ----------------------------------------------------------------
 
-// secretFieldsOf is the top-level settings properties m's schema marks
-// x-mediacore-secret (the Registry requires a secret field to be one). An
+// schemaFields is the top-level settings properties m's schema marks
+// x-mediacore-secret (the Registry requires a secret field to be one), and
+// those it types as URLs (format "uri", on the property or on its items). An
 // unreadable schema yields none, and instanceView then treats every value
-// that is shaped like a secrets.Ref as one.
-func secretFieldsOf(m integrations.Meta) map[string]bool {
+// that is shaped like a secrets.Ref as a secret.
+func schemaFields(m integrations.Meta) (secret, uriTyped map[string]bool) {
+	return schemaFieldsOf(m.Settings.JSON())
+}
+
+// schemaFieldsOf is schemaFields over a settings schema's JSON.
+func schemaFieldsOf(schema json.RawMessage) (secret, uriTyped map[string]bool) {
 	var doc struct {
 		Properties map[string]struct {
-			Secret bool `json:"x-mediacore-secret"`
+			Secret bool   `json:"x-mediacore-secret"`
+			Format string `json:"format"`
+			Items  *struct {
+				Format string `json:"format"`
+			} `json:"items"`
 		} `json:"properties"`
 	}
-	if err := json.Unmarshal(m.Settings.JSON(), &doc); err != nil {
-		return nil
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		return nil, nil
 	}
-	out := map[string]bool{}
+	secret, uriTyped = map[string]bool{}, map[string]bool{}
 	for name, p := range doc.Properties {
 		if p.Secret {
-			out[name] = true
+			secret[name] = true
+		}
+		if p.Format == "uri" || (p.Items != nil && p.Items.Format == "uri") {
+			uriTyped[name] = true
 		}
 	}
-	return out
+	return secret, uriTyped
 }
 
 // isSecretShaped reports a value a settings map must never put on the wire:
@@ -554,13 +578,18 @@ func isSecretShaped(v any) bool {
 	return false
 }
 
-// instanceView renders cfg. secretFields is the adapter's secret fields, nil
-// when the adapter is not registered in this binary (a row kept for another
-// binary): its secret fields are then the ones holding a Ref.
+// instanceView renders cfg. secretFields is the adapter's secret fields and
+// uriFields its URL-typed ones, nil when the adapter is not registered in this
+// binary (a row kept for another binary): its secret fields are then the ones
+// holding a Ref.
 //
 // Whatever the schema says, no Ref-shaped or Value-shaped setting is
-// answered: a secret leaves the server as a marker only.
-func instanceView(cfg integrations.InstanceConfig, secretFields map[string]bool) IntegrationInstance {
+// answered: a secret leaves the server as a marker only. A field an operator
+// value locks, and a URL-typed field, is also left out whole when any part of
+// its value could carry a URL's credentials (see unsafeSetting); no other
+// field is screened, so free text such as a message template is answered as
+// stored and a GET-edit-PUT keeps it.
+func instanceView(cfg integrations.InstanceConfig, secretFields, uriFields map[string]bool) IntegrationInstance {
 	v := IntegrationInstance{
 		Kind: string(cfg.Ref.Kind), ID: string(cfg.Ref.Instance), Adapter: string(cfg.Adapter),
 		Name: cfg.Name, Enabled: cfg.Enabled, Priority: cfg.Priority, Origin: string(cfg.Origin), Local: cfg.Local,
@@ -571,14 +600,17 @@ func instanceView(cfg integrations.InstanceConfig, secretFields map[string]bool)
 		v.SecretsSet[f] = isSecretShaped(cfg.Settings[f])
 	}
 	for f, val := range cfg.Settings {
+		_, locked := cfg.Locked[f]
 		switch {
 		case secretFields[f]:
 		case isSecretShaped(val):
 			v.SecretsSet[f] = true
+		case (locked || uriFields[f]) && unsafeSetting(val):
+			// Left out whole: a locked field may be omitted from a PUT, so
+			// the answer still round-trips, while a field that lost only
+			// one element could not (409 field_locked).
 		default:
-			if safe, ok := withoutUserinfo(val); ok {
-				v.Settings[f] = safe
-			}
+			v.Settings[f] = val
 		}
 	}
 	// limits is always answered: {} for an instance without overrides, so the
@@ -592,118 +624,107 @@ func instanceView(cfg integrations.InstanceConfig, secretFields map[string]bool)
 	return v
 }
 
-// withoutUserinfo is v with everything that could carry a credential-bearing
-// URL left out, ok false when v itself must be. It fails closed:
+// The bounds of unsafeSetting's walk. A value nested deeper than the depth
+// cap, or larger than the node budget, is unsafe: a hand-built cycle or a
+// wide shared structure ends the walk instead of the process.
+const (
+	maxScreenDepth = 64
+	maxScreenNodes = 1 << 16
+)
+
+// unsafeSetting reports whether v could carry a URL's credentials, or cannot
+// be shown not to: any string in it, or any key of a map in it, in which
+// carriesUserinfo holds; any value of a kind that cannot be walked (a struct,
+// a channel, a function, a map not keyed by strings); and anything nested
+// deeper than maxScreenDepth or larger than maxScreenNodes. It fails closed.
 //
-//   - a string is withheld when any "//" in it opens an authority containing
-//     "@" (carriesUserinfo);
-//   - a map or list is rebuilt without its withheld elements and keys, whatever
-//     its Go type (the JSON shapes keep their types; any other string-keyed map
-//     or slice is rebuilt as map[string]any or []any);
-//   - a value of a kind that cannot be walked (a struct, a channel, a function,
-//     a map that is not keyed by strings) is withheld, never passed through.
-//
-// The Registry refuses userinfo in a Put, but an operator-layer value is not a
-// Put: a URL there can carry a credential, and the settings answer is read
-// with core:integrations.read. Leaving the value out is safe for a client that
-// sends the answer back: an operator-locked field may be omitted from a PUT
-// (M1.3 Put). Containers are copied, never edited, because cfg.Settings is
-// the Registry's.
-func withoutUserinfo(v any) (out any, ok bool) {
-	switch x := v.(type) {
-	case nil:
-		return nil, true
-	case string:
-		return v, !carriesUserinfo(x)
-	case []string:
-		kept := make([]string, 0, len(x))
-		for _, e := range x {
-			if !carriesUserinfo(e) {
-				kept = append(kept, e)
-			}
-		}
-		return kept, true
-	case map[string]string:
-		kept := make(map[string]string, len(x))
-		for k, e := range x {
-			if !carriesUserinfo(k) && !carriesUserinfo(e) {
-				kept[k] = e
-			}
-		}
-		return kept, true
-	case []any:
-		kept := make([]any, 0, len(x))
-		for _, e := range x {
-			if s, ok := withoutUserinfo(e); ok {
-				kept = append(kept, s)
-			}
-		}
-		return kept, true
-	case map[string]any:
-		kept := make(map[string]any, len(x))
-		for k, e := range x {
-			if carriesUserinfo(k) {
-				continue
-			}
-			if s, ok := withoutUserinfo(e); ok {
-				kept[k] = s
-			}
-		}
-		return kept, true
-	}
-	return screenValue(reflect.ValueOf(v))
+// The Registry refuses userinfo when a URL-typed field is written, but an
+// operator-layer value is not a Put, and the settings answer is read with
+// core:integrations.read.
+func unsafeSetting(v any) bool {
+	w := screener{left: maxScreenNodes}
+	return w.value(v, 0)
 }
 
-// screenValue is withoutUserinfo for the shapes its type switch does not
-// name: named string types, typed slices and maps, and pointers to them.
-func screenValue(rv reflect.Value) (any, bool) {
+// screener is one walk's node budget.
+type screener struct{ left int }
+
+// value is unsafeSetting for the JSON shapes (strings, lists, maps), by type
+// switch; anything else goes to reflect.
+func (w *screener) value(v any, depth int) bool {
+	if w.left--; w.left < 0 || depth > maxScreenDepth {
+		return true
+	}
+	switch x := v.(type) {
+	case nil:
+		return false
+	case string:
+		return carriesUserinfo(x)
+	case []string:
+		return slices.ContainsFunc(x, carriesUserinfo)
+	case map[string]string:
+		for k, e := range x {
+			if carriesUserinfo(k) || carriesUserinfo(e) {
+				return true
+			}
+		}
+		return false
+	case []any:
+		for _, e := range x {
+			if w.value(e, depth+1) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		for k, e := range x {
+			if carriesUserinfo(k) || w.value(e, depth+1) {
+				return true
+			}
+		}
+		return false
+	}
+	return w.reflected(reflect.ValueOf(v), depth)
+}
+
+// reflected is value for the shapes its type switch does not name: named
+// string types, typed slices and maps, and pointers to them.
+func (w *screener) reflected(rv reflect.Value, depth int) bool {
+	if w.left--; w.left < 0 || depth > maxScreenDepth {
+		return true
+	}
 	switch rv.Kind() {
 	case reflect.String:
-		if carriesUserinfo(rv.String()) {
-			return nil, false
-		}
-		return rv.Interface(), true
+		return carriesUserinfo(rv.String())
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64:
-		return rv.Interface(), true
+		return false
 	case reflect.Interface, reflect.Pointer:
-		if rv.IsNil() {
-			return nil, true
-		}
-		return screenValue(rv.Elem())
+		return !rv.IsNil() && w.reflected(rv.Elem(), depth+1)
 	case reflect.Slice, reflect.Array:
 		if rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
 			// Bytes marshal as base64, which hides the text; screen the text.
-			if carriesUserinfo(string(rv.Bytes())) {
-				return nil, false
-			}
-			return rv.Interface(), true
+			return carriesUserinfo(string(rv.Bytes()))
 		}
-		kept := make([]any, 0, rv.Len())
 		for i := range rv.Len() {
-			if e, ok := screenValue(rv.Index(i)); ok {
-				kept = append(kept, e)
+			if w.reflected(rv.Index(i), depth+1) {
+				return true
 			}
 		}
-		return kept, true
+		return false
 	case reflect.Map:
 		if rv.Type().Key().Kind() != reflect.String {
-			return nil, false
+			return true
 		}
-		kept := make(map[string]any, rv.Len())
 		for it := rv.MapRange(); it.Next(); {
-			k := it.Key().String()
-			if carriesUserinfo(k) {
-				continue
-			}
-			if e, ok := screenValue(it.Value()); ok {
-				kept[k] = e
+			if carriesUserinfo(it.Key().String()) || w.reflected(it.Value(), depth+1) {
+				return true
 			}
 		}
-		return kept, true
+		return false
 	}
-	return nil, false
+	return true
 }
 
 // carriesUserinfo reports whether s holds a "//" that opens an authority (the

@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/errors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3a9c1d4-52b7-4f06-8a1d-7c40b9e2f635
 // last-edited: 2026-11-11
 
@@ -104,7 +104,7 @@ func (a *api) guardManage(p *auth.Principal) error {
 	if err := a.guard(p); err != nil {
 		return err
 	}
-	if p.Perms == nil || !p.Perms.Has(permManage) {
+	if p.Perms == nil || !p.Perms.Has(integrations.ManagePerm) {
 		return forbidden(nil)
 	}
 	return nil

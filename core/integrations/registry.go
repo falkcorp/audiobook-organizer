@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -27,8 +27,10 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// managePerm is the permission every write of the Registry requires.
-const managePerm rbac.Permission = "core:integrations.manage"
+// ManagePerm is the permission every write of the Registry requires. The HTTP
+// surface (core/internal/integrationhttp) declares its manage routes with it,
+// so the router and the Registry cannot name different permissions.
+const ManagePerm rbac.Permission = "core:integrations.manage"
 
 // Settings is the live core.integrations section the Registry reads on each
 // call (05-metadata M1.7; name coined by F7-01). The kernel adapts its
@@ -601,8 +603,8 @@ func writerOf(ctx context.Context) (writer, error) {
 	if !ok || p.Perms == nil {
 		return writer{}, fmt.Errorf("%w: no authenticated principal", ErrForbidden)
 	}
-	if !p.Perms.Has(managePerm) {
-		return writer{}, fmt.Errorf("%w: %s is required", ErrForbidden, managePerm)
+	if !p.Perms.Has(ManagePerm) {
+		return writer{}, fmt.Errorf("%w: %s is required", ErrForbidden, ManagePerm)
 	}
 	return writer{p: p, admin: p.Method.MayChangeCredentials() && p.Perms.Has(rbac.CoreAdmin)}, nil
 }

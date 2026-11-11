@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/env_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 6d2e8b40-a7c3-4f19-95e1-0c3b7a48d256
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -49,6 +50,8 @@ type batsignalSettings struct {
 	URL      string      `json:"url,omitempty" schema:"format=uri"`
 	Password secrets.Ref `json:"password"`
 	Channel  string      `json:"channel,omitempty"`
+	// Extra is an object-valued field, for a container an operator value locks.
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 // oracleSettings is hello.oracle's settings.
@@ -152,53 +155,97 @@ func (r *recorder) recordCalls() int {
 	return r.calls
 }
 
-// fakeHolds is a HoldReleaser that records its calls. holdOn makes ref hold
-// scope; HeldScope answers from that table alone, as the real one answers
-// from the gate.
+// fakeHolds is a HoldReleaser over a table of holds by instance, with the
+// semantics of providerhttp.Registry's pair: HoldFor reads one, ReleaseHoldIf
+// releases it only while it is still the hold in force (nil when none is,
+// ErrHoldChanged when a different one is). afterRead runs between HoldFor's
+// answer and the caller's next call, to change the hold in that gap.
 type fakeHolds struct {
-	mu     sync.Mutex
-	held   map[integrations.Ref]string
-	asked  int
-	scopes []string
-	err    error
+	mu        sync.Mutex
+	held      map[integrations.Ref]integrations.Hold
+	asked     int
+	expects   []integrations.Hold // every ReleaseHoldIf's argument
+	released_ []integrations.Hold // the holds actually ended
+	err       error
+	afterRead func(f *fakeHolds)
 }
 
-// holdOn makes ref's active hold be on scope.
-func (f *fakeHolds) holdOn(ref integrations.Ref, scope string) {
+// holdOn makes ref's active hold h (replacing any).
+func (f *fakeHolds) holdOn(ref integrations.Ref, h integrations.Hold) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.setLocked(ref, h)
+}
+
+func (f *fakeHolds) setLocked(ref integrations.Ref, h integrations.Hold) {
 	if f.held == nil {
-		f.held = map[integrations.Ref]string{}
+		f.held = map[integrations.Ref]integrations.Hold{}
 	}
-	f.held[ref] = scope
+	f.held[ref] = h
 }
 
-func (f *fakeHolds) HeldScope(ref integrations.Ref) (string, bool) {
+func (f *fakeHolds) HoldFor(ref integrations.Ref) (integrations.Hold, bool) {
+	f.mu.Lock()
+	f.asked++
+	h, ok := f.held[ref]
+	hook := f.afterRead
+	f.mu.Unlock()
+	if hook != nil {
+		hook(f)
+	}
+	return h, ok
+}
+
+func (f *fakeHolds) ReleaseHoldIf(_ context.Context, expect integrations.Hold) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.asked++
-	scope, ok := f.held[ref]
-	return scope, ok
+	f.expects = append(f.expects, expect)
+	if f.err != nil {
+		return f.err
+	}
+	for ref, cur := range f.held {
+		if cur.Scope != expect.Scope {
+			continue
+		}
+		if cur != expect {
+			return fmt.Errorf("fake: %w", ErrHoldChanged)
+		}
+		delete(f.held, ref)
+		f.released_ = append(f.released_, cur)
+		return nil
+	}
+	return nil // no hold in force: the goal is met
 }
 
-// heldScopeCalls is how many times HeldScope was asked.
+// heldScopeCalls is how many times HoldFor was asked.
 func (f *fakeHolds) heldScopeCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.asked
 }
 
-func (f *fakeHolds) ReleaseHold(_ context.Context, scope string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.scopes = append(f.scopes, scope)
-	return f.err
-}
-
+// released is the scopes of the holds actually ended.
 func (f *fakeHolds) released() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.scopes)
+	var out []string
+	for _, h := range f.released_ {
+		out = append(out, h.Scope)
+	}
+	return out
+}
+
+// releaseCalls is every ReleaseHoldIf argument.
+func (f *fakeHolds) releaseCalls() []integrations.Hold {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.expects)
+}
+
+// hold is a hold on scope for the cases: quota class, an hour from now.
+func (e *env) hold(scope string, extra time.Duration) integrations.Hold {
+	return integrations.Hold{Scope: scope, Class: integrations.ClassQuota,
+		Until: e.clock.now().Add(time.Hour + extra), SetAt: e.clock.now()}
 }
 
 func newEnv(t testing.TB) *env {

@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 91c5d7e2-3a84-4b1f-b6d0-58e2a4c7f193
 // last-edited: 2026-11-11
 
@@ -37,12 +37,10 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// The two permissions the routes declare (05-rbac §7.1: core.integration.*).
+// permRead is the permission the read routes declare (05-rbac §7.1). The
+// manage routes declare integrations.ManagePerm, the Registry's own constant;
 // manage implies read in the catalog.
-const (
-	permRead   rbac.Permission = "core:integrations.read"
-	permManage rbac.Permission = "core:integrations.manage"
-)
+const permRead rbac.Permission = "core:integrations.read"
 
 // maxBody bounds a body: an instance's settings are a handful of fields, and
 // a secret is capped at maxSecretBytes by validation, so a request has no
@@ -72,7 +70,7 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 	a := &api{reg: reg, holds: holds, audit: auditLog, base: g.Base()}
 	tags := []string{"integrations"}
 	read := rbac.Need(permRead)
-	manage := rbac.Need(permManage)
+	manage := rbac.Need(integrations.ManagePerm)
 
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/integrations/adapters", Name: "listIntegrationAdapters", Perm: read, Tags: tags,
@@ -114,19 +112,19 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 	}, a.getHealth)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: manage, Tags: tags,
-		RateClass: httpapi.RateExpensive, Summary: "Release the instance's active hold",
-		Doc: "204 once the hold is released; 404 no_hold when the instance has none. Sends nothing to the remote.",
+		Summary: "Release the instance's active hold",
+		Doc:     "204 whether a hold was released or none was active, so the call is idempotent; 409 hold_changed when a different hold took its place between the read and the release (read the health again and retry); 404 for an instance that does not exist. Sends nothing to the remote.",
 	}, a.releaseHold)
 }
 
-// updateRoute is PUT's route. It is Lenient so the read-only keys of a GET
-// answer are accepted and ignored on the way back (see
-// IntegrationInstanceReplace); it is a function so a test can pin that.
+// updateRoute is PUT's route. It is strict (not Lenient): an unknown key is a
+// 400, and the read-only keys of a GET answer are members of
+// IntegrationInstanceReplace; it is a function so a test can pin that.
 func updateRoute(manage rbac.Requirement, tags []string) httpapi.Route {
 	return httpapi.Route{
 		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: manage, Tags: tags,
-		MaxBody: maxBody, Lenient: true, Summary: "Replace an instance's editable fields",
-		Doc: "The body carries the stored version and every editable field (name, enabled, priority, local, limits; {} limits inherit), so a GET answer edited and sent back is a valid body: the read-only keys it carries (kind, origin, secrets_set, locked, stored, updated) are accepted and ignored. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
+		MaxBody: maxBody, Summary: "Replace an instance's editable fields",
+		Doc: "The body carries the stored version and every editable field (name, enabled, priority, local, limits; {} limits inherit), so a GET answer edited and sent back is a valid body: the read-only keys it carries (kind, origin, secrets_set, locked, stored, updated) are accepted and ignored, and any other unknown key is a 400. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
 	}
 }
 
@@ -253,11 +251,11 @@ func (a *api) metasOf(kind integrations.Kind) map[integrations.AdapterID]integra
 
 // view renders cfg, with its adapter's secret fields when this binary has it.
 func view(cfg integrations.InstanceConfig, metas map[integrations.AdapterID]integrations.Meta) IntegrationInstance {
-	var fields map[string]bool
+	var secret, uriTyped map[string]bool
 	if m, ok := metas[cfg.Adapter]; ok {
-		fields = secretFieldsOf(m)
+		secret, uriTyped = schemaFields(m)
 	}
-	return instanceView(cfg, fields)
+	return instanceView(cfg, secret, uriTyped)
 }
 
 // page is items[offset:offset+limit] as httpapi's default list shape.
