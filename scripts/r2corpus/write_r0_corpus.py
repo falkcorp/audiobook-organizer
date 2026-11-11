@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -464,17 +464,42 @@ def lay_out_slow_tree(root: pathlib.Path, fanout: int = SLOW_TREE_FANOUT) -> int
     return fanout**3
 
 
-def check_outside_maintenance_window(now: _dt.datetime | None = None) -> None:
-    """Refuse to drive R0 inside the configured maintenance window (UTC)."""
+def check_outside_maintenance_window(
+    now: _dt.datetime | None = None, window: tuple[int, int] = MAINTENANCE_WINDOW_UTC
+) -> None:
+    """Refuse to drive R0 inside the configured maintenance window (UTC).
+
+    ``window`` is (start, end) in UTC hours, the end exclusive; a window that
+    wraps midnight (start > end) is handled, and so is the margin around it.
+    """
     now = now or _dt.datetime.now(_dt.timezone.utc)
-    start, end = MAINTENANCE_WINDOW_UTC
+    start, end = window
     lo, hi = start - WINDOW_MARGIN_HOURS, end + WINDOW_MARGIN_HOURS
-    if lo <= now.astimezone(_dt.timezone.utc).hour < hi:
+    span = (hi - lo) % 24 or 24
+    if (now.astimezone(_dt.timezone.utc).hour - lo) % 24 < span:
         raise CorpusError(
             f"it is {now:%H:%M} UTC: the corpus' maintenance window is "
             f"{start:02d}:00-{end:02d}:00 UTC and window tasks would run while R0 is "
             f"driven; start outside {lo:02d}:00-{hi:02d}:00 UTC"
         )
+
+
+def shifted_window(now: _dt.datetime | None = None) -> tuple[int, int]:
+    """A maintenance window (start, end) UTC twelve hours away from now.
+
+    A replay that must run at any hour (F2-15's CI jobs) boots with this window
+    instead of MAINTENANCE_WINDOW_UTC, so no window task runs while it drives
+    the binary; shifted_window_env gives the boot's env layer for it.
+    """
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    length = MAINTENANCE_WINDOW_UTC[1] - MAINTENANCE_WINDOW_UTC[0]
+    start = (now.astimezone(_dt.timezone.utc).hour + 12) % 24
+    return start, (start + length) % 24
+
+
+def shifted_window_env(window: tuple[int, int]) -> dict[str, str]:
+    """The env layer that moves the maintenance window to ``window``."""
+    return {"MAINTENANCE_WINDOW_START": str(window[0]), "MAINTENANCE_WINDOW_END": str(window[1])}
 
 
 # ------------------------------------------------------------- the R0 process
@@ -489,11 +514,15 @@ class R0Process:
         layout: Layout,
         port: int,
         docker: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.binary = binary
         self.layout = layout
         self.port = port
         self.docker = docker
+        # Replaces boot_env's values by name (F2-15's pre-freeze replays move
+        # the maintenance window away from the clock: shifted_window_env).
+        self.extra_env = dict(extra_env or {})
         self.proc: subprocess.Popen[bytes] | None = None
         self._log = None
         self.container = f"r2corpus-{os.getpid()}"
@@ -503,7 +532,7 @@ class R0Process:
         return f"http://127.0.0.1:{self.port}"
 
     def _command(self) -> tuple[list[str], dict[str, str]]:
-        env = boot_env(self.layout, self.port)
+        env = {**boot_env(self.layout, self.port), **self.extra_env}
         if not self.docker:
             argv = boot_argv(str(self.binary), self.layout, self.port)
             full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env}

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_gen_production_shaped.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6f5d38ad-dc4d-42f5-b83c-f79c1e1d4f7c
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/gen_production_shaped.py and the Go row writer (F2-14).
@@ -184,7 +184,7 @@ class Generator(unittest.TestCase):
         for prefix in ("act:digest:", "batcave:"):
             self.assertEqual(got[prefix]["keys"], 0, f"{prefix} was invented")
             self.assertTrue(self.report[prefix]["skipped"], prefix)
-            self.assertIn(f"SKIPPED", [ln for ln in self.stdout.splitlines() if ln.startswith(prefix)][0])
+            self.assertIn("SKIPPED", [ln for ln in self.stdout.splitlines() if ln.startswith(prefix)][0])
         self.assertIn("skipped families (2): act:digest:, batcave:", self.stdout)
 
     def test_every_generated_row_still_decodes(self):
@@ -300,14 +300,16 @@ class ShapedStoreJobTrigger(unittest.TestCase):
         self.assertGreaterEqual(len(theirs), 8)
         self.assertEqual(ours, theirs, "extraction-gates.yml's shaped-store paths drifted from unit-lifecycle.yml's")
         # What the job adds is its own files only: the workflows that run it,
-        # the generator, the row writer, the test, the shared script and the corpus.
+        # the generator, the row writer, the test, the shared script, the corpus
+        # and F2-15's cutover suite with its shared-family golden.
         self.assertIn(".github/workflows/extraction-gates.yml", own)
         self.assertIn(".github/workflows/nightly.yml", own)
         for path in own:
             self.assertTrue(
                 path.startswith((".github/workflows/", "scripts/r2corpus/", "scripts/ci/run_production_shaped_store.sh",
                                  "scripts/tests/test_gen_production_shaped.py", "internal/books/production_shaped_test.go",
-                                 "internal/books/testdata/r2corpus/")),
+                                 "internal/books/testdata/r2corpus/", "internal/books/cutover_suite_test.go",
+                                 "internal/books/testdata/shared_families.golden")),
                 f"{path} is not one of the job's own files",
             )
 
