@@ -108,6 +108,11 @@ core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
 core/internal/executor.Reconfigure
 core/internal/executor.cpuBudget.resize
+core/internal/scheduler.ValidateSchedules
+core/internal/scheduler.configSegment
+core/internal/scheduler.joinKinds
+core/internal/scheduler.keyOwner
+core/internal/scheduler.ownerName
 core/internal/taskstore.SerializedPrefixes
 core/internal/taskstore.StorageSpec
 core/kernel.bootConfig
