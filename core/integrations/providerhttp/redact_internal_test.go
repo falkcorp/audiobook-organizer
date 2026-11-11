@@ -54,6 +54,8 @@ func TestScrubText_Leaks(t *testing.T) {
 		{"long name", strings.Repeat("a", 300) + "key=" + s},
 		{"long name session", strings.Repeat("a", 300) + "session=" + s},
 		{"x-custom adapter name", "gotham_pin=" + s},
+		{"authorization other scheme", "Authorization: Negotiate " + s + "AB"},
+		{"auth header scheme and token", "X-Auth: Token " + s},
 	} {
 		got := newScrubber([]string{"gotham_pin"}).text(tc.in)
 		if strings.Contains(got, s) {
@@ -155,7 +157,7 @@ func TestScrubSecretRules(t *testing.T) {
 		"token": true, "Access_Token": true, "refresh_token": true, "X-Plex-Token": true,
 		"secret": true, "client_secret": true, "password": true, "passwd": true, "pwd": true, "pass": true,
 		"session": true, "sessionid": true, "JSESSIONID": true, "sig": true, "signature": true, "X-Amz-Signature": true,
-		"credential": true, "X-Amz-Credential": true, "authorization": true, "Proxy-Authorization": true,
+		"credential": true, "X-Amz-Credential": true, "sig_v4": true, "sigv4": true, "authorization": true, "Proxy-Authorization": true,
 		"auth": true, "oauth": true, "cookie": true, "Set-Cookie": true, "sid": true,
 		"x-batcave-pin": true, "x_batcave_pin": true,
 		"author": false, "authors": false, "authority": false, "narrator": false, "title": false, "q": false,
