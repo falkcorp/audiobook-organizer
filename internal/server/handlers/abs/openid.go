@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	coreaudit "github.com/falkcorp/mediacore/audit"
+
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -699,8 +701,8 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 			res.GlobalEvicted, logger.SanitizeLogValue(res.EvictedFrom), oidcStoreCap, logger.SanitizeLogValue(callerKey))
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "openid-authorize", Outcome: absauth.OutcomeSuccess, Mode: oidcAuthMethod,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "openid-authorize", Outcome: coreaudit.OutcomeSuccess, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "browser-hop-issued",
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		ServiceToken: servermiddleware.ABSServiceToken(c),
@@ -711,8 +713,8 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 
 // oidcAuthorizeReject answers hop 1 with a 400 plain-text body and audits it.
 func (h *Handler) oidcAuthorizeReject(c *gin.Context, reason, message string) {
-	absauth.Audit(absauth.AuditEvent{
-		Action: "openid-authorize", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "openid-authorize", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		ServiceToken: servermiddleware.ABSServiceToken(c),
@@ -818,7 +820,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		ev.Outcome = oidcOutcomeForStatus(authErr.Status)
 		ev.Reason = authErr.Reason
 		ev.Email = authErr.Email
-		absauth.Audit(ev)
+		coreaudit.Audit(ev)
 		errCode := "access_denied"
 		if authErr.Status >= http.StatusInternalServerError {
 			errCode = "server_error"
@@ -835,18 +837,18 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		oidcLog.Warn("openid browser hop resolved no verified identity: service_token=%s reauth=%t caller=%s client_id=%s",
 			logger.SanitizeLogValue(ev.ServiceToken), reauth,
 			logger.SanitizeLogValue(pending.CallerKey), oidcLogValue(pending.ClientID))
-		ev.Outcome = absauth.OutcomeDenied
+		ev.Outcome = coreaudit.OutcomeDenied
 		ev.Reason = "no-verified-identity"
-		absauth.Audit(ev)
+		coreaudit.Audit(ev)
 		oidcRedirectError(c, http.StatusFound, pending.RedirectURI, pending.State, "access_denied",
 			"no verified identity on this request")
 		return
 	}
 
 	ev.UserID, ev.Username, ev.Email = identity.User.ID, identity.User.Username, identity.Email
-	ev.Outcome = absauth.OutcomeSuccess
+	ev.Outcome = coreaudit.OutcomeSuccess
 	ev.Reason = "consent-shown"
-	absauth.Audit(ev)
+	coreaudit.Audit(ev)
 	h.renderOIDCConsent(c, reqID, pending, identity)
 }
 
@@ -915,9 +917,9 @@ func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 		state = reqID
 	}
 	if c.PostForm("decision") != "allow" {
-		ev.Outcome = absauth.OutcomeDenied
+		ev.Outcome = coreaudit.OutcomeDenied
 		ev.Reason = "consent-declined"
-		absauth.Audit(ev)
+		coreaudit.Audit(ev)
 		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, state, "access_denied",
 			"the user declined the sign-in")
 		return
@@ -927,15 +929,15 @@ func (h *Handler) OpenIDBrowserConsent(c *gin.Context) {
 	if err != nil {
 		oidcLog.Error("openid consent could not mint a code: user_id=%s: %v",
 			logger.SanitizeLogValue(identity.User.ID), err)
-		ev.Outcome = absauth.OutcomeError
+		ev.Outcome = coreaudit.OutcomeError
 		ev.Reason = "code-mint-error"
-		absauth.Audit(ev)
+		coreaudit.Audit(ev)
 		oidcRedirectError(c, http.StatusSeeOther, pending.RedirectURI, state, "server_error", "could not mint code")
 		return
 	}
-	ev.Outcome = absauth.OutcomeSuccess
+	ev.Outcome = coreaudit.OutcomeSuccess
 	ev.Reason = "code-issued"
-	absauth.Audit(ev)
+	coreaudit.Audit(ev)
 	oidcRedirect(c, http.StatusSeeOther, pending.RedirectURI, map[string]string{"code": code, "state": state})
 }
 
@@ -953,13 +955,13 @@ func (h *Handler) oidcConsentToken(reqID, userID string) string {
 }
 
 // oidcBrowserAudit is the common part of every hop-2 audit record.
-func (h *Handler) oidcBrowserAudit(c *gin.Context, pending oidcPendingRequest) absauth.AuditEvent {
+func (h *Handler) oidcBrowserAudit(c *gin.Context, pending oidcPendingRequest) coreaudit.AuditEvent {
 	st := servermiddleware.ABSServiceToken(c)
 	if st == "" && strings.HasPrefix(pending.CallerKey, "svc:") {
 		// The hop-1 service token, so the token↔person pairing is on this line.
 		st = strings.TrimPrefix(pending.CallerKey, "svc:")
 	}
-	return absauth.AuditEvent{
+	return coreaudit.AuditEvent{
 		Action: "openid-browser", Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Path: c.Request.URL.Path,
 		UserAgent: c.Request.UserAgent(), ServiceToken: st,
@@ -968,8 +970,8 @@ func (h *Handler) oidcBrowserAudit(c *gin.Context, pending oidcPendingRequest) a
 
 // oidcConsentRefuse answers a consent POST that failed a check before the take.
 func (h *Handler) oidcConsentRefuse(c *gin.Context, reason, message string) {
-	absauth.Audit(absauth.AuditEvent{
-		Action: "openid-consent", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "openid-consent", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
@@ -980,8 +982,8 @@ func (h *Handler) oidcConsentRefuse(c *gin.Context, reason, message string) {
 // trusted redirect target for such an id, so this renders a message page in the browser
 // rather than redirecting anywhere.
 func (h *Handler) oidcBrowserDead(c *gin.Context) {
-	absauth.Audit(absauth.AuditEvent{
-		Action: "openid-browser", Outcome: absauth.OutcomeFailure, Mode: oidcAuthMethod,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "openid-browser", Outcome: coreaudit.OutcomeFailure, Mode: oidcAuthMethod,
 		SourceIP: strings.TrimSpace(c.ClientIP()), Reason: "request-unknown-expired-or-used",
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
@@ -1139,8 +1141,8 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	sum := sha256.Sum256([]byte(verifier))
 	expected := base64.RawURLEncoding.EncodeToString(sum[:])
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(pending.Challenge)) != 1 {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "openid-callback", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: pending.UserID,
 			Reason: "pkce-mismatch", Path: c.Request.URL.Path,
 		})
@@ -1155,8 +1157,8 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	// redirect_uri from the token request for exactly that reason). A client that
 	// DOES send one must send the exact value the code was minted for.
 	if ru, sent := c.GetQuery("redirect_uri"); sent && ru != pending.RedirectURI {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "openid-callback", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: pending.UserID,
 			Reason: "redirect-uri-mismatch", Path: c.Request.URL.Path,
 		})
@@ -1182,8 +1184,8 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	// same order as ResolveBearer, so a code minted before a deactivation is
 	// 401 credentials-changed (dead) rather than 403 account-inactive.
 	if user.CredentialEpoch != pending.CredentialEpoch {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "openid-callback", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: user.ID,
 			Username: user.Username, Reason: "credentials-changed", Path: c.Request.URL.Path,
 		})
@@ -1195,8 +1197,8 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	// a row whose status is inactive at the same epoch the code carries.
 	// Mirrors the middleware's own active check.
 	if status := strings.ToLower(strings.TrimSpace(user.Status)); status != "" && status != "active" {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "openid-callback", Outcome: absauth.OutcomeDenied, Mode: oidcAuthMethod,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "openid-callback", Outcome: coreaudit.OutcomeDenied, Mode: oidcAuthMethod,
 			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: user.ID,
 			Username: user.Username, Reason: "user-inactive", Path: c.Request.URL.Path,
 		})
@@ -1440,14 +1442,14 @@ func oidcCFCookieNames(c *gin.Context) string {
 }
 
 // oidcOutcomeForStatus classifies a resolver error for the audit log.
-func oidcOutcomeForStatus(status int) absauth.Outcome {
+func oidcOutcomeForStatus(status int) coreaudit.Outcome {
 	switch {
 	case status >= http.StatusInternalServerError:
-		return absauth.OutcomeError
+		return coreaudit.OutcomeError
 	case status == http.StatusForbidden:
-		return absauth.OutcomeDenied
+		return coreaudit.OutcomeDenied
 	default:
-		return absauth.OutcomeFailure
+		return coreaudit.OutcomeFailure
 	}
 }
 

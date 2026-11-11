@@ -37,12 +37,13 @@ import (
 	texttemplate "text/template"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
@@ -131,7 +132,7 @@ func normalizeInviteEmail(raw string) (string, error) {
 	if strings.ContainsAny(raw, "\r\n") {
 		return "", errors.New("email must be a single plain address")
 	}
-	e := util.NormalizeEmail(raw)
+	e := coreauth.NormalizeEmail(raw)
 	if e == "" {
 		return "", nil
 	}

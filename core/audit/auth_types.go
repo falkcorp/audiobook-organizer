@@ -3,20 +3,15 @@
 // guid: 0e5c72a8-91b3-4f46-8d27-4a08b6e1c937
 // last-edited: 2026-09-13
 
-package absauth
+package audit
 
 import (
 	"log/slog"
-
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // AuditEventName is the fixed slog attribute every ABS auth record carries, so the
 // whole audit trail is one grep/log-query away: `event=abs.auth`.
 const AuditEventName = "abs.auth"
-
-// Outcome classifies an authentication attempt.
-type Outcome string
 
 const (
 	// OutcomeSuccess — identity resolved and the request proceeds.

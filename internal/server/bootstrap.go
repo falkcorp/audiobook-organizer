@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"slices"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,7 +31,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -501,7 +502,7 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	if err != nil {
 		return nil, "", fmt.Errorf("generate admin password: %w", err)
 	}
-	algo, hash, err := absauth.HashPassword(password)
+	algo, hash, err := authpw.HashPassword(password)
 	if err != nil {
 		return nil, "", fmt.Errorf("hash password: %w", err)
 	}

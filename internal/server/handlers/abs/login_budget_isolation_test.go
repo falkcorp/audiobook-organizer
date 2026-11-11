@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
@@ -22,7 +24,7 @@ import (
 func TestRefreshBudget_LoginTyposDoNotSpendIt(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		if code := failLogin(t, h, "192.0.2.20"); code != http.StatusUnauthorized {
 			t.Fatalf("login typo %d: %d, want 401", i, code)
 		}
@@ -42,7 +44,7 @@ func TestRefreshBudget_LoginTyposDoNotSpendIt(t *testing.T) {
 func TestRefreshBudget_SpentRefreshBudgetDoesNotRefuseAbsLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for range absauth.MaxFailuresPerIP {
+	for range coreauth.MaxFailuresPerIP {
 		failRefresh(t, h, "192.0.2.21")
 	}
 	if code := failRefresh(t, h, "192.0.2.21"); code != http.StatusTooManyRequests {
@@ -63,7 +65,7 @@ func TestRefreshBudget_SpentRefreshBudgetDoesNotRefuseAbsLogin(t *testing.T) {
 func TestRefreshBudget_ASuccessfulLoginDoesNotRefundIt(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := 0; i < absauth.MaxFailuresPerIP-1; i++ {
+	for i := 0; i < coreauth.MaxFailuresPerIP-1; i++ {
 		if code := failRefresh(t, h, "192.0.2.23"); code != http.StatusUnauthorized {
 			t.Fatalf("refresh %d: %d, want 401", i, code)
 		}
@@ -122,7 +124,7 @@ func TestLogin_FailedAbsLoginTimingDoesNotRevealWhetherTheNameExists(t *testing.
 func TestAbsHandlerRefusals_CarryRetryAfter(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for range absauth.MaxFailuresPerIP {
+	for range coreauth.MaxFailuresPerIP {
 		failLogin(t, h, "192.0.2.24")
 		failRefresh(t, h, "192.0.2.25")
 	}
@@ -160,7 +162,7 @@ func TestRefreshBudget_ASuccessfulRefreshDoesNotRefundIt(t *testing.T) {
 		}
 		return str(t, userObj(t, body), "refreshToken")
 	}
-	for i := 0; i < absauth.MaxFailuresPerIP-1; i++ {
+	for i := 0; i < coreauth.MaxFailuresPerIP-1; i++ {
 		failRefresh(t, h, visitor)
 	}
 	w, _ := h.do(t, request{method: http.MethodPost, path: "/auth/refresh",

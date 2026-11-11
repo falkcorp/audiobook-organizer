@@ -11,8 +11,9 @@ import (
 	"fmt"
 	"time"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
 // allAtoms is HEAD's thirteen atoms, in seed order (05-rbac §6.1; the stage-1
@@ -27,7 +28,7 @@ var allAtoms = []string{
 // createUser creates a user through the store's own writer with a fixture
 // password hashed by HEAD's one hashing policy, and returns it.
 func (w *writer) createUser(username string, roles []string, status string) *database.User {
-	algo, hash, err := absauth.HashPassword(overlayPassword)
+	algo, hash, err := authpw.HashPassword(overlayPassword)
 	must(err, "hash fixture password")
 	u, err := w.db.CreateUser(username, "", algo, hash, roles, status)
 	must(err, "create user "+username)
@@ -223,7 +224,7 @@ func writeInviteAllow(w *writer, label string) {
 	must(err, "create invite")
 	_, err = w.db.MarkInviteEmailSent(token, email, time.Now())
 	must(err, "mark invite sent")
-	algo, hash, err := absauth.HashPassword(overlayPassword)
+	algo, hash, err := authpw.HashPassword(overlayPassword)
 	must(err, "hash fixture password")
 	_, err = w.db.ConsumeInvite(token, algo, hash)
 	must(err, "consume invite")

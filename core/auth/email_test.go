@@ -3,7 +3,7 @@
 // guid: bb606c60-2e28-48c8-900c-950f0c43fb1e
 // last-edited: 2026-10-20
 
-package util
+package auth
 
 import "testing"
 

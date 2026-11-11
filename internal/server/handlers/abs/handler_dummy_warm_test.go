@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 )
 
 const warmChildEnv = "AORG_TEST_WARM_CHILD"
@@ -31,11 +31,11 @@ func TestWarmChild_New(t *testing.T) {
 	if os.Getenv(warmChildEnv) != "1" {
 		t.Skip("runs only as the child of TestNew_WarmsTheLoginDummy")
 	}
-	if absauth.LoginDummyReadyForTest() {
+	if authpw.LoginDummyReadyForTest() {
 		t.Fatal("the dummy hash was already built before the constructor ran: the child does not start cold")
 	}
 	newHarness(t, "cf,jwt", nil) // builds the handler with abshandler.New
-	if !absauth.LoginDummyReadyForTest() {
+	if !authpw.LoginDummyReadyForTest() {
 		t.Fatal("abs.New did not build the dummy hash: the first unknown-name login would pay for it")
 	}
 }

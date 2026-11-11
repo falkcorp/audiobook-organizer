@@ -135,7 +135,7 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// normalizeAddress is util.NormalizeEmail (trimmed, NFKC, lowercased, NFKC
+// normalizeAddress is coreauth.NormalizeEmail (trimmed, NFKC, lowercased, NFKC
 // again), repeated here because this package imports no module package
 // (layer 0 in internal/arch). TestCFAccessPolicyEmailMatchesUtil in
 // internal/server keeps the two identical.
