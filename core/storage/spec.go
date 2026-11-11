@@ -1,7 +1,7 @@
 // file: core/storage/spec.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 156e1b2e-7ad2-4241-b21e-71d4f21d472b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -51,9 +51,9 @@ func parseCompat(s string) MigrationCompat {
 // Data migrations are declared separately (storage/datamigrate, L4) because
 // storage (L1) cannot import tasks (SIMP-17).
 //
-// R1-20 lands the members below. Derived (§5S.3.9) arrives with derived
-// indexes and ReadAdapters with the deferred Online mode (§5S.3.14); neither
-// field exists until then, so no declaration can set one and have it ignored.
+// R1-20 lands the members below; F7-07 adds Derived (§5S.3.9). ReadAdapters
+// arrives with the deferred Online mode (§5S.3.14) and does not exist until
+// then, so no declaration can set it and have it ignored.
 // VersionSource is the per-owner version-source adapter of §5S.3.5's
 // "Bookkeeping" row, the one member this file adds to the spec's block.
 type Spec struct {
@@ -66,6 +66,7 @@ type Spec struct {
 	Legacy            []LegacyMigration      // books only, versions 1..LegacyCap, §5S.3.5
 	LegacyGuard       *LegacyGuardProjection // books only, §5S.3.7
 	UpgradeFloor      *UpgradeFloor          // §5S.3.5 (R2-4)
+	Derived           []DerivedIndex         // declarative part only; hooks and rebuild task via Registrar.DerivedIndex (§5S.3.9)
 	// VersionSource, when set, keeps the owner's bookkeeping in its own rows
 	// instead of c/storage/ks/<owner>/ (books: HEAD's migration-version rows).
 	VersionSource VersionSource

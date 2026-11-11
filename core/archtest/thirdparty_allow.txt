@@ -1,5 +1,5 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.12
+# version: 1.0.13
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
 # last-edited: 2026-11-11
 #
@@ -103,3 +103,13 @@ go.yaml.in/yaml/v3
 github.com/coreos/go-oidc/v3
 github.com/go-jose/go-jose/v4
 golang.org/x/oauth2
+
+# F7-07: internal/bleveindex, the one full-text engine behind storage/index
+# (05-storage §5S.3.8). bleve v2 and the packages it is built from (mapping,
+# query, the standard and keyword analyzers, the scorch index and its async-error
+# registry); errgroup bounds the reconciler's worker pool. No other core package
+# may import bleve: storage/index never names an engine type (I5), and the
+# allow line is not package-scoped, so a new direct import elsewhere needs its
+# own review.
+github.com/blevesearch/bleve/v2
+golang.org/x/sync/errgroup
