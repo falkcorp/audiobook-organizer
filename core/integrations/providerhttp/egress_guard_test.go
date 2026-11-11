@@ -8,11 +8,13 @@ package providerhttp_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/mediacore/integrations"
@@ -430,7 +432,35 @@ func TestSchemeAllowlistOnEveryRequest(t *testing.T) {
 		if err == nil {
 			_ = resp.Body.Close()
 			t.Errorf("%s was sent", u)
+			continue
 		}
+		// Refused by the gate itself (an egress refusal that counts for
+		// nothing), not by whatever the transport underneath would say.
+		if !refusedFor(err, providerhttp.ReasonEgress) {
+			t.Errorf("%s: err = %v, want an egress refusal", u, err)
+		}
+	}
+}
+
+// TestRedirectChainIsCapped: a client that follows redirects stops after five
+// requests (the literal, so a changed constant fails here).
+func TestRedirectChainIsCapped(t *testing.T) {
+	r := newRegistry(t, newClock())
+	var srv *httptest.Server
+	var hits atomic.Int64
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		n := hits.Add(1)
+		http.Redirect(w, req, fmt.Sprintf("%s/hop/%d", srv.URL, n), http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	resp, err := c.Client().Get(srv.URL + "/start")
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("an endless redirect chain was followed to its end")
+	}
+	if got := hits.Load(); got != 5 {
+		t.Errorf("the server saw %d requests, want a chain of 5 (the original safehttp cap)", got)
 	}
 }
 

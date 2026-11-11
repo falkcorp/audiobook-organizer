@@ -256,6 +256,46 @@ func refusedFor(err error, why providerhttp.Reason) bool {
 	return ok && r == why && integrations.ClassOf(context.Background(), err) == integrations.ClassRefusedLocal
 }
 
+// TestBreaker_StaleProbeCannotTouchNewLease: probe A's lease expires, the
+// breaker reopens and probe B takes a new lease; A's late success must not
+// close the breaker under B (the epoch names the lease).
+func TestBreaker_StaleProbeCannotTouchNewLease(t *testing.T) {
+	clk := newClock()
+	r := newRegistry(t, clk)
+	lim := limits(100, 100)
+	lim.Breaker = integrations.BreakerPolicy{Threshold: 1, Cooldown: 10 * time.Second, ProbeTimeout: 5 * time.Second}
+	lim.Holds = integrations.HoldPolicy{Durations: map[integrations.Class]time.Duration{integrations.ClassTransient: time.Millisecond}}
+	g := r.GateFor(batcave, providerhttp.Policy{Limits: lim})
+	ctx := context.Background()
+	tk, err := g.Acquire(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.Done(&integrations.Error{Class: integrations.ClassTransient, Status: 503})
+	clk.Advance(11 * time.Second)
+	a, err := g.Acquire(ctx, "") // probe A
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(6 * time.Second)  // A's lease expires: open again
+	clk.Advance(10 * time.Second) // and the cooldown after that passes
+	b, err := g.Acquire(ctx, "")  // probe B holds the new lease
+	if err != nil {
+		t.Fatalf("probe B was refused: %v", err)
+	}
+	a.Done(nil) // A answers late
+	if st := g.State().Breaker; st != integrations.BreakerHalfOpen {
+		t.Fatalf("A's stale success moved the breaker to %v while B holds the lease", st)
+	}
+	if _, err := g.Acquire(ctx, ""); !refusedFor(err, providerhttp.ReasonBreaker) {
+		t.Fatalf("B's lease was given away: %v", err)
+	}
+	b.Done(nil)
+	if st := g.State().Breaker; st != integrations.BreakerClosed {
+		t.Fatalf("B's success left the breaker %v", st)
+	}
+}
+
 // TestBreaker_IgnoresCanceled: our own cancellation and refusals count for
 // nothing (HEAD defect 3), and a probe that is canceled releases its lease.
 func TestBreaker_IgnoresCanceled(t *testing.T) {
