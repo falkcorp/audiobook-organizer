@@ -1,5 +1,5 @@
 // file: core/config/precedence_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0f72db87-b1b3-4bcb-9393-6594c50533ca
 // last-edited: 2026-11-11
 
@@ -596,7 +596,9 @@ func TestImporter_StagesFailClosedDefault(t *testing.T) {
 // owner-delegated decision of 2026-11-11): a FailClosed key's own stored row
 // keeps counting toward the more restrictive choice when its section's rows
 // are quarantined, whenever it decodes on its own; one that does not decode
-// stops boot, naming the key and never its value.
+// stops boot, naming the key (never its value) and the recovery env setting,
+// unless the key's fallback is already the strictest value, when it is
+// quarantined.
 func TestFailClosed_SurvivesSectionQuarantine(t *testing.T) {
 	const kN config.Path = "core.http.n"
 	for name, sibling := range map[string]string{"sibling does not decode": `"robin"`, "sibling fails validation": "99"} {
@@ -632,24 +634,66 @@ func TestFailClosed_SurvivesSectionQuarantine(t *testing.T) {
 			t.Errorf("gate %s: the quarantine loosened a FailClosed key past its stored value", ks.Effective)
 		}
 	})
-	for name, row := range map[config.Path]string{kGate: `"joker-maybe"`, kAuthMode: `"joker-sometimes"`} {
-		t.Run(string(name)+" does not decode", func(t *testing.T) {
-			r := fcRig(t, nil, "", map[config.Path]string{name: row})
-			ctx := context.Background()
-			if _, err := r.st.Boot(ctx); err != nil {
-				t.Fatal(err)
+	attach := func(t *testing.T, r *rig) (config.AttachReport, error) {
+		t.Helper()
+		ctx := context.Background()
+		if _, err := r.st.Boot(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.st.Load(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return r.st.Attach(ctx, r.mem, r.cm)
+	}
+	// An undecodable FailClosed row refuses boot only while what the key
+	// falls back to (the operator value, else the default) is not the
+	// strictest value; the error names the way out. With the strictest
+	// fallback the row can tighten nothing and is quarantined, so setting
+	// the recovery env value always gets a boot past it (a rollback past a
+	// release that widened the enum stores such a row).
+	for _, c := range []struct {
+		key           config.Path
+		row           string
+		weakEnv       []string // a fallback that is not the strictest value
+		strictEnv     string   // the recovery
+		defaultStrict bool     // the default alone is the strictest value
+	}{
+		{kGate, `"joker-maybe"`, nil, "GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=true", false},
+		{kAuthMode, `"joker-sso"`, []string{"GOTHAM_CORE_AUTH_MODE=disabled"}, "GOTHAM_CORE_AUTH_MODE=required", true},
+	} {
+		t.Run(string(c.key)+" does not decode, weak fallback", func(t *testing.T) {
+			r := fcRig(t, c.weakEnv, "", map[config.Path]string{c.key: c.row})
+			_, err := attach(t, r)
+			if !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), string(c.key)) || strings.Contains(err.Error(), "joker") {
+				t.Errorf("Attach err = %v, want ErrInvalid naming %s and not its value", err, c.key)
 			}
-			if err := r.st.Load(ctx); err != nil {
-				t.Fatal(err)
-			}
-			_, err := r.st.Attach(ctx, r.mem, r.cm)
-			if !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), string(name)) || strings.Contains(err.Error(), "joker") {
-				t.Errorf("Attach err = %v, want ErrInvalid naming %s and not its value", err, name)
+			if err == nil || !strings.Contains(err.Error(), "set "+c.strictEnv) {
+				t.Errorf("Attach err = %v, want it to name the recovery %s", err, c.strictEnv)
 			}
 			if strings.Contains(r.logs.all(), "joker") {
 				t.Error("the value reached the log")
 			}
 		})
+		fallbacks := map[string][]string{"strictest env": {c.strictEnv}}
+		if c.defaultStrict {
+			fallbacks["strictest default"] = nil
+		}
+		for name, env := range fallbacks {
+			t.Run(string(c.key)+" does not decode, "+name, func(t *testing.T) {
+				r := fcRig(t, env, "", map[config.Path]string{c.key: c.row})
+				rep, err := attach(t, r)
+				if err != nil {
+					t.Fatalf("Attach err = %v: the strictest fallback still refused", err)
+				}
+				if _, q := rep.Quarantined[c.key]; !q {
+					t.Errorf("Quarantined = %v, want the undecodable row", rep.Quarantined)
+				}
+				_, strict, _ := strings.Cut(c.strictEnv, "=")
+				if ks := r.lookup(c.key); strings.Trim(string(ks.Effective), `"`) != strict {
+					t.Errorf("%s = %s, want the strictest %s", c.key, ks.Effective, strict)
+				}
+			})
+		}
 	}
 	t.Run("the stricter row fails its section's validation", func(t *testing.T) {
 		r := fcRig(t, []string{"GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=false", "GOTHAM_CORE_HTTP_N=13"}, "", map[config.Path]string{kGate: "true"})
@@ -660,8 +704,9 @@ func TestFailClosed_SurvivesSectionQuarantine(t *testing.T) {
 		if err := r.st.Load(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.st.Attach(ctx, r.mem, r.cm); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "the fail-closed key "+string(kGate)) {
-			t.Errorf("Attach err = %v, want ErrInvalid naming the fail-closed key %s", err, kGate)
+		if _, err := r.st.Attach(ctx, r.mem, r.cm); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "the fail-closed key "+string(kGate)) ||
+			!strings.Contains(err.Error(), "set GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=true") {
+			t.Errorf("Attach err = %v, want ErrInvalid naming the fail-closed key %s and the recovery", err, kGate)
 		}
 	})
 	t.Run("a stored default beats a weaker operator value", func(t *testing.T) {

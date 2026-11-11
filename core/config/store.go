@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-11
 
@@ -526,9 +526,16 @@ func (s *Store) settle(sec *section, ph phase) error {
 				// The section builds without the FailClosed rows and not with
 				// them: dropping them could open a gate, keeping them cannot
 				// build, so boot stops (§1.3.5).
+				var ways []string
+				for _, p := range kept {
+					if ck, ok := s.keyFor(p); ok {
+						ways = append(ways, s.failClosedRecovery(ck))
+					}
+				}
 				return fmt.Errorf("%w: config: section %s fails validation with the stored value of the fail-closed key %s, "+
-					"which is stricter than the operator's or the default; boot stops rather than ignore it (05-config §1.3.5)",
-					ErrInvalid, sec.path, joinPaths(kept))
+					"which is stricter than the operator's or the default; boot stops rather than ignore it (05-config §1.3.5); "+
+					"to start, set %s, the strictest value, and the row is then ignored",
+					ErrInvalid, sec.path, joinPaths(kept), strings.Join(ways, " and "))
 			}
 		}
 		return fmt.Errorf("config: section %s (%s): %w", sec.path, s.operatorSources(sec), invalid(err2))
@@ -563,11 +570,28 @@ func (s *Store) failClosedKeeps(p Path, raw json.RawMessage) bool {
 	if !ok || ck.k.failOrder == nil {
 		return false
 	}
-	base := ck.def()
-	if op, locked := s.op[p]; locked {
-		base = op.raw
+	return ck.k.failRank(raw) < ck.k.failRank(s.failClosedFallback(ck))
+}
+
+// failClosedFallback is what a FailClosed key has without its stored row:
+// its operator value, else its default.
+func (s *Store) failClosedFallback(ck ckey) json.RawMessage {
+	if op, locked := s.op[ck.p]; locked {
+		return op.raw
 	}
-	return ck.k.failRank(raw) < ck.k.failRank(base)
+	return ck.def()
+}
+
+// failClosedRecovery names the env setting that gets a boot past a
+// FailClosed row it refuses: the key's canonical env name set to its
+// strictest value, which no stored value can beat (05-config §1.3.5).
+func (s *Store) failClosedRecovery(ck ckey) string {
+	strict := string(ck.k.failOrder[0])
+	var str string
+	if json.Unmarshal(ck.k.failOrder[0], &str) == nil {
+		strict = str
+	}
+	return envName(s.prefix, ck.p) + "=" + strict
 }
 
 // sectionPaths lists m's paths owned by sec, sorted.
@@ -707,13 +731,17 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 			continue
 		}
 		v, err := ck.k.canonical(p, rows[p].Value)
-		if err != nil && ck.k.failOrder != nil {
+		if err != nil && ck.k.failOrder != nil && ck.k.failRank(s.failClosedFallback(ck)) > 0 {
 			// A FailClosed key's row that does not decode cannot be weighed
-			// against the operator value, and dropping it could open what an
-			// admin closed: boot stops, naming the key and never the value
-			// (05-config §1.3.5).
+			// against what the key falls back to, and that fallback is not the
+			// strictest value, so dropping the row could open what an admin
+			// closed: boot stops, naming the key, never the value, and the way
+			// out (05-config §1.3.5). When the fallback is already the
+			// strictest value the row can tighten nothing and is quarantined
+			// with its section like any row, below.
 			return AttachReport{}, fmt.Errorf("%w: config: the stored value of the fail-closed key %s does not decode; "+
-				"boot stops rather than ignore a value that may be stricter than the operator's (05-config §1.3.5)", ErrInvalid, p)
+				"boot stops rather than ignore a value that may be stricter than the operator's (05-config §1.3.5); "+
+				"to start, set %s, the strictest value, and the row is then ignored", ErrInvalid, p, s.failClosedRecovery(ck))
 		}
 		if err != nil {
 			quar[p] = err
