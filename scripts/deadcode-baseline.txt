@@ -1,6 +1,11 @@
+core/kernel.CutoverPreflight
 core/kernel.DataMigrations.Preflight
 core/kernel.DataMigrations.RecordMetrics
-core/kernel.DataMigrations.Stats
+core/kernel.ExitCode
+core/kernel.NewQuarantineGauge
+core/kernel.QuarantineDetail
+core/kernel.QuarantineGauge.Record
+core/kernel.StorageHealth
 core/kernel.buildHealth
 core/kernel.enginePing
 internal/ai.NewEmbeddingClient
@@ -164,7 +169,6 @@ internal/querygrammar.PatternSlotAcquisitions
 internal/repairs.GuardBooks
 core/kernel.auditMetrics
 core/kernel.auditOwnerSpec
-core/kernel.buildAudit
 core/kernel.startAudit
 core/kernel.stopAudit
 internal/repairs.GuardBooksFor
