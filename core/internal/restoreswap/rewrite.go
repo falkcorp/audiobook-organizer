@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4287385-23de-4df7-b1bb-31ac3240dac4
 // last-edited: 2026-11-10
 
@@ -45,7 +45,8 @@ const (
 	// LabelRewriteStage: the KindRewrite intent's create in the slot and its
 	// journal directory.
 	LabelRewriteStage = "swap.rewrite.stage"
-	// LabelRewriteDelete: phase 4's deletion of the set-aside directory.
+	// LabelRewriteDelete: phase 4's deletion of the set-aside directory and
+	// its rewriteDeleteStarted mark.
 	LabelRewriteDelete = "swap.rewrite.delete"
 )
 
@@ -249,26 +250,48 @@ func (s *Swapper) stageRewrite(ctx context.Context, in restorejournal.Intent) er
 	return s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID})
 }
 
-// rewriteFinish is phase 4, idempotent: the set-aside directory deleted at
-// once (KindRewrite keeps no previous/), the journal applied, the in-flight
-// file removed, then M8's record done. A kill anywhere repeats it.
+// rewriteFinish is phase 4, idempotent: the swap's set-aside deleted at once
+// (KindRewrite keeps no previous/; finishRewriteSwap), the journal applied,
+// the in-flight file removed, then M8's record done. A kill anywhere repeats
+// it.
 func (s *Swapper) rewriteFinish(ctx context.Context, db *storage.DB, step storage.RewriteStep, id string) error {
-	dbPath := filepath.Clean(db.Path())
-	root := filepath.Join(filepath.Dir(dbPath), restorejournal.AsideDirName, id)
-	if err := bootseam.Labelled(bootseam.From(ctx), LabelRewriteDelete, func() error {
-		if ok, err := exists(s.fs, root); err != nil || !ok {
-			return err
-		}
-		if err := s.fs.RemoveAll(root); err != nil {
-			return fmt.Errorf("restoreswap: delete the rewrite's set-aside %s: %w", root, err)
-		}
-		return syncDirIfExists(s.fs, filepath.Dir(root))
-	}); err != nil {
+	if err := s.finishRewriteSwap(ctx, id, step.ID, db.Path()); err != nil {
 		return err
 	}
-	if last, err := s.last(id); err != nil {
+	s.o.Logger.Info("restoreswap: the store rewrite is done; the old directory is deleted", "step", step.ID, "journal", id)
+	return db.SetRewriteRecord(ctx, step.ID, storage.DataMigrationDone)
+}
+
+// rewriteDeleteStarted is phase 4's durable mark in restore/<id>/: it exists
+// from before the set-aside's deletion, so a later run that finds the
+// set-aside gone knows the deletion did it.
+const rewriteDeleteStarted = "rewrite.delete.started"
+
+// finishRewriteSwap is phase 4's swap half for journal id of M8 stepID over
+// the store at dbPath. Until the journal is applied, the in-flight file's
+// intent is the one the move used: it must be stepID's KindRewrite intent
+// for dbPath, and the set-aside its step c moved the old store to (the same
+// SetAsideDest rule, s.setAsides) is deleted (deleteRewriteAside). Then
+// applied is journaled and the in-flight file removed.
+func (s *Swapper) finishRewriteSwap(ctx context.Context, id, stepID, dbPath string) error {
+	last, err := s.last(id)
+	if err != nil {
 		return err
-	} else if last != StepApplied {
+	}
+	if last != StepApplied {
+		in, err := readIntent(s.fs, s.inflightPath(id))
+		if err != nil {
+			return fmt.Errorf("%w: the store rewrite %s is at %q and its intent does not read: %w", ErrJournalCorrupt, id, last, err)
+		}
+		if in.ID != id || in.Kind != restorejournal.KindRewrite || in.StepID != stepID {
+			return fmt.Errorf("%w: restore/%s/inflight.json holds %s intent %s of step %q, not M8 %q", ErrJournalCorrupt, id, in.Kind, in.ID, in.StepID, stepID)
+		}
+		if filepath.Clean(in.DBPath) != filepath.Clean(dbPath) {
+			return fmt.Errorf("%w: the store rewrite %s moved the store at %s; this boot opened %s", ErrJournalCorrupt, id, in.DBPath, dbPath)
+		}
+		if err := s.deleteRewriteAside(ctx, in); err != nil {
+			return err
+		}
 		if err := s.appendRec(ctx, id, restorejournal.Record{Step: StepApplied}); err != nil {
 			return err
 		}
@@ -276,12 +299,83 @@ func (s *Swapper) rewriteFinish(ctx context.Context, db *storage.DB, step storag
 	if ok, err := exists(s.fs, s.inflightPath(id)); err != nil {
 		return err
 	} else if ok {
-		if err := s.removeInflight(ctx, id); err != nil {
-			return err
+		return s.removeInflight(ctx, id)
+	}
+	return nil
+}
+
+// rewriteAside is where KindRewrite intent in's step c moved the old store:
+// dest, the DB directory's set-aside (s.setAsides, restorejournal's
+// SetAsideDest rule), and leaf, the directory of the swap's aside root that
+// holds it (previous/: <state dir>/restore/<id>/previous for a DB under the
+// state directory, the compiled default, else <db parent>/.mediacore-restore/
+// <id>/previous), with root, that aside root.
+func (s *Swapper) rewriteAside(in restorejournal.Intent) (dest, leaf, root string, err error) {
+	sa := s.setAsides(in)
+	if len(sa) != 1 || filepath.Clean(sa[0].From) != filepath.Clean(in.DBPath) {
+		return "", "", "", fmt.Errorf("restoreswap: KindRewrite %s sets aside %d items, want its DB directory alone", in.ID, len(sa))
+	}
+	dest = filepath.Clean(sa[0].To)
+	sep := string(filepath.Separator)
+	for _, r := range restorejournal.AsideRoots(s.o.StateDir, in.DBPath, in.ID, []string{in.DBPath}) {
+		rel, err := filepath.Rel(filepath.Clean(r), dest)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+			continue
+		}
+		if first, rest, ok := strings.Cut(rel, sep); ok && rest != "" {
+			return dest, filepath.Join(filepath.Clean(r), first), filepath.Clean(r), nil
 		}
 	}
-	s.o.Logger.Info("restoreswap: the store rewrite is done; the old directory is deleted", "step", step.ID, "journal", id)
-	return db.SetRewriteRecord(ctx, step.ID, storage.DataMigrationDone)
+	return "", "", "", fmt.Errorf("restoreswap: KindRewrite %s's set-aside %s lies in none of its aside roots", in.ID, dest)
+}
+
+// deleteRewriteAside deletes the old store in's step c set aside (its
+// previous/ leaf; rewriteAside), fail-closed: with no deletion begun
+// (rewriteDeleteStarted absent) the set-aside must exist, or the journal
+// says the move happened and the old store is not where the move put it, an
+// error (ErrJournalCorrupt) that deletes nothing. The mark is written before
+// the first removal; an aside root of the swap's own outside the journal
+// directory is removed once empty. The journal directory itself stays.
+func (s *Swapper) deleteRewriteAside(ctx context.Context, in restorejournal.Intent) error {
+	dest, leaf, root, err := s.rewriteAside(in)
+	if err != nil {
+		return err
+	}
+	mark := s.markPath(in.ID, rewriteDeleteStarted)
+	return bootseam.Labelled(bootseam.From(ctx), LabelRewriteDelete, func() error {
+		started, err := exists(s.fs, mark)
+		if err != nil {
+			return err
+		}
+		present, err := exists(s.fs, dest)
+		if err != nil {
+			return err
+		}
+		if !present && !started {
+			return fmt.Errorf("%w: the store rewrite %s moved the old store to %s and nothing is there", ErrJournalCorrupt, in.ID, dest)
+		}
+		if !started {
+			if err := writeFileAtomic(s.fs, mark, nil, privateFile); err != nil {
+				return err
+			}
+		}
+		if err := s.fs.RemoveAll(leaf); err != nil {
+			return fmt.Errorf("restoreswap: delete the rewrite's set-aside %s: %w", leaf, err)
+		}
+		if err := syncDirIfExists(s.fs, filepath.Dir(leaf)); err != nil {
+			return err
+		}
+		if root == filepath.Clean(s.journalDir(in.ID)) {
+			return nil
+		}
+		if names, err := s.fs.List(root); err == nil && len(names) == 0 {
+			if err := s.fs.Remove(root); err != nil {
+				return fmt.Errorf("restoreswap: remove the rewrite's aside root %s: %w", root, err)
+			}
+			return syncDirIfExists(s.fs, filepath.Dir(root))
+		}
+		return nil
+	})
 }
 
 // RewriteDry is the dry run's M8 (`storage migrate --dry-run`): phases 1
