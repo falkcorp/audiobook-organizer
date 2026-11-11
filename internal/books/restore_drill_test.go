@@ -405,7 +405,10 @@ var fakeCases = []fakeCase{
 	{name: "deletes-a-row", mut: "delete", bites: []string{"ids", "refs"}},
 	{name: "drops-a-row-silently", mut: "drop", bites: []string{"ids", "refs"}},
 	{name: "changes-an-id", mut: "change-id", bites: []string{"ids", "refs"}},
+	{name: "counts-a-row-twice", mut: "double-count", bites: []string{"counts"}},
 	{name: "touches-a-byte-outside-its-source", mut: "touch-outside", bites: []string{"bytes"}},
+	{name: "deletes-a-family-outside-its-source", mut: "delete-family", bites: []string{"bytes"}},
+	{name: "writes-a-family-the-corpus-lacks", mut: "new-family", bites: []string{"bytes"}},
 	{name: "quarantines-a-row-no-case-names", mut: "quarantine", bites: []string{"quarantine"}},
 	{name: "quarantines-without-reporting-orphans", mut: "quarantine-unreported", bites: []string{"quarantine", "refs"}},
 	{name: "imports-a-quarantine-case", mut: "import-case", bites: []string{"quarantine"}},
@@ -574,9 +577,22 @@ func moveUsers(t *testing.T, dir, mut string, c corpus) (cutoverStep, bool) {
 	case "undercount":
 		r.Read--
 		r.Imported--
+	case "double-count":
+		r.Imported++
 	case "touch-outside":
 		k, v := firstKey(t, db, "author:")
 		require.NoError(t, b.Set(k, append(v, ' '), nil))
+	case "delete-family":
+		k, _ := firstKey(t, db, "bookmark:")
+		rng := prefixRange("bookmark:")
+		require.NoError(t, b.DeleteRange(rng.Lo, rng.Hi, nil), "the family of %s", k)
+	case "new-family":
+		rng := prefixRange("playlist:")
+		it, err := db.NewIter(&pebble.IterOptions{LowerBound: rng.Lo, UpperBound: rng.Hi})
+		require.NoError(t, err)
+		require.False(t, it.First(), "the corpus holds a playlist: row: pick another absent family")
+		require.NoError(t, it.Close())
+		require.NoError(t, b.Set([]byte("playlist:01ARKHAM0000000000000000"), []byte(`{"name":"Arkham Knight"}`), nil))
 	}
 	require.NoError(t, b.Commit(pebble.Sync))
 	return step, victim != "" && len(refs[victim]) > 0
@@ -630,14 +646,14 @@ func testDrillSelftest(t *testing.T, c corpus, pristine string) {
 	pre := scanStore(t, storeDB(pristine), wholeStore())
 	for name, tc := range map[string]struct {
 		mutate func(t *testing.T, db *pebble.DB)
-		bites  bool
+		want   string // a problem naming this; "" = none
 	}{
 		"restore-is-the-pre-upgrade-store": {mutate: func(*testing.T, *pebble.DB) {}},
-		"marker-survives": {bites: true, mutate: func(t *testing.T, db *pebble.DB) {
+		"marker-survives": {want: "the marker written after the upgrade survived", mutate: func(t *testing.T, db *pebble.DB) {
 			require.NoError(t, db.Set([]byte("playlist:999999"), []byte(`{"name":"`+drillMarker+`"}`), pebble.Sync))
 		}},
-		"checkpoint-after-the-step": {bites: true, mutate: nil},
-		"prefreeze-row-lost": {bites: true, mutate: func(t *testing.T, db *pebble.DB) {
+		"checkpoint-after-the-step": {want: "family u:: all", mutate: nil},
+		"prefreeze-row-lost": {want: "the pre-freeze binary's row", mutate: func(t *testing.T, db *pebble.DB) {
 			if c.wrote == nil {
 				t.Skip("prefreeze-written only")
 			}
@@ -655,11 +671,12 @@ func testDrillSelftest(t *testing.T, c corpus, pristine string) {
 				require.NoError(t, db.Close())
 			}
 			got := drillProblems(pre, scanStore(t, storeDB(work), wholeStore()), c.wrote)
-			if tc.bites {
-				require.NotEmpty(t, got, "drillProblems did not catch it")
-			} else {
+			if tc.want == "" {
 				require.Empty(t, got)
+				return
 			}
+			require.Truef(t, slices.ContainsFunc(got, func(p string) bool { return strings.Contains(p, tc.want) }),
+				"drillProblems did not report %q: %v", tc.want, got)
 		})
 	}
 }
