@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
 // last-edited: 2026-11-11
 
@@ -334,8 +334,8 @@ func checkpointRecords(t *testing.T, fs vfs.FS, db string) []string {
 	}
 	var out []string
 	for _, n := range names {
-		if strings.HasSuffix(n, ".json") {
-			out = append(out, strings.TrimSuffix(n, ".json"))
+		if before, ok := strings.CutSuffix(n, ".json"); ok {
+			out = append(out, before)
 		}
 	}
 	return out
