@@ -82,7 +82,7 @@ func TestReleaseHolds_StoreFailureKeepsHold(t *testing.T) {
 	if err == nil || res.Listed != 2 || res.Released != 1 {
 		t.Fatalf("result = %+v, %v; want 2 listed, 1 released, an error", res, err)
 	}
-	if _, held := r.HeldScope(ref("alfred")); !held {
+	if _, held := r.HoldFor(ref("alfred")); !held {
 		t.Fatal("a hold whose record could not be deleted was reported released")
 	}
 }
