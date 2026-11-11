@@ -160,10 +160,6 @@ const (
 	OneTimeBootstrap OneTimeKind = "bootstrap"
 )
 
-func (k OneTimeKind) valid() bool {
-	return k == OneTimeInvite || k == OneTimeTempLogin || k == OneTimeBootstrap
-}
-
 // OneTimeToken is one stored single-use token (§3.4, §4.1). ID is a public
 // ULID (revoking an invite names it); the secret is never held.
 type OneTimeToken struct {
