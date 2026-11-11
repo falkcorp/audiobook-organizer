@@ -42,6 +42,11 @@ type DryRunOptions struct {
 	// scratch directory (05-config §2.4 step 1: secrets.Open with a KeyFile
 	// there; F3-07 wires it). nil: a sensitive row fails its step.
 	Sealer func(scratch string) (storage.QuarantineSealer, error)
+	// Bind receives the scratch store between Prepare and Migrate, so a
+	// cutover step's importer binds the scratch store's handles (the batch
+	// it stages into is the scratch store's), never the live boot's. nil: the
+	// steps reach no handle of their own.
+	Bind func(db *storage.DB) error
 	// FirstN bounds the keys listed per outcome; 0 = 10.
 	FirstN int
 }
@@ -115,7 +120,7 @@ func DryRun(ctx context.Context, c Config, opt DryRunOptions) (rep *storage.DryR
 	if err := k.dryRunCopy(ctx, opts, opt.FromArchive, dbDir, rewrite != nil); err != nil {
 		return rep, err
 	}
-	return rep, k.dryRunMigrate(ctx, opts, scratch, dbDir, migs, rewrite, opt.Sealer, first, rep)
+	return rep, k.dryRunMigrate(ctx, opts, scratch, dbDir, migs, rewrite, opt, first, rep)
 }
 
 // dryRunList is migs limited to id and the data migrations it runs after,
@@ -210,11 +215,11 @@ func (k *Kernel) dryRunCopy(ctx context.Context, opts storage.OpenOptions, archi
 // directory), Migrate, then the report from the runner's stats and the
 // scratch store's quarantine.
 func (k *Kernel) dryRunMigrate(ctx context.Context, opts storage.OpenOptions, scratch, dbDir string,
-	migs []datamigrate.DataMigration, rewrite *storage.RewriteStep, sealerOf func(string) (storage.QuarantineSealer, error),
+	migs []datamigrate.DataMigration, rewrite *storage.RewriteStep, opt DryRunOptions,
 	first int, rep *storage.DryRunReport) error {
 	var sealer storage.QuarantineSealer
-	if sealerOf != nil {
-		s, err := sealerOf(scratch)
+	if opt.Sealer != nil {
+		s, err := opt.Sealer(scratch)
 		if err != nil {
 			return fmt.Errorf("kernel: dry run: the throw-away keyring: %w", err)
 		}
@@ -263,6 +268,11 @@ func (k *Kernel) dryRunMigrate(ctx context.Context, opts storage.OpenOptions, sc
 	db, err := o.Prepare(ctx)
 	if err != nil {
 		return errors.Join(fmt.Errorf("kernel: dry run: prepare the scratch copy: %w", err), o.Close())
+	}
+	if opt.Bind != nil {
+		if err := opt.Bind(db); err != nil {
+			return errors.Join(fmt.Errorf("kernel: dry run: bind the scratch store: %w", err), db.Close())
+		}
 	}
 	runErr := db.Migrate(ctx)
 	if runErr != nil {

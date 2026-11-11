@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
+
 	ipebble "github.com/falkcorp/mediacore/internal/pebble"
 )
 
@@ -58,10 +60,11 @@ func (o *Opened) NewDryRunScratch() (string, error) {
 }
 
 // CopyForDryRun copies the store o opened ReadOnly into dst, a directory
-// that must not exist yet: Pebble's checkpoint of the read-only engine
-// without a WAL flush (SSTs hard-linked, WAL, MANIFEST and OPTIONS copied),
-// so nothing is written to the live directory and no format is ratcheted;
-// the copy's files are made 0600 and its directories 0700. Before it, the
+// that must not exist yet (copyStoreDir: SSTs hard-linked, WAL, MANIFEST,
+// OPTIONS and markers copied, no WAL flush), so nothing is written to the
+// live directory and no format is ratcheted; the copy's files are made 0600
+// and its directories 0700. The directory is quiescent: the caller refused
+// a store another process holds, and o's read-only engine writes nothing. Before it, the
 // scratch filesystem's free space is checked against the store's size, once
 // more when the list holds M8 (rewrite), plus the margin.
 func (o *Opened) CopyForDryRun(ctx context.Context, dst string, rewrite bool) error {
@@ -94,13 +97,53 @@ func (o *Opened) CopyForDryRun(ctx context.Context, dst string, rewrite bool) er
 		return fmt.Errorf("%w: need %d bytes (store %d, margin %d, M8 copy %t), %d available",
 			ErrDryRunFreeSpace, need, storeBytes, st.opts.FreeSpaceMargin, rewrite, avail)
 	}
-	if err := db.eng.DB().Checkpoint(dst); err != nil {
+	if err := copyStoreDir(st.opts.fs, st.opts.Path, dst); err != nil {
 		return fmt.Errorf("storage: dry run copy into %s: %w", dst, err)
 	}
 	if err := db.privateTree(dst); err != nil {
 		return err
 	}
 	return ipebble.SyncDir(st.opts.fs, filepath.Dir(dst))
+}
+
+// copyStoreDir copies the quiescent Pebble directory src into dst, a new
+// directory: each table hard-linked (vfs.LinkOrCopy; a table is immutable,
+// and the copy's compactions unlink only the copy's link), every other file
+// copied (the WAL, MANIFEST, OPTIONS and marker files, which the copy's
+// engine appends to or replaces), LOCK skipped. Pebble's own Checkpoint
+// cannot copy a read-only engine: it copies OPTIONS-<n> by the number the
+// engine would have written, and a read-only open writes none.
+func copyStoreDir(fs vfs.FS, src, dst string) error {
+	if err := fs.MkdirAll(dst, 0o700); err != nil {
+		return err
+	}
+	names, err := fs.List(src)
+	if err != nil {
+		return err
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		if n == "LOCK" {
+			continue
+		}
+		from, to := filepath.Join(src, n), filepath.Join(dst, n)
+		fi, err := fs.Stat(from)
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(n, ".sst") {
+			err = vfs.LinkOrCopy(fs, from, to)
+		} else {
+			err = vfs.Copy(fs, from, to)
+		}
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", n, err)
+		}
+	}
+	return ipebble.SyncDir(fs, dst)
 }
 
 // NewDryRunScratchAt is NewDryRunScratch for a run with no live store open
