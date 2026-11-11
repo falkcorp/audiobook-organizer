@@ -1,7 +1,7 @@
 // file: core/internal/executor/attempt.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -514,8 +514,18 @@ func (a *attempt) strike(ctx context.Context, kind, detail string) {
 // --- the attempt's life ---
 
 // run is the attempt goroutine: body, then the terminal (or yield) CAS.
-func (a *attempt) run() {
+// run executes the body and commits the attempt's end. withBody is false
+// when a stop (a cancel, a watchdog kill) committed while the attempt was
+// claimed but not yet live: the run's context has already ended, so the
+// body never starts and the attempt ends by that stop (HEAD's pickup gate:
+// a run canceled there never runs). Starting it with an ended context
+// would leave an uncooperative body to do all its work after the cancel.
+func (a *attempt) run(withBody bool) {
 	defer a.e.attemptExited(a)
+	if !withBody {
+		a.finish(nil, context.Cause(a.ctx))
+		return
+	}
 	res, err := a.body()
 	a.finish(res, err)
 }

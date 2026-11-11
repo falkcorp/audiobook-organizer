@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -386,20 +386,32 @@ func (g gatedRuns) parks(ctx context.Context, id tasks.RunID) bool {
 	return err == nil && r.Kind == g.kind
 }
 
+// releaser returns an idempotent close of a park's release channel. A test
+// that parks defers it, so a failed assertion still frees the parked store
+// call: otherwise the harness's Shutdown waits on the parked dispatcher
+// forever and the failure surfaces as a package timeout, not a test failure.
+func releaser(release chan struct{}) func() {
+	var once sync.Once
+	return func() { once.Do(func() { close(release) }) }
+}
+
 // TestCancel_ClaimedNotStartedTakesTheStop (5T.3.6, synctest; added for the
-// cancel/claim race the parity kit found, #37 and #41): a cancel of a run
-// whose claim committed but whose attempt has not started puts it in
-// stopping, not canceled, because its body is about to run; the attempt
-// takes the stop when it starts, so the body sees its context canceled
-// with ErrCanceled and the run ends canceled.
+// cancel/claim race the parity kit found, kit cases
+// CancelRacingAResumeThatBecameLive and CancelAtTheClaimStillCancelsTheRun):
+// a cancel of a run whose claim committed but whose attempt has not started
+// puts it in stopping, not canceled, because an attempt is about to go
+// live; the attempt takes the stop as it goes live, its body never starts,
+// and the run ends canceled.
 func TestCancel_ClaimedNotStartedTakesTheStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reached := make(chan tasks.RunID, 1)
 		release := make(chan struct{})
-		saw := make(chan error, 1)
+		unpark := releaser(release)
+		defer unpark()
+		var ran atomic.Bool
 		def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
+			ran.Store(true)
 			<-rc.Context().Done()
-			saw <- context.Cause(rc.Context())
 			return "", context.Cause(rc.Context())
 		}, withCancel(tasks.Cooperative(time.Minute)))
 		h := newHarness(t, []tasks.Definition{def}, func(o *Options) {
@@ -418,18 +430,13 @@ func TestCancel_ClaimedNotStartedTakesTheStop(t *testing.T) {
 		if r := h.get(id); r.State != tasks.StateStopping || r.Reason != reasonCancel {
 			t.Fatalf("cancel of a claimed run not yet started: %s/%q, want stopping/cancel", r.State, r.Reason)
 		}
-		close(release)
-		synctest.Wait()
-		select {
-		case err := <-saw:
-			if !errors.Is(err, tasks.ErrCanceled) {
-				t.Fatalf("the body's context ended with %v, want ErrCanceled", err)
-			}
-		default:
-			t.Fatal("the body is running with a live context: the committed cancel never reached it")
-		}
+		unpark()
 		if r := h.waitState(id, tasks.StateCanceled, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
 			t.Fatalf("run ended %s/%q, want canceled/cancel", r.State, r.Reason)
+		}
+		synctest.Wait()
+		if ran.Load() {
+			t.Fatal("the body started after a cancel that committed before its attempt went live")
 		}
 	})
 }
@@ -445,6 +452,8 @@ func TestShutdown_ReleasesClaimNotYetLive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reached := make(chan tasks.RunID, 1)
 		release := make(chan struct{})
+		unpark := releaser(release)
+		defer unpark()
 		var ran atomic.Bool
 		def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
 			ran.Store(true)
@@ -461,7 +470,7 @@ func TestShutdown_ReleasesClaimNotYetLive(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- h.x.Shutdown(context.Background()) }()
 		synctest.Wait() // Shutdown has taken its view and waits for the parked dispatcher
-		close(release)
+		unpark()
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
@@ -485,6 +494,8 @@ func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reached := make(chan tasks.RunID, 1)
 		release := make(chan struct{})
+		unpark := releaser(release)
+		defer unpark()
 		takeHold, holding, free := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		var ran atomic.Bool
 		scan := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
@@ -511,7 +522,7 @@ func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
 		<-reached
 		close(takeHold)
 		<-holding
-		close(release)
+		unpark()
 		synctest.Wait()
 		if ran.Load() {
 			t.Fatal("the scan started beside a stand-down hold on its key")

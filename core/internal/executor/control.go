@@ -1,5 +1,5 @@
 // file: core/internal/executor/control.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
 // last-edited: 2026-11-11
 
@@ -272,7 +272,7 @@ func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, rea
 	e.mu.Unlock()
 	if live {
 		target.cancel(cause)
-	} // else startAttempt applies stopCause before the body runs
+	} // else startAttempt applies stopCause as the attempt goes live, and the body never starts
 	return nil
 }
 

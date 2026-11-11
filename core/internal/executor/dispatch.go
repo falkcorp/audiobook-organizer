@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-11
 
@@ -376,7 +376,7 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	e.ins.runStarted(a)
 	e.bg.Add(1)
 	go a.supervise()
-	go a.run()
+	go a.run(pending == nil)
 }
 
 // zeroFrom is the attempt from which ResumeFromZero voids earlier

@@ -1,5 +1,5 @@
 // file: core/internal/executor/writer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2387b9f-4100-4a09-af79-f3829a530ac5
 // last-edited: 2026-11-11
 
@@ -143,6 +143,8 @@ func TestWriter_StopDuringIntentKeepsFnFromRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reached := make(chan struct{}, 1)
 		release := make(chan struct{})
+		unpark := releaser(release)
+		defer unpark()
 		got := make(chan doOutcome, 1)
 		def := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
 			var o doOutcome
@@ -165,7 +167,7 @@ func TestWriter_StopDuringIntentKeepsFnFromRunning(t *testing.T) {
 		if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
 			t.Fatal(err)
 		}
-		close(release)
+		unpark()
 		if o := <-got; !isErr(o.err, tasks.ErrFenced) || o.called {
 			t.Fatalf("write whose intent a cancel overtook: err %v, fn called %v; want ErrFenced and fn never called", o.err, o.called)
 		}
