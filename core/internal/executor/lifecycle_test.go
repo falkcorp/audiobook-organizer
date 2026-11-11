@@ -1,0 +1,415 @@
+// file: core/internal/executor/lifecycle_test.go
+// version: 1.0.0
+// guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
+// last-edited: 2026-11-10
+
+package executor
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/lifecycle"
+	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
+)
+
+// extendLog records ExtendTimeout requests.
+type extendLog struct {
+	mu   sync.Mutex
+	asks []time.Duration
+}
+
+func (l *extendLog) extend(d time.Duration) error {
+	l.mu.Lock()
+	l.asks = append(l.asks, d)
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *extendLog) got() []time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]time.Duration(nil), l.asks...)
+}
+
+// TestShutdown_UninterruptibleExtendsOnceOnlyUnderNotify (5T.4 step 4,
+// synctest): Shutdown asks systemd for one EXTEND_TIMEOUT_USEC, capped by
+// shutdown_extend_max, only when an Uninterruptible run is in flight and
+// NOTIFY_SOCKET is set; otherwise the bounded drain is all it waits.
+func TestShutdown_UninterruptibleExtendsOnceOnlyUnderNotify(t *testing.T) {
+	cells := []struct {
+		name     string
+		notify   bool
+		kinds    []string // fixture kinds in flight
+		wantAsks []time.Duration
+		want     tasks.RunState // the in-flight runs' state after Shutdown
+	}{
+		{name: "uninterruptible under notify", notify: true, kinds: []string{"gotham.vault"}, wantAsks: []time.Duration{time.Minute}, want: tasks.StateSucceeded},
+		{name: "two uninterruptible runs ask once", notify: true, kinds: []string{"gotham.vault", "arkham.vault"}, wantAsks: []time.Duration{time.Minute}, want: tasks.StateSucceeded},
+		{name: "no notify socket", kinds: []string{"gotham.vault"}, want: tasks.StateInterrupted},
+		{name: "only a stubborn cooperative run", notify: true, kinds: []string{"gotham.stubborn"}, want: tasks.StateInterrupted},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan struct{}, 2)
+				work := func(rc *tasks.RC, _ noParams) (string, error) {
+					started <- struct{}{}
+					time.Sleep(30 * time.Second) // past the 10s drain, inside the extension
+					return "vault sealed", nil
+				}
+				vault := func(c *tasks.Common) { c.Cancel = tasks.Uninterruptible("sealing the vault", 5*time.Minute) }
+				defs := []tasks.Definition{
+					taskDef("gotham.vault", work, vault),
+					taskDef("arkham.vault", work, vault),
+					taskDef("gotham.stubborn", work, withCancel(tasks.Cooperative(time.Second))),
+				}
+				ext := &extendLog{}
+				h := newHarness(t, defs, func(o *Options) {
+					synctestConfig(o)
+					o.Config.ShutdownDrain = 10 * time.Second
+					o.Config.ShutdownExtendMax = time.Minute
+					o.ExtendTimeout = ext.extend
+					o.Getenv = func(k string) string {
+						if k == lifecycle.NotifySocketEnv && c.notify {
+							return "@batcave-notify"
+						}
+						return ""
+					}
+				})
+				var ids []tasks.RunID
+				for _, k := range c.kinds {
+					ids = append(ids, h.start(k, tasks.StartRequest{}))
+					<-started
+				}
+				if err := h.x.Shutdown(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if got := ext.got(); !equalDurations(got, c.wantAsks) {
+					t.Fatalf("ExtendTimeout requests %v, want %v", got, c.wantAsks)
+				}
+				for _, id := range ids {
+					if r := h.get(id); r.State != c.want {
+						t.Fatalf("run %s after Shutdown: %s, want %s", id, r.State, c.want)
+					}
+				}
+				time.Sleep(time.Minute) // let an abandoned body return inside the bubble
+			})
+		})
+	}
+}
+
+func equalDurations(a, b []time.Duration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// heldFixture leaves runs of arkham.* in every unfinished state the held
+// rule names, plus a terminal one, on one store, and returns their IDs.
+type heldFixture struct {
+	queued, interrupted, awaiting, done tasks.RunID
+}
+
+func arkhamDefs() []tasks.Definition {
+	return []tasks.Definition{
+		taskDef("arkham.intake", blockUntilCtx(nil)),
+		taskDef("arkham.transfer", blockUntilCtx(nil), withResume(tasks.ResumeAsk)),
+		taskDef("arkham.release", okBody),
+	}
+}
+
+func buildHeldFixture(t *testing.T) (*harness, heldFixture) {
+	t.Helper()
+	ctx := context.Background()
+	var f heldFixture
+	// Boot 1: a terminal run, and a ResumeAsk run interrupted by shutdown.
+	h := newHarness(t, arkhamDefs(), nil)
+	f.done = h.start("arkham.release", tasks.StartRequest{})
+	h.waitState(f.done, tasks.StateSucceeded)
+	f.awaiting = h.start("arkham.transfer", tasks.StartRequest{})
+	h.waitState(f.awaiting, tasks.StateRunning)
+	if err := h.x.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Boot 2: the ResumeAsk run becomes awaiting_decision; a run is left
+	// interrupted by shutdown and one queued behind the pause marker.
+	h = h.reboot(arkhamDefs(), nil)
+	h.waitState(f.awaiting, tasks.StateAwaitingDecision)
+	f.interrupted = h.start("arkham.intake", tasks.StartRequest{})
+	h.waitState(f.interrupted, tasks.StateRunning)
+	if err := h.x.Pause(ctx, "lockdown"); err != nil {
+		t.Fatal(err)
+	}
+	f.queued = h.start("arkham.release", tasks.StartRequest{})
+	if err := h.x.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return h, f
+}
+
+// disabledArkham is the manifest set of a boot with arkham disabled: its
+// definitions are not registered and its ledger names its kinds.
+func disabledArkham(o *Options) {
+	o.Manifests = []Manifest{{Module: "arkham", Enabled: false, TaskLedger: []tasks.Kind{"arkham.intake", "arkham.transfer", "arkham.release"}}}
+}
+
+// TestHeld_DisabledModuleRunsUntouchedAndBootSucceeds (5T.3.11): a boot
+// with the module disabled succeeds, the resume sweep leaves its runs as
+// stored (no drop, no requeue), and reads show them Held.
+func TestHeld_DisabledModuleRunsUntouchedAndBootSucceeds(t *testing.T) {
+	h, f := buildHeldFixture(t)
+	before := map[tasks.RunID]tasks.RunRecord{}
+	ids := []tasks.RunID{f.queued, f.interrupted, f.awaiting, f.done}
+	for _, id := range ids {
+		before[id] = h.get(id)
+	}
+	held := h.reboot([]tasks.Definition{taskDef("gotham.patrol", okBody)}, disabledArkham)
+	if err := held.x.Unpause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	held.waitState(held.start("gotham.patrol", tasks.StartRequest{}), tasks.StateSucceeded) // the rest of the system runs
+	for _, id := range ids {
+		r := held.get(id)
+		b := before[id]
+		if r.State != b.State || r.Attempt != b.Attempt || r.FenceEpoch != b.FenceEpoch || r.Reason != b.Reason {
+			t.Errorf("held run %s moved: %s/%d/%d/%q, was %s/%d/%d/%q", id, r.State, r.Attempt, r.FenceEpoch, r.Reason, b.State, b.Attempt, b.FenceEpoch, b.Reason)
+		}
+		v, err := held.x.Get(context.Background(), id)
+		if err != nil || !v.Held {
+			t.Errorf("Get(%s): held %v, err %v; want Held", id, v.Held, err)
+		}
+	}
+	if s := before[f.queued].State; s != tasks.StateQueued {
+		t.Fatalf("fixture: queued run is %s", s)
+	}
+	if s := before[f.interrupted].State; s != tasks.StateInterrupted {
+		t.Fatalf("fixture: interrupted run is %s", s)
+	}
+}
+
+// TestHeld_MutationsRefused409 (5T.3.11): every mutation of a held run is
+// refused with ErrHeld (F2-05 maps it to 409 tasks.held), and so is a start
+// of a held kind; reads still work.
+func TestHeld_MutationsRefused409(t *testing.T) {
+	h, f := buildHeldFixture(t)
+	held := h.reboot(nil, disabledArkham)
+	ctx := context.Background()
+	checks := map[string]func() error{
+		"Cancel":        func() error { return held.x.Cancel(ctx, f.interrupted) },
+		"CancelAs":      func() error { return held.x.CancelAs(ctx, f.queued, tasks.Actor{UserID: "alfred"}) },
+		"Decide resume": func() error { return held.x.Decide(ctx, f.awaiting, tasks.DecideResume) },
+		"Decide drop":   func() error { return held.x.Decide(ctx, f.awaiting, tasks.DecideDrop) },
+		"Approve":       func() error { return held.x.Approve(ctx, f.done, tasks.ApproveRequest{}) },
+		"Discard":       func() error { return held.x.Discard(ctx, f.done) },
+		"Start the kind": func() error {
+			_, err := held.x.Start(ctx, "arkham.release", tasks.StartRequest{Mode: tasks.ModeRequestLive})
+			return err
+		},
+	}
+	for name, call := range checks {
+		if err := call(); !errors.Is(err, ErrHeld) {
+			t.Errorf("%s on a held run: %v, want ErrHeld", name, err)
+		}
+	}
+	if _, err := held.x.Get(ctx, f.awaiting); err != nil {
+		t.Fatalf("Get of a held run: %v (reads are allowed)", err)
+	}
+	if r := held.get(f.awaiting); r.State != tasks.StateAwaitingDecision {
+		t.Fatalf("held run moved to %s", r.State)
+	}
+}
+
+// TestStandDown_MarkerAtBootDefersQuiescedRun (5T.3.7): a stand-down marker
+// found at boot means its holder died mid-work; the runs it quiesced stay
+// interrupted_quiesced for that boot, the marker is cleared, and the next
+// boot re-queues them.
+func TestStandDown_MarkerAtBootDefersQuiescedRun(t *testing.T) {
+	scanStarted := make(chan tasks.RunID, 2)
+	holding := make(chan struct{}, 1)
+	scan := func(body func(rc *tasks.RC, p noParams) (string, error)) tasks.Definition {
+		return taskDef("gotham.scan", body, func(c *tasks.Common) { c.Yields = true })
+	}
+	holder := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+		if _, err := rc.StandDown("gotham.scan"); err != nil {
+			return "", err
+		}
+		holding <- struct{}{}
+		<-rc.Context().Done()
+		return "", context.Cause(rc.Context())
+	}, withResume(tasks.ResumeDrop), func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "store")) })
+	h := newHarness(t, []tasks.Definition{scan(blockUntilCtx(scanStarted)), holder}, nil)
+	s := h.start("gotham.scan", tasks.StartRequest{})
+	<-scanStarted
+	h.start("gotham.compact", tasks.StartRequest{})
+	<-holding
+	h.waitState(s, tasks.StateInterruptedQuiesced)
+
+	defs := []tasks.Definition{scan(okBody), holder}
+	second := h.crashBoot(defs, nil)
+	second.stays(s, tasks.StateInterruptedQuiesced, 300*time.Millisecond)
+	for m, err := range second.stores.StandDown.List(context.Background()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("marker %s survived the boot that found it", m.Key)
+	}
+	if err := second.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	third := second.reboot(defs, nil)
+	third.waitState(s, tasks.StateSucceeded)
+}
+
+// TestUnknownKindRun_DroppedAtResume (5T.3.6, D10): at boot, an unfinished
+// run of a kind no definition registers (and no manifest holds) is
+// interrupted_dropped with reason unknown_kind; boot succeeds and the
+// known kinds resume.
+func TestUnknownKindRun_DroppedAtResume(t *testing.T) {
+	started := make(chan tasks.RunID, 2)
+	lab := func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "lab")) } // disjoint from gotham.retired's writes
+	defs := []tasks.Definition{taskDef("gotham.retired", blockUntilCtx(started)), taskDef("gotham.patrol", blockUntilCtx(started), lab)}
+	h := newHarness(t, defs, nil)
+	running := h.start("gotham.retired", tasks.StartRequest{})
+	<-started
+	known := h.start("gotham.patrol", tasks.StartRequest{})
+	<-started
+	if err := h.x.Pause(context.Background(), "inventory"); err != nil {
+		t.Fatal(err)
+	}
+	queued := h.start("gotham.retired", tasks.StartRequest{Params: mustParams(t, "second")})
+	next := h.crashBoot([]tasks.Definition{taskDef("gotham.patrol", okBody, lab)}, nil)
+	for _, id := range []tasks.RunID{running, queued} {
+		if r := next.waitState(id, tasks.StateInterruptedDropped); r.Reason != reasonUnknownKind {
+			t.Fatalf("run %s of the unknown kind: reason %q, want %q", id, r.Reason, reasonUnknownKind)
+		}
+	}
+	if err := next.x.Unpause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next.waitState(known, tasks.StateSucceeded)
+}
+
+// TestOnTerminal_NotificationStagedInTerminalBatch (5T.4 step 3, COR2-3):
+// OnTerminal stages its write in the terminal transition's own batch: both
+// commit, or (when it fails) neither does.
+func TestOnTerminal_NotificationStagedInTerminalBatch(t *testing.T) {
+	subject := entity.Ref{Module: "gotham", Kind: "cases", ID: "ace"}
+	for _, fail := range []bool{false, true} {
+		name := map[bool]string{false: "commits with the transition", true: "an error aborts both"}[fail]
+		t.Run(name, func(t *testing.T) {
+			var h *harness
+			var calls int
+			var mu sync.Mutex
+			h = newHarness(t, []tasks.Definition{taskDef("gotham.closecase", okBody)}, func(o *Options) {
+				o.OnTerminal = func(ctx context.Context, b *storage.Batch, v tasks.RunView) error {
+					mu.Lock()
+					calls++
+					mu.Unlock()
+					if !v.State.Terminal() {
+						return errors.New("OnTerminal called for a non-terminal state")
+					}
+					if err := o.Stores.Runs.Stamp(ctx, b, subject, v.Kind, time.Unix(1_000_000, 0)); err != nil {
+						return err
+					}
+					if fail {
+						return errors.New("the signal is down")
+					}
+					return nil
+				}
+			})
+			id := h.start("gotham.closecase", tasks.StartRequest{})
+			waitFor(t, "OnTerminal", func() bool { mu.Lock(); defer mu.Unlock(); return calls > 0 })
+			r := h.waitState(id, tasks.StateSucceeded, tasks.StateRunning)
+			_, stamped, err := h.stores.Runs.Stamped(context.Background(), subject, "gotham.closecase")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fail && (r.State != tasks.StateSucceeded || !stamped) {
+				t.Fatalf("run %s, stamp %v; want succeeded and stamped together", r.State, stamped)
+			}
+			if fail {
+				time.Sleep(100 * time.Millisecond)
+				r = h.get(id)
+				if r.State.Terminal() || stamped {
+					t.Fatalf("OnTerminal failed but the run is %s and stamp %v; want neither committed", r.State, stamped)
+				}
+			}
+		})
+	}
+}
+
+// waitFor polls cond for 10s of the test's clock.
+func waitFor(t testing.TB, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// TestModuleSystemActor_CannotStartUndeclaredKind (SEC2-15, F4-09): a
+// module's system actor may start only its own kinds and the kinds its
+// manifest lists in TaskStarts, and never one that needs core:admin or an
+// AuthRequired scope.
+func TestModuleSystemActor_CannotStartUndeclaredKind(t *testing.T) {
+	gothamSystem := tasks.Actor{AuthMethod: systemMethod, System: "gotham"}
+	purge := func(c *tasks.Common) { c.Perms.Start = rbac.Need("core:system.manage") } // AuthRequired
+	defs := []tasks.Definition{
+		taskDef("gotham.dispatch", okBody),
+		taskDef("arkham.cleanup", okBody),
+		taskDef("arkham.purge", okBody, purge),
+		taskDef("arkham.transfer", okBody),
+	}
+	cells := []struct {
+		kind    tasks.Kind
+		starts  []tasks.Kind
+		allowed bool
+	}{
+		{kind: "gotham.dispatch", allowed: true},
+		{kind: "arkham.cleanup"},
+		{kind: "arkham.cleanup", starts: []tasks.Kind{"arkham.cleanup"}, allowed: true},
+		{kind: "arkham.transfer", starts: []tasks.Kind{"arkham.cleanup"}},
+		{kind: "arkham.purge", starts: []tasks.Kind{"arkham.purge"}},
+	}
+	for _, c := range cells {
+		t.Run(string(c.kind)+"/"+strings.Join(kindStrings(c.starts), ","), func(t *testing.T) {
+			h := newHarness(t, defs, func(o *Options) {
+				o.Catalog = catalogWith(t, "gotham:run", "arkham:run")
+				o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: c.starts}}
+			})
+			_, err := h.x.Start(context.Background(), c.kind, tasks.StartRequest{Mode: tasks.ModeRequestLive, Actor: gothamSystem})
+			if c.allowed && err != nil {
+				t.Fatalf("gotham's system actor starting %s: %v, want allowed", c.kind, err)
+			}
+			if !c.allowed && !errors.Is(err, ErrNotPermitted) {
+				t.Fatalf("gotham's system actor starting %s: %v, want ErrNotPermitted", c.kind, err)
+			}
+		})
+	}
+}
+
+func kindStrings(ks []tasks.Kind) []string {
+	out := make([]string, len(ks))
+	for i, k := range ks {
+		out[i] = string(k)
+	}
+	return out
+}
