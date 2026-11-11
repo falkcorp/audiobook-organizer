@@ -1,5 +1,5 @@
 // file: core/auth/login.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ee7aa4e7-d5e2-4977-8b7e-49faa860a120
 // last-edited: 2026-11-11
 
@@ -44,6 +44,12 @@ func (e *ThrottledError) Unwrap() error { return ErrThrottled }
 
 func throttled(retryAfter int) error {
 	return &ThrottledError{RetryAfter: max(retryAfter, 1)}
+}
+
+// throttledOn is throttled, counted on surface in mediacore_auth_throttled_total.
+func (s *Service) throttledOn(surface string, retryAfter int) error {
+	s.met.throttle(surface)
+	return throttled(retryAfter)
 }
 
 // loginThrottle is the service's throttle with the core.auth.login.* policy
@@ -157,7 +163,7 @@ func (s *Service) checkPassword(ctx context.Context, in LoginInput, m Method) (*
 	}
 	if adm == nil {
 		s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
-		return nil, throttled(dec.RetryAfter)
+		return nil, s.throttledOn(surfaceLogin, dec.RetryAfter)
 	}
 	outcome := LoginOther
 	handedOver := false
@@ -173,14 +179,14 @@ func (s *Service) checkPassword(ctx context.Context, in LoginInput, m Method) (*
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
 		s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceLogin, LoginRetryAfter)
 	}
 	if adm.Saturated() {
 		d, refuse := th.SaturationPolicy(account)
 		if refuse {
 			outcome = LoginSaturationRefused
 			s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
-			return nil, throttled(LoginRetryAfter)
+			return nil, s.throttledOn(surfaceLogin, LoginRetryAfter)
 		}
 		th.Delay(d)
 	}

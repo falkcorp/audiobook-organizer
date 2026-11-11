@@ -1,5 +1,5 @@
 // file: core/auth/templogin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 224ca491-2171-423a-bce4-a4654be50c1f
 // last-edited: 2026-11-11
 
@@ -148,7 +148,7 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
 		s.consumeRefused(ctx, client, reasonThrottled)
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceTempLogin, LoginRetryAfter)
 	}
 	t, err := s.lookupOneTime(ctx, OneTimeTempLogin, KindTempLogin, token)
 	if err != nil {

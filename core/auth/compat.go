@@ -1,5 +1,5 @@
 // file: core/auth/compat.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e6f2d-83c4-4a19-b5d0-7e2a9c41f386
 // last-edited: 2026-11-11
 
@@ -121,7 +121,7 @@ func (c *compat) AuthenticateKey(ctx context.Context, raw string, client ClientI
 	source := client.sourceKey()
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceLogin, LoginRetryAfter)
 	}
 	p, refusal, err := s.resolveKey(ctx, raw, client, c.method)
 	if err != nil {
@@ -143,7 +143,7 @@ func (c *compat) AuthenticateKey(ctx context.Context, raw string, client ClientI
 func (c *compat) PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64, client ClientInfo) (*Principal, error) {
 	s := c.s
 	if s.loginThrottle().SourceBlocked(client.sourceKey()) {
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceLogin, LoginRetryAfter)
 	}
 	if u == nil || u.ID == "" {
 		return nil, fmt.Errorf("%w: no user", ErrInvalidCredentials)
