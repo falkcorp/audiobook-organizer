@@ -7,6 +7,7 @@ package journal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -264,12 +265,12 @@ func claimedEnd(c *Chain, rest [][]byte, want uint64) uint64 {
 
 // ReadFile reads and verifies the journal at path. A file that does not exist
 // is an error satisfying os.ErrNotExist; an empty one yields an empty Chain.
-func ReadFile(path string, keys Keys) (*Chain, error) {
+func ReadFile(path string, keys Keys) (c *Chain, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("journal: read %s: %w", path, err)

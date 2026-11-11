@@ -49,12 +49,12 @@ func TestRestoreBootLongWay(t *testing.T) {
 	ctx := context.Background()
 	s, f, out := hooksBoot(t)
 	id := out.ID
-	for i := 0; i < 2; i++ { // the second pass of each is the crash-loop re-call
+	for range 2 { // the second pass of each is the crash-loop re-call
 		if err := s.Opened(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := s.RestoreLine(ctx, id, 7); err != nil {
 			t.Fatal(err)
 		}
@@ -62,12 +62,12 @@ func TestRestoreBootLongWay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := s.HooksDone(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := s.MarkerWritten(ctx, id); err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestRestoreBootLongWay(t *testing.T) {
 	if _, ok := readFile(t, f.mem, inflight); !ok {
 		t.Fatal("the in-flight file is gone before applied")
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := s.HooksApplied(ctx, id); err != nil {
 			t.Fatal(err)
 		}

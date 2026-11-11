@@ -35,7 +35,7 @@ var ErrMoveRefused = errors.New("journal: the journal move was refused")
 // destination that exists is accepted only when it verifies and holds the
 // source's last line unchanged; any other file there is ErrMoveRefused and is
 // never overwritten.
-func MoveFile(from, to string, keys Keys) error {
+func MoveFile(from, to string, keys Keys) (err error) {
 	if from == to {
 		return nil
 	}
@@ -47,7 +47,7 @@ func MoveFile(from, to string, keys Keys) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}
-	defer f.Close() // releases the lock; a read-only use, so its error carries nothing
+	defer func() { err = errors.Join(err, f.Close()) }() // releases the lock
 
 	src := ReadChain(data, keys)
 	if src.Break != nil {

@@ -96,13 +96,13 @@ func ReadBrokenLatch(ctx context.Context, ks storage.Reader) (string, error) {
 
 // WriteBrokenLatch records, synchronously, that the boot failed closed on the
 // broken journal state fp.
-func WriteBrokenLatch(ctx context.Context, ks storage.Keyspace, fp string, at time.Time) error {
+func WriteBrokenLatch(ctx context.Context, ks storage.Keyspace, fp string, at time.Time) (err error) {
 	raw, err := json.Marshal(latchRecord{Fingerprint: fp, At: at.UTC()})
 	if err != nil {
 		return err
 	}
 	b := ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := b.In(ks).Set([]byte(brokenLatchKey), raw); err != nil {
 		return err
 	}
