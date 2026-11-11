@@ -1,5 +1,5 @@
 // file: core/config/doc.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: e74dba99-865d-4688-bd81-8e7ca26610c8
 // last-edited: 2026-11-10
 
@@ -20,10 +20,15 @@
 // KeyState, Keys and Schema describe every key for the settings UI; secret
 // values never appear in them. Importer stages a cutover step's rows.
 //
-// The env and file grammar, FailClosed and retired names are F3-02's; the
-// secrets store and its stager are F3-03's; the kernel wires the Store at
-// F3-07. Until then the operator layers that reach a Store are the
-// explicitly set flags, and a configured operator file is refused.
+// The operator layers are the YAML file (Options.FilePath, nested by path
+// segments), the environment (Options.Environ: canonical names
+// <PREFIX>_<PATH>, <NAME>_FILE, an empty value is unset, ecosystem bindings)
+// and the explicitly set flags, every value decoded strictly for its key
+// (05-config §1.3.6). The one exception to the operator lock is a FailClosed
+// key, whose more restrictive value wins (§1.3.5). Retired names
+// (Options.Retired) are never read: one set for a protected or secret key
+// refuses boot before anything opens, any other warns. The secrets store and
+// its stager are F3-03's; the kernel wires the Store at F3-07.
 //
 // # Field metadata
 //

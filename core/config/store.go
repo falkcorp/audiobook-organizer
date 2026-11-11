@@ -1,7 +1,7 @@
 // file: core/config/store.go
-// version: 1.0.7
+// version: 1.1.5
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -13,6 +13,7 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -49,16 +50,31 @@ type Store struct {
 	// mu serialises Register, Boot, Load, Attach, SetSecrets, Apply and Close
 	// (05-config §1.6: Apply holds it from candidate build through publish).
 	mu       sync.Mutex
-	sections []*section // sorted by path
-	envNames map[string]Path
+	sections []*section      // sorted by path
+	envNames map[string]Path // the sections' EnvBinding names
+	// canonNames are the registered struct keys' canonical env names;
+	// appBindings is Options.EnvBindings (05-config §1.3.6).
+	canonNames  map[string]Path
+	appBindings map[string]Path
+	envVars     map[string]string // Options.Environ, parsed once
 
-	file fileSource     // the operator file (F3-02); unbuiltFile until then
-	env  operatorSource // the environment (F3-02); nil until then
+	file fileSource     // the operator file; nil when Options.FilePath is ""
+	env  operatorSource // the environment (Options.Environ)
+
+	// The in-layer binding conflicts, the FailClosed keys whose stored value
+	// wins, and the retired names set: what this boot found, and which of
+	// them it has already warned about (once per boot each).
+	conflictLogged map[Path]bool
+	fcWins         map[Path]string
+	fcLogged       map[Path]bool
+	retired        []RetiredUse
+	retiredLogged  map[retiredKey]bool
 
 	sealed, booted, loaded, attached, closed bool
 
-	op     map[Path]opValue
-	ptVals map[Path]OperatorValue // the operator values of passthrough paths
+	op        map[Path]opValue
+	ptVals    map[Path]OperatorValue // the operator values of passthrough paths
+	opSecrets map[Path]OperatorValue // the operator values of secret keys (OperatorSecrets)
 
 	bootIO      *bootRecordIO
 	boot        map[Path]json.RawMessage // every entry of the boot record, unknown ones included (current)
@@ -134,9 +150,25 @@ func NewStore(o Options) (*Store, error) {
 	if !validEnvPrefix(prefix) {
 		return nil, fmt.Errorf("config: env prefix %q must match [A-Z][A-Z0-9]{1,15}", prefix)
 	}
+	if err := checkRetiredNames(o.Retired); err != nil {
+		return nil, err
+	}
+	appBindings := map[string]Path{}
+	for _, b := range o.EnvBindings {
+		switch p, dup := appBindings[b.Name]; {
+		case b.Name == "" || b.Path == "":
+			return nil, fmt.Errorf("%w: Options.EnvBindings holds an entry without a name or a path (%q, %q)", ErrInvalid, b.Name, b.Path)
+		case dup:
+			return nil, fmt.Errorf("%w: env name %s is bound to %s and %s", ErrDuplicate, b.Name, p, b.Path)
+		}
+		appBindings[b.Name] = b.Path
+	}
 	s := &Store{
 		o: o, prefix: prefix, log: o.Logger, now: o.Now,
-		envNames: map[string]Path{}, op: map[Path]opValue{}, ptVals: map[Path]OperatorValue{},
+		canonNames: map[string]Path{}, appBindings: appBindings, envVars: parseEnviron(o.Environ),
+		conflictLogged: map[Path]bool{}, fcWins: map[Path]string{}, fcLogged: map[Path]bool{}, retiredLogged: map[retiredKey]bool{},
+		opSecrets: map[Path]OperatorValue{},
+		envNames:  map[string]Path{}, op: map[Path]opValue{}, ptVals: map[Path]OperatorValue{},
 		boot: map[Path]json.RawMessage{}, bootVals: map[Path]json.RawMessage{}, bootAtLoad: map[Path]json.RawMessage{},
 		bootQuar: map[Path]error{}, bootIgnored: map[Path]string{}, bootLogged: map[Path]bool{}, db: map[Path]Override{}, dbVals: map[Path]json.RawMessage{},
 		dbAtAttach: map[Path]json.RawMessage{}, quar: map[Path]error{}, secretMeta: map[Path]*secrets.Meta{},
@@ -148,8 +180,10 @@ func NewStore(o Options) (*Store, error) {
 	if s.now == nil {
 		s.now = time.Now
 	}
+	retEnv, retFile := retiredNames(o.Retired)
+	s.env = newEnvSource(prefix, s.envVars, retEnv, s.log, readEnvFile)
 	if o.FilePath != "" {
-		s.file = unbuiltFile{path: o.FilePath}
+		s.file = newYAMLFile(o.FilePath, os.ReadFile, retFile, s.log)
 	}
 	s.subCtx, s.subCancel = context.WithCancel(context.Background())
 	s.index.Store(&keyIndex{byPath: map[Path]KeyState{}})
@@ -195,6 +229,9 @@ func (s *Store) register(sp *sectionSpec) (*binding, error) {
 			return nil, fmt.Errorf("%w: env name %s is bound to %s and %s", ErrDuplicate, eb.name, p, eb.path)
 		}
 		names[eb.name] = eb.path
+	}
+	if err := s.checkEnvNames(sec, names); err != nil {
+		return nil, err
 	}
 	b := &binding{sec: sec, store: s}
 	sec.bind = b
@@ -286,8 +323,13 @@ func (s *Store) Boot(ctx context.Context) (BootView, error) {
 	return s.bootView(), nil
 }
 
-// bootLocked is Boot under s.mu.
+// bootLocked is Boot under s.mu. The retired names of core keys are judged
+// first, so a refused boot has opened nothing, not even the boot record
+// (05-config §1.3.6).
 func (s *Store) bootLocked() error {
+	if err := s.checkRetired(false); err != nil {
+		return err
+	}
 	lr, err := s.readOperator(false)
 	if err != nil {
 		return err
@@ -295,7 +337,8 @@ func (s *Store) bootLocked() error {
 	if lr.fileSet[stateDirKey] {
 		return fmt.Errorf("config: the operator file sets %s: it is a pre-boot key, read from the environment and flags only, because the state directory is resolved before any config file (05-config §1.7)", stateDirKey)
 	}
-	s.op, s.ptVals = lr.op, lr.passthrough
+	s.op, s.ptVals, s.opSecrets = lr.op, lr.passthrough, lr.secrets
+	s.noteBindingConflicts(lr.conflicts)
 	stateDir := ""
 	if c, ok := s.keyFor(stateDirKey); ok {
 		var v string
@@ -431,6 +474,7 @@ func (s *Store) settleAll(ph phase) error {
 		}
 		s.install(sec, eff, pend, s.gen.Load(), false)
 	}
+	s.syncFailClosed()
 	s.reindex()
 	return nil
 }
@@ -451,20 +495,49 @@ func (s *Store) settle(sec *section, ph phase) error {
 		return nil
 	}
 	stripped := v
-	var held []Path
+	var held, kept []Path
 	switch ph {
 	case phaseBoot, phaseLoad:
 		stripped.boot = withoutSection(v.boot, sec, s)
 		held = sectionPaths(v.boot, sec, s)
 	case phaseAttach:
+		// A FailClosed key's stricter row survives the section's quarantine
+		// (05-config §1.3.5): only the other rows are held back.
 		stripped.live = withoutSection(v.live, sec, s)
+		for _, p := range sectionPaths(v.live, sec, s) {
+			if s.failClosedKeeps(p, v.live[p]) {
+				kept = append(kept, p)
+				stripped.live[p] = v.live[p]
+				continue
+			}
+			held = append(held, p)
+		}
 		stripped.restart = stripped.live
-		held = sectionPaths(v.live, sec, s)
 	}
-	if len(held) == 0 {
+	if len(held) == 0 && len(kept) == 0 {
 		return fmt.Errorf("config: section %s (%s): %w", sec.path, s.operatorSources(sec), invalid(err))
 	}
 	if err2 := try(stripped); err2 != nil {
+		if len(kept) > 0 {
+			bare := stripped
+			bare.live = withoutSection(v.live, sec, s)
+			bare.restart = bare.live
+			if try(bare) == nil {
+				// The section builds without the FailClosed rows and not with
+				// them: dropping them could open a gate, keeping them cannot
+				// build, so boot stops (§1.3.5).
+				var ways []string
+				for _, p := range kept {
+					if ck, ok := s.keyFor(p); ok {
+						ways = append(ways, s.failClosedRecovery(ck))
+					}
+				}
+				return fmt.Errorf("%w: config: section %s fails validation with the stored value of the fail-closed key %s, "+
+					"which is stricter than the operator's or the default; boot stops rather than ignore it (05-config §1.3.5); "+
+					"to start, set %s, the strictest value, and the row is then ignored",
+					ErrInvalid, sec.path, joinPaths(kept), strings.Join(ways, " and "))
+			}
+		}
 		return fmt.Errorf("config: section %s (%s): %w", sec.path, s.operatorSources(sec), invalid(err2))
 	}
 	for _, p := range held {
@@ -483,8 +556,42 @@ func (s *Store) settle(sec *section, ph phase) error {
 	}
 	s.health[token] = fmt.Sprintf("section %s: %v", sec.path, err)
 	s.log.Warn("config: stored values of a section fail validation; they are kept and ignored",
-		"section", sec.path, "keys", held, "err", err)
+		"section", sec.path, "keys", held, "err", err, "fail_closed_kept", kept)
 	return nil
+}
+
+// failClosedKeeps reports whether p's decoded stored value stays in play when
+// its section's stored values are quarantined: p is a FailClosed key and raw
+// is more restrictive than what p would have without it, its operator value
+// or else its default (05-config §1.3.5). A quarantine can then only tighten
+// a FailClosed key, never loosen it.
+func (s *Store) failClosedKeeps(p Path, raw json.RawMessage) bool {
+	ck, ok := s.keyFor(p)
+	if !ok || ck.k.failOrder == nil {
+		return false
+	}
+	return ck.k.failRank(raw) < ck.k.failRank(s.failClosedFallback(ck))
+}
+
+// failClosedFallback is what a FailClosed key has without its stored row:
+// its operator value, else its default.
+func (s *Store) failClosedFallback(ck ckey) json.RawMessage {
+	if op, locked := s.op[ck.p]; locked {
+		return op.raw
+	}
+	return ck.def()
+}
+
+// failClosedRecovery names the env setting that gets a boot past a
+// FailClosed row it refuses: the key's canonical env name set to its
+// strictest value, which no stored value can beat (05-config §1.3.5).
+func (s *Store) failClosedRecovery(ck ckey) string {
+	strict := string(ck.k.failOrder[0])
+	var str string
+	if json.Unmarshal(ck.k.failOrder[0], &str) == nil {
+		strict = str
+	}
+	return envName(s.prefix, ck.p) + "=" + strict
 }
 
 // sectionPaths lists m's paths owned by sec, sorted.
@@ -516,6 +623,12 @@ func (s *Store) Load(ctx context.Context) error {
 			return err
 		}
 	}
+	// Every key is registered now: the retired names of module and
+	// passthrough keys are judged before any value is read, and so before
+	// storage opens (05-config §1.4 step 3).
+	if err := s.checkRetired(true); err != nil {
+		return err
+	}
 	lr, err := s.readOperator(true)
 	if err != nil {
 		return err
@@ -523,7 +636,8 @@ func (s *Store) Load(ctx context.Context) error {
 	if lr.fileSet[stateDirKey] {
 		return fmt.Errorf("config: the operator file sets %s: it is a pre-boot key (05-config §1.7)", stateDirKey)
 	}
-	s.op, s.ptVals = lr.op, lr.passthrough
+	s.op, s.ptVals, s.opSecrets = lr.op, lr.passthrough, lr.secrets
+	s.noteBindingConflicts(lr.conflicts)
 	s.sealed = true
 	s.classifyBoot()
 	if err := s.settleAll(phaseLoad); err != nil {
@@ -607,13 +721,28 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 			quar[p] = fmt.Errorf("%s is a boot key: its stored value lives in the boot record", p)
 			continue
 		}
-		if op, locked := s.op[p]; locked {
+		// A FailClosed key's row is read even when an operator layer sets
+		// the key: the more restrictive of the two is effective (05-config
+		// §1.3.5), decided after the sections settle.
+		if op, locked := s.op[p]; locked && ck.k.failOrder == nil {
 			rep.Ignored[p] = op.by
 			s.log.Warn("config: a stored value is ignored because an operator layer sets the key",
 				"key", p, "locked_by", op.by)
 			continue
 		}
 		v, err := ck.k.canonical(p, rows[p].Value)
+		if err != nil && ck.k.failOrder != nil && ck.k.failRank(s.failClosedFallback(ck)) > 0 {
+			// A FailClosed key's row that does not decode cannot be weighed
+			// against what the key falls back to, and that fallback is not the
+			// strictest value, so dropping the row could open what an admin
+			// closed: boot stops, naming the key, never the value, and the way
+			// out (05-config §1.3.5). When the fallback is already the
+			// strictest value the row can tighten nothing and is quarantined
+			// with its section like any row, below.
+			return AttachReport{}, fmt.Errorf("%w: config: the stored value of the fail-closed key %s does not decode; "+
+				"boot stops rather than ignore a value that may be stricter than the operator's (05-config §1.3.5); "+
+				"to start, set %s, the strictest value, and the row is then ignored", ErrInvalid, p, s.failClosedRecovery(ck))
+		}
 		if err != nil {
 			quar[p] = err
 			if _, seen := bad[ck.k.sec]; !seen {
@@ -626,18 +755,25 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 	// A row that does not decode is the section failing with its overrides:
 	// every row of that section is quarantined (05-config §1.4 step 6). It is
 	// never handed to the build, where a missing value would read as JSON
-	// null and decode to the zero value.
+	// null and decode to the zero value. A FailClosed key's own row that
+	// decodes and is stricter than what the key would otherwise have stays
+	// in play: a sibling's bad row must not open a gate (§1.3.5).
 	for _, sec := range s.sections {
 		first, ok := bad[sec]
 		if !ok {
 			continue
 		}
+		var kept []Path
 		for _, p := range sectionPaths(vals, sec, s) {
+			if s.failClosedKeeps(p, vals[p]) {
+				kept = append(kept, p)
+				continue
+			}
 			quar[p] = fmt.Errorf("quarantined with its section %s, whose row %s does not decode: %w", sec.path, first, quar[first])
 			delete(vals, p)
 		}
 		s.log.Warn("config: a stored row does not decode; its section's rows are kept and ignored",
-			"section", sec.path, "key", first, "err", quar[first])
+			"section", sec.path, "key", first, "err", quar[first], "fail_closed_kept", kept)
 	}
 	if len(quar) > 0 {
 		s.health[healthOverridesQuarantined] = fmt.Sprintf("%d stored overrides ignored", len(quar))
@@ -649,7 +785,21 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 		return AttachReport{}, err
 	}
 	maps.Copy(rep.Quarantined, s.quar)
-	rep.Applied = len(s.dbVals)
+	maps.Copy(rep.FailClosed, s.fcWins)
+	// A FailClosed row the operator value still beats is shadowed like any
+	// locked row.
+	shadowed := 0
+	for _, p := range slices.Sorted(maps.Keys(s.dbVals)) {
+		op, locked := s.op[p]
+		if _, wins := s.fcWins[p]; !locked || wins {
+			continue
+		}
+		shadowed++
+		rep.Ignored[p] = op.by
+		s.log.Warn("config: a stored value is ignored because an operator layer sets the key",
+			"key", p, "locked_by", op.by)
+	}
+	rep.Applied = len(s.dbVals) - shadowed
 	s.overrides, s.committer, s.attached = o, c, true
 	s.refreshSecrets(ctx, nil)
 	s.reindex()
@@ -714,8 +864,13 @@ func (s *Store) reindex() {
 				Reload: c.k.reload, Protection: c.k.protect, FailClosed: c.k.failOrder != nil,
 				Pending: string(ev.raw) != string(pv.raw),
 			}
-			if ev.src.operator() {
+			switch op, locked := s.op[p]; {
+			case ev.src.operator():
 				ks.LockedBy = ev.by
+			case locked && c.k.failOrder != nil:
+				// A stricter stored value is effective, but the operator
+				// value still bounds what Apply accepts (§1.3.5).
+				ks.LockedBy = op.by
 			}
 			if e := s.quar[p]; e != nil {
 				ks.Quarantined = e
@@ -830,9 +985,35 @@ func (s *Store) Keys() iter.Seq2[Path, KeyState] {
 	}
 }
 
-// RetiredSet lists the retired names set at this boot. Retired names are
-// F3-02's: until then it is nil.
-func (s *Store) RetiredSet() []RetiredUse { return nil }
+// RetiredSet lists the retired names set at this boot (05-config §1.3.6):
+// after Boot the uses of core keys and of dropped keys, after Load or a
+// refused Boot every use, refused ones included (it is filled before a
+// refused Boot or Load returns, so config check can print it).
+func (s *Store) RetiredSet() []RetiredUse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.retired)
+}
+
+// OperatorSecrets iterates the secret keys' operator values (env,
+// <NAME>_FILE, a binding or the file), sorted by path: Value is the secret
+// as a JSON string. The kernel hands each to secrets.(*Store).Ephemeral
+// after the secrets store opens (05-config §2.4 step 2), because config keeps
+// only a secret key's reference in its snapshots (name coined by F3-02).
+func (s *Store) OperatorSecrets() iter.Seq2[Path, OperatorValue] {
+	s.mu.Lock()
+	sv := maps.Clone(s.opSecrets)
+	s.mu.Unlock()
+	return func(yield func(Path, OperatorValue) bool) {
+		for _, p := range slices.Sorted(maps.Keys(sv)) {
+			v := sv[p]
+			v.Value = slices.Clone(v.Value)
+			if !yield(p, v) {
+				return
+			}
+		}
+	}
+}
 
 // PassthroughValues iterates the operator-layer values of passthrough paths,
 // raw, sorted by path; the kernel hands them to integrations (C11).
@@ -999,6 +1180,10 @@ func (s *Store) Operator(p Path) (OperatorValue, bool, error) {
 	var out OperatorValue
 	found := false
 	ck, known := s.keyFor(p)
+	var k *keyInfo
+	if known {
+		k = ck.k
+	}
 	for _, l := range []struct {
 		src Source
 		os  operatorSource
@@ -1010,11 +1195,19 @@ func (s *Store) Operator(p Path) (OperatorValue, bool, error) {
 		if err != nil {
 			return OperatorValue{}, false, err
 		}
+		if l.src == SourceEnv {
+			if vals, _, err = s.mergeEnv(vals); err != nil {
+				return OperatorValue{}, false, err
+			}
+		}
 		for _, v := range vals {
 			if v.path != p {
 				continue
 			}
-			raw := v.raw
+			raw, err := operatorJSON(k, v)
+			if err != nil {
+				return OperatorValue{}, false, fmt.Errorf("config: %s: %w", v.by, invalid(err))
+			}
 			if known {
 				c, err := ck.k.canonical(p, raw)
 				if err != nil {
@@ -1026,10 +1219,6 @@ func (s *Store) Operator(p Path) (OperatorValue, bool, error) {
 		}
 	}
 	if text, ok := s.o.Flags[p]; ok {
-		var k *keyInfo
-		if known {
-			k = ck.k
-		}
 		raw, err := flagJSON(k, p, text)
 		if err != nil {
 			return OperatorValue{}, false, fmt.Errorf("config: %s: %w", flagBy(p), invalid(err))
