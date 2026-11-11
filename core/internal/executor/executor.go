@@ -1,5 +1,5 @@
 // file: core/internal/executor/executor.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a39876a5-3dce-4f6d-9003-f07fdeb8a28d
 // last-edited: 2026-11-10
 
@@ -59,6 +59,9 @@ type erased interface {
 		task *tasks.TaskSpec[any, json.RawMessage], batch *tasks.BatchSpec[any, any, json.RawMessage], fixer *tasks.FixerSpec[any, any])
 }
 
+// coreModule is the module prefix of core's own kinds.
+const coreModule = "core"
+
 // Shape default timeouts (5T.3.6; HEAD's definition.go defaults).
 const (
 	defaultTaskTimeout  = 30 * time.Minute
@@ -85,8 +88,13 @@ func newDef(d tasks.Definition) (*def, error) {
 		x.key = tasks.Key(x.kind)
 	}
 	// 5T.3.4: a module may use keys in its own namespace and in core.
-	if m := x.key.Module(); m != x.module && m != "core" {
+	if m := x.key.Module(); m != x.module && m != coreModule {
 		return nil, fmt.Errorf("executor: %s: ConcurrencyKey %q is outside the module's namespace and core", x.kind, x.key)
+	}
+	// PrioritySystem is core-only (the kernel's registration rule, 05-tasks
+	// 5T.3.1): the constructor bounds the range, not who may use it.
+	if c.Priority == tasks.PrioritySystem && x.module != coreModule {
+		return nil, fmt.Errorf("executor: %s: %w: a module kind may not default to PrioritySystem", x.kind, ErrInvalidPriority)
 	}
 	x.timeout = c.Timeout
 	if x.timeout == 0 {

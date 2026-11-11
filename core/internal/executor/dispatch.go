@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-11
 
@@ -325,6 +325,9 @@ func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 			next.Attempt = cur.Attempt - 1
 			return next, tasks.RunEvent{Event: "release"}, nil
 		case cur.State == tasks.StateStopping && (cur.Reason == reasonCancel || cur.Reason == reasonWatchdog):
+			// The watchdog half is defensive and unreachable today: watchOnce
+			// stops only live attempts (watchdog.go, the a.live filter under
+			// e.mu), and release only ever sees an attempt that never went live.
 			next.State, next.Finished = tasks.StateCanceled, e.now()
 			return next, tasks.RunEvent{Event: "cancel", Reason: cur.Reason}, nil
 		}

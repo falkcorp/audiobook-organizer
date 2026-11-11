@@ -1,5 +1,5 @@
 // file: core/internal/executor/errors.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: ee118157-68ed-4213-be77-f44028207038
 // last-edited: 2026-11-11
 
@@ -27,6 +27,9 @@ var (
 	// set names no plan_ref, or a Fixer apply run names none (it applies
 	// nothing).
 	ErrPlanRequired = errors.New("executor: a live start of this kind must name a preview plan run")
+	// ErrInvalidPriority: a start names a priority past PrioritySystem, or
+	// PrioritySystem on a module kind (core-only, tasks.PrioritySystem).
+	ErrInvalidPriority = errors.New("executor: priority out of range or reserved for core kinds")
 	// ErrPlanInvalid: plan_ref does not name a succeeded Preview run of the
 	// same kind.
 	ErrPlanInvalid = errors.New("executor: plan_ref does not name a succeeded preview run of this kind")

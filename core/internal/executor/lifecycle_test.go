@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -980,6 +980,19 @@ func (h *harness) children(id tasks.RunID) []tasks.RunID {
 	return out
 }
 
+// count is the number of runs of kind.
+func (h *harness) count(kind tasks.Kind) int {
+	h.t.Helper()
+	var n int
+	for _, err := range h.x.Runs(context.Background(), tasks.RunQuery{Kinds: []tasks.Kind{kind}}) {
+		if err != nil {
+			h.t.Fatalf("runs of %s: %v", kind, err)
+		}
+		n++
+	}
+	return n
+}
+
 // enqueueOnce boots defs plus gotham.dispatch, whose body makes one
 // rc.Enqueue of kind with opts and hands back its error, starts the parent
 // as Gordon (who holds gotham:run and nothing else) and returns the
@@ -1062,18 +1075,23 @@ func TestEnqueue_ChildBoundedByItsModule(t *testing.T) {
 }
 
 // TestEnqueue_OptionCannotRestampTheChild (COR-21): a StartOption adjusts a
-// child's mode, params or priority. One that sets the child's actor, parent,
-// trigger or idempotency key is refused and creates no run, so a body
-// cannot start a child as another user or as a system actor (whose reach is
-// another rule), unlinked from its parent, or folded into another run.
+// child's mode, params or priority, and the child takes what it states (a
+// Live parent may ask for a Preview child). One that sets the child's
+// actor, parent, trigger or idempotency key is refused and creates no run,
+// so a body cannot start a child as another user or as a system actor
+// (whose reach is another rule), unlinked from its parent, or folded into
+// another run.
 func TestEnqueue_OptionCannotRestampTheChild(t *testing.T) {
 	defs := []tasks.Definition{taskDef("gotham.forensics", okBody)}
 	cells := []struct {
-		name    string
-		opt     tasks.StartOption
-		allowed bool
+		name  string
+		opt   tasks.StartOption
+		check func(tasks.RunRecord) bool // nil: refused
 	}{
-		{name: "priority", opt: func(r *tasks.StartRequest) { r.Priority = tasks.PriorityHigh }, allowed: true},
+		{name: "priority", opt: func(r *tasks.StartRequest) { r.Priority = tasks.PriorityHigh },
+			check: func(r tasks.RunRecord) bool { return r.Priority == tasks.PriorityHigh && r.Actor == gordon }},
+		{name: "a preview child of a live parent", opt: func(r *tasks.StartRequest) { r.Mode = tasks.ModeRequestPreview },
+			check: func(r tasks.RunRecord) bool { return r.Mode == tasks.ModePreview && r.Actor == gordon }},
 		{name: "another user", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{UserID: "joker", AuthMethod: "session"} }},
 		{name: "a system actor", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{AuthMethod: systemMethod, System: "gotham"} }},
 		{name: "no parent", opt: func(r *tasks.StartRequest) { r.Parent = "" }},
@@ -1083,18 +1101,11 @@ func TestEnqueue_OptionCannotRestampTheChild(t *testing.T) {
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
 			h, pid, err := enqueueOnce(t, defs, nil, "gotham.forensics", c.opt)
-			if !c.allowed {
+			if c.check == nil {
 				if !errors.Is(err, ErrNotPermitted) {
 					t.Fatalf("enqueue with %s: %v, want ErrNotPermitted", c.name, err)
 				}
-				var n int
-				for _, err := range h.x.Runs(context.Background(), tasks.RunQuery{Kinds: []tasks.Kind{"gotham.forensics"}}) {
-					if err != nil {
-						t.Fatal(err)
-					}
-					n++
-				}
-				if n != 0 {
+				if n := h.count("gotham.forensics"); n != 0 {
 					t.Fatalf("a refused enqueue created %d runs", n)
 				}
 				return
@@ -1106,8 +1117,57 @@ func TestEnqueue_OptionCannotRestampTheChild(t *testing.T) {
 			if len(kids) != 1 {
 				t.Fatalf("children %v, want one", kids)
 			}
-			if r := h.get(kids[0]); r.Priority != tasks.PriorityHigh || r.Actor != gordon {
-				t.Fatalf("child priority %v actor %+v, want high as %+v", r.Priority, r.Actor, gordon)
+			if r := h.get(kids[0]); !c.check(r) {
+				t.Fatalf("child with %s: mode %v priority %v actor %+v", c.name, r.Mode, r.Priority, r.Actor)
+			}
+		})
+	}
+}
+
+// TestEnqueue_SystemActorParentIsBoundedByBothModules (SEC2-15): a run that
+// another module's system actor started is bounded by both modules' reach.
+// gotham's system actor starts arkham.transfer (listed in gotham's
+// TaskStarts); the transfer's body may enqueue arkham.cleanup, arkham's own
+// kind, only when gotham lists it too: a module that starts another
+// module's kind lists that kind's whole child closure (fail closed).
+func TestEnqueue_SystemActorParentIsBoundedByBothModules(t *testing.T) {
+	gothamSystem := tasks.Actor{AuthMethod: systemMethod, System: "gotham"}
+	for _, c := range []struct {
+		starts  []tasks.Kind
+		allowed bool
+	}{
+		{starts: []tasks.Kind{"arkham.transfer"}},
+		{starts: []tasks.Kind{"arkham.transfer", "arkham.cleanup"}, allowed: true},
+	} {
+		t.Run(strings.Join(kindStrings(c.starts), ","), func(t *testing.T) {
+			got := make(chan error, 1)
+			transfer := taskDef("arkham.transfer", func(rc *tasks.RC, _ noParams) (string, error) {
+				_, err := rc.Enqueue("arkham.cleanup", noParams{})
+				got <- err
+				return "", nil
+			})
+			h := newHarness(t, []tasks.Definition{transfer, taskDef("arkham.cleanup", okBody)}, func(o *Options) {
+				o.Catalog = catalogWith(t, "gotham:run", "arkham:run")
+				o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: c.starts}}
+			})
+			pid := h.start("arkham.transfer", tasks.StartRequest{Actor: gothamSystem})
+			err := <-got
+			h.waitState(pid, tasks.StateSucceeded)
+			kids := h.children(pid)
+			if !c.allowed {
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("enqueue of arkham.cleanup: %v, want ErrNotPermitted (gotham does not list it)", err)
+				}
+				if len(kids) != 0 {
+					t.Fatalf("a refused enqueue created runs %v", kids)
+				}
+				return
+			}
+			if err != nil || len(kids) != 1 {
+				t.Fatalf("enqueue of arkham.cleanup: %v, children %v, want one", err, kids)
+			}
+			if r := h.get(kids[0]); r.Actor != gothamSystem {
+				t.Fatalf("child actor %+v, want gotham's system actor", r.Actor)
 			}
 		})
 	}
