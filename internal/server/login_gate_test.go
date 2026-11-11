@@ -381,7 +381,7 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 	fillCeiling(t, ceiling, coreauth.LoginGlobalCeiling-realFlood)
 	const minDelay = coreauth.SaturationDelayBase - 100*time.Millisecond
 	const satAdmissions = 8
-	// Deliberately below the validated floor (config.MinLoginSaturatedRate): the
+	// Deliberately below the validated floor (coreauth.MinSaturatedRate): the
 	// bucket is meant to refill negligibly, and the computed wait then hits the
 	// defensive window cap, which this test pins.
 	ceiling.SetSaturatedBound(0.0001, satAdmissions)

@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.176.3
+// version: 1.176.4
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package config
 
@@ -1664,7 +1664,7 @@ type Config struct {
 	// (§1.7.1). Placeholder until Phase 3 owns real libraries.
 	ABSDefaultLibraryID string `json:"abs_default_library_id"`
 
-	// ── Invitation email and guest access (invite_config.go) ─────────────────
+	// ── Invitation email and guest access (env_only_settings.go) ────────────
 	//
 	// ENVIRONMENT-ONLY and `json:"-"`: never in GET /config, never in the blob,
 	// refused by PUT /config. Re-applied after the blob load by
@@ -1721,7 +1721,7 @@ type Config struct {
 	// LoginSaturatedRate and LoginSaturatedBurst (LOGIN_SATURATED_RATE logins
 	// per second, LOGIN_SATURATED_BURST) are the service-wide token bucket on
 	// password logins admitted while the aggregate login ceilings are spent.
-	// Empty means DefaultLoginSaturatedRate / DefaultLoginSaturatedBurst; use
+	// Empty means coreauth.DefaultSaturatedRate / DefaultSaturatedBurst; use
 	// LoginSaturatedLimits, which validates them (the server refuses to start
 	// on an unusable value). Kept as the raw text so a typo is an error, not a
 	// silent zero.
@@ -1743,8 +1743,9 @@ type Config struct {
 	MetadataFetch MetadataFetchConfig `json:"metadata_fetch" mapstructure:"metadata_fetch"`
 	// BootstrapKeyTTL is how long a bootstrap-issued, full-scope admin API key
 	// stays valid: a Go duration ("8h", "90m"). Empty means the default,
-	// DefaultBootstrapKeyTTL (8h); anything over MaxBootstrapKeyTTL (24h) is
-	// capped, and an invalid or non-positive value falls back to the default.
+	// coreauth.DefaultBootstrapKeyTTL (8h); anything over
+	// coreauth.MaxBootstrapKeyTTL (24h) is capped, and an invalid or
+	// non-positive value falls back to the default.
 	// It never means "never expire". Resolve with ResolveBootstrapKeyTTL.
 	//
 	// Set from the environment / config file only (BOOTSTRAP_KEY_TTL), never
@@ -1754,7 +1755,7 @@ type Config struct {
 	BootstrapKeyTTL string `json:"-" mapstructure:"bootstrap_key_ttl"`
 	// BootstrapKeyTTLDays is the DEPRECATED predecessor of BootstrapKeyTTL
 	// (whole days, default 30 until 2026-10-07). A config file or environment
-	// that still sets it is honoured, capped at MaxBootstrapKeyTTL, with a
+	// that still sets it is honoured, capped at coreauth.MaxBootstrapKeyTTL, with a
 	// startup warning, and only when BootstrapKeyTTL is unset. `json:"-"` so
 	// the 30 that older config blobs stored is ignored. (SEC-1/PROC-6)
 	BootstrapKeyTTLDays int `json:"-" mapstructure:"bootstrap_key_ttl_days"`
@@ -2858,7 +2859,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 	r.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", mf.NegativeTTLDays.OpenLibrary)
 	r.SetDefault("metadata_fetch.negative_ttl_days.google", mf.NegativeTTLDays.Google)
 	// No defaults for bootstrap_key_ttl / bootstrap_key_ttl_days: an empty
-	// bootstrap_key_ttl resolves to DefaultBootstrapKeyTTL in code, and a
+	// bootstrap_key_ttl resolves to coreauth.DefaultBootstrapKeyTTL in code, and a
 	// default for the legacy days key would make it look set on every boot
 	// (see ResolveBootstrapKeyTTL). Bound explicitly so BOOTSTRAP_KEY_TTL /
 	// BOOTSTRAP_KEY_TTL_DAYS reach them even where AutomaticEnv is not on.

@@ -1,7 +1,7 @@
 // file: internal/config/bootstrap_key_ttl_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a2f7c48-1e5b-4d93-b6a0-3c8d1f2e7b59
-// last-edited: 2026-10-07
+// last-edited: 2026-11-10
 
 package config
 
@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 func TestResolveBootstrapKeyTTL(t *testing.T) {
@@ -116,7 +118,7 @@ func TestResolveBootstrapKeyTTL_OldBlobIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap := Snapshot()
-	if got, warn := snap.ResolveBootstrapKeyTTL(); got != DefaultBootstrapKeyTTL || warn != "" {
-		t.Errorf("after loading an old blob: ttl=%v warn=%q, want %v and no warning", got, warn, DefaultBootstrapKeyTTL)
+	if got, warn := snap.ResolveBootstrapKeyTTL(); got != coreauth.DefaultBootstrapKeyTTL || warn != "" {
+		t.Errorf("after loading an old blob: ttl=%v warn=%q, want %v and no warning", got, warn, coreauth.DefaultBootstrapKeyTTL)
 	}
 }
