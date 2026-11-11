@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/window_run_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f5b8f0e-8a7d-4c1e-b6f2-9d0a4e7c2b13
 // last-edited: 2026-11-11
 
@@ -247,6 +247,23 @@ func TestPollWindow_Rules(t *testing.T) {
 	}
 	if rs := runsOf(t, f.st, tasks.WindowNightly); len(rs) != 1 {
 		t.Fatalf("%d window runs, want 1", len(rs))
+	}
+}
+
+// TestPollWindow_DeletedEntryIsCounted: a window kind whose config entry is
+// gone (core.tasks.windows.<name> removed) never runs, and every poll counts
+// it as a schedule error instead of skipping it silently.
+func TestPollWindow_DeletedEntryIsCounted(t *testing.T) {
+	gate := true
+	f, _ := windowFixture(t, &gate)
+	f.cfg.dropWindow("nightly")
+	f.poll(day(3, 1, 0))
+	f.poll(day(3, 1, 1))
+	if n := f.rec.errCount(tasks.WindowNightly); n != 2 {
+		t.Fatalf("schedule_errors for a deleted window entry = %d, want 2 (one per poll)", n)
+	}
+	if got := f.rec.take(); len(got) != 0 {
+		t.Fatalf("a deleted window fired: %q", got)
 	}
 }
 

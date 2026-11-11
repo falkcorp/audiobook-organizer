@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/math_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d0feac80-13ca-4ad9-8d21-62931949112f
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/schedspec"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -21,125 +22,6 @@ func utc(s string) time.Time {
 		panic(err)
 	}
 	return t
-}
-
-func TestParseCron_Grammar(t *testing.T) {
-	good := []string{"* * * * *", "0 3 * * *", "*/15 1-4 * * 1-5", "5,10,15 0 1 1 0", "0 0 * * 7", "1-59/2 * * * *", "30/10 * * * *", "0 0 29 2 *"}
-	for _, e := range good {
-		if _, err := parseCron(e); err != nil {
-			t.Errorf("parseCron(%q) = %v", e, err)
-		}
-	}
-	bad := []string{"", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 8",
-		"*/0 * * * *", "5-1 * * * *", "MON * * * *", "* * ? * *", "* * L * *", "+5 * * * *", "* * * * 1#2", "-1 * * * *", "1- * * * *"}
-	for _, e := range bad {
-		if _, err := parseCron(e); err == nil {
-			t.Errorf("parseCron(%q) accepted", e)
-		}
-	}
-	c, _ := parseCron("0 0 * * 7")
-	if !has(c.dow, 0) || has(c.dow, 7) {
-		t.Fatal("day-of-week 7 is not folded onto Sunday")
-	}
-	c, _ = parseCron("50/5 * * * *")
-	for _, m := range []int{50, 55} {
-		if !has(c.minute, m) {
-			t.Fatalf("a/n does not run to the field's end: %d missing", m)
-		}
-	}
-	if has(c.minute, 45) || has(c.minute, 51) {
-		t.Fatal("a/n matched outside its steps")
-	}
-}
-
-func TestCronNext_DaysAndRollover(t *testing.T) {
-	cases := []struct{ expr, after, want string }{
-		{"0 3 * * *", "2026-01-01T02:59:00Z", "2026-01-01T03:00:00Z"},
-		{"0 3 * * *", "2026-01-01T03:00:00Z", "2026-01-02T03:00:00Z"}, // strictly after
-		{"*/15 * * * *", "2026-01-01T10:07:00Z", "2026-01-01T10:15:00Z"},
-		{"0 0 1 1 *", "2026-06-01T00:00:00Z", "2027-01-01T00:00:00Z"},
-		{"0 0 29 2 *", "2026-03-01T00:00:00Z", "2028-02-29T00:00:00Z"},
-		// both day fields restricted: either matches (2026-01-05 is a Monday)
-		{"0 0 13 * 1", "2026-01-01T00:00:00Z", "2026-01-05T00:00:00Z"},
-		// day-of-week starred: day-of-month alone decides
-		{"0 0 13 * *", "2026-01-01T00:00:00Z", "2026-01-13T00:00:00Z"},
-		{"0 0 * * 1", "2026-01-01T00:00:00Z", "2026-01-05T00:00:00Z"},
-	}
-	for _, c := range cases {
-		s, err := parseCron(c.expr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, ok := s.next(utc(c.after), time.UTC)
-		if !ok || !got.Equal(utc(c.want)) {
-			t.Errorf("%q after %s = %s %v, want %s", c.expr, c.after, got, ok, c.want)
-		}
-	}
-	never, _ := parseCron("0 0 31 2 *")
-	if got, ok := never.next(utc("2026-01-01T00:00:00Z"), time.UTC); ok {
-		t.Fatalf("0 0 31 2 * came due at %s", got)
-	}
-}
-
-func TestWallInstant_DST(t *testing.T) {
-	loc := GothamZone(t)
-	cases := []struct {
-		name    string
-		y       int
-		mo      time.Month
-		d, h, m int
-		want    string
-	}{
-		{"plain winter", 2026, 1, 15, 1, 30, "2026-01-15T06:30:00Z"},
-		{"plain summer", 2026, 7, 15, 1, 30, "2026-07-15T05:30:00Z"},
-		{"gap start resolves to the transition", 2026, 3, 8, 2, 0, "2026-03-08T07:00:00Z"},
-		{"inside the gap resolves to the transition", 2026, 3, 8, 2, 30, "2026-03-08T07:00:00Z"},
-		{"after the gap", 2026, 3, 8, 3, 0, "2026-03-08T07:00:00Z"},
-		{"before the gap", 2026, 3, 8, 1, 59, "2026-03-08T06:59:00Z"},
-		{"repeated hour: first occurrence", 2026, 11, 1, 1, 30, "2026-11-01T05:30:00Z"},
-		{"repeated hour start: first occurrence", 2026, 11, 1, 1, 0, "2026-11-01T05:00:00Z"},
-		{"after the repeat", 2026, 11, 1, 2, 0, "2026-11-01T07:00:00Z"},
-		{"day overflow normalises", 2026, 1, 32, 0, 0, "2026-02-01T05:00:00Z"},
-	}
-	for _, c := range cases {
-		if got := wallInstant(c.y, c.mo, c.d, c.h, c.m, loc); !got.Equal(utc(c.want)) {
-			t.Errorf("%s: %s, want %s", c.name, got.UTC(), c.want)
-		}
-	}
-}
-
-func TestDailyAt_ParseAndDST(t *testing.T) {
-	for _, bad := range []string{"", "3:00", "24:00", "12:60", "12-00", "ab:cd", "12:00:00", "+1:00"} {
-		if _, err := parseDailyAt(bad); err == nil {
-			t.Errorf("parseDailyAt(%q) accepted", bad)
-		}
-	}
-	loc := GothamZone(t)
-	d, err := parseDailyAt("02:30")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Spring forward: 02:30 does not exist; it fires at 03:00 GDT, then the
-	// next day at 02:30 GDT.
-	got, _ := d.next(utc("2026-03-08T06:00:00Z"), loc)
-	if !got.Equal(utc("2026-03-08T07:00:00Z")) {
-		t.Fatalf("spring-forward day: %s", got.UTC())
-	}
-	got, _ = d.next(got.Add(time.Minute), loc)
-	if !got.Equal(utc("2026-03-09T06:30:00Z")) {
-		t.Fatalf("day after: %s", got.UTC())
-	}
-	d, _ = parseDailyAt("01:30")
-	// Fall back: 01:30 happens twice; a stamp after the first means
-	// tomorrow, never the second copy an hour later.
-	got, _ = d.next(utc("2026-11-01T05:31:00Z"), loc)
-	if !got.Equal(utc("2026-11-02T06:30:00Z")) {
-		t.Fatalf("fall-back day after the first 01:30: %s", got.UTC())
-	}
-	got, _ = d.next(utc("2026-11-01T04:00:00Z"), loc)
-	if !got.Equal(utc("2026-11-01T05:30:00Z")) {
-		t.Fatalf("fall-back day before: %s", got.UTC())
-	}
 }
 
 func TestEffectiveOf_Rules(t *testing.T) {
@@ -197,9 +79,25 @@ func TestDecide_Table(t *testing.T) {
 		if !d.write || d.fire || !d.next.LastDue.Equal(t0) || d.next.ScheduleHash != "h" || !d.next.GateClosedAt.IsZero() {
 			t.Fatalf("%+v", d)
 		}
-		d = decide(tasks.Clock{}, false, in(t0, effective{}, tasks.Coalesce))
-		if !d.write || d.fire || !d.next.GateClosedAt.Equal(t0) {
+	})
+	t.Run("first sight while disabled writes nothing", func(t *testing.T) {
+		// HEAD never seeds a closed kind (pollV3Entry returns before the claim
+		// while the gate is closed): the first poll that finds it enabled
+		// seeds it, and it runs one period after that, not on that poll.
+		d := decide(tasks.Clock{}, false, in(t0, effective{}, tasks.Coalesce))
+		if d.write || d.fire {
 			t.Fatalf("disabled first sight: %+v", d)
+		}
+		enabled := t0.Add(6 * time.Hour)
+		d = decide(tasks.Clock{}, false, in(enabled, every(time.Hour), tasks.Coalesce))
+		if !d.write || d.fire || !d.next.LastDue.Equal(enabled) {
+			t.Fatalf("the first enabled poll must seed and wait: %+v", d)
+		}
+		if d := decide(d.next, true, in(enabled.Add(59*time.Minute), every(time.Hour), tasks.Coalesce)); d.fire {
+			t.Fatalf("fired before one period after enable: %+v", d)
+		}
+		if d := decide(d.next, true, in(enabled.Add(time.Hour), every(time.Hour), tasks.Coalesce)); !d.fire {
+			t.Fatalf("did not fire one period after enable: %+v", d)
 		}
 	})
 	prev := tasks.Clock{LastDue: t0, ScheduleHash: "h"}
@@ -244,6 +142,59 @@ func TestDecide_Table(t *testing.T) {
 			t.Fatalf("more than one poll late is missed: %+v", d)
 		}
 	})
+	t.Run("skip missed measures freshness from the previous poll", func(t *testing.T) {
+		// A poll 90 minutes after the previous one (the process was up, the
+		// poll was delayed) is not downtime: the instant that came due
+		// between the two polls fires even though it is older than one poll.
+		now := t0.Add(3*time.Hour + 30*time.Minute)
+		late := in(now, every(time.Hour), tasks.SkipMissed)
+		late.since = now.Add(-90 * time.Minute)
+		if d := decide(prev, true, late); !d.fire || !d.dueAt.Equal(t0.Add(3*time.Hour)) {
+			t.Fatalf("a delayed poll lost its fire: %+v", d)
+		}
+		// A boot after the instant (since is the boot time) is downtime.
+		down := in(now, every(time.Hour), tasks.SkipMissed)
+		down.since = t0.Add(3*time.Hour + 10*time.Minute)
+		if d := decide(prev, true, down); d.fire || d.missed != 3 {
+			t.Fatalf("an instant that passed before the boot fired: %+v", d)
+		}
+		// An instant at the previous poll itself came due while up.
+		edge := in(now, every(time.Hour), tasks.SkipMissed)
+		edge.since = t0.Add(3 * time.Hour)
+		if d := decide(prev, true, edge); !d.fire {
+			t.Fatalf("an instant at the previous poll is up time: %+v", d)
+		}
+	})
+	t.Run("re-open edge is the due time", func(t *testing.T) {
+		closed := tasks.Clock{LastDue: t0, GateClosedAt: t0.Add(30 * time.Minute)}
+		// Coalesce fires once, due at the edge, whatever passed while off.
+		now := t0.Add(10*time.Hour + 20*time.Minute)
+		d := decide(closed, true, in(now, every(time.Hour), tasks.Coalesce))
+		if !d.fire || !d.dueAt.Equal(now) || d.missed != 0 {
+			t.Fatalf("coalesce: %+v", d)
+		}
+		// SkipMissed applies its policy: a stale instant does not fire, a
+		// fresh one does (due at that instant).
+		if d := decide(closed, true, in(now, every(time.Hour), tasks.SkipMissed)); d.fire || d.missed != 0 {
+			t.Fatalf("skip, stale: %+v", d)
+		}
+		fresh := t0.Add(10*time.Hour + 30*time.Second)
+		if d := decide(closed, true, in(fresh, every(time.Hour), tasks.SkipMissed)); !d.fire || !d.dueAt.Equal(t0.Add(10*time.Hour)) || d.missed != 0 {
+			t.Fatalf("skip, fresh: %+v", d)
+		}
+	})
+	t.Run("a changed schedule counts nothing missed", func(t *testing.T) {
+		old := tasks.Clock{LastDue: t0, ScheduleHash: "old"}
+		now := t0.Add(5 * time.Hour)
+		d := decide(old, true, in(now, every(time.Hour), tasks.Coalesce))
+		if !d.fire || d.missed != 0 || d.next.Missed != 0 {
+			t.Fatalf("%+v", d)
+		}
+		same := tasks.Clock{LastDue: t0, ScheduleHash: "h"}
+		if d := decide(same, true, in(now, every(time.Hour), tasks.Coalesce)); d.missed != 4 {
+			t.Fatalf("an unchanged schedule counts missed: %+v", d)
+		}
+	})
 	t.Run("disabled stamps the close edge once", func(t *testing.T) {
 		now := t0.Add(5 * time.Hour)
 		d := decide(prev, true, in(now, effective{}, tasks.Coalesce))
@@ -278,7 +229,7 @@ func TestDecide_Table(t *testing.T) {
 		}
 	})
 	t.Run("no next instant never fires", func(t *testing.T) {
-		never, _ := parseCron("0 0 31 2 *")
+		never, _ := schedspec.ParseCron("0 0 31 2 *")
 		if d := decide(prev, true, in(t0.Add(1000*time.Hour), effective{enabled: true, t: never, hash: "h"}, tasks.Coalesce)); d.write || d.fire {
 			t.Fatalf("%+v", d)
 		}
@@ -288,7 +239,7 @@ func TestDecide_Table(t *testing.T) {
 		if n != maxCount {
 			t.Fatalf("interval count %d, want %d", n, maxCount)
 		}
-		c, _ := parseCron("* * * * *")
+		c, _ := schedspec.ParseCron("* * * * *")
 		n, _ = countDue(c, t0, t0.Add(10000*time.Minute), time.UTC)
 		if n != maxCount {
 			t.Fatalf("cron count %d, want %d", n, maxCount)

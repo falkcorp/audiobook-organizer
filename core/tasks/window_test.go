@@ -1,5 +1,5 @@
 // file: core/tasks/window_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d83459b-b9ee-450d-91e9-94da56e2134e
 // last-edited: 2026-11-11
 
@@ -154,5 +154,44 @@ func TestScheduleConfig_OneJSONValue(t *testing.T) {
 		t.Fatal("a mistyped field decoded")
 	}
 	var _ json.Marshaler = tasks.ScheduleConfig{}
-	var _ json.Unmarshaler = &c
+	// Decoding is encoding/json's own: a strict decode refuses an unknown
+	// field, and null leaves the value as it was.
+	dec := json.NewDecoder(strings.NewReader(`{"enabled":true,"evry":"5m"}`))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err == nil {
+		t.Fatal("a strict decode took an unknown field")
+	}
+	keep := tasks.ScheduleConfig{Enabled: true, Cron: "0 3 * * *"}
+	if err := json.Unmarshal([]byte(`null`), &keep); err != nil || keep.Cron != "0 3 * * *" {
+		t.Fatalf("null: %+v %v", keep, err)
+	}
+}
+
+// TestScheduleConfig_Validate: the value rules config enforces at load.
+func TestScheduleConfig_Validate(t *testing.T) {
+	hour := config.Duration(time.Hour)
+	bad := map[string]tasks.ScheduleConfig{
+		"every and cron":     {Enabled: true, Every: hour, Cron: "* * * * *"},
+		"two while disabled": {DailyAt: "03:00", Window: "nightly"},
+		"enabled, no timing": {Enabled: true},
+		"negative every":     {Enabled: true, Every: config.Duration(-time.Hour)},
+		"bad daily_at":       {Enabled: true, DailyAt: "3:00"},
+		"bad cron":           {Enabled: true, Cron: "* * * *"},
+		"bad window":         {Enabled: true, Window: "Night-ly"},
+		"negative order":     {Enabled: true, Window: "nightly", Order: -1},
+		"bad cron, disabled": {Cron: "bat signal"},
+	}
+	for name, c := range bad {
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: %+v accepted", name, c)
+		}
+	}
+	for _, c := range []tasks.ScheduleConfig{
+		{}, {Every: hour}, {Enabled: true, Every: hour}, {Enabled: true, DailyAt: "23:59"},
+		{Enabled: true, Cron: "*/15 1-4 * * 1-5"}, {Enabled: true, Window: "nightly", Order: 3},
+	} {
+		if err := c.Validate(); err != nil {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
 }

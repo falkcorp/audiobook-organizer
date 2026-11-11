@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/window.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 595ea63d-e3fd-4e96-98e7-440412a07142
 // last-edited: 2026-11-11
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/schedspec"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
@@ -25,14 +26,27 @@ import (
 // window's members, the kinds whose ScheduleConfig.Window names it, one after
 // another in (Order, kind) order. A member's own clock is not polled.
 //
-// Once per opening, by date: the window's clock fires when the poll is inside
-// the window and the local date of its LastDue is before the local date of
-// the opening it is in. This is HEAD's rule (maintenance.go's hasRunToday
-// against maintenance_window_last_run, a local YYYY-MM-DD), which the tasks
-// cutover imports as LastDue = local midnight of that date (5T.8.3), so a
-// window that ran on day D is not run again on D after the cutover. Measuring
-// against the opening's date, not the poll's, keeps a window that wraps
-// midnight (23-4) from firing again after midnight within one opening.
+// Once per opening: a window's clock always holds the start instant of an
+// opening, never a poll time. A fire stamps LastDue with the start of the
+// opening it fires for; the first sight stamps the start of the most recent
+// opening at or before now, so a window first seen inside an opening does not
+// run until the next one (no boot stampede), and one first seen outside runs
+// at its next opening. The clock fires when the poll is inside an opening
+// whose local start date is after the local date of LastDue. Comparing dates,
+// not instants, keeps the cutover's import working: HEAD's
+// maintenance_window_last_run is a local date (maintenance.go's
+// hasRunToday), imported as LastDue = local midnight of that date (5T.8.3),
+// so a window HEAD ran on day D is not run again in D's opening. Because
+// LastDue is an opening start, a window that wraps midnight (23-4) compares
+// the opening's own start date on both sides: a restart after midnight inside
+// an opening does not fire it twice, and the next night's opening fires.
+//
+// DST: an opening starts at Start:00 local, resolved by schedspec.WallInstant.
+// A start hour the zone skips (02:00 on a US spring-forward day) resolves to
+// the transition (03:00 daylight), so a window 2-4 opens at 03:00 that day; a
+// window that lies wholly inside the gap (2-3) has no local hour inside it
+// that day and does not open. A repeated start hour (fall back) opens once,
+// at its first occurrence.
 
 // windowOpen reports whether now is inside w, and the instant the opening it
 // is in began. The hours wrap midnight when End <= Start (Start == End is the
@@ -45,15 +59,25 @@ func windowOpen(now time.Time, w WindowConfig, loc *time.Location) (in bool, ope
 		if h < w.Start || h >= w.End {
 			return false, time.Time{}
 		}
-		return true, wallInstant(y, mo, d, w.Start, 0, loc)
+		return true, schedspec.WallInstant(y, mo, d, w.Start, 0, loc)
 	}
 	switch {
 	case h >= w.Start:
-		return true, wallInstant(y, mo, d, w.Start, 0, loc)
+		return true, schedspec.WallInstant(y, mo, d, w.Start, 0, loc)
 	case h < w.End:
-		return true, wallInstant(y, mo, d-1, w.Start, 0, loc)
+		return true, schedspec.WallInstant(y, mo, d-1, w.Start, 0, loc)
 	}
 	return false, time.Time{}
+}
+
+// lastOpening is the start of the most recent opening of w at or before now:
+// today's Start:00 local if it has passed, else yesterday's.
+func lastOpening(now time.Time, w WindowConfig, loc *time.Location) time.Time {
+	y, mo, d := now.In(loc).Date()
+	if t := schedspec.WallInstant(y, mo, d, w.Start, 0, loc); !t.After(now) {
+		return t
+	}
+	return schedspec.WallInstant(y, mo, d-1, w.Start, 0, loc)
 }
 
 // localDate is t's calendar date in loc, comparable as an int.
@@ -66,10 +90,7 @@ func localDate(t time.Time, loc *time.Location) int {
 func decideWindow(prev tasks.Clock, had bool, now time.Time, w WindowConfig, loc *time.Location) decision {
 	hash := hashOf("window_hours", fmt.Sprint(w.Start, w.End), loc.String())
 	if !had {
-		// First sight seeds, inside the window or not: seeded outside, the
-		// window runs at its next opening; seeded inside, not before the
-		// next one (no boot stampede).
-		return decision{write: true, next: tasks.Clock{LastDue: now, ScheduleHash: hash}}
+		return decision{write: true, next: tasks.Clock{LastDue: lastOpening(now, w, loc), ScheduleHash: hash}}
 	}
 	in, opened := windowOpen(now, w, loc)
 	if !w.Enabled || !in {
@@ -79,9 +100,9 @@ func decideWindow(prev tasks.Clock, had bool, now time.Time, w WindowConfig, loc
 		return decision{}
 	}
 	next := prev
-	next.LastDue = now
+	next.LastDue = opened
 	next.ScheduleHash = hash
-	return decision{write: true, next: next, fire: true, dueAt: opened}
+	return decision{write: true, next: next, fire: true, dueAt: opened, at: now}
 }
 
 // validWindowHours reports hours inside 0-23.
@@ -93,7 +114,14 @@ func validWindowHours(w WindowConfig) bool {
 func (s *Scheduler) pollWindow(ctx context.Context, name string, now time.Time) {
 	kind := tasks.WindowKind(name)
 	w, ok := s.opts.Config.Window(name)
-	if !ok || !w.Enabled {
+	if !ok {
+		// The window kind was registered from an entry that is gone: its
+		// members never run. Counted and logged at every poll, like any
+		// other schedule value the scheduler cannot run.
+		s.scheduleError(kind, fmt.Errorf("%w: core.tasks.windows.%s is not set; its window kind and members do not run", errConfig, name))
+		return
+	}
+	if !w.Enabled {
 		return
 	}
 	if !validWindowHours(w) {
@@ -102,12 +130,8 @@ func (s *Scheduler) pollWindow(ctx context.Context, name string, now time.Time) 
 	}
 	members := s.members(name)
 	start := func(ctx context.Context, b *storage.Batch) (tasks.RunRef, bool, error) {
-		ref, ok, err := s.activeRun(ctx, kind, tasks.ModeLive)
-		if err != nil || ok {
-			return ref, ok, err
-		}
-		ref, err = s.opts.Starter.StartIn(ctx, b, kind, tasks.StartRequest{Mode: tasks.ModeRequestLive, Trigger: tasks.TriggerWindow})
-		return ref, false, err
+		ref, err := s.opts.Starter.StartIn(ctx, b, kind, tasks.StartRequest{Mode: tasks.ModeRequestLive, Trigger: tasks.TriggerWindow})
+		return ref, ref.Existing, err
 	}
 	var obs Observer
 	if s.opts.Observer != nil {

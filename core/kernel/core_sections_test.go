@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
 // last-edited: 2026-11-11
 
@@ -39,7 +39,7 @@ const mapKeyPlaceholder = "<id>"
 // (names coined by F2-09): a struct field with a json name is a segment; a
 // struct recurses, except secrets.Ref, which is one key (the config field
 // type of a secret, 05-config §2.3; F3-03), and a struct that encodes itself
-// (json.Marshaler), which is one key as config's own walker has it
+// (json.Marshaler or json.Unmarshaler, on the type or its pointer: encodesItself), which is one key as config's own walker has it
 // (config/keys.go isLeaf; tasks.ScheduleConfig, F2-04); any other type is one
 // key, a map and a list included (05-config §1.3.6). The one exception is a section
 // whose type is itself a map, whose entries' own keys sit under
@@ -59,10 +59,19 @@ func sectionLeaves(t *testing.T, sec any) (config.Path, []leaf) {
 	return path, out
 }
 
+// encodesItself is config's leaf rule (config/keys.go encodesItself, which is
+// unexported and under edit by sibling rows): a struct whose type or pointer
+// type implements json.Marshaler or json.Unmarshaler is one key, never walked.
+// tasks.ScheduleConfig implements Marshaler alone.
+func encodesItself(typ reflect.Type) bool {
+	m, u := reflect.TypeFor[json.Marshaler](), reflect.TypeFor[json.Unmarshaler]()
+	return typ.Implements(m) || typ.Implements(u) || reflect.PointerTo(typ).Implements(m) || reflect.PointerTo(typ).Implements(u)
+}
+
 func walkType(t *testing.T, path string, typ reflect.Type, reload config.Reload, protect config.Protection, schema string, root bool, out *[]leaf) {
 	t.Helper()
 	switch {
-	case typ == reflect.TypeFor[secrets.Ref](), typ.Kind() == reflect.Struct && typ.Implements(reflect.TypeFor[json.Marshaler]()):
+	case typ == reflect.TypeFor[secrets.Ref](), typ.Kind() == reflect.Struct && encodesItself(typ):
 		*out = append(*out, leaf{path, typ, reload, protect, schema, false})
 	case typ.Kind() == reflect.Struct:
 		for f := range typ.Fields() {

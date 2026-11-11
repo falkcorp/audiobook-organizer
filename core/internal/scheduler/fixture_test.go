@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/fixture_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a0e3a4c-5d0b-4f61-9a43-2b8f3f1c7e21
 // last-edited: 2026-11-11
 
@@ -99,6 +99,12 @@ func (c *fakeConfig) set(key string, v tasks.ScheduleConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.schedules[key] = v
+}
+
+func (c *fakeConfig) dropWindow(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.windows, name)
 }
 
 func (c *fakeConfig) setWindow(name string, w WindowConfig) {
@@ -363,6 +369,11 @@ func runsOf(t *testing.T, st tasks.Stores, k tasks.Kind) []tasks.RunRecord {
 	}
 	slices.SortFunc(out, func(a, b tasks.RunRecord) int { return a.Created.Compare(b.Created) })
 	return out
+}
+
+// activeStates are the unfinished states finish closes.
+func activeStates() []tasks.RunState {
+	return []tasks.RunState{tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateRunning}
 }
 
 // finish completes every active run of k, so its next fire is not folded.

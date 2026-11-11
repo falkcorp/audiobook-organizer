@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/validate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f13c956a-820f-41e7-b966-672cd969eb3a
 // last-edited: 2026-11-11
 
@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/mediacore/internal/schedspec"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -75,7 +76,7 @@ func ValidateSchedules(defs []tasks.Definition, declared func(key string) (isSch
 			continue
 		}
 		users[key] = append(users[key], k)
-		owner, err := keyOwner(key)
+		owner, err := schedspec.KeyOwner(key)
 		if err != nil {
 			refuse("%v", err)
 			continue
@@ -114,43 +115,6 @@ func ValidateSchedules(defs []tasks.Definition, declared func(key string) (isSch
 		errs[i] = errors.New("tasks: " + p)
 	}
 	return errors.Join(errs...)
-}
-
-// keyOwner checks key's form (R2-7) and returns the owner its namespace
-// names: "core", or the module ID of modules.<id>.
-func keyOwner(key string) (string, error) {
-	segs := strings.Split(key, ".")
-	for i, seg := range segs {
-		if !configSegment(seg) {
-			return "", fmt.Errorf("schedule key %q: segment %d (%q) does not match [a-z][a-z0-9_]{0,47}", key, i+1, seg)
-		}
-	}
-	var owner string
-	var rest []string
-	switch {
-	case len(segs) == 4 && segs[0] == "core":
-		owner, rest = "core", segs[1:]
-	case len(segs) == 5 && segs[0] == "modules":
-		owner, rest = segs[1], segs[2:]
-	}
-	if rest == nil || rest[1] != "schedules" || rest[0] == "schedules" {
-		return "", fmt.Errorf("schedule key %q: want core.<subsystem>.schedules.<name> or modules.<id>.<subsystem>.schedules.<name>", key)
-	}
-	return owner, nil
-}
-
-// configSegment reports whether seg matches [a-z][a-z0-9_]{0,47}.
-func configSegment(seg string) bool {
-	if seg == "" || len(seg) > 48 || seg[0] < 'a' || seg[0] > 'z' {
-		return false
-	}
-	for i := 1; i < len(seg); i++ {
-		c := seg[i]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
-			return false
-		}
-	}
-	return true
 }
 
 func ownerName(owner string) string {

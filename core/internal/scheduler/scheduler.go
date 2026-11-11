@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/scheduler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e077a1c0-bf41-4e89-bbc0-6e1675ec5276
 // last-edited: 2026-11-11
 
@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -151,6 +152,11 @@ type Scheduler struct {
 	stop    chan struct{}
 	done    chan struct{}
 	stopped bool
+
+	// pollMu guards lastPoll: when this process last polled (or booted), the
+	// bound SkipMissed measures "came due while up" against.
+	pollMu   sync.Mutex
+	lastPoll time.Time
 }
 
 // batchOpener is NativeStores' run store's batch opener.
@@ -235,7 +241,11 @@ func cmpKind(a, b tasks.Kind) int {
 // called. It returns nil on either. Run may be called once.
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.mu.Lock()
-	if s.stop != nil || s.stopped {
+	switch {
+	case s.stopped:
+		s.mu.Unlock()
+		return errors.New("scheduler: Run after Stop")
+	case s.stop != nil:
 		s.mu.Unlock()
 		return errors.New("scheduler: Run called twice")
 	}
@@ -297,6 +307,9 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 // harness call it directly.
 func (s *Scheduler) Boot(ctx context.Context) {
 	now := s.opts.Now()
+	s.pollMu.Lock()
+	s.lastPoll = now
+	s.pollMu.Unlock()
 	for _, e := range s.entries {
 		if !e.sched.RunsOnStart() || s.held(e.kind) {
 			continue
@@ -314,10 +327,12 @@ func (s *Scheduler) Boot(ctx context.Context) {
 			if !had {
 				next = tasks.Clock{}
 			}
-			next.LastDue, next.LastFire = now, now
+			// LastFire and LastRun are stamped by commitFire, and only when
+			// the When gate lets the run through.
+			next.LastDue = now
 			next.GateClosedAt = time.Time{}
 			next.ScheduleHash = eff.hash
-			return decision{write: true, next: next, fire: true}, nil
+			return decision{write: true, next: next, fire: true, at: now}, nil
 		}, s.startFor(e, tasks.TriggerOnStart, ""), s.opts.Observer)
 	}
 }
@@ -327,6 +342,10 @@ func (s *Scheduler) Boot(ctx context.Context) {
 // logged and never stops the others; a held kind is skipped whole.
 func (s *Scheduler) Poll(ctx context.Context) {
 	now := s.opts.Now()
+	s.pollMu.Lock()
+	since := s.lastPoll
+	s.lastPoll = now
+	s.pollMu.Unlock()
 	for _, e := range s.entries {
 		if ctx.Err() != nil {
 			return
@@ -334,7 +353,7 @@ func (s *Scheduler) Poll(ctx context.Context) {
 		if s.held(e.kind) {
 			continue // 5T.3.11: a held kind's clock is not polled
 		}
-		s.pollEntry(ctx, e, now)
+		s.pollEntry(ctx, e, now, since)
 	}
 	for _, name := range s.windows {
 		if ctx.Err() != nil {
@@ -371,7 +390,7 @@ func (s *Scheduler) effective(e entry) (effective, error) {
 }
 
 // pollEntry is one due check of e.
-func (s *Scheduler) pollEntry(ctx context.Context, e entry, now time.Time) {
+func (s *Scheduler) pollEntry(ctx context.Context, e entry, now, since time.Time) {
 	eff, err := s.effective(e)
 	if err != nil {
 		s.scheduleError(e.kind, err)
@@ -380,7 +399,7 @@ func (s *Scheduler) pollEntry(ctx context.Context, e entry, now time.Time) {
 	if eff.window != "" {
 		return // a window member: the window runs it; its own clock is not polled
 	}
-	in := pollInput{now: now, poll: s.opts.Poll, loc: s.opts.Location, eff: eff, missed: e.sched.OnMissed()}
+	in := pollInput{now: now, since: since, poll: s.opts.Poll, loc: s.opts.Location, eff: eff, missed: e.sched.OnMissed()}
 	s.commitFire(ctx, e.kind, tasks.TriggerSchedule, func(prev tasks.Clock, had bool) (decision, error) {
 		return decide(prev, had, in), nil
 	}, s.startFor(e, tasks.TriggerSchedule, ""), s.opts.Observer)
@@ -391,44 +410,23 @@ type starter func(ctx context.Context, b *storage.Batch) (tasks.RunRef, bool, er
 
 // startFor is e's start: the schedule's mode (Live or Preview; Live for a
 // read-only kind that states neither) and params, the system actor of the
-// kind's module (StartIn stamps it), trigger tr. A start folds into an
-// active run of the same kind and mode (HEAD's EnqueueOp rule for scheduled
-// defs, registry.go: queued, waiting_deps or running; not a stopping run,
-// whose goroutine has not returned, which HEAD's dedupe also skips).
+// kind's module (StartIn stamps it), trigger tr. Folding is the executor's:
+// StartIn applies the kind's DedupePolicy (by default a queued or running run
+// of the kind and mode with identical params), and a start that folded comes
+// back RunRef.Existing. This package has no fold rule of its own, so a kind's
+// Key, Merge and AnyParams policies hold for a scheduled start as for any
+// other.
 func (s *Scheduler) startFor(e entry, tr tasks.Trigger, parent tasks.RunID) starter {
-	mode, req := tasks.ModeLive, tasks.ModeRequestLive
+	mode := tasks.ModeRequestLive
 	if e.sched.IsPreview() || (!e.sched.IsLive() && !e.readOnly) {
-		mode, req = tasks.ModePreview, tasks.ModeRequestPreview
+		mode = tasks.ModeRequestPreview
 	}
 	return func(ctx context.Context, b *storage.Batch) (tasks.RunRef, bool, error) {
-		ref, ok, err := s.activeRun(ctx, e.kind, mode)
-		if err != nil || ok {
-			return ref, ok, err
-		}
-		ref, err = s.opts.Starter.StartIn(ctx, b, e.kind, tasks.StartRequest{
-			Mode: req, Params: e.sched.RunParams(), Trigger: tr, Parent: parent,
+		ref, err := s.opts.Starter.StartIn(ctx, b, e.kind, tasks.StartRequest{
+			Mode: mode, Params: e.sched.RunParams(), Trigger: tr, Parent: parent,
 		})
-		return ref, false, err
+		return ref, ref.Existing, err
 	}
-}
-
-// activeStates are the states a scheduled start folds into.
-func activeStates() []tasks.RunState {
-	return []tasks.RunState{tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateRunning}
-}
-
-// activeRun finds an active run of kind in mode.
-func (s *Scheduler) activeRun(ctx context.Context, kind tasks.Kind, mode tasks.Mode) (tasks.RunRef, bool, error) {
-	q := tasks.RunQuery{Kinds: []tasks.Kind{kind}, States: activeStates(), Limit: 1000}
-	for r, err := range s.opts.Stores.Runs.List(ctx, q) {
-		if err != nil {
-			return tasks.RunRef{}, false, err
-		}
-		if r.Kind == kind && r.Mode == mode && r.PlanRef == "" {
-			return tasks.RunRef{ID: r.ID, Existing: true}, true, nil
-		}
-	}
-	return tasks.RunRef{}, false, nil
 }
 
 // errNoChange ends a fire's build when its decision writes nothing.
@@ -443,11 +441,13 @@ var errNoChange = errors.New("scheduler: no change")
 // writer sees the advanced clock and does not fire; ErrClockConflict at
 // staging is the same "another poll won", and is not an error.
 //
-// A start that fails for a reason other than a storage conflict (a refused
-// mode, permission or params) would abort the whole batch and leave the
-// clock where it was, so the kind would retry on every poll; the advance is
-// then committed alone and the failure counted (HEAD stamped its clock
-// before calling the trigger for the same reason).
+// A start the executor refuses (refused: a mode, permission or plan rule)
+// would abort the whole batch and leave the clock where it was, so the kind
+// would retry on every poll; the advance is then committed alone and the
+// failure counted (HEAD stamped its clock before calling the trigger for the
+// same reason). Any other start error (storage I/O in the fold check or in
+// StartIn) aborts the batch: the clock is not advanced and the next poll
+// fires.
 //
 // A clock read error skips the kind for this poll (metric schedule_errors),
 // never "due now".
@@ -485,9 +485,9 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 				} else if withStart {
 					d.next.LastFire = d.dueAt
 					if tr == tasks.TriggerOnStart {
-						d.next.LastFire = d.next.LastDue
+						d.next.LastFire = d.at
 					}
-					d.next.LastRun = d.next.LastDue
+					d.next.LastRun = d.at
 					res.d = d
 				}
 			}
@@ -499,7 +499,13 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 			}
 			ref, folded, err := start(ctx, b)
 			if err != nil {
-				return &startError{err: err}
+				if refused(err) {
+					return &startError{err: err}
+				}
+				// A storage error (the fold check's read, StartIn's own
+				// reads and staging): the whole batch aborts, the clock
+				// stays where it was, and the next poll fires.
+				return err
 			}
 			res.ref, res.folded, res.started = ref, folded, true
 			return nil
@@ -561,7 +567,28 @@ type clockReadError struct{ err error }
 func (e *clockReadError) Error() string { return "scheduler: read clock: " + e.err.Error() }
 func (e *clockReadError) Unwrap() error { return e.err }
 
-// startError: a fire's StartIn failed at staging.
+// refused reports whether a start error is the executor refusing the start
+// itself (an unknown or held kind, a permission, a mode, priority or plan
+// rule, a write outside the declared effects): retrying it at every poll would fail the
+// same way, so commitFire advances the clock alone. Every other error is
+// treated as transient and fires at the next poll. A definition's static
+// Params that fail to decode is not one of these sentinels: it is retried and
+// counted at every poll until the definition is fixed.
+func refused(err error) bool {
+	for _, target := range []error{
+		executor.ErrUnknownKind, executor.ErrHeld, executor.ErrNotPermitted,
+		executor.ErrPlanRequired, executor.ErrInvalidPriority, executor.ErrPlanInvalid, executor.ErrPlanTooOld,
+		executor.ErrApprovalRequired, executor.ErrPlanRejected, executor.ErrPlanDecided,
+		tasks.ErrModeUnset, tasks.ErrOutsideEffects,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// startError: the executor refused a fire's start (refused).
 type startError struct{ err error }
 
 func (e *startError) Error() string { return "scheduler: start: " + e.err.Error() }

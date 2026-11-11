@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_schedule_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 142497a5-74e7-4e83-b386-0ab3ddd41c0b
 // last-edited: 2026-11-11
 
@@ -8,9 +8,12 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +125,74 @@ func TestCoreSections_ScheduleKeysDeclared(t *testing.T) {
 	}
 	if len(windows) != 1 {
 		t.Errorf("core.tasks.windows default declares %d windows, want only nightly: %s", len(windows), ks.Effective)
+	}
+}
+
+// TestCoreSections_ScheduleValidation (name coined by F2-04, SHOULD-FIX 3 of
+// its T3 review): a schedule value that cannot run is refused when config
+// applies it, on every one of the 14 schedule keys, naming the key; a value
+// that can run is accepted. The check is tasks.ScheduleConfig.Validate called
+// from each owning section's Validate (core_sections_validate.go), so a key
+// of a group the sections forgot would show up here as an accepted bad value.
+func TestCoreSections_ScheduleValidation(t *testing.T) {
+	bad := map[string]string{
+		"two timings":      `{"enabled":true,"every":"1h","cron":"* * * * *"}`,
+		"unparsable cron":  `{"enabled":true,"cron":"bat signal"}`,
+		"bad daily_at":     `{"enabled":true,"daily_at":"3:00"}`,
+		"negative every":   `{"enabled":true,"every":"-1h"}`,
+		"enabled, nothing": `{"enabled":true}`,
+		"bad cron, off":    `{"enabled":false,"cron":"* * * *"}`,
+	}
+	good := map[string]string{
+		"every":    `{"enabled":true,"every":"2h"}`,
+		"daily_at": `{"enabled":true,"daily_at":"03:15"}`,
+		"cron":     `{"enabled":true,"cron":"*/15 1-4 * * 1-5"}`,
+		"window":   `{"enabled":true,"window":"nightly","order":2}`,
+		"off":      `{"enabled":false}`,
+	}
+	cb, _ := startedCfg(t, configIn(t))
+	for _, key := range slices.Sorted(maps.Keys(scheduleKeys())) {
+		for name, v := range bad {
+			err := applyOne(cb, interactiveAdmin(), config.Path(key), v)
+			if !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s: %s accepted or misreported: %v", key, name, err)
+			}
+		}
+		for name, v := range good {
+			if err := applyOne(cb, interactiveAdmin(), config.Path(key), v); err != nil {
+				t.Errorf("%s: %s refused: %v", key, name, err)
+			}
+		}
+	}
+}
+
+// TestValidateSchedules_WalksTheGroup: validateSchedules checks every
+// tasks.ScheduleConfig field of a group, names each failing key by its json
+// name, ignores other fields, and returns nil for a valid group.
+func TestValidateSchedules_WalksTheGroup(t *testing.T) {
+	type group struct {
+		Good  tasks.ScheduleConfig `json:"good"`
+		Bad   tasks.ScheduleConfig `json:"bad_one"`
+		Worse tasks.ScheduleConfig `json:"worse"`
+		Other int                  `json:"other"`
+	}
+	err := validateSchedules("core.gotham.schedules", group{
+		Good:  tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)},
+		Bad:   tasks.ScheduleConfig{Enabled: true, Cron: "x"},
+		Worse: tasks.ScheduleConfig{Enabled: true},
+	})
+	if _, ok := errors.AsType[*config.FieldError](err); !ok {
+		t.Fatalf("err = %v, want *config.FieldError", err)
+	}
+	for _, p := range []string{"core.gotham.schedules.bad_one", "core.gotham.schedules.worse"} {
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("err = %v, want it to name %s", err, p)
+		}
+	}
+	if strings.Contains(err.Error(), "schedules.good") {
+		t.Errorf("a valid key was reported: %v", err)
+	}
+	if err := validateSchedules("core.gotham.schedules", group{Good: scheduleEvery(time.Hour)}); err != nil {
+		t.Errorf("a valid group: %v", err)
 	}
 }

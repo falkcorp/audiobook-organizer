@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/schedule/schedule_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b511c270-bb41-4218-b39b-a0b0bec4a046
 // last-edited: 2026-11-11
 
@@ -58,7 +58,7 @@ func TestScheduleHarness_RecordsSequence(t *testing.T) {
 	got := schedule.Strings(schedule.Run(t, defs, cfg, steps))
 	want := []string{
 		"2026-01-01T12:00:00Z seed gotham.patrol last_due=2026-01-01T12:00:00Z",
-		"2026-01-01T12:00:00Z seed core.window.nightly last_due=2026-01-01T12:00:00Z",
+		"2026-01-01T12:00:00Z seed core.window.nightly last_due=2026-01-01T01:00:00Z", // the latest opening's start
 		"2026-01-01T18:00:00Z advance gotham.patrol last_due=2026-01-01T18:00:00Z",
 		"2026-01-01T18:00:00Z enqueue gotham.patrol trigger=schedule",
 		"2026-01-02T00:00:00Z advance gotham.patrol last_due=2026-01-02T00:00:00Z",
@@ -70,7 +70,7 @@ func TestScheduleHarness_RecordsSequence(t *testing.T) {
 		"2026-01-02T06:00:00Z enqueue gotham.patrol trigger=schedule",
 		"2026-01-03T01:05:00Z advance gotham.patrol last_due=2026-01-03T01:05:00Z",
 		"2026-01-03T01:05:00Z enqueue gotham.patrol trigger=schedule missed=2",
-		"2026-01-03T01:05:00Z advance core.window.nightly last_due=2026-01-03T01:05:00Z",
+		"2026-01-03T01:05:00Z advance core.window.nightly last_due=2026-01-03T01:00:00Z", // the opening's start, not the poll
 		"2026-01-03T01:05:00Z window core.window.nightly members=[gotham.batcave-sweep]",
 		"2026-01-03T01:05:00Z enqueue core.window.nightly trigger=window",
 	}
@@ -112,6 +112,65 @@ func TestScheduleHarness_RestartHeldImportEdit(t *testing.T) {
 		"2026-01-01T12:31:00Z enqueue gotham.patrol trigger=schedule",
 		"2026-01-01T12:40:00Z advance gotham.patrol last_due=2026-01-01T12:40:00Z",
 		"2026-01-01T12:40:00Z enqueue gotham.patrol trigger=schedule",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sequence:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestScheduleHarness_DisabledAtFirstSightWaitsOnePeriod: a kind first seen
+// while its schedule is off is not seeded (HEAD's pollV3Entry returns before
+// the claim while the gate is closed); the first poll that finds it enabled
+// seeds it, and it runs one period after that, not on that poll.
+func TestScheduleHarness_DisabledAtFirstSightWaitsOnePeriod(t *testing.T) {
+	const key = "modules.gotham.watch.schedules.patrol"
+	defs := []tasks.Definition{gothamTask("gotham.patrol", tasks.ScheduleFromConfig(key))}
+	cfg := schedule.Config{Schedules: map[string]tasks.ScheduleConfig{key: {Every: config.Duration(time.Hour)}}}
+	on := func(c *schedule.Config) {
+		c.Schedules[key] = tasks.ScheduleConfig{Enabled: true, Every: config.Duration(time.Hour)}
+	}
+	steps := []schedule.Step{
+		{At: at(1, 12, 0)},           // first sight, disabled: nothing recorded
+		{At: at(1, 14, 0), Edit: on}, // enabled: seeded here, does not fire
+		{At: at(1, 14, 59)},          // not yet
+		{At: at(1, 15, 0)},           // one period after the enable: fires
+	}
+	got := schedule.Strings(schedule.Run(t, defs, cfg, steps))
+	want := []string{
+		"2026-01-01T14:00:00Z seed gotham.patrol last_due=2026-01-01T14:00:00Z",
+		"2026-01-01T15:00:00Z advance gotham.patrol last_due=2026-01-01T15:00:00Z",
+		"2026-01-01T15:00:00Z enqueue gotham.patrol trigger=schedule",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sequence:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestScheduleHarness_WrapWindowEveryNight: a window that wraps midnight
+// fires at each opening, including the one after a restart inside the
+// previous opening.
+func TestScheduleHarness_WrapWindowEveryNight(t *testing.T) {
+	defs := []tasks.Definition{gothamTask("gotham.batcave-sweep", tasks.ScheduleFromConfig("modules.gotham.cave.schedules.sweep"))}
+	cfg := schedule.Config{
+		Schedules: map[string]tasks.ScheduleConfig{"modules.gotham.cave.schedules.sweep": {Enabled: true, Window: "nightly"}},
+		Windows:   map[string]schedule.Window{"nightly": {Start: 23, End: 4, Enabled: true}},
+	}
+	steps := []schedule.Step{
+		{At: at(1, 12, 0)},
+		{At: at(1, 23, 30)},
+		{At: at(2, 0, 30), Boot: true, Finish: []tasks.Kind{tasks.WindowNightly}}, // restart inside the opening
+		{At: at(2, 2, 0)},
+		{At: at(2, 23, 5)},
+	}
+	got := schedule.Strings(schedule.Run(t, defs, cfg, steps))
+	want := []string{
+		"2026-01-01T12:00:00Z seed core.window.nightly last_due=2025-12-31T23:00:00Z",
+		"2026-01-01T23:30:00Z advance core.window.nightly last_due=2026-01-01T23:00:00Z",
+		"2026-01-01T23:30:00Z window core.window.nightly members=[gotham.batcave-sweep]",
+		"2026-01-01T23:30:00Z enqueue core.window.nightly trigger=window",
+		"2026-01-02T23:05:00Z advance core.window.nightly last_due=2026-01-02T23:00:00Z",
+		"2026-01-02T23:05:00Z window core.window.nightly members=[gotham.batcave-sweep]",
+		"2026-01-02T23:05:00Z enqueue core.window.nightly trigger=window",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sequence:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

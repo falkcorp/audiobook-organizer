@@ -1,11 +1,15 @@
 // file: core/tasks/window.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cbdfdee8-39cf-4632-b2a0-5d3470f108c2
 // last-edited: 2026-11-11
 
 package tasks
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/falkcorp/mediacore/internal/schedspec"
+)
 
 // The maintenance windows' one owner (05-tasks 5T.8.2, T4 table row
 // maintenance.window: "core/tasks, the one owner: declared at F2 with the
@@ -29,7 +33,7 @@ const windowKindPrefix = "core.window."
 // is not one config segment ([a-z][a-z0-9_]{0,47}) has no window kind, and
 // the result fails ParseKind.
 func WindowKind(name string) Kind {
-	if !configSegment(name) {
+	if !schedspec.Segment(name) {
 		return ""
 	}
 	// Kind segments allow '-' but not '_': a window name maps to a kind
@@ -46,7 +50,7 @@ func WindowName(k Kind) (name string, ok bool) {
 		return "", false
 	}
 	name = strings.ReplaceAll(rest, "-", "_")
-	if !configSegment(name) {
+	if !schedspec.Segment(name) {
 		return "", false
 	}
 	return name, true

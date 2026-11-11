@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.14
+// version: 1.0.15
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-11
 
@@ -35,13 +35,18 @@ const corePath = "github.com/falkcorp/mediacore"
 // internal/openapi entry, R1-20's internal/pebble entry, R1-16's
 // internal/sdnotify entry, R1-21's internal/bootseam entry, F4-01's
 // internal/rbacstore entry, F3-01's internal/configstore entry, F4-09's
-// internal/authz entry and F4-02's internal/authstore entry, R4 packages the
+// internal/authz entry, F4-02's internal/authstore entry and F2-04's
+// internal/schedspec entry, R4 packages the
 // table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
 	"storage/keys": 0, "storage/codec": 0, "storage/restorejournal": 0,
 	"internal/keyedmutex": 0, "internal/jsonschemax": 0,
+	// internal/schedspec is F2-04's schedule grammar (cron, daily_at, the
+	// schedule key form), the standard library only, shared by tasks (config
+	// time) and internal/scheduler (poll time).
+	"internal/schedspec": 0,
 	// internal/sdnotify (R1-16) is the systemd notify protocol over the
 	// standard library; its one core import is lifecycle's constants.
 	"internal/sdnotify": 0,

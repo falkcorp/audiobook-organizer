@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/scheduler_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c0f39f5-0a37-4c1b-a1f0-7d6c5b7b8e52
 // last-edited: 2026-11-11
 
@@ -8,13 +8,16 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -168,7 +171,10 @@ func TestSchedule_NoBootStampede(t *testing.T) {
 
 // TestSchedule_CoalesceMissed (05-tasks 5T.9): Coalesce fires once for any
 // number of missed instants and counts them (schedule_missed); SkipMissed
-// does not fire for a late instant and waits for the next on-time one.
+// does not fire for an instant that came due while the process was down (a
+// restart after it) and waits for the next on-time one, but does fire for an
+// instant that came due while the process was up and its poll was merely
+// delayed.
 func TestSchedule_CoalesceMissed(t *testing.T) {
 	defs := []tasks.Definition{
 		gotham(patrol, tasks.ScheduleFromConfig(patrolKey)),
@@ -180,7 +186,8 @@ func TestSchedule_CoalesceMissed(t *testing.T) {
 	f.boot(day(1, 0, 0))
 	f.poll(day(1, 0, 0))
 	f.rec.take()
-	f.poll(day(1, 5, 30)) // instants 01..05 passed: four missed, one fired
+	f.boot(day(1, 5, 30)) // down since 00:00: instants 01..05 passed: four missed, one fired
+	f.poll(day(1, 5, 30))
 	f.expect(
 		"01-01T05:30 advance gotham.bat-signal last_due=01-01T05:30",
 		"01-01T05:30 advance gotham.patrol last_due=01-01T05:30",
@@ -207,6 +214,21 @@ func TestSchedule_CoalesceMissed(t *testing.T) {
 		"01-01T06:30 enqueue gotham.bat-signal schedule",
 		"01-01T06:30 advance gotham.patrol last_due=01-01T06:30",
 		"01-01T06:30 enqueue gotham.patrol schedule",
+	)
+
+	// A poll that was merely delayed (the process stayed up) is not
+	// downtime: 07:30, 08:30 and 09:30 came due while it was up, so the
+	// skipping kind fires for 09:30 although that is far older than one poll.
+	f.finish(patrol, tasks.StateSucceeded)
+	f.finish(signal, tasks.StateSucceeded)
+	f.poll(day(1, 7, 0))
+	f.rec.take()
+	f.poll(day(1, 9, 45))
+	f.expect(
+		"01-01T09:45 advance gotham.bat-signal last_due=01-01T09:45",
+		"01-01T09:45 enqueue gotham.bat-signal schedule missed=2",
+		"01-01T09:45 advance gotham.patrol last_due=01-01T09:45",
+		"01-01T09:45 enqueue gotham.patrol schedule missed=2",
 	)
 }
 
@@ -572,11 +594,28 @@ func (failingClocks) Get(context.Context, tasks.Kind) (tasks.Clock, bool, error)
 	return tasks.Clock{}, false, errors.New("the batcomputer is offline")
 }
 
-// refusingStarter refuses every StartIn.
-type refusingStarter struct{ tasks.Stager }
+// refusingStarter refuses every StartIn with err.
+type refusingStarter struct {
+	tasks.Stager
+	err error
+}
 
-func (refusingStarter) StartIn(context.Context, *storage.Batch, tasks.Kind, tasks.StartRequest) (tasks.RunRef, error) {
-	return tasks.RunRef{}, errors.New("riddler: params refused")
+func (r refusingStarter) StartIn(context.Context, *storage.Batch, tasks.Kind, tasks.StartRequest) (tasks.RunRef, error) {
+	return tasks.RunRef{}, r.err
+}
+
+// flakyStarter fails StartIn with err until ok is set, then passes through.
+type flakyStarter struct {
+	tasks.Stager
+	err error
+	ok  *atomic.Bool
+}
+
+func (f flakyStarter) StartIn(ctx context.Context, b *storage.Batch, k tasks.Kind, req tasks.StartRequest) (tasks.RunRef, error) {
+	if !f.ok.Load() {
+		return tasks.RunRef{}, f.err
+	}
+	return f.Stager.StartIn(ctx, b, k, req)
 }
 
 // TestSchedule_ClockReadErrorSkips: a clock read error skips the kind for
@@ -599,13 +638,15 @@ func TestSchedule_ClockReadErrorSkips(t *testing.T) {
 	}
 }
 
-// TestSchedule_StartFailureAdvancesAlone: a start refused for a reason other
-// than a storage conflict commits the clock advance alone and counts the
-// error, so the kind does not retry on every poll.
+// TestSchedule_StartFailureAdvancesAlone: a start the executor refuses (a
+// permission, mode, priority or plan rule) commits the clock advance alone
+// and counts the error, so the kind does not retry on every poll.
 func TestSchedule_StartFailureAdvancesAlone(t *testing.T) {
 	f := newFixture(t, []tasks.Definition{gotham(patrol, tasks.ScheduleFromConfig(patrolKey))},
 		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{patrolKey: every(time.Hour)}})
-	f.wrap = func(o *Options) { o.Starter = refusingStarter{o.Starter} }
+	f.wrap = func(o *Options) {
+		o.Starter = refusingStarter{Stager: o.Starter, err: fmt.Errorf("%w: riddler", executor.ErrNotPermitted)}
+	}
 	f.boot(day(1, 0, 0))
 	f.poll(day(1, 0, 0))
 	f.poll(day(1, 1, 0))
@@ -623,6 +664,135 @@ func TestSchedule_StartFailureAdvancesAlone(t *testing.T) {
 	}
 	if len(f.rec.lags[patrol]) != 0 {
 		t.Fatal("a refused start recorded schedule_lag")
+	}
+}
+
+// TestSchedule_RefusalClassification: every refusal the executor can give a
+// scheduled start advances the clock alone; the tasks-level mode and effects
+// sentinels do too.
+func TestSchedule_RefusalClassification(t *testing.T) {
+	for _, refusal := range []error{
+		executor.ErrUnknownKind, executor.ErrHeld, executor.ErrNotPermitted, executor.ErrPlanRequired,
+		executor.ErrInvalidPriority, executor.ErrApprovalRequired, tasks.ErrModeUnset, tasks.ErrOutsideEffects,
+	} {
+		if !refused(fmt.Errorf("start: %w", refusal)) {
+			t.Errorf("%v is not classified as a refusal", refusal)
+		}
+	}
+	for _, transient := range []error{
+		errors.New("disk: input/output error"), storage.ErrConflict, executor.ErrShuttingDown,
+		context.DeadlineExceeded,
+	} {
+		if refused(transient) {
+			t.Errorf("%v is classified as a refusal; it must retry at the next poll", transient)
+		}
+	}
+}
+
+// TestSchedule_StorageErrorKeepsTheFire: a start that fails for a storage
+// reason (the executor's fold read or StartIn's own I/O) aborts the whole
+// batch, so the clock stays where it was and the next poll fires; only a
+// refusal advances the clock alone.
+func TestSchedule_StorageErrorKeepsTheFire(t *testing.T) {
+	f := newFixture(t, []tasks.Definition{gotham(patrol, tasks.ScheduleFromConfig(patrolKey))},
+		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{patrolKey: every(time.Hour)}})
+	var ok atomic.Bool
+	f.wrap = func(o *Options) {
+		o.Starter = flakyStarter{Stager: o.Starter, err: errors.New("pebble: input/output error"), ok: &ok}
+	}
+	f.boot(day(1, 0, 0))
+	f.poll(day(1, 0, 0))
+	f.rec.take()
+	f.poll(day(1, 1, 0)) // due; the start's storage read fails
+	f.expect()
+	if n := f.rec.errCount(patrol); n != 1 {
+		t.Fatalf("schedule_errors = %d, want 1", n)
+	}
+	if c, _ := f.clockOf(patrol); !c.LastDue.Equal(day(1, 0, 0)) || !c.LastFire.IsZero() {
+		t.Fatalf("a storage error advanced the clock: %+v", c)
+	}
+	if rs := runsOf(t, f.st, patrol); len(rs) != 0 {
+		t.Fatalf("%d runs after a failed start", len(rs))
+	}
+	ok.Store(true)
+	f.poll(day(1, 1, 1)) // the storage recovered: the same instant fires
+	f.expect(
+		"01-01T01:01 advance gotham.patrol last_due=01-01T01:01",
+		"01-01T01:01 enqueue gotham.patrol schedule",
+	)
+	if rs := runsOf(t, f.st, patrol); len(rs) != 1 {
+		t.Fatalf("%d runs after the recovery, want 1", len(rs))
+	}
+}
+
+// TestSchedule_FoldIsTheExecutors: a scheduled start folds into an unfinished
+// run of the kind through the executor's Dedupe rule (identical params), not a
+// rule of the scheduler's own: a manual run with other params does not
+// swallow the scheduled fire.
+func TestSchedule_FoldIsTheExecutors(t *testing.T) {
+	f := newFixture(t, []tasks.Definition{gotham(patrol, tasks.ScheduleFromConfig(patrolKey))},
+		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{patrolKey: every(time.Hour)}})
+	f.boot(day(1, 0, 0))
+	f.poll(day(1, 0, 0))
+	f.rec.take()
+	f.poll(day(1, 1, 0))
+	f.poll(day(2, 1, 0)) // the first run is still queued: the executor folds it
+	f.expect(
+		"01-01T01:00 advance gotham.patrol last_due=01-01T01:00",
+		"01-01T01:00 enqueue gotham.patrol schedule",
+		"01-02T01:00 advance gotham.patrol last_due=01-02T01:00",
+		"01-02T01:00 fold gotham.patrol schedule missed=23",
+	)
+	if rs := runsOf(t, f.st, patrol); len(rs) != 1 {
+		t.Fatalf("%d runs, want 1 (a fold)", len(rs))
+	}
+
+	// A queued manual run with other params is not a fold target (the zero
+	// DedupePolicy needs identical params), so the scheduled fire adds its
+	// own run beside it.
+	f.finish(patrol, tasks.StateSucceeded)
+	if _, err := f.x.Start(context.Background(), patrol, tasks.StartRequest{
+		Mode: tasks.ModeRequestLive, Params: []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.poll(day(2, 2, 0))
+	f.expect(
+		"01-02T02:00 advance gotham.patrol last_due=01-02T02:00",
+		"01-02T02:00 enqueue gotham.patrol schedule",
+	)
+	if rs := runsOf(t, f.st, patrol); len(rs) != 3 {
+		t.Fatalf("%d runs, want 3 (the finished one, the manual one, the scheduled one)", len(rs))
+	}
+}
+
+// TestSchedule_BootGatedFireStampsNoRun: an OnStart fire whose When gate is
+// closed advances LastDue only; LastFire and LastRun record a run that
+// started, so they stay unset.
+func TestSchedule_BootGatedFireStampsNoRun(t *testing.T) {
+	open := false
+	f := newFixture(t, []tasks.Definition{
+		gotham(patrol, tasks.ScheduleFromConfig(patrolKey).OnStart().When(func() bool { return open })),
+	}, fixtureOpts{schedules: map[string]tasks.ScheduleConfig{patrolKey: every(time.Hour)}})
+	f.boot(day(1, 0, 0))
+	f.expect(
+		"01-01T00:00 seed gotham.patrol last_due=01-01T00:00",
+		"01-01T00:00 gated gotham.patrol on_start",
+	)
+	if c, _ := f.clockOf(patrol); !c.LastDue.Equal(day(1, 0, 0)) || !c.LastFire.IsZero() || !c.LastRun.IsZero() {
+		t.Fatalf("a gated boot fire stamped a run: %+v", c)
+	}
+	if rs := runsOf(t, f.st, patrol); len(rs) != 0 {
+		t.Fatalf("a gated boot fire started %d runs", len(rs))
+	}
+	open = true
+	f.boot(day(1, 0, 30))
+	f.expect(
+		"01-01T00:30 advance gotham.patrol last_due=01-01T00:30",
+		"01-01T00:30 enqueue gotham.patrol on_start",
+	)
+	if c, _ := f.clockOf(patrol); !c.LastFire.Equal(day(1, 0, 30)) || !c.LastRun.Equal(day(1, 0, 30)) {
+		t.Fatalf("an admitted boot fire did not stamp its run: %+v", c)
 	}
 }
 
@@ -728,8 +898,8 @@ func TestRunStop(t *testing.T) {
 	if rs := runsOf(t, f.st, patrol); len(rs) != 1 {
 		t.Fatalf("%d runs, want 1", len(rs))
 	}
-	if err := s.Run(context.Background()); err == nil {
-		t.Fatal("Run after Stop accepted")
+	if err := s.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "Run after Stop") {
+		t.Fatalf("Run after Stop = %v, want the Run after Stop refusal (not \"called twice\")", err)
 	}
 	if err := s.Stop(context.Background()); err != nil {
 		t.Fatal("second Stop:", err)

@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/clock.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a3d82d6e-1ead-4517-9f64-a8ba9338e744
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/schedspec"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -41,16 +42,18 @@ import (
 // maxCount caps the instants counted for one fire (HEAD's countDue cap).
 const maxCount = 1000
 
-// timing is one effective schedule: when it comes due next.
+// timing is one effective schedule: when it comes due next. schedspec.Cron
+// (Cron and DailyAt) and interval implement it.
 type timing interface {
-	// next is the first due instant strictly after `after`.
-	next(after time.Time, loc *time.Location) (time.Time, bool)
+	// Next is the first due instant strictly after `after`.
+	Next(after time.Time, loc *time.Location) (time.Time, bool)
 }
 
 // interval is ScheduleConfig.Every, and the relay's fixed tasks.Every.
 type interval time.Duration
 
-func (d interval) next(after time.Time, _ *time.Location) (time.Time, bool) {
+// Next is after plus the interval.
+func (d interval) Next(after time.Time, _ *time.Location) (time.Time, bool) {
 	return after.Add(time.Duration(d)), true
 }
 
@@ -66,22 +69,17 @@ type effective struct {
 // schedule error and the poll skips the kind.
 var errConfig = errors.New("scheduler: invalid schedule config")
 
-// effectiveOf checks c against 5T.3.8's value rules (exactly one of Every,
-// DailyAt, Cron and Window when enabled; Every >= core.tasks.schedule_poll)
-// and returns its timing. A disabled value is not checked: "off" needs no
-// timing.
+// effectiveOf checks an enabled c (tasks.ScheduleConfig.Validate, the rules
+// config already enforced at load, re-checked because the scheduler must
+// never run a value it cannot parse; and Every >= core.tasks.schedule_poll,
+// the one rule that reads another key) and returns its timing. A disabled
+// value is effective{} unchecked: "off" needs no timing.
 func effectiveOf(c tasks.ScheduleConfig, poll time.Duration, loc *time.Location) (effective, error) {
 	if !c.Enabled {
 		return effective{}, nil
 	}
-	set := 0
-	for _, on := range []bool{c.Every != 0, c.DailyAt != "", c.Cron != "", c.Window != ""} {
-		if on {
-			set++
-		}
-	}
-	if set != 1 {
-		return effective{}, fmt.Errorf("%w: exactly one of every, daily_at, cron and window must be set when enabled (got %d)", errConfig, set)
+	if err := c.Validate(); err != nil {
+		return effective{}, fmt.Errorf("%w: %v", errConfig, err)
 	}
 	zone := loc.String()
 	switch {
@@ -92,21 +90,18 @@ func effectiveOf(c tasks.ScheduleConfig, poll time.Duration, loc *time.Location)
 		}
 		return effective{enabled: true, t: interval(d), hash: hashOf("every", d.String())}, nil
 	case c.DailyAt != "":
-		d, err := parseDailyAt(c.DailyAt)
+		d, err := schedspec.ParseDailyAt(c.DailyAt)
 		if err != nil {
 			return effective{}, fmt.Errorf("%w: %v", errConfig, err)
 		}
 		return effective{enabled: true, t: d, hash: hashOf("daily_at", c.DailyAt, zone)}, nil
 	case c.Cron != "":
-		s, err := parseCron(c.Cron)
+		cr, err := schedspec.ParseCron(c.Cron)
 		if err != nil {
 			return effective{}, fmt.Errorf("%w: %v", errConfig, err)
 		}
-		return effective{enabled: true, t: s, hash: hashOf("cron", c.Cron, zone)}, nil
+		return effective{enabled: true, t: cr, hash: hashOf("cron", c.Cron, zone)}, nil
 	default:
-		if tasks.WindowKind(c.Window) == "" {
-			return effective{}, fmt.Errorf("%w: window %q is not a config segment", errConfig, c.Window)
-		}
 		return effective{enabled: true, window: c.Window, hash: hashOf("window", c.Window)}, nil
 	}
 }
@@ -123,8 +118,13 @@ func hashOf(parts ...string) string {
 
 // pollInput is what one due check decides from, besides the stored clock.
 type pollInput struct {
-	now    time.Time
-	poll   time.Duration // core.tasks.schedule_poll: the freshness bound of SkipMissed
+	now time.Time
+	// since is when this process last polled, or booted when it has not
+	// polled yet: a due instant at or after it came due while the process was
+	// up. Zero when Poll runs on a scheduler that never booted; SkipMissed then
+	// falls back to one poll of freshness.
+	since  time.Time
+	poll   time.Duration // core.tasks.schedule_poll
 	loc    *time.Location
 	eff    effective
 	missed tasks.MissedPolicy
@@ -136,30 +136,43 @@ type decision struct {
 	next   tasks.Clock //
 	fire   bool        // a due instant fires (subject to the When gate)
 	dueAt  time.Time   // the instant that fires: lag is measured from it
+	at     time.Time   // the poll that fires: LastRun when a run starts or folds
 	missed int         // instants this check counts as missed
 }
 
 // decide is one due check of a kind with an interval, DailyAt, Cron or fixed
 // timing, from the clock the poll read (had false: no clock).
 //
-//   - First sight seeds LastDue = now and does not fire (no boot stampede).
-//   - Disabled: the first poll that sees it stamps GateClosedAt; nothing fires.
+//   - First sight of an enabled kind seeds LastDue = now and does not fire (no
+//     boot stampede). First sight of a disabled kind writes nothing, so the
+//     kind is seeded by the first poll that finds it enabled and runs one
+//     period after that, as HEAD does (v3_schedule.go pollV3Entry returns
+//     before the claim while the gate is closed; interval_clock.go
+//     claimIntervalRun seeds on the first observation and declines).
+//   - Disabled with a clock: the first poll that sees it stamps GateClosedAt;
+//     nothing fires.
 //   - Not yet due: nothing is written (the re-open edge excepted, which clears
 //     GateClosedAt).
 //   - Due: LastDue = now, always. Coalesce fires once for any number of due
-//     instants since LastDue and counts the others as missed; SkipMissed
-//     fires only when the latest instant is no older than one poll (the
-//     process was up for it) and otherwise counts them all and waits for the
-//     next. On the re-open edge nothing counts as missed: the instants passed
-//     while the key was disabled.
+//     instants since LastDue and counts the others as missed. SkipMissed
+//     fires only when the latest instant came due while this process was up
+//     (at or after its previous poll, or its boot), and otherwise counts them
+//     all and waits for the next: a slow or delayed poll is not downtime.
+//   - On the re-open edge the kind's Missed policy applies as for any other
+//     gap: Coalesce fires once, due at the edge itself (the poll that found it
+//     enabled, so its lag is measured from there and not from instants that
+//     passed while the key was off), and SkipMissed fires only for an instant
+//     that is fresh. Nothing counts as missed: those instants passed while the
+//     key was disabled. Nothing counts as missed either when
+//     the schedule changed since the clock was written (a non-empty hash that
+//     differs): the instants were the old schedule's.
 func decide(prev tasks.Clock, had bool, in pollInput) decision {
 	now := in.now
 	if !had {
-		seed := tasks.Clock{LastDue: now, ScheduleHash: in.eff.hash}
 		if !in.eff.enabled {
-			seed.GateClosedAt = now
+			return decision{}
 		}
-		return decision{write: true, next: seed}
+		return decision{write: true, next: tasks.Clock{LastDue: now, ScheduleHash: in.eff.hash}}
 	}
 	if !in.eff.enabled {
 		if !prev.GateClosedAt.IsZero() {
@@ -170,7 +183,7 @@ func decide(prev tasks.Clock, had bool, in pollInput) decision {
 		return decision{write: true, next: next}
 	}
 	reopen := !prev.GateClosedAt.IsZero()
-	first, ok := in.eff.t.next(prev.LastDue, in.loc)
+	first, ok := in.eff.t.Next(prev.LastDue, in.loc)
 	if !ok || now.Before(first) {
 		if !reopen {
 			return decision{}
@@ -181,13 +194,17 @@ func decide(prev tasks.Clock, had bool, in pollInput) decision {
 		return decision{write: true, next: next}
 	}
 	n, latest := countDue(in.eff.t, first, now, in.loc)
-	d := decision{write: true, next: prev}
+	d := decision{write: true, next: prev, at: now}
 	d.next.LastDue = now
 	d.next.GateClosedAt = time.Time{}
 	d.next.ScheduleHash = in.eff.hash
-	switch in.missed {
-	case tasks.SkipMissed:
-		d.fire = now.Sub(latest) <= in.poll
+	switch {
+	case in.missed == tasks.SkipMissed:
+		if in.since.IsZero() {
+			d.fire = now.Sub(latest) <= in.poll
+		} else {
+			d.fire = !latest.Before(in.since)
+		}
 		d.dueAt = latest
 		d.missed = n
 		if d.fire {
@@ -196,9 +213,12 @@ func decide(prev tasks.Clock, had bool, in pollInput) decision {
 	default: // Coalesce
 		d.fire = true
 		d.dueAt = first
+		if reopen {
+			d.dueAt = now // lag is measured from the open edge, not from instants that passed while off
+		}
 		d.missed = n - 1
 	}
-	if reopen {
+	if reopen || (prev.ScheduleHash != "" && prev.ScheduleHash != in.eff.hash) {
 		d.missed = 0
 	}
 	d.next.Missed += d.missed
@@ -216,7 +236,7 @@ func countDue(t timing, first, now time.Time, loc *time.Location) (n int, latest
 	}
 	n, latest = 1, first
 	for n < maxCount {
-		nt, more := t.next(latest, loc)
+		nt, more := t.Next(latest, loc)
 		if !more || nt.After(now) {
 			break
 		}
