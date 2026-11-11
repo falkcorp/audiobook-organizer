@@ -1,5 +1,5 @@
 // file: core/auth/password/password.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-11-10
 
@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -76,19 +76,22 @@ type Options struct {
 	// GOMAXPROCS (HEAD's sizing: it follows a container's CPU quota, which
 	// NumCPU does not, and never exceeds NumCPU, 05-authn §4.5).
 	Permits int
-	// Time and MemoryKiB lower the cost Hash writes, for tests only: a hash
-	// written at a lowered cost verifies exactly as before, because
-	// verification reads the parameters stored in the hash. Zero means the
-	// production value.
+	// Time and MemoryKiB lower the cost Hash writes, for test binaries only
+	// (New panics on them anywhere else, and archtest.NoLoweredHashCost
+	// refuses them in a non-test file): a hash written at a lowered cost
+	// verifies exactly as before, because verification reads the parameters
+	// stored in the hash. Zero means the production value.
 	Time      uint32
 	MemoryKiB uint32
 	// Compute replaces argon2.IDKey (the concurrency test observes how many
-	// derivations overlap). Nil is argon2.IDKey.
+	// derivations overlap), for test binaries only like Time and MemoryKiB.
+	// Nil is argon2.IDKey.
 	Compute func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte
 }
 
 // Hasher hashes and verifies passwords under one bounded semaphore. Safe for
-// concurrent use; build one per process.
+// concurrent use; build one per process, with New (the zero Hasher is not
+// usable).
 type Hasher struct {
 	sem     chan struct{}
 	time    uint32
@@ -97,13 +100,23 @@ type Hasher struct {
 
 	derivations, cost atomic.Uint64
 
-	dummyOnce sync.Once
-	dummy     string
-	dummyOK   atomic.Bool
+	// dummy is the hash a login with no usable credential verifies against
+	// (newDummy). It is set by New and never changes.
+	dummy string
 }
 
-// New returns a Hasher.
-func New(o Options) *Hasher {
+// New returns a Hasher. It panics when o sets Time, MemoryKiB or Compute
+// outside a test binary (testing.Testing is false there), so an Options
+// literal that reached a production binary, from any file the static guard
+// could miss, still cannot lower a real password's cost.
+func New(o Options) *Hasher { return newHasher(o, testing.Testing) }
+
+// newHasher is New with the test-binary probe passed in, so a test can stand
+// in for a production binary without a package-level variable.
+func newHasher(o Options, isTestBinary func() bool) *Hasher {
+	if (o.Time != 0 || o.MemoryKiB != 0 || o.Compute != nil) && !isTestBinary() {
+		panic("password: Options.Time, MemoryKiB and Compute lower the hash cost; they are for test binaries only")
+	}
 	permits := o.Permits
 	if permits <= 0 {
 		permits = max(1, runtime.GOMAXPROCS(0))
@@ -118,6 +131,7 @@ func New(o Options) *Hasher {
 	if h.compute == nil {
 		h.compute = argon2.IDKey
 	}
+	h.dummy = newDummy(h.time, h.memory)
 	return h
 }
 
@@ -189,12 +203,16 @@ func (h *Hasher) HashWithin(ctx context.Context, wait time.Duration, plain strin
 	}
 	key := h.derive([]byte(plain), salt, h.time, h.memory, argonThreads, argonKeyLen)
 	h.release()
-	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argonVersion, h.memory, h.time, argonThreads,
+	return AlgoArgon2id, encodeArgon2id(h.time, h.memory, salt, key), nil
+}
+
+// encodeArgon2id is the PHC string Hash writes.
+func encodeArgon2id(time, memory uint32, salt, key []byte) string {
+	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argonVersion, memory, time, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	)
-	return AlgoArgon2id, encoded, nil
 }
 
 // AlgoOf derives the algorithm of a stored hash from its format: a PHC
@@ -284,28 +302,22 @@ func (h *Hasher) verifyArgon2id(ctx context.Context, wait time.Duration, encoded
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
-// dummyHash is a fixed argon2id hash of a random secret nobody holds, built
-// once at this Hasher's cost. A login for a name with no usable password
-// verifies against it and discards the answer, so that case costs what a
-// wrong password for a real account costs (equal timing, §3.2).
-func (h *Hasher) dummyHash() string {
-	h.dummyOnce.Do(func() {
-		secret := make([]byte, 32)
-		_, _ = rand.Read(secret) // crypto/rand.Read never fails (Go 1.24+)
-		if _, d, err := h.Hash(base64.RawStdEncoding.EncodeToString(secret)); err == nil {
-			h.dummy = d
-			h.dummyOK.Store(true)
-		}
-	})
-	return h.dummy
+// newDummy returns the hash a login for a name with no usable password
+// verifies against, discarding the answer, so that case costs what a wrong
+// password for a real account costs (equal timing, 05-authn §3.2). It carries
+// this Hasher's write cost, a random salt and a random key, so verifying
+// against it runs one full derivation at that cost, exactly as a wrong
+// password does, and no input matches it (the key is 256 random bits that no
+// derivation produced). Building it derives nothing, so it is made in New:
+// there is no first login that pays for it, nothing to warm, and no build
+// that could wait for a permit outside a bounded call's wait (§6).
+func newDummy(time, memory uint32) string {
+	salt := make([]byte, argonSaltLen)
+	key := make([]byte, argonKeyLen)
+	_, _ = rand.Read(salt) // crypto/rand.Read never fails (Go 1.24+)
+	_, _ = rand.Read(key)
+	return encodeArgon2id(time, memory, salt, key)
 }
-
-// Warm builds the dummy hash now, so the first login for an unknown name
-// does not pay for building it as well. Idempotent.
-func (h *Hasher) Warm() { _ = h.dummyHash() }
-
-// Warmed reports whether the dummy hash has been built.
-func (h *Hasher) Warmed() bool { return h.dummyOK.Load() }
 
 // SpendVerification does one verification's work against the dummy hash and
 // discards the result.
@@ -314,11 +326,8 @@ func (h *Hasher) SpendVerification(plain string) {
 }
 
 func (h *Hasher) spendWithin(ctx context.Context, wait time.Duration, plain string) (bool, error) {
-	if d := h.dummyHash(); d != "" {
-		_, err := h.verifyArgon2id(ctx, wait, d, plain)
-		return false, err
-	}
-	return false, nil
+	_, err := h.verifyArgon2id(ctx, wait, h.dummy, plain)
+	return false, err
 }
 
 // HasCredential reports whether a stored (algo, hash) pair is one Verify does

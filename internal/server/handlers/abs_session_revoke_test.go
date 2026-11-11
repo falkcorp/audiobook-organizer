@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 

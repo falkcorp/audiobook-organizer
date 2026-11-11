@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.

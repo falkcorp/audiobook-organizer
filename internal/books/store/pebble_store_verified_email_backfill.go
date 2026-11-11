@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_verified_email_backfill.go
-// version: 2.9.2
+// version: 2.9.3
 // guid: b03036d5-834d-4848-93e7-d72c52242753
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 

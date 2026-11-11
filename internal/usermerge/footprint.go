@@ -1,7 +1,7 @@
 // file: internal/usermerge/footprint.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a7c3e91-b284-4d06-9f1a-e8d62b05c473
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package usermerge
 

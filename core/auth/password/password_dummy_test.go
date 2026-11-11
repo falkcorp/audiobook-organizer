@@ -1,106 +1,100 @@
-// file: internal/server/absauth/password_dummy_test.go
-// version: 1.0.0
+// file: core/auth/password/password_dummy_test.go
+// version: 2.1.0
 // guid: 5cd17e42-c363-4a36-b03d-c2556ce8cef7
-// last-edited: 2026-10-22
+// last-edited: 2026-11-10
 
 package password
 
 import (
-	"sync/atomic"
+	"fmt"
+	"strings"
 	"testing"
 )
 
-// countArgon swaps argonCompute for a counting wrapper around the real one.
-func countArgon(t *testing.T) *atomic.Int32 {
-	t.Helper()
-	orig := argonCompute
-	var calls atomic.Int32
-	argonCompute = func(password, salt []byte, time_, memory uint32, threads uint8, keyLen uint32) []byte {
-		calls.Add(1)
-		return orig(password, salt, time_, memory, threads, keyLen)
-	}
-	t.Cleanup(func() { argonCompute = orig })
-	return &calls
-}
-
-// S3: a login for a name with no usable password credential spends exactly one
-// argon2id derivation, the same as a wrong password for a real argon2id account,
-// so response time does not tell the two apart.
-func TestVerifyLoginPassword_EveryNonSuccessSpendsOneDerivation(t *testing.T) {
-	_, real, err := HashPassword("correct horse")
+// S3 (§3.2 equal timing): a login for a name with no usable password
+// credential spends exactly one argon2id derivation of the same cost as a
+// wrong password for a real account, so response time does not tell the two
+// apart.
+func TestVerifyLogin_EveryNonSuccessSpendsOneDerivation(t *testing.T) {
+	h := New(Options{Time: 1, MemoryKiB: 16})
+	_, real, err := h.Hash("correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}
-	WarmLoginDummy() // built before counting, as the handlers' constructors do
-	calls := countArgon(t)
-
-	cases := []struct {
-		name       string
-		algo, hash string
-		plain      string
-	}{
-		{"wrong password, real argon2id account", AlgoArgon2id, real, "wrong"},
-		{"no hash at all", AlgoArgon2id, "", "wrong"},
-		{"blank hash", AlgoArgon2id, "   ", "wrong"},
-		{"oauth user", AlgoOAuth, real, "wrong"},
-		{"unknown algorithm", "scrypt", real, "wrong"},
+	work := func(f func()) (n, cost uint64) {
+		n0, c0 := h.Derivations()
+		f()
+		n1, c1 := h.Derivations()
+		return n1 - n0, c1 - c0
 	}
-	for _, tc := range cases {
-		calls.Store(0)
-		ok, rehash := VerifyLoginPassword(tc.algo, tc.hash, tc.plain)
+	wantN, wantCost := work(func() { h.VerifyLogin(AlgoArgon2id, real, "wrong") })
+	if wantN != 1 || wantCost == 0 {
+		t.Fatalf("a wrong password costs %d derivations (%d KiB-passes), want 1", wantN, wantCost)
+	}
+	for _, tc := range []struct {
+		name, algo, hash string
+	}{
+		{"no hash at all", AlgoArgon2id, ""},
+		{"blank hash", AlgoArgon2id, "   "},
+		{"oauth user", AlgoOAuth, real},
+		{"unknown algorithm", "scrypt", real},
+	} {
+		var ok, rehash bool
+		n, cost := work(func() { ok, rehash = h.VerifyLogin(tc.algo, tc.hash, "wrong") })
 		if ok || rehash {
 			t.Fatalf("%s: ok=%v rehash=%v", tc.name, ok, rehash)
 		}
-		if got := calls.Load(); got != 1 {
-			t.Errorf("%s: %d argon2id derivations, want 1", tc.name, got)
+		if n != wantN || cost != wantCost {
+			t.Errorf("%s: %d derivations (%d KiB-passes), want %d (%d)", tc.name, n, cost, wantN, wantCost)
 		}
 	}
-
-	calls.Store(0)
-	SpendVerification("anything")
-	if got := calls.Load(); got != 1 {
-		t.Errorf("SpendVerification: %d derivations, want 1", got)
+	if n, cost := work(func() { h.SpendVerification("anything") }); n != 1 || cost != wantCost {
+		t.Errorf("SpendVerification: %d derivations (%d KiB-passes), want 1 (%d)", n, cost, wantCost)
 	}
-
-	// The right password for a real account still succeeds, with one derivation.
-	calls.Store(0)
-	if ok, _ := VerifyLoginPassword(AlgoArgon2id, real, "correct horse"); !ok || calls.Load() != 1 {
-		t.Errorf("real account: ok=%v derivations=%d", ok, calls.Load())
+	var ok bool
+	if n, _ := work(func() { ok, _ = h.VerifyLogin(AlgoArgon2id, real, "correct horse") }); !ok || n != 1 {
+		t.Errorf("real account: ok=%v derivations=%d", ok, n)
 	}
 }
 
-// The dummy is built once, with the production parameters.
-func TestDummyHashUsesProductionParametersAndIsBuiltOnce(t *testing.T) {
-	WarmLoginDummy()
-	first := dummyArgon2idHash()
-	if first == "" {
-		t.Fatal("no dummy hash")
+// The dummy carries the cost this Hasher writes, is fixed for its life, and
+// no guess satisfies it.
+func TestDummyHashCarriesTheWriteCostAndIsFixed(t *testing.T) {
+	for _, o := range []Options{{}, {Time: 2, MemoryKiB: 32}} {
+		h := New(o)
+		want := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=2$", h.memory, h.time)
+		if !strings.HasPrefix(h.dummy, want) {
+			t.Fatalf("dummy hash %q does not carry the write cost %q", h.dummy, want)
+		}
 	}
-	want := "$argon2id$v=19$m=65536,t=3,p=2$"
-	if len(first) < len(want) || first[:len(want)] != want {
-		t.Fatalf("dummy hash %q does not carry the production parameters %q", first, want)
+	h := New(Options{Time: 1, MemoryKiB: 8})
+	first := h.dummy
+	for _, guess := range []string{"", "password"} {
+		if ok, _ := h.Verify(AlgoArgon2id, first, guess); ok {
+			t.Fatalf("the dummy hash verified %q", guess)
+		}
 	}
-	if again := dummyArgon2idHash(); again != first {
-		t.Fatal("the dummy hash was rebuilt")
+	h.SpendVerification("x")
+	if h.dummy != first {
+		t.Fatal("the dummy hash changed")
 	}
-	// It cannot be satisfied by an ordinary password.
-	if verifyArgon2id(first, "") || verifyArgon2id(first, "password") {
-		t.Fatal("the dummy hash verified a guess")
+	if New(Options{Time: 1, MemoryKiB: 8}).dummy == first {
+		t.Fatal("two Hashers share a dummy: its salt and key are not random")
 	}
 }
 
-func TestRefreshKey_IsAKeyOfItsOwn(t *testing.T) {
-	if RefreshKey("") != "" {
-		t.Fatal("an empty source stays empty")
+// The first login with no usable credential on a fresh Hasher, with nothing
+// warmed, costs exactly one derivation at the write cost: building the dummy
+// derives nothing, so no first caller pays for it.
+func TestFirstLoginWithoutACredentialCostsOneDerivation(t *testing.T) {
+	h := New(Options{Time: 1, MemoryKiB: 16})
+	if n, _ := h.Derivations(); n != 0 {
+		t.Fatalf("New ran %d derivations, want 0", n)
 	}
-	if k := RefreshKey("192.0.2.1"); k == "192.0.2.1" || k == "" {
-		t.Fatalf("refresh key %q must differ from the source key", k)
+	if ok, _ := h.VerifyLogin(AlgoOAuth, "", "anything"); ok {
+		t.Fatal("a login with no credential authenticated")
 	}
-	th := NewThrottle()
-	for range MaxFailuresPerIP {
-		th.RecordFailure("", RefreshKey("192.0.2.1"))
-	}
-	if !th.IPBlocked(RefreshKey("192.0.2.1")) || th.IPBlocked("192.0.2.1") {
-		t.Fatal("refresh failures spend the refresh budget only")
+	if n, cost := h.Derivations(); n != 1 || cost != 16 {
+		t.Fatalf("first no-credential login: %d derivations (%d KiB-passes), want 1 (16)", n, cost)
 	}
 }

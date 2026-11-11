@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 

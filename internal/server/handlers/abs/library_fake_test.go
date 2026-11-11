@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.27.3
+// version: 1.27.4
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs_test
 

@@ -1,7 +1,7 @@
 // file: internal/cfaccesspolicy/client.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: c863e806-fb62-4ceb-9226-d971b7d4d048
-// last-edited: 2026-10-23
+// last-edited: 2026-11-10
 
 // Package cfaccesspolicy adds one include rule to, and removes one from, ONE
 // Cloudflare Access reusable policy's include list. Two rule kinds exist and no

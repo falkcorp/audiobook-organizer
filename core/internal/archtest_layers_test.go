@@ -28,14 +28,15 @@ const corePath = "github.com/falkcorp/mediacore"
 // (coreFamily). The test-support packages (coretest and its sub-packages,
 // archtest and its sub-packages, the <pkg>/<pkg>test conformance suites) are
 // not layered: they may import any core package and no core non-test package
-// imports them (coreTestSupport).
+// imports them (archtest.CoreTestSupport).
 //
 // R1-09, R1-36 and R1-13 edit this file only to change the in-module control (03
 // §3.5.1 item 2), never this table; the exceptions are R1-13's
 // internal/openapi entry, R1-20's internal/pebble entry, R1-16's
 // internal/sdnotify entry, R1-21's internal/bootseam entry, F4-01's
-// internal/rbacstore entry, F3-01's internal/configstore entry and F4-09's
-// internal/authz entry, R4 packages the table missed.
+// internal/rbacstore entry, F3-01's internal/configstore entry, F4-09's
+// internal/authz entry and F4-02's internal/authstore entry, R4 packages the
+// table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -68,6 +69,9 @@ var coreLayerOf = map[string]int{
 	// compiled checker and the two privileged checkers, so it takes rbac's
 	// layer (R4).
 	"internal/authz": 4,
+	// internal/authstore implements auth's identity Store over c/auth/
+	// (F4-02, 05-authn §3.6), so it takes auth's layer (R4).
+	"internal/authstore": 4,
 	// internal/taskstore is the c/tasks/ key layout and raw staging under
 	// tasks' NativeStores and Importer (F2-02, 5T.6.1), so it takes tasks'
 	// layer (R4).
@@ -125,21 +129,6 @@ func coreFamily(pkg string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-// coreTestSupport reports R4's test-support packages.
-func coreTestSupport(pkg string) bool {
-	for _, root := range []string{"coretest", "archtest"} {
-		if pkg == root || strings.HasPrefix(pkg, root+"/") {
-			return true
-		}
-	}
-	// <pkg>/<pkg>test, e.g. tasks/taskstest, storage/index/indextest.
-	if i := strings.LastIndex(pkg, "/"); i > 0 {
-		parent, last := pkg[:i], pkg[i+1:]
-		return last == parent[strings.LastIndex(parent, "/")+1:]+"test"
-	}
-	return false
 }
 
 // declaredLayers is coreLayerOf extended with every loaded package that the
@@ -233,7 +222,7 @@ func TestCoreLayering(t *testing.T) {
 		Family:              coreFamily,
 		Control:             archtest.Edge{"app", "kernel"},
 		ImportFloor:         0,
-		TestSupport:         coreTestSupport,
+		TestSupport:         archtest.CoreTestSupport,
 		FloorRatio:          1,
 		FloorBase:           held,
 		TagSets:             archtest.TagSets(),

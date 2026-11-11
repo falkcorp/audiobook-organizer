@@ -1,7 +1,7 @@
 // file: internal/server/main_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d9f6b3e-7a41-4c58-9e02-b6c1f8a35d74
-// last-edited: 2026-10-30
+// last-edited: 2026-11-10
 
 package server
 
