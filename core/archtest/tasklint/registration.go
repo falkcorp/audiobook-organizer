@@ -200,8 +200,8 @@ func (r *registration) returnsDefinition(u *unit, fd *ast.FuncDecl) bool {
 		return false
 	}
 	res := fn.Type().(*types.Signature).Results()
-	for i := range res.Len() {
-		if n, ok := namedIn(res.At(i).Type(), r.cfg.TasksPath); ok && n.Obj().Name() == "Definition" {
+	for v := range res.Variables() {
+		if n, ok := namedIn(v.Type(), r.cfg.TasksPath); ok && n.Obj().Name() == "Definition" {
 			return true
 		}
 	}

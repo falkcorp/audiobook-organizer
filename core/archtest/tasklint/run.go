@@ -417,9 +417,11 @@ func baseEntries(dir string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		// git grep exits 1 when nothing matches: no output and an error.
-		callers, _ := git("grep", "-l", "-F", "CheckShrinkOnly(", mb, "--", ":(glob)"+prefix+"*_test.go")
-		if existed == "" && callers == "" {
+		callers, err := gitGrepAny(mb, "CheckShrinkOnly(", ":(glob)"+prefix+"*_test.go")
+		if err != nil {
+			return nil, err
+		}
+		if existed == "" && !callers {
 			return nil, nil
 		}
 		return map[string]string{}, nil
@@ -458,4 +460,18 @@ func shrinkBase(git func(args ...string) (string, error)) (string, error) {
 		return "", fmt.Errorf("shallow checkout without %s or origin/main (fetch it: git fetch --no-tags --depth=1 origin main): %w", ShrinkBaseEnv, ferr)
 	}
 	return sha, nil
+}
+
+// gitGrepAny reports whether any file of commit matching pathspec contains the
+// fixed string text. git grep exits 1 when nothing matches, which is not an
+// error here; any other failure is.
+func gitGrepAny(commit, text, pathspec string) (bool, error) {
+	err := exec.Command("git", "grep", "-q", "-F", text, commit, "--", pathspec).Run()
+	if err == nil {
+		return true, nil
+	}
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok && ee.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git grep %s in %s: %w", text, commit, err)
 }
