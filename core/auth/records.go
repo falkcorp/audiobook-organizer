@@ -167,10 +167,13 @@ type OneTimeToken struct {
 	Kind      OneTimeKind
 	UserID    UserID // temp-login: the target user; invite: none; bootstrap: none
 	CreatedBy UserID // invite and temp-login: the actor who minted it
-	Role      rbac.RoleName
-	Email     string
-	// CredentialEpoch is the target's epoch at issue (temp-login): a bump
-	// kills the token (§4.12).
+	// Username is an invite's account name, chosen by its creator (HEAD's
+	// CreateInvite, handlers/user.go): accepting it creates that account.
+	Username string
+	Role     rbac.RoleName
+	Email    string
+	// CredentialEpoch is the epoch a bump of which kills the token (§4.12):
+	// for a temp-login the target's at issue, for an invite its creator's.
 	CredentialEpoch int64
 	// Reset marks a temp-login token minted as a reset link
 	// (Service.MintResetLink): consuming it takes a new password, which is
@@ -359,17 +362,30 @@ type BootstrapResult struct {
 	GeneratedPassword string
 }
 
-// InviteSpec is a request to create an invite (§4.13).
+// InviteSpec is a request to create an invite (§4.13). The creator picks
+// the account's username, as at HEAD (handlers/user.go CreateInvite).
 type InviteSpec struct {
-	Email string
-	Role  rbac.RoleName
-	TTL   time.Duration // 0 = core.auth.invite.ttl
+	Username string
+	Email    string // optional; the account's e-mail, unverified
+	Role     rbac.RoleName
+	TTL      time.Duration // 0 = core.auth.invite.ttl
 }
 
-// AcceptInviteInput accepts an invite with the new account's credentials.
+// AcceptInviteInput accepts an invite with the new account's password, as at
+// HEAD (handlers/user.go AcceptInvite: token and password).
 type AcceptInviteInput struct {
 	Token    string
-	Username string
 	Password string
 	Client   ClientInfo
+}
+
+// InviteView is an open invite as shown: never its token (§4.13).
+type InviteView struct {
+	ID        string
+	Username  string
+	Email     string
+	Role      rbac.RoleName
+	CreatedBy UserID
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }

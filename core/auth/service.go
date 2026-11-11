@@ -49,7 +49,10 @@ const (
 	MaxBootstrapKeyTTL = 24 * time.Hour
 	// DefaultTempLoginTTL is core.auth.temp_login.ttl's default: how long a
 	// temp-login or reset link may be consumed (HEAD's 15 minutes, §4.1).
-	DefaultTempLoginTTL  = 15 * time.Minute
+	DefaultTempLoginTTL = 15 * time.Minute
+	// DefaultInviteTTL is core.auth.invite.ttl's default (HEAD's 72 hours,
+	// handlers/user.go CreateInvite).
+	DefaultInviteTTL     = 72 * time.Hour
 	conflictRetries      = 4
 	auditModule          = "core"
 	refKindUser          = "user"
@@ -109,6 +112,9 @@ type Settings struct {
 	// TempLoginTTL is core.auth.temp_login.ttl: the lifetime of a temp-login
 	// or reset link (§8, reloadable).
 	TempLoginTTL time.Duration
+	// InviteTTL is core.auth.invite.ttl: an invite's lifetime when its spec
+	// names none (§8, reloadable).
+	InviteTTL time.Duration
 }
 
 func (s Settings) withDefaults() Settings {
@@ -129,6 +135,9 @@ func (s Settings) withDefaults() Settings {
 	}
 	if s.TempLoginTTL <= 0 {
 		s.TempLoginTTL = DefaultTempLoginTTL
+	}
+	if s.InviteTTL <= 0 {
+		s.InviteTTL = DefaultInviteTTL
 	}
 	s.Login = s.Login.withDefaults()
 	// Only an unset value takes the default: a negative or NaN one is kept,
@@ -191,6 +200,10 @@ type Service struct {
 	// another account with the write that depends on it (HEAD's inviteMu):
 	// the store indexes usernames, not e-mails.
 	emailMu sync.Mutex
+	// inviteMu serialises CreateInvite's check that no open invite holds
+	// the username with the invite's own write: the store indexes users'
+	// names, not invites'.
+	inviteMu sync.Mutex
 
 	extensions []Extension
 	methods    map[Method]MethodSpec // registered extension and compat methods
