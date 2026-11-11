@@ -1,7 +1,7 @@
 // file: core/internal/executor/options.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e70fc5b-cdb1-48ee-bd63-a7f133df6d3b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -125,6 +125,15 @@ type Options struct {
 	// Principal stamps Client calls; nil: every call acts as req.Actor
 	// with no permission check beyond the system-actor rule.
 	Principal Principal
+	// WindowMembers lists the kinds window name would start now, in order
+	// (the scheduler's Members). A start of a window kind (core.window.<name>)
+	// by a caller with a checker must satisfy every member's Perms.Start,
+	// because the window's run starts them as their own modules' system
+	// actors: a holder of core:tasks.manage alone must not reach a member
+	// kind through it. A nil func with a caller present refuses every window
+	// start (fail closed); a start with no caller (the scheduler's StartIn)
+	// is not checked. The kernel closes over Scheduler.Members (F2-16).
+	WindowMembers func(window string) []tasks.Kind
 
 	// Health is the readiness registry dispatch waits on (Common.Ready);
 	// nil: every signal counts as ready.
