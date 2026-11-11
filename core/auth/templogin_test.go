@@ -1,5 +1,5 @@
 // file: core/auth/templogin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c5b74eb3-61fb-41c9-8574-c5f1f428e944
 // last-edited: 2026-11-11
 
@@ -307,6 +307,8 @@ func TestResetLink_LiftsARestrictionOnlyFromTheOwner(t *testing.T) {
 	lucius := f.edit(f.user("lucius-fox", "gotham.detective"), func(u *auth.User) { u.SignInRestricted = true })
 	owner := f.session(gordon)
 	owner.Assurance |= auth.AssuranceOwner
+	required := true // the gate AssuranceOwner means something under
+	f.setSettings(auth.Settings{OwnerRequired: &required})
 	tok := f.mintTemp(owner, lucius.ID, true)
 	if _, err := f.svc.ConsumeTempLogin(ctx, tok, "applied-sciences", from("192.0.2.44")); err != nil {
 		t.Fatalf("consume the owner's reset link: %v", err)

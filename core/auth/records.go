@@ -1,5 +1,5 @@
 // file: core/auth/records.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 056d2e0c-400d-404d-99ff-15b759dd0403
 // last-edited: 2026-11-11
 
@@ -175,6 +175,13 @@ type OneTimeToken struct {
 	// CredentialEpoch is the epoch a bump of which kills the token (§4.12):
 	// for a temp-login the target's at issue, for an invite its creator's.
 	CredentialEpoch int64
+	// CreatorEpoch is a temp-login's creator's credential epoch at issue
+	// (§4.12, §3.2): consuming the link is refused unless the creator is
+	// still at it, still active and still allowed to mint the link, so a
+	// creator who was disabled, signed out everywhere, merged away or
+	// demoted takes its outstanding links with it. An invite keeps its
+	// creator's epoch in CredentialEpoch; this field is the temp-login's.
+	CreatorEpoch int64
 	// Reset marks a temp-login token minted as a reset link
 	// (Service.MintResetLink): consuming it takes a new password, which is
 	// stored with a credential epoch bump in the session's own batch, and
