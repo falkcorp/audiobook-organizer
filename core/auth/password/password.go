@@ -201,8 +201,8 @@ func (h *Hasher) HashWithin(ctx context.Context, wait time.Duration, plain strin
 	if err := h.acquire(ctx, wait); err != nil {
 		return "", "", err
 	}
+	defer h.release() // a derivation that panics must not keep its permit
 	key := h.derive([]byte(plain), salt, h.time, h.memory, argonThreads, argonKeyLen)
-	h.release()
 	return AlgoArgon2id, encodeArgon2id(h.time, h.memory, salt, key), nil
 }
 
@@ -302,8 +302,8 @@ func (h *Hasher) verifyArgon2id(ctx context.Context, wait time.Duration, encoded
 	if err := h.acquire(ctx, wait); err != nil {
 		return false, err
 	}
+	defer h.release() // a derivation that panics must not keep its permit
 	got := h.derive([]byte(plain), salt, time, memory, threads, uint32(len(want)))
-	h.release()
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 

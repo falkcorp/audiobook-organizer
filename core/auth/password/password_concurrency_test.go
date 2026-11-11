@@ -113,3 +113,41 @@ func TestPasswordHash_BoundedWaitIsBusy(t *testing.T) {
 		t.Fatalf("HashWithin with a free permit: %v", err)
 	}
 }
+
+// TestPasswordHash_PanickingDerivationFreesItsPermit: a derivation that
+// panics (an allocation failure inside argon2, say) releases its permit on
+// the way out, so the semaphore does not shrink by one for good. With one
+// permit, a leak would make the next bounded call ErrBusy.
+func TestPasswordHash_PanickingDerivationFreesItsPermit(t *testing.T) {
+	var boom atomic.Bool
+	h := New(Options{Permits: 1, Time: 1, MemoryKiB: 8, Compute: func(_, _ []byte, _, _ uint32, _ uint8, keyLen uint32) []byte {
+		if boom.Load() {
+			panic("the Joker's gas")
+		}
+		return make([]byte, keyLen)
+	}})
+	_, stored, err := h.Hash("riddle-me-this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	panics := func(what string, call func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", what)
+			}
+		}()
+		call()
+	}
+	for name, call := range map[string]func(){
+		"HashWithin":   func() { _, _, _ = h.HashWithin(context.Background(), 0, "riddle-me-this") },
+		"VerifyWithin": func() { _, _, _ = h.VerifyWithin(context.Background(), 0, AlgoArgon2id, stored, "riddle-me-this") },
+	} {
+		boom.Store(true)
+		panics(name, call)
+		boom.Store(false)
+		if _, _, err := h.HashWithin(context.Background(), 0, "riddle-me-this"); err != nil {
+			t.Fatalf("after %s panicked, a bounded hash = %v; the permit leaked", name, err)
+		}
+	}
+}
