@@ -1,5 +1,5 @@
 // file: internal/cfaccess/verifier.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3a7e0c92-8b41-4d56-9f08-1c6b2a5d7e39
 // last-edited: 2026-11-11
 
@@ -101,48 +101,70 @@ type CFAccessVerifier struct {
 }
 
 // NewCFAccessVerifier builds a verifier bound to the team domain (e.g.
-// "myteam.cloudflareaccess.com") and the Access application AUD tag. It uses a remote
-// keyset that refreshes automatically as Cloudflare rotates signing keys.
+// "myteam.cloudflareaccess.com") and the Access application AUD tag. Its keys
+// come from a keyCache: fetched on first use, refreshed hourly, and refetched
+// for an unknown kid at most once per half minute, so a caller choosing kids
+// cannot make it fetch, and a key Cloudflare withdraws stops verifying.
 //
-// Every key fetch goes through keysTransport, so a fetch that fails (the
-// network, a non-200 answer, a body that is not a key set) surfaces as
-// ErrKeysUnavailable and never as "this token is forged": the extension opens
-// to the next method on the first and refuses on the second.
+// A fetch that fails (the network, any status other than 200 including a
+// redirect, a body that is not a key set) surfaces as ErrKeysUnavailable and
+// never as "this token is forged": the extension opens to the next method on
+// the first and refuses on the second.
 func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccessVerifier, error) {
-	return newCFAccessVerifier(ctx, teamDomain, aud, nil)
+	return newCFAccessVerifier(ctx, teamDomain, aud, verifierOptions{})
 }
 
 // keysTimeout bounds one key-set fetch.
 const keysTimeout = 10 * time.Second
 
-// newCFAccessVerifier is NewCFAccessVerifier over an HTTP client; a test
-// passes the one that trusts its fake team domain's certificate.
-func newCFAccessVerifier(ctx context.Context, teamDomain, aud string, hc *http.Client) (*CFAccessVerifier, error) {
+// verifierOptions are the seams a test sets; production passes the zero value
+// (the default HTTP client, the real clock). A struct, not option functions: a
+// function only a test calls is dead code to the deadcode ratchet.
+type verifierOptions struct {
+	hc  *http.Client     // the client the key fetch uses (a test's trusts its fake team domain)
+	now func() time.Time // the key cache's clock
+}
+
+func newCFAccessVerifier(ctx context.Context, teamDomain, aud string, o verifierOptions) (*CFAccessVerifier, error) {
 	teamDomain = strings.TrimSpace(teamDomain)
 	aud = strings.TrimSpace(aud)
 	if teamDomain == "" || aud == "" {
 		return nil, fmt.Errorf("cfaccess: team domain and AUD are required")
 	}
-	issuer := "https://" + teamDomain
-	certsURL := issuer + "/cdn-cgi/access/certs"
-	client := &http.Client{Timeout: keysTimeout}
-	if hc != nil {
-		c := *hc
-		client = &c
-		if client.Timeout == 0 {
-			client.Timeout = keysTimeout
-		}
+	if o.hc == nil {
+		o.hc = &http.Client{}
 	}
-	client.Transport = keysTransport{base: client.Transport}
-	keySet := probingKeySet{inner: oidc.NewRemoteKeySet(oidc.ClientContext(ctx, client), certsURL)}
+	if o.now == nil {
+		o.now = time.Now
+	}
+	issuer := "https://" + teamDomain
+	keySet := newKeyCache(ctx, issuer+"/cdn-cgi/access/certs", o.hc, o.now)
 	verifier := oidc.NewVerifier(issuer, keySet, &oidc.Config{ClientID: aud}) // ClientID = expected aud
 	return &CFAccessVerifier{verifier: verifier}, nil
+}
+
+// VerifiedAssertion is a verified Access token: the identity, and when
+// Cloudflare issued the token.
+type VerifiedAssertion struct {
+	Claims *legacyoauth.IdentityClaims
+	// IssuedAt is the token's iat; zero when the token has none. It is when
+	// Cloudflare authenticated the user, which is what an auth time means.
+	IssuedAt time.Time
 }
 
 // Verify checks the signature, issuer, expiry, and aud of a Cloudflare Access JWT and
 // returns the verified identity. Cloudflare only mints this token after its own IdP
 // login, so the email is verified.
 func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error) {
+	va, err := v.VerifyIssued(ctx, rawJWT)
+	if err != nil {
+		return nil, err
+	}
+	return va.Claims, nil
+}
+
+// VerifyIssued is Verify that also returns the token's issue time.
+func (v *CFAccessVerifier) VerifyIssued(ctx context.Context, rawJWT string) (*VerifiedAssertion, error) {
 	pr := &keyProbe{}
 	tok, err := v.verifier.Verify(context.WithValue(ctx, keyProbeKey{}, pr), rawJWT)
 	if err != nil {
@@ -176,11 +198,14 @@ func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*legacyoa
 	if subject == "" {
 		subject = claims.Email // fall back to email as the stable id
 	}
-	return &legacyoauth.IdentityClaims{
-		Provider:      legacyoauth.ProviderCFAccess,
-		Subject:       subject,
-		Email:         claims.Email,
-		EmailVerified: true,
-		Name:          "",
+	return &VerifiedAssertion{
+		Claims: &legacyoauth.IdentityClaims{
+			Provider:      legacyoauth.ProviderCFAccess,
+			Subject:       subject,
+			Email:         claims.Email,
+			EmailVerified: true,
+			Name:          "",
+		},
+		IssuedAt: tok.IssuedAt,
 	}, nil
 }
