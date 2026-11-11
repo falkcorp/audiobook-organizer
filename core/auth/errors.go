@@ -1,7 +1,7 @@
 // file: core/auth/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d92e3ae8-8bef-47eb-a6ac-a221aa99fd21
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -57,6 +57,21 @@ var (
 	// creator may no longer assign its role (SEC3-2).
 	ErrInviteInvalid = errors.New("auth: invite invalid")
 )
+
+// ErrExtensionUnavailable is what an identity extension's Authenticate returns
+// when it could not decide a request for a reason of its own, not because the
+// credential is bad: its IdP's key set could not be fetched, its backend is
+// down (05-authn §6, "Extension authenticator internal error"). Stage 12
+// treats it as ErrNoCredential: it logs a warning, counts
+// mediacore_auth_extension_errors_total{extension}, and the next
+// authenticator runs, so an outage of an optional IdP cannot lock out
+// password and key users. It opens only the extension: the extension granted
+// nothing, and whatever the request carries is still decided by the methods
+// after it. A presented assertion that verifies false (bad signature,
+// audience, issuer or expiry) must NOT be reported with this error: that is a
+// refusal and ends authentication with 401 (SEC-12). An extension that cannot
+// tell the two apart must report the refusal.
+var ErrExtensionUnavailable = errors.New("auth: identity extension unavailable")
 
 // ErrUndecodableRecord: a stored identity record the store cannot decode. It
 // is per record (§3.4): a scan yields it for that record and goes on, and

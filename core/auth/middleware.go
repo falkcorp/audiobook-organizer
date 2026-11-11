@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -450,6 +450,15 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 		}
 		if errors.Is(err, ErrStoreUnavailable) {
 			return nil, nil, err
+		}
+		if errors.Is(err, ErrExtensionUnavailable) {
+			// §6: an extension that could not decide (its IdP's keys, its
+			// backend) opens to the next method; it granted nothing, so the
+			// request is exactly as anonymous as before it ran. Only the
+			// error's class is logged, never its text: it can quote a URL.
+			s.log.Warn("auth: identity extension could not decide; trying the next method", "extension", e.Authenticator.Name())
+			s.met.extensionError(r.Context(), e.Authenticator.Name())
+			return nil, nil, nil
 		}
 		if err != nil || a == nil || a.User == "" {
 			return nil, &Failure{Code: failureCode(err)}, nil
