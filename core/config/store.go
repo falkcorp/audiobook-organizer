@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-11
 
@@ -181,7 +181,7 @@ func NewStore(o Options) (*Store, error) {
 		s.now = time.Now
 	}
 	retEnv, retFile := retiredNames(o.Retired)
-	s.env = newEnvSource(prefix, s.envVars, retEnv, s.log, os.ReadFile)
+	s.env = newEnvSource(prefix, s.envVars, retEnv, s.log, readEnvFile)
 	if o.FilePath != "" {
 		s.file = newYAMLFile(o.FilePath, os.ReadFile, retFile, s.log)
 	}

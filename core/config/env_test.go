@@ -1,7 +1,7 @@
 // file: core/config/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 675a9bc4-c085-4c7d-96e2-ab783574cba4
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config_test
 
@@ -208,6 +208,44 @@ func TestEnvName_CollisionRejected(t *testing.T) {
 	if _, err := config.NewStore(config.Options{AppID: "gotham", EnvBindings: []config.EnvName{{Name: "WAYNE_API_KEY", Path: ptAPIKey}, {Name: "WAYNE_API_KEY", Path: ptBaseURL}}}); !errors.Is(err, config.ErrDuplicate) {
 		t.Errorf("an app binding listed twice: err = %v, want ErrDuplicate", err)
 	}
+	// One key's canonical name is another's <NAME>_FILE form: in one
+	// section, across sections, and through a binding.
+	type fileForm struct {
+		Key     string `json:"key"`
+		KeyFile string `json:"key_file"`
+	}
+	type keyOnly struct {
+		Key string `json:"key"`
+	}
+	type fileOnly struct {
+		File string `json:"file"`
+	}
+	if _, err := config.Register(newStore(config.Options{}).Registry(), config.Define("core.lair", fileForm{})); !errors.Is(err, config.ErrDuplicate) || !strings.Contains(err.Error(), "GOTHAM_CORE_LAIR_KEY_FILE") {
+		t.Errorf("core.lair.key and core.lair.key_file: err = %v, want ErrDuplicate naming GOTHAM_CORE_LAIR_KEY_FILE", err)
+	}
+	st = newStore(config.Options{})
+	if _, err := config.Register(st.Registry(), config.Define("core.lair_key", fileOnly{})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Register(st.Registry(), config.Define("core.lair", keyOnly{})); !errors.Is(err, config.ErrDuplicate) || !strings.Contains(err.Error(), "_FILE form") {
+		t.Errorf("core.lair.key after core.lair_key.file: err = %v, want ErrDuplicate for the _FILE form", err)
+	}
+	st = newStore(config.Options{})
+	if _, err := config.Register(st.Registry(), config.Define("core.lair", keyOnly{})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Register(st.Registry(), config.Define("core.lair_key", fileOnly{})); !errors.Is(err, config.ErrDuplicate) || !strings.Contains(err.Error(), "_FILE form") {
+		t.Errorf("core.lair_key.file after core.lair.key: err = %v, want ErrDuplicate for the _FILE form", err)
+	}
+	if _, err := config.Register(newStore(config.Options{}).Registry(),
+		traceSection(config.EnvBinding(kInsecure, "GOTHAM_CORE_TRACING_OTLP_ENDPOINT_FILE"))); !errors.Is(err, config.ErrDuplicate) {
+		t.Errorf("a binding equal to a canonical name's _FILE form: err = %v, want ErrDuplicate", err)
+	}
+	app = newStore(config.Options{EnvBindings: []config.EnvName{{Name: "GOTHAM_CORE_BATCAVE_LEVEL_FILE", Path: ptAPIKey}}})
+	if _, err := config.Register(app.Registry(), configtest.BatcaveSection()); !errors.Is(err, config.ErrDuplicate) {
+		t.Errorf("an app binding equal to a canonical name's _FILE form: err = %v, want ErrDuplicate", err)
+	}
+
 	r := realRig(t, []string{"GOTHAM_CORE_BATCAVE_LEVEL=debug"}, "", rigOpts{o: config.Options{
 		Retired: []config.RetiredName{{Name: "GOTHAM_CORE_BATCAVE_LEVEL", Canonical: kLevel}},
 	}})
@@ -218,15 +256,26 @@ func TestEnvName_CollisionRejected(t *testing.T) {
 
 // TestEnv_EmptyValueIsUnset (05-config §1.3.5): a variable set to "" supplies
 // nothing and locks nothing, as viper treats it at HEAD; so does an empty
-// <NAME>_FILE, and an empty unknown name does not warn.
+// <NAME>_FILE, and an empty unknown name does not warn. The literal null is
+// unset too, for every key type and in a <NAME>_FILE file, as a YAML null is.
 func TestEnv_EmptyValueIsUnset(t *testing.T) {
+	nullFile := writeFile(t, "null", "null\n")
 	r := realRig(t, []string{
 		"GOTHAM_CORE_BATCAVE_LEVEL=",
 		"GOTHAM_CORE_BATCAVE_GADGET_COUNT_FILE=",
 		"GOTHAM_CORE_BATCAVE_NOPE=",
-	}, "", rigOpts{})
+		// null is unset for every type, as a YAML null in the file is.
+		"GOTHAM_CORE_BATCAVE_SIGNAL=null",
+		"GOTHAM_CORE_BATCAVE_WORKERS=null",
+		"GOTHAM_CORE_BATCAVE_ALLIES=null",
+		"GOTHAM_CORE_BATCAVE_GADGET_NAME_FILE=" + nullFile,
+		"GOTHAM_OLD_LEVEL=null",
+	}, "", rigOpts{o: config.Options{Retired: []config.RetiredName{{Name: "GOTHAM_OLD_LEVEL", Canonical: kLevel}}}})
 	r.start()
-	for _, p := range []config.Path{kLevel, kCount} {
+	if len(r.st.RetiredSet()) != 0 {
+		t.Errorf("a retired name set to null counts as set: %+v", r.st.RetiredSet())
+	}
+	for _, p := range []config.Path{kLevel, kCount, kSignal, kWorkers, kAllies, configtest.BatcavePath + ".gadget.name"} {
 		if ks := r.lookup(p); ks.Source != config.SourceDefault || ks.LockedBy != "" {
 			t.Errorf("%s: source %v locked by %q, want the default and no lock", p, ks.Source, ks.LockedBy)
 		}
@@ -427,8 +476,22 @@ func TestEnvFileSuffix(t *testing.T) {
 		t.Errorf("unreadable _FILE: Boot err = %v, want an error naming the variable", err)
 	}
 	r = realRig(t, []string{"GOTHAM_CORE_BATCAVE_LEVEL=debug", "GOTHAM_CORE_BATCAVE_LEVEL_FILE=" + level}, "", rigOpts{})
-	if _, err := r.st.Boot(context.Background()); err == nil || !strings.Contains(err.Error(), "both set") {
-		t.Errorf("a name and its _FILE form: Boot err = %v, want a refusal", err)
+	if _, err := r.st.Boot(context.Background()); !errors.Is(err, config.ErrDuplicate) || !strings.Contains(err.Error(), "both set") {
+		t.Errorf("a name and its _FILE form: Boot err = %v, want ErrDuplicate", err)
+	}
+
+	// A file past 1 MiB is refused, naming the variable and the file, never
+	// its contents, and without loading it whole.
+	big := writeFile(t, "big", "joker"+strings.Repeat("x", 1<<20))
+	r = realRig(t, []string{"GOTHAM_CORE_BATCAVE_LEVEL_FILE=" + big}, "", rigOpts{})
+	_, err := r.st.Boot(context.Background())
+	if !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "GOTHAM_CORE_BATCAVE_LEVEL_FILE") || !strings.Contains(err.Error(), big) || strings.Contains(err.Error(), "joker") {
+		t.Errorf("an oversized _FILE: Boot err = %v", err)
+	}
+	exact := writeFile(t, "exact", strings.Repeat("a", 1<<20))
+	r = realRig(t, []string{"GOTHAM_CORE_BATCAVE_GADGET_NAME_FILE=" + exact}, "", rigOpts{})
+	if _, err := r.st.Boot(context.Background()); err != nil {
+		t.Errorf("a _FILE of exactly 1 MiB: %v", err)
 	}
 }
 

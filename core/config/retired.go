@@ -1,7 +1,7 @@
 // file: core/config/retired.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a1fd550-2ff7-4d1a-bd04-56e8285dd1f9
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -69,13 +69,13 @@ func retiredNames(rs []RetiredName) (env, file map[string]bool) {
 // topKeyer is a file layer that can list its top-level keys.
 type topKeyer interface{ topKeys() ([]string, error) }
 
-// retiredIsSet reports whether r is set: an env name with a non-empty value
-// (an empty one is unset, §1.3.5), or a file key the operator file holds.
+// retiredIsSet reports whether r is set: an env name with a value that is
+// not unset (empty or null, §1.3.5), or a file key the operator file holds.
 func (s *Store) retiredIsSet(r RetiredName, fileKeys []string) bool {
 	if r.File {
 		return slices.Contains(fileKeys, r.Name)
 	}
-	return s.envVars[r.Name] != ""
+	return !envUnset(s.envVars[r.Name])
 }
 
 // coreScoped reports whether p is a core path: one Boot can judge, because

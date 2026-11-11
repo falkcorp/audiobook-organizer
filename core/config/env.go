@@ -1,7 +1,7 @@
 // file: core/config/env.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 42d74b09-6939-4af0-857f-5c9778bb1ca3
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -280,6 +282,9 @@ func (e *envSource) read(q sourceQuery) ([]sourced, error) {
 		if err != nil {
 			return nil, err
 		}
+		if envUnset(v) {
+			continue
+		}
 		base := name
 		if viaFile {
 			base = strings.TrimSuffix(name, fileSuffix)
@@ -317,6 +322,9 @@ func (e *envSource) readWanted(q sourceQuery) ([]sourced, error) {
 				if err != nil {
 					return nil, err
 				}
+				if envUnset(v) {
+					continue
+				}
 				out = append(out, sourced{path: w, raw: json.RawMessage(v), by: "env " + full, text: true, binding: i > 0})
 			}
 		}
@@ -342,12 +350,38 @@ func (e *envSource) value(name, val string, viaFile bool) (string, error) {
 		if ft.err != nil {
 			return "", fmt.Errorf("config: env %s: read %q: %w", name, val, ft.err)
 		}
+		if len(ft.text) > maxEnvFileBytes {
+			return "", fmt.Errorf("%w: config: env %s: the file %q is larger than %d bytes; a <NAME>_FILE file holds one value",
+				ErrInvalid, name, val, maxEnvFileBytes)
+		}
 		text = trimOneNewline(ft.text)
 	}
 	if base == otelMetricExportInterval && allDigits(text) {
 		text += "ms"
 	}
 	return text, nil
+}
+
+// envUnset reports whether an env value supplies nothing (05-config §1.3.5):
+// empty, or the literal null, for every key type, as a YAML null in the file
+// is unset. The same holds for the contents of a <NAME>_FILE file. An env
+// variable cannot set the string "null" (the file can, quoted).
+func envUnset(text string) bool { return text == "" || text == "null" }
+
+// maxEnvFileBytes caps a <NAME>_FILE file: a credential or a setting, never
+// a bulk file. A larger one fails boot, naming the variable and the file and
+// never its contents.
+const maxEnvFileBytes = 1 << 20
+
+// readEnvFile is the default <NAME>_FILE reader: it reads at most one byte
+// past maxEnvFileBytes, so an oversized file is refused without being loaded.
+func readEnvFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, maxEnvFileBytes+1))
 }
 
 // trimOneNewline drops one trailing line break ("\n" or "\r\n").
@@ -502,7 +536,7 @@ func (s *Store) mergeEnv(vals []sourced) (kept []sourced, conflicts map[Path]str
 			}
 		}
 		if len(canon) > 1 {
-			return nil, nil, fmt.Errorf("config: %s and %s both set %s; set one", canon[0].by, canon[1].by, p)
+			return nil, nil, fmt.Errorf("%w: config: %s and %s both set %s; set one", ErrDuplicate, canon[0].by, canon[1].by, p)
 		}
 		for i := 1; i < len(binds); i++ {
 			same, err := s.sameValue(binds[0], binds[i])
@@ -602,6 +636,34 @@ func (s *Store) checkEnvNames(sec *section, names map[string]Path) error {
 			return fmt.Errorf("%w: env name %s is bound to %s and is the app's binding of %s", ErrDuplicate, n, p, o)
 		}
 	}
+	if err := s.checkFileFormClash(mine, names); err != nil {
+		return err
+	}
 	maps.Copy(s.canonNames, mine)
+	return nil
+}
+
+// checkFileFormClash refuses a name that is another name's <NAME>_FILE form:
+// key A's canonical name equal to key B's canonical name plus _FILE would
+// make one variable both A's value and the path of B's value. Every
+// registered name counts: canonical names, section bindings and the app's
+// bindings, the new section's included.
+func (s *Store) checkFileFormClash(mine, names map[string]Path) error {
+	all := map[string]Path{}
+	for _, m := range []map[string]Path{s.canonNames, s.envNames, s.appBindings, mine, names} {
+		maps.Copy(all, m)
+	}
+	for _, m := range []map[string]Path{mine, names} {
+		for _, n := range slices.Sorted(maps.Keys(m)) {
+			if o, clash := all[n+fileSuffix]; clash {
+				return fmt.Errorf("%w: env name %s of %s is the %s form of %s's env name %s", ErrDuplicate, n+fileSuffix, o, fileSuffix, m[n], n)
+			}
+			if base, ok := strings.CutSuffix(n, fileSuffix); ok {
+				if o, clash := all[base]; clash {
+					return fmt.Errorf("%w: env name %s of %s is the %s form of %s's env name %s", ErrDuplicate, n, m[n], fileSuffix, o, base)
+				}
+			}
+		}
+	}
 	return nil
 }
