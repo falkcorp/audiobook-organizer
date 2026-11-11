@@ -7,10 +7,14 @@ package providerhttp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/integrations"
 )
@@ -210,4 +214,48 @@ func (r *Registry) scopeOf(ref integrations.Ref) string {
 // set between a read and such a release would be released unseen.
 func (r *Registry) HoldFor(ref integrations.Ref) (integrations.Hold, bool) {
 	return r.activeHold(r.scopeOf(ref))
+}
+
+// maxLogDetail bounds a hold's Detail in a log line.
+const maxLogDetail = 120
+
+// scopeAttrs names scope in a log line without ever carrying a caller-chosen
+// string: a Policy.Scope can hold a host, a path or a credential's hash. The
+// owning instance is logged when some Client or GateFor call named this scope
+// (instance=<kind>/<id>); a scope that IS the default form of a valid Ref
+// (kind/instance ID, nothing else can pass Ref.Validate) is that Ref; any
+// other scope is an opaque digest (scope_digest=<12 hex characters>), enough to
+// tell two scopes apart in one log and not to recover either.
+func (r *Registry) scopeAttrs(scope string) []any {
+	r.mu.Lock()
+	for ref, s := range r.refScope {
+		if s == scope {
+			r.mu.Unlock()
+			return []any{"instance", ref.String()}
+		}
+	}
+	r.mu.Unlock()
+	if kind, id, ok := strings.Cut(scope, "/"); ok {
+		ref := integrations.Ref{Kind: integrations.Kind(kind), Instance: integrations.InstanceID(id)}
+		if ref.Validate() == nil && ref.String() == scope {
+			return []any{"instance", scope}
+		}
+	}
+	sum := sha256.Sum256([]byte(scope))
+	return []any{"scope_digest", hex.EncodeToString(sum[:6])}
+}
+
+// logDetail is a hold's Detail as a log line may carry it: scrubbed of
+// credentials like an error's text and cut to maxLogDetail bytes. A hold's
+// Detail is a constant ("class=...") when this Registry placed it, but a
+// persisted record is another writer's input.
+func logDetail(d string) string {
+	d = scrubText(strings.ToValidUTF8(d, ""), nil)
+	if len(d) > maxLogDetail {
+		d = d[:maxLogDetail]
+		for len(d) > 0 && !utf8.ValidString(d) {
+			d = d[:len(d)-1]
+		}
+	}
+	return d
 }
