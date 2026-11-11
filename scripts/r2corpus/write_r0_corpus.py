@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -484,17 +484,22 @@ def check_outside_maintenance_window(
         )
 
 
-def shifted_window(now: _dt.datetime | None = None) -> tuple[int, int]:
+def shifted_window(now: _dt.datetime | None = None, start: int | None = None) -> tuple[int, int]:
     """The corpus' maintenance window as (start, end) UTC hours, moved twelve hours from now.
 
     A replay that must run at any hour (F2-15's CI jobs) boots the binary with
     shifted_window_env's time zone, which puts the corpus' stored window
     (MAINTENANCE_WINDOW_UTC in local hours) at these UTC hours, so no window
-    task runs while it drives the binary.
+    task runs while it drives the binary. ``start`` fixes the window's UTC
+    start hour instead (F2-15's suite picks one per test process, so every
+    boot of a run shares one time zone).
     """
-    now = now or _dt.datetime.now(_dt.timezone.utc)
     length = MAINTENANCE_WINDOW_UTC[1] - MAINTENANCE_WINDOW_UTC[0]
-    start = (now.astimezone(_dt.timezone.utc).hour + 12) % 24
+    if start is None:
+        now = now or _dt.datetime.now(_dt.timezone.utc)
+        start = (now.astimezone(_dt.timezone.utc).hour + 12) % 24
+    if not 0 <= start < 24:
+        raise CorpusError(f"window start {start} is not an hour (0-23)")
     return start, (start + length) % 24
 
 
