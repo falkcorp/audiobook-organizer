@@ -1,18 +1,19 @@
 // file: core/tasks/schedule.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 231e5481-a9cd-411a-9926-86fc95b5dc49
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/schedspec"
 )
 
 // Schedule is a definition's one timer declaration (5T.3.8). Build it with
@@ -59,42 +60,11 @@ func ScheduleFromConfig(key string) *Schedule {
 	return s
 }
 
-// checkScheduleKey checks the R2-7 key form.
+// checkScheduleKey checks the R2-7 key form (schedspec.KeyOwner, the one
+// grammar the scheduler's registration check also uses).
 func checkScheduleKey(key string) error {
-	segs := strings.Split(key, ".")
-	for i, seg := range segs {
-		if !configSegment(seg) {
-			return fmt.Errorf("schedule key %q: segment %d (%q) does not match [a-z][a-z0-9_]{0,47}", key, i+1, seg)
-		}
-	}
-	var rest []string
-	switch {
-	case len(segs) == 4 && segs[0] == "core":
-		rest = segs[1:]
-	case len(segs) == 5 && segs[0] == "modules":
-		rest = segs[2:]
-	default:
-		return fmt.Errorf("schedule key %q: want core.<subsystem>.schedules.<name> or modules.<id>.<subsystem>.schedules.<name>", key)
-	}
-	if rest[1] != "schedules" || rest[0] == "schedules" {
-		return fmt.Errorf("schedule key %q: want core.<subsystem>.schedules.<name> or modules.<id>.<subsystem>.schedules.<name>", key)
-	}
-	return nil
-}
-
-// configSegment reports whether seg matches the config path grammar
-// [a-z][a-z0-9_]{0,47}.
-func configSegment(seg string) bool {
-	if seg == "" || len(seg) > 48 || seg[0] < 'a' || seg[0] > 'z' {
-		return false
-	}
-	for i := 1; i < len(seg); i++ {
-		c := seg[i]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
-			return false
-		}
-	}
-	return true
+	_, err := schedspec.KeyOwner(key)
+	return err
 }
 
 // ScheduleConfig is the value type of every schedule key. Exactly one of
@@ -106,6 +76,65 @@ type ScheduleConfig struct {
 	Cron    string          `json:"cron,omitempty"`     // 5-field, in core.tasks.timezone
 	Window  string          `json:"window,omitempty"`   // member of a maintenance window
 	Order   int             `json:"order,omitempty"`    // position inside Window
+}
+
+// scheduleConfigJSON is ScheduleConfig without its methods, so MarshalJSON
+// encodes the plain struct without recursing.
+type scheduleConfigJSON ScheduleConfig
+
+// MarshalJSON encodes c as its plain JSON object. ScheduleConfig encodes
+// itself (a json.Marshaler is enough for config's leaf test; decoding stays
+// encoding/json's own, so a strict decode still refuses an unknown field) so
+// that config treats a schedule key as ONE key whose value is the whole
+// object (05-config §1.6: "an ordinary live object key"); config walks
+// into a struct that does not, which would split each schedule key into six
+// keys and leave the key ScheduleFromConfig names undeclared. Method added by
+// F2-04.
+func (c ScheduleConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(scheduleConfigJSON(c))
+}
+
+// Validate checks c's value (05-tasks 5T.3.8): at most one of Every,
+// DailyAt, Cron and Window, exactly one when Enabled; Every positive; DailyAt
+// a 24-hour "HH:MM"; Cron the 5-field grammar; Window a config segment (the
+// window's name); Order not negative. The kernel's config sections call it,
+// so a bad value is refused when config loads it, not at the first poll.
+// Every >= core.tasks.schedule_poll is the scheduler's check (it depends on
+// another key). Method added by F2-04.
+func (c ScheduleConfig) Validate() error {
+	var errs []error
+	set := 0
+	for _, on := range []bool{c.Every != 0, c.DailyAt != "", c.Cron != "", c.Window != ""} {
+		if on {
+			set++
+		}
+	}
+	switch {
+	case set > 1:
+		errs = append(errs, fmt.Errorf("only one of every, daily_at, cron and window may be set (got %d)", set))
+	case set == 0 && c.Enabled:
+		errs = append(errs, errors.New("an enabled schedule sets one of every, daily_at, cron and window"))
+	}
+	if c.Every < 0 {
+		errs = append(errs, fmt.Errorf("every %s is not positive", c.Every.Std()))
+	}
+	if c.DailyAt != "" {
+		if _, err := schedspec.ParseDailyAt(c.DailyAt); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.Cron != "" {
+		if _, err := schedspec.ParseCron(c.Cron); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.Window != "" && !schedspec.Segment(c.Window) {
+		errs = append(errs, fmt.Errorf("window %q does not match [a-z][a-z0-9_]{0,47}", c.Window))
+	}
+	if c.Order < 0 {
+		errs = append(errs, fmt.Errorf("order %d is negative", c.Order))
+	}
+	return errors.Join(errs...)
 }
 
 // Every is a fixed, non-configurable schedule reserved for the outbox relay's

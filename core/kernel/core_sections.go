@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.7
+// version: 1.1.0
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // This file is the kernel's core-section list (05-config §1.12.1, "Every core
@@ -28,10 +29,14 @@ import (
 // keywords. A map-typed field is one key whose value is the whole map
 // (05-config §1.3.6); a list is one key as well.
 //
-// Left out of this file, each added by the row named, never declared here as a
-// stand-in:
-//   - every key typed as the tasks package's schedule configuration, and the
-//     core.tasks windows map: F2-04.
+// Schedule keys (F2-04): every key of type tasks.ScheduleConfig that exists at
+// F2 sits in its owner's section under "schedules" (R2-7,
+// <owner>.<subsystem>.schedules.<name>), with the owner table's default and
+// live reload ("re-read every poll"); the defaults come from scheduleEvery and
+// scheduleWindow (core_schedule_defaults.go). tasks.ScheduleConfig encodes
+// itself, so config treats each as one key whose value is the whole object
+// (05-config §1.6). core.tasks.windows is one map key whose map keys are
+// window names (data, 05-config §1.3.6).
 //
 // core.auth.mode and core.http.basic_gate.enabled are FailClosed (05-config
 // §1.3.5): their more restrictive value wins between the operator layers and
@@ -72,6 +77,7 @@ func coreSections() []any {
 			BatchParallelism:      2,
 			BatchMaxApplyAttempts: 5,
 			LogNoCapableEvery:     dur(time.Minute),
+			Schedules:             aiSchedules{BatchPoll: scheduleEvery(5 * time.Minute)},
 		}),
 
 		// 05-authn §8
@@ -116,6 +122,10 @@ func coreSections() []any {
 				Providers:       []authOIDCProvider{},
 			},
 			Owner: authOwner{Required: false},
+			Schedules: authSchedules{
+				SessionPrune: scheduleEvery(time.Hour),
+				OnetimePrune: scheduleEvery(time.Hour),
+			},
 		},
 			config.FailClosed("core.auth.mode", json.RawMessage(`"required"`), json.RawMessage(`"disabled"`)),
 		),
@@ -138,6 +148,10 @@ func coreSections() []any {
 			BeforeBreakingMigration: true,
 			HashWorkers:             hashWorkersDefault(),
 			Restore:                 backupRestore{RehashOnBoot: false},
+			Schedules: backupSchedules{
+				Create: scheduleEvery(24 * time.Hour),
+				Verify: scheduleEvery(168 * time.Hour),
+			},
 		}),
 
 		// 05-config §1.7 and §2.7
@@ -180,6 +194,7 @@ func coreSections() []any {
 			LogLines:     5000,
 			TaskRuns:     200,
 			MaxFileBytes: 64 * mib,
+			Schedules:    diagnosticsSchedules{Prune: scheduleEvery(time.Hour)},
 		}),
 
 		// 05-http-api §10
@@ -220,6 +235,10 @@ func coreSections() []any {
 			},
 			FreeSpace:  libraryFreeSpace{WarnPercent: 10, DefaultMinBytes: 5 * gib},
 			Quarantine: libraryQuarantine{Retention: 0},
+			Schedules: librarySchedules{
+				QuarantinePrune: scheduleEvery(24 * time.Hour),
+				TransferRecover: scheduleEvery(24 * time.Hour),
+			},
 		}),
 
 		// 05-logging §8: core.log is log.Settings; the journal's two sections are
@@ -232,7 +251,7 @@ func coreSections() []any {
 			RetentionDays: 90,
 			QueueSize:     4096,
 		}),
-		config.Define("core.log.schedules", logSchedules{}),
+		config.Define("core.log.schedules", logSchedules{JournalPrune: scheduleEvery(24 * time.Hour)}),
 
 		// 05-metadata M1.7 and M2.7
 		config.Define("core.integrations", integrationsSettings{
@@ -242,6 +261,7 @@ func coreSections() []any {
 			DrainTimeout:        dur(30 * time.Second),
 			MaxInstancesPerKind: 32,
 			Disabled:            false,
+			Schedules:           integrationsSchedules{Health: scheduleEvery(5 * time.Minute)},
 		}),
 		config.Define("core.providerhttp", providerHTTPSettings{
 			Fallback: providerHTTPFallback{
@@ -291,6 +311,7 @@ func coreSections() []any {
 			AsyncBuffer:     4096,
 			CoalesceWindow:  dur(time.Minute),
 			DetailsMaxBytes: 4096,
+			Schedules:       auditSchedules{Prune: scheduleEvery(24 * time.Hour)},
 		}),
 
 		// 05-realtime §8
@@ -324,6 +345,7 @@ func coreSections() []any {
 				KeepPrevious:     dur(168 * time.Hour),
 				ResetHookTimeout: dur(30 * time.Minute),
 			},
+			Schedules: storageSchedules{Compact: scheduleWindow(tasks.NightlyWindow().Name)},
 		}),
 		config.Define("core.index", indexSettings{
 			Reconcile: indexReconcile{Workers: runtime.NumCPU(), Interval: dur(5 * time.Second)},
@@ -345,6 +367,8 @@ func coreSections() []any {
 			Timezone:              "",
 			IdempotencyTTL:        dur(168 * time.Hour),
 			HistoryRetention:      dur(2160 * time.Hour),
+			Schedules:             tasksSchedules{Prune: scheduleEvery(24 * time.Hour)},
+			Windows:               map[string]tasksWindow{tasks.NightlyWindow().Name: nightlyWindow()},
 		}),
 
 		// 05-updater §5U.8
@@ -352,6 +376,7 @@ func coreSections() []any {
 			Mode:        "off",
 			Channel:     "stable",
 			MaxDownload: 512 * mib,
+			Schedules:   updaterSchedules{Check: scheduleEvery(time.Hour)},
 		}),
 
 		// 06 §6.8. core.modules.<id>.enabled: the section is the map keyed by
@@ -386,7 +411,12 @@ type aiSettings struct {
 	BatchParallelism      int             `json:"batch_parallelism" schema:"minimum=1"`
 	BatchMaxApplyAttempts int             `json:"batch_max_apply_attempts"`
 	LogNoCapableEvery     config.Duration `json:"log_no_capable_every"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules             aiSchedules     `json:"schedules"`
+}
+
+// aiSchedules is core.ai.schedules (05-ai §7).
+type aiSchedules struct {
+	BatchPoll tasks.ScheduleConfig `json:"batch_poll"`
 }
 
 // aiKindLimits is per kind of call; 0 means no limit.
@@ -415,7 +445,13 @@ type authSettings struct {
 	TempLogin           authTempLogin `json:"temp_login"`
 	OIDC                authOIDC      `json:"oidc"`
 	Owner               authOwner     `json:"owner"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules           authSchedules `json:"schedules"`
+}
+
+// authSchedules is core.auth.schedules (05-authn §8).
+type authSchedules struct {
+	SessionPrune tasks.ScheduleConfig `json:"session_prune"`
+	OnetimePrune tasks.ScheduleConfig `json:"onetime_prune"`
 }
 
 type authSession struct {
@@ -525,7 +561,13 @@ type backupSettings struct {
 	BeforeBreakingMigration bool            `json:"before_breaking_migration" reload:"restart" protect:"admin"`
 	HashWorkers             int             `json:"hash_workers"`
 	Restore                 backupRestore   `json:"restore"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules               backupSchedules `json:"schedules"`
+}
+
+// backupSchedules is core.backup.schedules (05-backup §5B.7).
+type backupSchedules struct {
+	Create tasks.ScheduleConfig `json:"create"`
+	Verify tasks.ScheduleConfig `json:"verify"`
 }
 
 type backupRetention struct {
@@ -598,12 +640,17 @@ type shutdownSettings struct {
 }
 
 type diagnosticsSettings struct {
-	Dir          string          `json:"dir" reload:"restart" protect:"admin" schema:"format=path"` // resolves against the DB's parent
-	Retention    config.Duration `json:"retention"`
-	LogLines     int             `json:"log_lines"`
-	TaskRuns     int             `json:"task_runs"`
-	MaxFileBytes int             `json:"max_file_bytes"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Dir          string               `json:"dir" reload:"restart" protect:"admin" schema:"format=path"` // resolves against the DB's parent
+	Retention    config.Duration      `json:"retention"`
+	LogLines     int                  `json:"log_lines"`
+	TaskRuns     int                  `json:"task_runs"`
+	MaxFileBytes int                  `json:"max_file_bytes"`
+	Schedules    diagnosticsSchedules `json:"schedules"`
+}
+
+// diagnosticsSchedules is core.diagnostics.schedules (05-health §5H.7).
+type diagnosticsSchedules struct {
+	Prune tasks.ScheduleConfig `json:"prune"`
 }
 
 // ---- core.http (05-http-api §10) ----
@@ -669,7 +716,15 @@ type librarySettings struct {
 	Watch          libraryWatch      `json:"watch"`
 	FreeSpace      libraryFreeSpace  `json:"free_space"`
 	Quarantine     libraryQuarantine `json:"quarantine"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules      librarySchedules  `json:"schedules"`
+}
+
+// librarySchedules is core.library.schedules (05-library §5L.7).
+// transfer_recover also runs once at start: its kind registers with
+// ScheduleFromConfig(...).OnStart() (F7-06, 05-library §5L.3.3).
+type librarySchedules struct {
+	QuarantinePrune tasks.ScheduleConfig `json:"quarantine_prune"`
+	TransferRecover tasks.ScheduleConfig `json:"transfer_recover"`
 }
 
 type libraryTransfer struct {
@@ -711,19 +766,24 @@ type logJournalSettings struct {
 }
 
 type logSchedules struct {
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	JournalPrune tasks.ScheduleConfig `json:"journal_prune"`
 }
 
 // ---- core.integrations, core.providerhttp (05-metadata M1.7, M2.7) ----
 
 type integrationsSettings struct {
-	Egress              integrationsEgress `json:"egress"`
-	HealthParallelism   int                `json:"health_parallelism" schema:"minimum=1"`
-	ProbeTimeout        config.Duration    `json:"probe_timeout"`
-	DrainTimeout        config.Duration    `json:"drain_timeout"`
-	MaxInstancesPerKind int                `json:"max_instances_per_kind"`
-	Disabled            bool               `json:"disabled" protect:"admin"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Egress              integrationsEgress    `json:"egress"`
+	HealthParallelism   int                   `json:"health_parallelism" schema:"minimum=1"`
+	ProbeTimeout        config.Duration       `json:"probe_timeout"`
+	DrainTimeout        config.Duration       `json:"drain_timeout"`
+	MaxInstancesPerKind int                   `json:"max_instances_per_kind"`
+	Disabled            bool                  `json:"disabled" protect:"admin"`
+	Schedules           integrationsSchedules `json:"schedules"`
+}
+
+// integrationsSchedules is core.integrations.schedules (05-metadata M1.7).
+type integrationsSchedules struct {
+	Health tasks.ScheduleConfig `json:"health"`
 }
 
 type integrationsEgress struct {
@@ -801,7 +861,12 @@ type auditSettings struct {
 	AsyncBuffer     int             `json:"async_buffer" reload:"restart"`
 	CoalesceWindow  config.Duration `json:"coalesce_window"`
 	DetailsMaxBytes int             `json:"details_max_bytes"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules       auditSchedules  `json:"schedules"`
+}
+
+// auditSchedules is core.audit.schedules (05-rbac §10).
+type auditSchedules struct {
+	Prune tasks.ScheduleConfig `json:"prune"`
 }
 
 type auditRetention struct {
@@ -841,7 +906,16 @@ type storageSettings struct {
 	Migration      storageMigration     `json:"migration"`
 	DataMigration  storageDataMigration `json:"data_migration"`
 	Swap           storageSwap          `json:"swap"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Schedules      storageSchedules     `json:"schedules"`
+}
+
+// storageSchedules is core.storage.schedules (05-storage §5S.4 "Task kinds").
+// Unlike the section's other keys it is DB-persisted, as every schedule key
+// is, so it carries no operator protection. 05-storage states no default;
+// F2-04 declares {enabled: true, window: "nightly"}, a window member as §5S.4
+// says.
+type storageSchedules struct {
+	Compact tasks.ScheduleConfig `json:"compact"`
 }
 
 type storageSequence struct {
@@ -885,8 +959,7 @@ type indexReconcile struct {
 
 // ---- core.tasks (05-tasks §5T.10) ----
 
-// tasksSettings is the core.tasks section: every key of the owner's table
-// except the per-owner schedule keys and the windows map, both F2-04's.
+// tasksSettings is the core.tasks section: every key of the owner's table.
 type tasksSettings struct {
 	Workers               int                      `json:"workers" reload:"restart"`
 	SystemWorkers         int                      `json:"system_workers" reload:"restart"` // reserved for PrioritySystem
@@ -902,8 +975,22 @@ type tasksSettings struct {
 	Timezone              string                   `json:"timezone" reload:"restart"` // an IANA zone; empty is the server's local zone
 	IdempotencyTTL        config.Duration          `json:"idempotency_ttl"`           // the HTTP start route only
 	HistoryRetention      config.Duration          `json:"history_retention"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
-	// windows (map): F2-04
+	Schedules             tasksSchedules           `json:"schedules"`
+	Windows               map[string]tasksWindow   `json:"windows"` // one key; map keys are window names
+}
+
+// tasksSchedules is core.tasks.schedules (05-tasks §5T.10).
+type tasksSchedules struct {
+	Prune tasks.ScheduleConfig `json:"prune"`
+}
+
+// tasksWindow is one core.tasks.windows.<name> entry (05-tasks §5T.10): hours
+// in core.tasks.timezone, wrapping midnight when end <= start, and the enable
+// flag.
+type tasksWindow struct {
+	Start   int  `json:"start" schema:"minimum=0,maximum=23"`
+	End     int  `json:"end" schema:"minimum=0,maximum=23"`
+	Enabled bool `json:"enabled"`
 }
 
 // tasksKindDial is the per-kind dial of core.tasks.kinds.
@@ -914,10 +1001,16 @@ type tasksKindDial struct {
 // ---- core.updater (05-updater §5U.8) ----
 
 type updaterSettings struct {
-	Mode        string `json:"mode" protect:"admin" schema:"enum=off|check"`
-	Channel     string `json:"channel" protect:"admin" schema:"enum=stable|prerelease"`
-	MaxDownload int64  `json:"max_download"`
-	// schedule keys (tasks.ScheduleConfig): F2-04
+	Mode        string           `json:"mode" protect:"admin" schema:"enum=off|check"`
+	Channel     string           `json:"channel" protect:"admin" schema:"enum=stable|prerelease"`
+	MaxDownload int64            `json:"max_download"`
+	Schedules   updaterSchedules `json:"schedules"`
+}
+
+// updaterSchedules is core.updater.schedules (05-updater §5U.8).
+// core.updater.schedules.apply is registered by the release that builds it.
+type updaterSchedules struct {
+	Check tasks.ScheduleConfig `json:"check"`
 }
 
 // ---- core.modules, core.lifecycle (06 §6.8) ----
