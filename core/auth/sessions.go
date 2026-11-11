@@ -1,5 +1,5 @@
 // file: core/auth/sessions.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
 // last-edited: 2026-11-11
 
@@ -263,7 +263,17 @@ func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
 		return err
 	}
 	now := s.now()
+	keyID, isKey := p.keyRef()
 	switch {
+	case isKey:
+		k, err := s.d.Store.APIKeyByID(ctx, keyID)
+		if err != nil {
+			return revalidateErr("key "+keyID, err)
+		}
+		if k.Owner != u.ID {
+			return fmt.Errorf("%w: key %s is not %s's", ErrRevoked, keyID, u.ID)
+		}
+		return keyUsable(k, now)
 	case p.Method.sessionMethod():
 		rec, err := s.d.Store.SessionByPublicID(ctx, p.CredentialID)
 		if err != nil {
@@ -277,15 +287,6 @@ func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
 		case rec.CredentialEpoch != u.CredentialEpoch:
 			return fmt.Errorf("%w: session %s", ErrStaleEpoch, p.CredentialID)
 		}
-	case p.Method == MethodAPIKey:
-		k, err := s.d.Store.APIKeyByID(ctx, p.CredentialID)
-		if err != nil {
-			return revalidateErr("key "+p.CredentialID, err)
-		}
-		if k.Owner != u.ID {
-			return fmt.Errorf("%w: key %s is not %s's", ErrRevoked, p.CredentialID, u.ID)
-		}
-		return keyUsable(k, now)
 	case u.CredentialEpoch != p.User.CredentialEpoch:
 		return fmt.Errorf("%w: %s", ErrStaleEpoch, u.ID)
 	}

@@ -1,5 +1,5 @@
 // file: core/auth/compat_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d9a1f58-7c02-4be6-a1d4-82e5b0c9f713
 // last-edited: 2026-11-11
 
@@ -360,4 +360,100 @@ func TestCompat_CheckCredentialFor(t *testing.T) {
 	other := f.session(dick) // Method session, not this handle's
 	wantErr(t, "another method's principal", c.CheckCredentialFor(other, rbac.Need("gotham:patrol")), auth.ErrInvalidCredentials)
 	wantErr(t, "no principal", c.CheckCredentialFor(nil, rbac.Need("gotham:patrol")), auth.ErrInvalidCredentials)
+}
+
+// TestCompatKey_RevalidateFollowsTheKey: a compat key principal carries a key
+// under its own Method, so Revalidate must read the key the way it does for
+// api_key: a revoked, disabled, expired or deleted key, and a key moved to
+// another owner, end the principal; its user's epoch alone does not decide.
+func TestCompatKey_RevalidateFollowsTheKey(t *testing.T) {
+	f, c := compatFx(t)
+	ctx := context.Background()
+	cl := from("192.0.2.78")
+	dick := f.user("dick-grayson", "gotham.detective")
+	sess := f.session(dick)
+
+	for _, tc := range []struct {
+		name   string
+		status auth.KeyStatus
+		want   error
+	}{
+		{"revoked", auth.KeyRevoked, auth.ErrRevoked},
+		{"disabled", auth.KeyDisabled, auth.ErrRevoked},
+		{"needs_confirmation", auth.KeyNeedsConfirmation, auth.ErrRevoked},
+	} {
+		raw, k := f.mint(sess, dick.ID, "gotham:patrol")
+		p, err := c.AuthenticateKey(ctx, raw, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.svc.Revalidate(ctx, p); err != nil {
+			t.Fatalf("%s: a live compat key principal: %v", tc.name, err)
+		}
+		cur := f.key(k.ID)
+		cur.Status, cur.Version = tc.status, cur.Version+1
+		f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, cur) })
+		wantErr(t, tc.name+" compat key", f.svc.Revalidate(ctx, p), tc.want)
+	}
+
+	raw, _ := f.mint(sess, dick.ID, "gotham:patrol")
+	p, err := c.AuthenticateKey(ctx, raw, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.advance(auth.DefaultKeyTTL + time.Minute)
+	wantErr(t, "an expired compat key", f.svc.Revalidate(ctx, p), auth.ErrExpired)
+}
+
+// TestCompatKey_CannotMintOrManageKeys: a compat surface's key principal has
+// no business mutating credentials, and the key rules that bind api_key
+// principals bind it too: it cannot mint a key (wider than itself or not), and
+// cannot re-enable, disable or revoke any key, so a narrow key never revives a
+// broader one (#4590 M1). The refusal is outright (ErrDenied).
+func TestCompatKey_CannotMintOrManageKeys(t *testing.T) {
+	f, c := compatFx(t)
+	ctx := context.Background()
+	cl := from("192.0.2.79")
+	dick := f.user("dick-grayson", "gotham.detective")
+	sess := f.session(dick)
+	broad, bk := f.mint(sess, dick.ID, "gotham:patrol", "gotham:cases.read")
+	_ = broad
+	rawN, _ := f.mint(sess, dick.ID, "gotham:patrol")
+	disabled := f.key(bk.ID)
+	disabled.Status, disabled.Version = auth.KeyDisabled, disabled.Version+1
+	f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, disabled) })
+
+	p, err := c.AuthenticateKey(ctx, rawN, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = f.svc.CreateAPIKey(ctx, p, auth.KeySpec{Owner: dick.ID, Name: "wider", Scopes: []rbac.Permission{"gotham:patrol", "gotham:cases.read"}})
+	wantErr(t, "a wider key minted by a compat key", err, auth.ErrDenied)
+	_, _, err = f.svc.CreateAPIKey(ctx, p, auth.KeySpec{Owner: dick.ID, Name: "same", Scopes: []rbac.Permission{"gotham:patrol"}})
+	wantErr(t, "an equal key minted by a compat key", err, auth.ErrDenied)
+	wantErr(t, "a broader key re-enabled by a compat key", f.svc.SetAPIKeyStatus(ctx, p, bk.ID, auth.KeyActive), auth.ErrDenied)
+	wantErr(t, "a key revoked by a compat key", f.svc.RevokeAPIKey(ctx, p, bk.ID), auth.ErrDenied)
+	if got := f.key(bk.ID).Status; got != auth.KeyDisabled {
+		t.Fatalf("the broader key is now %q", got)
+	}
+}
+
+// TestKeyPrincipal_NarrowKeyCannotReviveABroaderOne is the api_key twin of the
+// compat refusal above: the key rules themselves, through keyRef, hold for the
+// native method.
+func TestKeyPrincipal_NarrowKeyCannotReviveABroaderOne(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	dick := f.user("dick-grayson", "gotham.detective")
+	sess := f.session(dick)
+	_, bk := f.mint(sess, dick.ID, "gotham:patrol", "gotham:cases.read")
+	_, nk := f.mint(sess, dick.ID, "gotham:patrol")
+	disabled := f.key(bk.ID)
+	disabled.Status, disabled.Version = auth.KeyDisabled, disabled.Version+1
+	f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, disabled) })
+
+	p := f.keyPrincipal(dick, nk)
+	_, _, err := f.svc.CreateAPIKey(ctx, p, auth.KeySpec{Owner: dick.ID, Name: "wider", Scopes: []rbac.Permission{"gotham:patrol", "gotham:cases.read"}})
+	wantErr(t, "a wider key minted by a narrow key", err, auth.ErrScopeEscalation)
+	wantErr(t, "a broader key managed by a narrow key", f.svc.RevokeAPIKey(ctx, p, bk.ID), auth.ErrScopeEscalation)
 }

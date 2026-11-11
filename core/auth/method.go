@@ -1,5 +1,5 @@
 // file: core/auth/method.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 52a74e31-1d25-42c9-950d-3275d209be9e
 // last-edited: 2026-11-11
 
@@ -68,6 +68,31 @@ type Principal struct {
 	// MethodAPIKey, and CheckCredentialFor still has to re-read the key.
 	keyID string
 }
+
+// keyRef is the API key p was authenticated by, and false when p was not
+// built from a key. It covers both shapes of key principal: core's own
+// (Method MethodAPIKey, CredentialID the key) and a compat surface's (its own
+// Method, keyID the key). Every gate that depends on the key (Revalidate,
+// the effective set, key minting and management, CheckCredentialFor) asks
+// this and never compares Method to MethodAPIKey, so a compat key principal
+// cannot slip past a key rule by carrying another method name.
+func (p *Principal) keyRef() (id string, ok bool) {
+	switch {
+	case p == nil:
+		return "", false
+	case p.keyID != "":
+		return p.keyID, true
+	case p.Method == MethodAPIKey:
+		// An empty CredentialID is still a key principal: the read of key ""
+		// finds nothing and every gate refuses, rather than skipping.
+		return p.CredentialID, true
+	}
+	return "", false
+}
+
+// compatKey reports whether p is a compat surface's key principal: a key
+// principal whose Method is not core's.
+func (p *Principal) compatKey() bool { return p != nil && p.keyID != "" && p.Method != MethodAPIKey }
 
 // principalKey is the context key of WithPrincipal; unexported so only this
 // package can bind or read a principal.

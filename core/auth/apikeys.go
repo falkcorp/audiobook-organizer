@@ -1,5 +1,5 @@
 // file: core/auth/apikeys.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 61144126-f293-45db-8152-bf01124f696a
 // last-edited: 2026-11-11
 
@@ -32,6 +32,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	self, err := actorUser(actor)
 	if err != nil {
 		return "", nil, err
+	}
+	if actor.compatKey() {
+		return "", nil, fmt.Errorf("%w: a compat surface's key may not mint keys", ErrDenied)
 	}
 	// Refused here, before any Compile: a nil or empty list is a session's
 	// "every role permission" to rbac, never a key's (F4-02 rule).
@@ -68,7 +71,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	if err != nil {
 		return "", nil, err
 	}
-	if actor.Method == MethodAPIKey {
+	if _, isKey := actor.keyRef(); isKey {
 		if owner != self {
 			return "", nil, fmt.Errorf("%w: a key-authenticated caller mints keys only for itself", ErrDenied)
 		}
@@ -139,8 +142,8 @@ func (s *Service) effectiveSet(ctx context.Context, actor *Principal) (rbac.Chec
 	}
 	in := rbac.CheckerInput{Roles: u.Roles, Interactive: s.interactive(actor.Method)}
 	var expiry time.Time
-	if actor.Method == MethodAPIKey {
-		k, err := s.d.Store.APIKeyByID(ctx, actor.CredentialID)
+	if keyID, isKey := actor.keyRef(); isKey {
+		k, err := s.d.Store.APIKeyByID(ctx, keyID)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
@@ -201,6 +204,9 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 	if _, err := actorUser(actor); err != nil {
 		return err
 	}
+	if actor.compatKey() {
+		return fmt.Errorf("%w: a compat surface's key may not manage keys", ErrDenied)
+	}
 	if !st.valid() || st == KeyNeedsConfirmation {
 		return fmt.Errorf("%w: key status %q", ErrBadInput, st)
 	}
@@ -212,7 +218,7 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 		if err := s.mayManage(ctx, actor, k.Owner); err != nil {
 			return err
 		}
-		if actor.Method == MethodAPIKey {
+		if _, isKey := actor.keyRef(); isKey {
 			if err := s.keyMayManage(ctx, actor, k); err != nil {
 				return err
 			}
@@ -298,10 +304,7 @@ func (s *Service) CheckCredentialFor(p *Principal, perm rbac.Requirement) error 
 	if p == nil || p.Perms == nil {
 		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}
-	if keyID := p.keyID; p.Method == MethodAPIKey || keyID != "" {
-		if keyID == "" {
-			keyID = p.CredentialID
-		}
+	if keyID, isKey := p.keyRef(); isKey {
 		k, err := s.d.Store.APIKeyByID(context.Background(), keyID)
 		if errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("%w: key %s", ErrRevoked, keyID)
