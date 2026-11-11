@@ -1,5 +1,5 @@
 // file: core/tasks/items.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4939aca5-9ac9-469d-bb84-fc497d308458
 // last-edited: 2026-11-10
 
@@ -152,7 +152,11 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 // held, a second call is refused with ErrLockAlreadyHeld, and a nested loop
 // may lock only refs that call covers (in the item's table), else
 // ErrNestedLockNotHeld: two sibling items locking X then Y and Y then X
-// would deadlock. Release-then-relock is fine.
+// would deadlock. Release-then-relock is fine. The reverse holds too: while
+// a nested item under it holds a run-table lock (its own ExclusiveRefs, or a
+// LockRefs call made under no hold), an item's LockRefs is refused with
+// ErrLockAlreadyHeld, so a parent never takes a run-table lock while its
+// child holds another (F2-03, from the #4554 verification).
 //
 // Both marks live on in every context derived from the item's, so a
 // goroutine started by an item must not outlive it (F2-17's tasklint is
@@ -360,13 +364,35 @@ type heldRefsKey struct{}
 // outstanding LockRefs call (at most one at a time); table is where every
 // nested lock covered by either is taken. parent is the enclosing item's
 // hold, consulted when this item holds nothing itself.
+//
+// Every hold of one item tree (a top-level item and the nested items under
+// it) shares fam, which guards dyn, pending and desc of each, so a decision
+// that reads one hold and writes another (an ancestor's reservation against
+// a descendant's run-table lock) is one atomic step.
 type itemHold struct {
 	refs   []entity.Ref
 	table  *refTable
 	parent *itemHold
+	fam    *sync.Mutex
 
-	mu  sync.Mutex
-	dyn []entity.Ref
+	dyn     []entity.Ref // the outstanding LockRefs call's refs; nil = none
+	pending bool         // a LockRefs call is reserved and still waiting for its locks
+	// desc counts the run-table locks that descendant items hold or are
+	// taking (their ExclusiveRefs, or a LockRefs call made under no hold).
+	// While it is non-zero this item's own LockRefs is refused with
+	// ErrLockAlreadyHeld: the item would take a run-table lock while a child
+	// holds another, which is locking in stages across the item tree.
+	desc int
+}
+
+// newItemHold is the hold of a new item nested under parent (nil at the
+// top level), sharing parent's family lock.
+func newItemHold(refs []entity.Ref, parent *itemHold) *itemHold {
+	fam := &sync.Mutex{}
+	if parent != nil {
+		fam = parent.fam
+	}
+	return &itemHold{refs: refs, table: &refTable{}, parent: parent, fam: fam}
 }
 
 func holdOf(ctx context.Context) *itemHold {
@@ -374,24 +400,32 @@ func holdOf(ctx context.Context) *itemHold {
 	return h
 }
 
-// holding reports the refs the item holds right now (ExclusiveRefs plus an
-// outstanding LockRefs call).
-func (h *itemHold) holding() []entity.Ref {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// holdingLocked reports the refs the item holds right now (ExclusiveRefs
+// plus an outstanding LockRefs call). fam is held.
+func (h *itemHold) holdingLocked() []entity.Ref {
 	return append(slices.Clone(h.refs), h.dyn...)
 }
 
-// owner is the nearest hold, this one or an enclosing item's, that holds
-// refs: nested locks under it are taken in its table. nil when no enclosing
-// item holds anything, so locks go to the run's table.
-func (h *itemHold) owner() *itemHold {
+// ownerLocked is the nearest hold, this one or an enclosing item's, that
+// holds refs or has a LockRefs call pending: nested locks under it are taken
+// in its table, and only refs it covers (none while its call is pending and
+// it holds nothing else). nil when no enclosing item holds or waits for
+// anything, so locks go to the run's table. fam is held.
+func (h *itemHold) ownerLocked() *itemHold {
 	for a := h; a != nil; a = a.parent {
-		if len(a.holding()) > 0 {
+		if a.pending || len(a.refs) > 0 || len(a.dyn) > 0 {
 			return a
 		}
 	}
 	return nil
+}
+
+// addDescLocked adds n to the descendant count of h and every enclosing
+// hold. A nil h is the top level: nothing to count. fam is held.
+func (h *itemHold) addDescLocked(n int) {
+	for a := h; a != nil; a = a.parent {
+		a.desc += n
+	}
 }
 
 // covers reports that holding h includes r: the same ref, or r is one ID of
@@ -411,14 +445,16 @@ var ErrHeldOverlap = errors.New("tasks: the lock overlaps a ref this item holds 
 var ErrNestedLockNotHeld = errors.New("tasks: a nested lock may name only refs the item holds; declare every ref the item needs in its ExclusiveRefs")
 
 // ErrLockAlreadyHeld refuses an item's second LockRefs call while its first
-// is still held: an item takes all its refs in one call, because two sibling
-// items locking in opposite orders deadlock. Release first, or lock every
-// ref at once. Name coined by F2-01's second follow-up.
+// is still held, and an item's LockRefs call while one of its nested items
+// holds a run-table lock: an item takes all its refs in one call, because
+// two sibling items locking in opposite orders deadlock. Release first, or
+// lock every ref at once. Name coined by F2-01's second follow-up.
 var ErrLockAlreadyHeld = errors.New("tasks: this item already holds refs from an earlier LockRefs call; take every ref in one call or release first")
 
-// check refuses any ref the hold does not cover (see ForEach).
-func (h *itemHold) check(refs []entity.Ref) error {
-	have := h.holding()
+// checkLocked refuses any ref the hold does not cover (see ForEach). fam is
+// held.
+func (h *itemHold) checkLocked(refs []entity.Ref) error {
+	have := h.holdingLocked()
 	for _, r := range refs {
 		switch {
 		case slices.ContainsFunc(have, func(x entity.Ref) bool { return covers(x, r) }):
@@ -431,60 +467,78 @@ func (h *itemHold) check(refs []entity.Ref) error {
 	return nil
 }
 
-// lock takes refs, all covered by the hold, in the item's table.
-func (h *itemHold) lock(ctx context.Context, refs []entity.Ref) (func(), error) {
-	if err := h.check(refs); err != nil {
-		return nil, err
-	}
+// lockIn takes refs, already checked against owner, in owner's table.
+func lockIn(ctx context.Context, owner *itemHold, refs []entity.Ref) (func(), error) {
 	if len(refs) == 0 {
 		return func() {}, nil
 	}
-	return h.table.lock(ctx, refs)
+	return owner.table.lock(ctx, refs)
 }
 
 // lockFor is ic.LockRefs and LockRefs. Outside any item it takes the run's
 // table. Inside an item it is that item's one LockRefs call: refused with
-// ErrLockAlreadyHeld while an earlier call is still held; under a hold that
-// owns refs (the item's ExclusiveRefs or an enclosing item's) it may name
-// only covered refs and locks them in that hold's table; otherwise it takes
-// the run's table, and nested loops under the item may then lock only refs
-// it covers until it is released.
+// ErrLockAlreadyHeld while an earlier call is still held or waiting, or
+// while a nested item holds a run-table lock (desc); under a hold that owns
+// refs (the item's ExclusiveRefs or an enclosing item's) it may name only
+// covered refs and locks them in that hold's table; otherwise it takes the
+// run's table, counted on every enclosing hold, and nested loops under the
+// item may then lock only refs it covers until it is released.
 func lockFor(ctx context.Context, h RunHost, refs []entity.Ref) (func(), error) {
 	hold := holdOf(ctx)
 	if hold == nil {
 		return h.LockRefs(ctx, refs...)
 	}
-	hold.mu.Lock()
-	if hold.dyn != nil {
-		hold.mu.Unlock()
+	hold.fam.Lock()
+	if hold.dyn != nil || hold.pending || hold.desc > 0 {
+		hold.fam.Unlock()
 		return nil, ErrLockAlreadyHeld
 	}
-	hold.dyn = []entity.Ref{} // reserved: a concurrent second call is refused, not queued
-	hold.mu.Unlock()
-	clear := func() {
-		hold.mu.Lock()
-		hold.dyn = nil
-		hold.mu.Unlock()
+	owner := hold.ownerLocked() // before the reservation: the item's own call covers nothing yet
+	if owner != nil {
+		if err := owner.checkLocked(refs); err != nil {
+			hold.fam.Unlock()
+			return nil, err
+		}
 	}
+	hold.pending = true // reserved: a concurrent second call is refused, not queued
+	runTable := owner == nil && len(refs) > 0
+	if runTable {
+		hold.parent.addDescLocked(1)
+	}
+	hold.fam.Unlock()
 	var release func()
 	var err error
-	if owner := hold.owner(); owner != nil {
-		release, err = owner.lock(ctx, refs)
+	if owner != nil {
+		release, err = lockIn(ctx, owner, refs)
 	} else {
 		release, err = h.LockRefs(ctx, refs...)
 	}
+	hold.fam.Lock()
+	hold.pending = false
 	if err != nil {
-		clear()
+		if runTable {
+			hold.parent.addDescLocked(-1)
+		}
+		hold.fam.Unlock()
 		return nil, err
 	}
-	hold.mu.Lock()
 	hold.dyn = slices.Clone(refs)
 	if hold.dyn == nil {
 		hold.dyn = []entity.Ref{}
 	}
-	hold.mu.Unlock()
+	hold.fam.Unlock()
 	var once sync.Once
-	return func() { once.Do(func() { release(); clear() }) }, nil
+	return func() {
+		once.Do(func() {
+			release()
+			hold.fam.Lock()
+			hold.dyn = nil
+			if runTable {
+				hold.parent.addDescLocked(-1)
+			}
+			hold.fam.Unlock()
+		})
+	}, nil
 }
 
 // PanicError is the item error a recovered panic in fn, Label, Key or
@@ -773,7 +827,7 @@ func (l *loop[T]) one(i int, item T, fn func(ic *ItemRC, item T) error) {
 	}
 	// The item's lock state: its ExclusiveRefs, its one LockRefs call, and
 	// the table nested locks under it are taken in (see ForEach).
-	ctx = context.WithValue(ctx, heldRefsKey{}, &itemHold{refs: heldRefs, table: &refTable{}, parent: holdOf(ctx)})
+	ctx = context.WithValue(ctx, heldRefsKey{}, newItemHold(heldRefs, holdOf(ctx)))
 	l.started.Add(1)
 	var label string
 	err := l.guard("Label", func() error {
@@ -821,18 +875,50 @@ func guarded[V any](what string, f func() (V, error)) (v V, err error) {
 
 // lockRefs takes an item's ExclusiveRefs, all at once (never in stages):
 // under an enclosing item that holds refs (its ExclusiveRefs or an
-// outstanding LockRefs call), in that item's table and only refs it covers;
-// otherwise in the run's table, or the loop's own without a run.
+// outstanding LockRefs call) or waits for them, in that item's table and
+// only refs it covers; otherwise in the run's table, or the loop's own
+// without a run, counted on every enclosing hold (desc) so that no enclosing
+// item takes a run-table lock while this item holds one.
 // The run's table therefore never sees a holder ask again for a ref it holds.
 func (l *loop[T]) lockRefs(ctx context.Context, refs []entity.Ref) (func(), error) {
 	if len(refs) == 0 {
 		return func() {}, nil
 	}
-	if hold := holdOf(ctx); hold != nil {
-		if owner := hold.owner(); owner != nil {
-			return owner.lock(ctx, refs)
-		}
+	hold := holdOf(ctx)
+	if hold == nil {
+		return l.lockTop(ctx, refs)
 	}
+	hold.fam.Lock()
+	if owner := hold.ownerLocked(); owner != nil {
+		err := owner.checkLocked(refs)
+		hold.fam.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return lockIn(ctx, owner, refs)
+	}
+	hold.addDescLocked(1)
+	hold.fam.Unlock()
+	release, err := l.lockTop(ctx, refs)
+	if err != nil {
+		hold.fam.Lock()
+		hold.addDescLocked(-1)
+		hold.fam.Unlock()
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			release()
+			hold.fam.Lock()
+			hold.addDescLocked(-1)
+			hold.fam.Unlock()
+		})
+	}, nil
+}
+
+// lockTop takes refs in the run's table, or the loop's own without a run.
+func (l *loop[T]) lockTop(ctx context.Context, refs []entity.Ref) (func(), error) {
 	if l.h == nil {
 		return l.locks.lock(ctx, refs)
 	}

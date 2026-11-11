@@ -1,5 +1,5 @@
 // file: core/tasks/items_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
@@ -1073,4 +1073,65 @@ func TestItemLockRefs_OneCallAtATime(t *testing.T) {
 			}
 		})
 	})
+}
+
+// TestItemLockRefs_ParentRefusedWhileChildHoldsRunTableLock (F2-03
+// coordinator addition, from the #4554 verification): a nested item that
+// holds a run-table lock (through ic.LockRefs under no hold, or through its
+// own ExclusiveRefs) makes its parent's LockRefs fail with
+// ErrLockAlreadyHeld instead of taking a second run-table lock in stages; once
+// the child releases, the parent locks.
+func TestItemLockRefs_ParentRefusedWhileChildHoldsRunTableLock(t *testing.T) {
+	cave := tasks.ResID("gotham", "caves", "batcave")
+	lab := tasks.ResID("gotham", "labs", "lab-1")
+	for _, c := range []struct {
+		name  string
+		child func(ctx context.Context, parent *tasks.ItemRC) error
+	}{
+		{"child ic.LockRefs", func(ctx context.Context, parent *tasks.ItemRC) error {
+			_, err := tasks.ForEach(ctx, tasks.Sequential("one clue"), []int{0}, func(cctx context.Context, _ int) error {
+				release, err := tasks.LockRefs(cctx, cave)
+				if err != nil {
+					return fmt.Errorf("child lock: %w", err)
+				}
+				defer release()
+				if _, err := parent.LockRefs(lab); !errors.Is(err, tasks.ErrLockAlreadyHeld) {
+					return fmt.Errorf("parent lock while the child holds the run table = %v, want ErrLockAlreadyHeld", err)
+				}
+				return nil
+			})
+			return err
+		}},
+		{"child ExclusiveRefs", func(ctx context.Context, parent *tasks.ItemRC) error {
+			_, err := tasks.ForEach(ctx, tasks.Sequential("one clue"), []int{0}, func(context.Context, int) error {
+				if _, err := parent.LockRefs(lab); !errors.Is(err, tasks.ErrLockAlreadyHeld) {
+					return fmt.Errorf("parent lock while the child holds its ExclusiveRefs = %v, want ErrLockAlreadyHeld", err)
+				}
+				return nil
+			}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				run := taskstest.NewFakeRun(ctx, caseKind)
+				_, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
+					if err := c.child(ic.Context(), ic); err != nil {
+						return err
+					}
+					release, err := ic.LockRefs(lab) // the child released: the parent may lock now
+					if err != nil {
+						return fmt.Errorf("parent lock after the child released: %w", err)
+					}
+					release()
+					return nil
+				})
+				if err != nil || ctx.Err() != nil {
+					t.Fatalf("err %v ctx %v", err, ctx.Err())
+				}
+			})
+		})
+	}
 }
