@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/analyzer.go
-// version: 2.2.0
+// version: 2.4.0
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package tasklint is the type-aware go/analysis check of core/tasks
 // definitions (05-tasks §5T.8.4), moved from ABO's tools/cmd/oplint (04 §8.2).
@@ -13,7 +13,11 @@
 //	unregistered-kind       a tasks.Task, tasks.Batch or tasks.Fixer call, or a
 //	                        call of a helper returning tasks.Definition that
 //	                        builds one, that no tasks.Definition argument of a
-//	                        Registrar method (Tasks, DerivedIndex) reaches
+//	                        Registrar.Tasks or Registrar.DerivedIndex call reaches
+//	                        (reaching a function covers its whole body), or one
+//	                        that is plainly thrown away wherever it is: a bare
+//	                        statement, an assignment to _, or a local read only
+//	                        by _ =
 //	                        (nor, with -list-funcs, a called package-level func
 //	                        returning []tasks.Definition: 05-tasks §5T.8.2 rule
 //	                        4's books list functions, until the F5 flip). Run
@@ -101,6 +105,12 @@ type Config struct {
 	// Registrar.Tasks call before the F5 flip (05-tasks §5T.8.2 rule 4,
 	// §5T.8.4).
 	ListFuncs bool
+	// Constructors lists the functions ("importpath.Func" or
+	// "importpath.Type.Method") allowed to carry ConstructorDirective
+	// (-constructors, comma separated): a reviewed allowlist, so a new
+	// constructor is a visible change to the caller's test. Run also reports
+	// an entry that matches no directive in the loaded packages.
+	Constructors []string
 
 	// wholeProgram is set by Analyze, which checks unregistered-kind over all
 	// loaded packages at once; the per-package passes then skip it.
@@ -147,6 +157,7 @@ func New(cfg Config) *analysis.Analyzer {
 	c := cfg
 	c.StorePackages = slices.Clone(cfg.StorePackages)
 	c.LegacyDefinitions = slices.Clone(cfg.LegacyDefinitions)
+	c.Constructors = slices.Clone(cfg.Constructors)
 	a := &analysis.Analyzer{
 		Name: "tasklint",
 		Doc:  "check core/tasks definitions (05-tasks §5T.8.4); rules in the package documentation",
@@ -159,6 +170,7 @@ func New(cfg Config) *analysis.Analyzer {
 	fs.StringVar(&c.RegistrarPath, "registrar", c.RegistrarPath, "import path of the package declaring Registrar")
 	fs.Var(listFlag{&c.StorePackages}, "stores", "comma-separated store packages (writer-bypass, store-capture)")
 	fs.Var(listFlag{&c.LegacyDefinitions}, "legacy-defs", `comma-separated "importpath.Type" legacy definition types`)
+	fs.Var(listFlag{&c.Constructors}, "constructors", `comma-separated functions allowed to carry //tasklint:constructor ("importpath.Func")`)
 	fs.BoolVar(&c.ListFuncs, "list-funcs", c.ListFuncs, "treat package-level funcs returning []tasks.Definition as registration roots")
 	return a
 }

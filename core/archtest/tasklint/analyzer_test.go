@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/analyzer_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: e8def934-7124-4f87-a67e-9f206a103d30
 // last-edited: 2026-11-10
 
@@ -21,6 +21,7 @@ const (
 func fixtureConfig() Config {
 	cfg := DefaultConfig()
 	cfg.StorePackages = []string{caseStore}
+	cfg.Constructors = []string{cases + "unregistered_kind.NewDerived"}
 	return cfg
 }
 

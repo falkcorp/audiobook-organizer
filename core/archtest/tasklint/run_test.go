@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 59ad832d-2138-4515-ab39-44beaafda01b
 // last-edited: 2026-11-10
 
@@ -410,6 +410,7 @@ func TestAnalyze_WholeProgram(t *testing.T) {
 		t.Helper()
 		cfg := fixtureConfig()
 		cfg.ListFuncs = listFuncs
+		cfg.Constructors = nil
 		var full []string
 		for _, p := range pkgs {
 			full = append(full, x+p)
@@ -567,5 +568,39 @@ func TestCheckShrinkOnly_BaseAndGenesis(t *testing.T) {
 	put("shrink_test.go", "package app\n\n// calls tasklint.CheckShrinkOnly(t, \"exempt.d\")\n")
 	if r := check(); len(r.errors)+len(r.fatals) != 0 {
 		t.Fatalf("genesis: errors %v fatals %v", r.errors, r.fatals)
+	}
+}
+
+// TestAnalyze_ConstructorAllowlist: the whole-program pass reports a
+// Constructors entry that no loaded function carrying the directive matches,
+// and accepts the listed one.
+func TestAnalyze_ConstructorAllowlist(t *testing.T) {
+	root := fixtureGOPATH(t)
+	cfg := fixtureConfig()
+	listed := cases + "unregistered_kind.NewDerived"
+	for _, tc := range []struct {
+		list  []string
+		stale int
+	}{
+		{[]string{listed}, 0},
+		{[]string{listed, cases + "unregistered_kind.Gone"}, 1},
+	} {
+		cfg.Constructors = tc.list
+		fs, _, err := Analyze(cfg, root, []string{cases + "unregistered_kind"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale, refused := 0, 0
+		for _, f := range fs {
+			if f.File == "(Options)" && strings.Contains(f.Message, "unregistered_kind.Gone, which no loaded function") {
+				stale++
+			}
+			if strings.Contains(f.Message, "on NewDerived, which Config.Constructors") {
+				refused++
+			}
+		}
+		if stale != tc.stale || refused != 0 {
+			t.Errorf("list %v: %d stale (want %d), NewDerived refused %d times; findings %v", tc.list, stale, tc.stale, refused, fs)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/registration.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 5baf56b2-c55e-4af1-af93-7a5c497dbcef
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasklint
 
@@ -26,21 +26,35 @@ import (
 // kind helper: a function or method returning tasks.Definition whose body
 // makes a kind site itself (found to a fixed point, so helpers of helpers
 // count). Every kind site must lie inside what the registration roots reach.
-// The roots are the tasks.Definition arguments of each Registrar method call
-// (Registrar.Tasks, and Registrar.DerivedIndex's build, 05-tasks §5T.2) and,
-// with ListFuncs, each list function some loaded package calls. Reachability
-// follows package-level funcs, methods and vars across packages and the
-// assignments of function-local variables. A site inside a helper that has
-// call sites is not checked itself: each of those call sites is, so a helper
-// shared by a registered and an orphan caller reports the orphan call, not
-// nothing. A helper nobody calls is checked in its own body, unless its doc
-// carries ConstructorDirective: an exported kind constructor other modules
-// call (datamigrate.DerivedBuildTask), whose call sites there are the kind
-// sites.
+// The roots are the arguments of each Registrar.Tasks call and the build
+// argument of each Registrar.DerivedIndex call (05-tasks §5T.2), and, with
+// ListFuncs, each list function some loaded package calls.
+//
+// Reachability follows package-level funcs, methods and vars across packages
+// and the assignments of function-local variables; reaching a function covers
+// its whole body, so a list built with make and index assignment, an adder
+// closure or a table of rows (the F5 conversions' shapes) passes. A site
+// inside a helper that has call sites is not checked by coverage: each of
+// those call sites is, so a helper shared by a registered and an orphan
+// caller reports the orphan call. A helper nobody calls is checked in its own
+// body, unless it carries ConstructorDirective: an exported kind constructor
+// other modules call (datamigrate.DerivedBuildTask), whose call sites there
+// are the kind sites. Config.Constructors lists the functions allowed to
+// carry the directive.
+//
+// Coverage cannot see a kind thrown away inside a covered body, so a site
+// that is clearly discarded is reported wherever it is, a helper's or a
+// constructor's body included: a bare expression statement, an assignment to
+// _ (in its result's position, for a multi-value call), or a local variable
+// whose only reads are assignments to _ (Go refuses a local never read at
+// all). A kind kept in a parameter, a struct field, a map or a channel is not
+// judged discarded.
 
 // ConstructorDirective, in an exported kind helper's doc comment with a
 // reason, marks it a constructor for other modules: with no call site in the
-// loaded program its body is not a kind site. It never hides a call site.
+// loaded program, its body is not checked by coverage. It never hides a call
+// site, nor a kind its body discards. Only the functions in
+// Config.Constructors may carry it.
 const ConstructorDirective = "//tasklint:constructor"
 
 // unit is one package's non-test files and type information.
@@ -317,8 +331,10 @@ func (r *registration) eachDecl(fn func(u *unit, d ast.Decl, dk string)) {
 	}
 }
 
-// roots returns the registration roots: every tasks.Definition argument of a
-// Registrar method (a ...tasks.Definition spread included) and, with
+// roots returns the registration roots: the tasks.Definition arguments of
+// each Registrar.Tasks call (a ...tasks.Definition spread included) and of
+// each Registrar.DerivedIndex call (its build), named so that a Registrar
+// method added later registers nothing until this rule says so; and, with
 // ListFuncs, every list function some loaded package calls (a list function
 // nothing calls registers nothing).
 func (r *registration) roots() []nodeAt {
@@ -333,7 +349,7 @@ func (r *registration) roots() []nodeAt {
 			if !ok {
 				return true
 			}
-			if recv, _ := methodIn(u.info, call, r.cfg.RegistrarPath); recv == "Registrar" {
+			if recv, name := methodIn(u.info, call, r.cfg.RegistrarPath); recv == "Registrar" && (name == "Tasks" || name == "DerivedIndex") {
 				for _, a := range call.Args {
 					t := u.info.TypeOf(a)
 					if sl, ok := t.(*types.Slice); ok && call.Ellipsis.IsValid() {
@@ -405,15 +421,17 @@ func (r *registration) reach(queue []nodeAt) []ast.Node {
 	return reached
 }
 
-func (r *registration) report(reached []ast.Node) []kindFinding {
-	covered := func(p token.Pos) bool {
-		for _, n := range reached {
-			if p >= n.Pos() && p < n.End() {
-				return true
-			}
+func within(nodes []ast.Node, p token.Pos) bool {
+	for _, n := range nodes {
+		if p >= n.Pos() && p < n.End() {
+			return true
 		}
-		return false
 	}
+	return false
+}
+
+func (r *registration) report(reached []ast.Node) []kindFinding {
+	covered := func(p token.Pos) bool { return within(reached, p) }
 	why := "no Registrar call in this package"
 	if r.whole {
 		why = "no Registrar call in any loaded package"
@@ -422,6 +440,10 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 		why += " and no called list function returning []tasks.Definition"
 	}
 	var out []kindFinding
+	allowed := map[string]bool{}
+	for _, k := range r.cfg.Constructors {
+		allowed[k] = true
+	}
 	keys := make([]string, 0, len(r.constructors))
 	for k := range r.constructors {
 		keys = append(keys, k)
@@ -434,20 +456,29 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s: only an exported kind helper (a func returning tasks.Definition that builds one) is a constructor; delete the directive", ConstructorDirective, fd.Name.Name)})
 		case r.constructors[k] == "":
 			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s needs the reason: who calls it and which Registrar method takes the result", ConstructorDirective, fd.Name.Name)})
+		case !allowed[k]:
+			out = append(out, kindFinding{pos: fd.Pos(), msg: fmt.Sprintf("%s on %s, which Config.Constructors (Options.Constructors) does not list as %q; a new constructor is a reviewed addition to that list", ConstructorDirective, fd.Name.Name, k)})
 		}
 	}
-	r.eachDecl(func(u *unit, d ast.Decl, dk string) {
-		valid := r.constructors[dk] != "" && r.funcs[dk] != nil && r.funcs[dk].Name.IsExported()
-		if r.helpers[dk] && (r.called[dk] || valid) {
-			return // each call site of the helper is checked instead
+	if r.whole {
+		for _, k := range r.cfg.Constructors {
+			if _, ok := r.constructors[k]; !ok {
+				out = append(out, kindFinding{pos: token.NoPos, msg: fmt.Sprintf("Constructors lists %s, which no loaded function carrying %s matches; delete the entry", k, ConstructorDirective)})
+			}
 		}
+	}
+	reads := r.localReads()
+	r.eachDecl(func(u *unit, d ast.Decl, dk string) {
+		valid := r.constructors[dk] != "" && allowed[dk] && r.funcs[dk] != nil && r.funcs[dk].Name.IsExported()
+		template := r.helpers[dk] && (r.called[dk] || valid) // its call sites carry coverage
+		discards := r.discards(u, d, reads)
 		ast.Inspect(d, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
 			s := r.siteKey(u, call)
-			if s == "" || s == dk || covered(call.Pos()) {
+			if s == "" || s == dk {
 				return true
 			}
 			var what string
@@ -457,11 +488,140 @@ func (r *registration) report(reached []ast.Node) []kindFinding {
 			} else {
 				what = "definition built by " + r.funcs[s].Name.Name
 			}
-			out = append(out, kindFinding{pos: call.Pos(), msg: fmt.Sprintf(
-				"%s in %s is not registered: %s reaches it; pass it to Registrar.Tasks (or Registrar.DerivedIndex), directly or through a function the call reaches",
-				what, declName(d), why)})
+			switch {
+			case discards[call]:
+				out = append(out, kindFinding{pos: call.Pos(), msg: fmt.Sprintf(
+					"%s in %s is built and discarded (a bare statement, an assignment to _, or a local read only by _ =): register it or delete it",
+					what, declName(d))})
+			case template || covered(call.Pos()):
+			default:
+				out = append(out, kindFinding{pos: call.Pos(), msg: fmt.Sprintf(
+					"%s in %s is not registered: %s reaches it; pass it to Registrar.Tasks (or Registrar.DerivedIndex), directly or through a function the call reaches",
+					what, declName(d), why)})
+			}
 			return true
 		})
+	})
+	return out
+}
+
+// isBlank reports the blank identifier.
+func isBlank(e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	return ok && id.Name == "_"
+}
+
+// localReads counts, for each function-local variable, the identifier uses
+// that read it: every use except the left side of an assignment and the
+// right side of an assignment to _ (`_ = v` keeps the compiler quiet and
+// reads nothing). A named result counts as read: a bare return reads it.
+func (r *registration) localReads() map[types.Object]int {
+	reads := map[types.Object]int{}
+	for _, u := range r.units {
+		for _, f := range u.files {
+			notRead := map[*ast.Ident]bool{}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if ft, ok := n.(*ast.FuncType); ok && ft.Results != nil {
+					// A named result is read by every bare return.
+					for _, fl := range ft.Results.List {
+						for _, id := range fl.Names {
+							if obj := u.info.Defs[id]; obj != nil {
+								reads[obj]++
+							}
+						}
+					}
+				}
+				as, ok := n.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, l := range as.Lhs {
+					if id, ok := ast.Unparen(l).(*ast.Ident); ok {
+						notRead[id] = true
+					}
+					if isBlank(l) && len(as.Rhs) == len(as.Lhs) {
+						if id, ok := ast.Unparen(as.Rhs[i]).(*ast.Ident); ok {
+							notRead[id] = true
+						}
+					}
+				}
+				return true
+			})
+			ast.Inspect(f, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || notRead[id] {
+					return true
+				}
+				if obj, ok := u.info.Uses[id].(*types.Var); ok && obj.Pkg() != nil && obj.Parent() != obj.Pkg().Scope() {
+					reads[obj]++
+				}
+				return true
+			})
+		}
+	}
+	return reads
+}
+
+// discards returns the calls in d whose definition is clearly thrown away:
+// a bare expression statement, a value assigned to _, or a value stored in a
+// local variable nothing reads (reads, localReads).
+func (r *registration) discards(u *unit, d ast.Decl, reads map[types.Object]int) map[*ast.CallExpr]bool {
+	out := map[*ast.CallExpr]bool{}
+	dropped := func(lhs ast.Expr) bool {
+		if isBlank(lhs) {
+			return true
+		}
+		id, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok {
+			return false
+		}
+		v, ok := u.info.ObjectOf(id).(*types.Var)
+		return ok && v.Pkg() != nil && v.Parent() != v.Pkg().Scope() && reads[v] == 0
+	}
+	// pair marks rhs when it is a call and its definition lands in lhs; a
+	// multi-value call lands its tasks.Definition result in that position.
+	pair := func(lhs []ast.Expr, rhs []ast.Expr) {
+		if len(lhs) == len(rhs) {
+			for i, x := range rhs {
+				if call, ok := ast.Unparen(x).(*ast.CallExpr); ok && dropped(lhs[i]) {
+					out[call] = true
+				}
+			}
+			return
+		}
+		if len(rhs) != 1 {
+			return
+		}
+		call, ok := ast.Unparen(rhs[0]).(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		tup, ok := u.info.TypeOf(call).(*types.Tuple)
+		if !ok {
+			return
+		}
+		for i := range tup.Len() {
+			if i < len(lhs) && r.isDefinition(tup.At(i).Type()) && dropped(lhs[i]) {
+				out[call] = true
+			}
+		}
+	}
+	ast.Inspect(d, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.ExprStmt:
+			if call, ok := ast.Unparen(n.X).(*ast.CallExpr); ok {
+				out[call] = true
+			}
+		case *ast.AssignStmt:
+			pair(n.Lhs, n.Rhs)
+		case *ast.ValueSpec:
+			lhs := make([]ast.Expr, len(n.Names))
+			for i, id := range n.Names {
+				lhs[i] = id
+			}
+			pair(lhs, n.Values)
+		}
+		return true
 	})
 	return out
 }
