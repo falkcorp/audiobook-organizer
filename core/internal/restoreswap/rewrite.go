@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/rewrite.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e4287385-23de-4df7-b1bb-31ac3240dac4
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -25,11 +25,14 @@ import (
 // copy, the in-process reopen); this file derives M8's phase and runs the
 // KindRewrite swap in process with the one journaled swap's own steps.
 //
-// The phase is derived from M8's record and from the KindRewrite journals
-// whose StepID is this M8's own (rejected ones skipped), newest first:
+// The phase is derived from the KindRewrite journals whose StepID is this
+// M8's own (rejected ones skipped), newest first, not from the copy (whose
+// own record reads copied, §5S.3.13):
 //
-//   - record pending (none): phases 1 (compact) and 2 (copy, record copied);
-//   - record copied, no journal: phase 3 (the swap), then 4;
+//   - record done: nothing;
+//   - no journal: phases 1 (compact), 2 (copy) and 3 (the swap), then 4,
+//     all in this boot, so the copy that is swapped in is always one taken
+//     from the store as this boot found it;
 //   - newest journal swapped, opened or applied: phase 4 without a second
 //     swap;
 //   - newest journal swapped_back: phases 1-4 once more;
@@ -128,14 +131,11 @@ func (s *Swapper) RunRewrite(ctx context.Context, db *storage.DB, step storage.R
 	case len(js) > 0 && js[0].last == StepSwappedBack:
 		s.o.Logger.Warn("restoreswap: the store rewrite swapped back once; restarting it from the compaction",
 			"step", step.ID, "journal", js[0].id)
-		state = "" // phases 1-2 again: the copy went to failed/ with the swap-back
 	case len(js) > 0:
 		return fmt.Errorf("%w: KindRewrite journal %s of %s at %q with no swap in flight", ErrJournalCorrupt, js[0].id, step.ID, js[0].last)
 	}
-	if state != storage.RewriteCopied {
-		if err := s.rewriteCopy(ctx, db, step); err != nil {
-			return err
-		}
+	if err := s.rewriteCopy(ctx, db, step); err != nil {
+		return err
 	}
 	id, err := s.rewriteSwap(ctx, db, step)
 	if err != nil {
@@ -144,19 +144,19 @@ func (s *Swapper) RunRewrite(ctx context.Context, db *storage.DB, step storage.R
 	return s.rewriteFinish(ctx, db, step, id)
 }
 
-// rewriteCopy is phases 1 and 2: compact, copy into RewriteDir, record
-// copied.
+// rewriteCopy is phases 1 and 2: compact, then copy into RewriteDir (the
+// copy carries M8's record at copied; the live store's stays pending).
 func (s *Swapper) rewriteCopy(ctx context.Context, db *storage.DB, step storage.RewriteStep) error {
 	if err := db.RewriteCompact(ctx); err != nil {
 		return err
 	}
-	stats, err := db.RewriteCopy(ctx, storage.RewriteDir(db.Path()))
+	stats, err := db.RewriteCopy(ctx, storage.RewriteDir(db.Path()), step.ID)
 	if err != nil {
 		return err
 	}
 	s.o.Logger.Info("restoreswap: the store rewrite copied the store", "step", step.ID,
 		"keys", stats.Keys, "bytes", stats.Bytes, "tables", stats.Tables)
-	return db.SetRewriteRecord(ctx, step.ID, storage.RewriteCopied)
+	return nil
 }
 
 // newRewriteID is a fresh intent id: rewrite-<UTC time>[-n], one no journal
@@ -183,7 +183,9 @@ func (s *Swapper) newRewriteID() (string, error) {
 // in-flight file exists before the first rename; then the steps of every
 // swap (the store set aside, the copy moved into place, the sidecars from
 // the copy, swapped), and on any failure after the in-flight file step x
-// moves the original back. Then opened once the copy is open.
+// moves the original back. A copy in place that storage cannot reopen
+// writable is swapped back the same way (RewriteSwap's swapBack). Then
+// opened once the copy is open.
 func (s *Swapper) rewriteSwap(ctx context.Context, db *storage.DB, step storage.RewriteStep) (string, error) {
 	if s.o.RewriteStep != step.ID {
 		return "", fmt.Errorf("restoreswap: the swapper serves M8 %q, not %q", s.o.RewriteStep, step.ID)
@@ -220,7 +222,7 @@ func (s *Swapper) rewriteSwap(ctx context.Context, db *storage.DB, step storage.
 			return s.SwapBack(ctx, id, err)
 		}
 		return nil
-	})
+	}, func(ctx context.Context, cause error) error { return s.SwapBack(ctx, id, cause) })
 	if err != nil {
 		return "", fmt.Errorf("restoreswap: the store rewrite's swap (%s): %w", id, err)
 	}
@@ -386,7 +388,7 @@ func RewriteDry(ctx context.Context, db *storage.DB, step storage.RewriteStep, d
 	if err := db.RewriteCompact(ctx); err != nil {
 		return storage.RewriteCopyStats{}, err
 	}
-	stats, err := db.RewriteCopy(ctx, dir)
+	stats, err := db.RewriteCopy(ctx, dir, step.ID)
 	if err != nil {
 		return stats, err
 	}
