@@ -1,0 +1,536 @@
+// file: core/kernel/cutover_test.go
+// version: 1.0.0
+// guid: 09c631c4-1c2d-4d66-ae13-7ee32b295c1e
+// last-edited: 2026-11-10
+
+package kernel
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2/vfs"
+
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/tasks"
+)
+
+// The cutover fixture: the module gcpd with a legacy family under the claim
+// "case:" (read-write before the cutover, retired by it). case:file/<n> rows
+// import into gcpd's keyspace as case/<n>, every fifth one is quarantined
+// as undecodable, and every case:vault/<n> row (Sensitive) is quarantined as
+// holding a credential. core/audit is among the owners so a purge can be
+// audited.
+
+const cutoverPath = "/batcave/store"
+
+func cutoverOwners(mode storage.ClaimMode) []storage.OwnerSpec {
+	return []storage.OwnerSpec{
+		{Owner: "gcpd", Enabled: true, Spec: storage.Spec{Keyspace: true, Claims: []storage.Claim{
+			{Prefix: "case:", Mode: mode, Description: "the GCPD's case files (a synthetic legacy family)"}}}},
+		auditOwnerSpec(),
+	}
+}
+
+// cutoverRows is the fixture's source rows: files 1..files, vaults 1..vaults.
+func cutoverRows(files, vaults int) map[string]string {
+	rows := map[string]string{}
+	for n := 1; n <= files; n++ {
+		rows[fmt.Sprintf("case:file/%03d", n)] = fmt.Sprintf("The Long Halloween, part %d", n)
+	}
+	for n := 1; n <= vaults; n++ {
+		rows[fmt.Sprintf("case:vault/%03d", n)] = fmt.Sprintf("Wayne Manor safe combination %d", n)
+	}
+	return rows
+}
+
+// seedCutover writes the pre-cutover store at cutoverPath on fs.
+func seedCutover(t *testing.T, fs vfs.FS, rows map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: cutoverOwners(storage.ClaimReadWrite),
+		Build: "batcomputer-1", FreeSpaceMargin: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatal(errors.Join(err, o.Close()))
+	}
+	lr, _ := db.Legacy("gcpd")
+	b := lr.NewBatch()
+	for k, v := range rows {
+		if err := b.Set([]byte(k), []byte(v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := errors.Join(b.Commit(ctx, storage.Sync), db.Close()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// cutoverHandles is what the step reaches during one boot.
+type cutoverHandles struct{ ks storage.Keyspace }
+
+// cutoverMigration is the fixture's cutover step.
+func cutoverMigration(h *cutoverHandles) datamigrate.DataMigration {
+	return datamigrate.DataMigration{
+		ID: "gcpd.case-files", Owner: "gcpd", Description: "import the GCPD's case files",
+		Source:      []storage.Range{{Start: []byte("case:"), End: []byte("case;")}},
+		Parallelism: tasks.Fixed(2, "test: two disjoint shards of the fixture"), Mode: datamigrate.BootBlocking,
+		Compat: storage.Breaking, Cutover: true, Sensitive: []string{"case:vault/"},
+		Step: func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			k := string(kv.Key)
+			if strings.HasPrefix(k, "case:vault/") {
+				return w.Quarantine(kv.Key, kv.Value, "a credential the importer does not carry")
+			}
+			var n int
+			if _, err := fmt.Sscanf(k, "case:file/%03d", &n); err != nil {
+				return err
+			}
+			if n%5 == 0 {
+				return w.Quarantine(kv.Key, kv.Value, "Joker venom: the row does not decode")
+			}
+			b := w.Batch().Bind(h.ks)
+			if err := b.In(h.ks).Set([]byte(fmt.Sprintf("case/%03d", n)), kv.Value); err != nil {
+				return err
+			}
+			if err := w.Delete(kv.Key); err != nil {
+				return err
+			}
+			w.Count("imported")
+			return nil
+		},
+	}
+}
+
+// fakeSealer seals a row into gcpd's keyspace under sealed/<name>, the bytes
+// reversed: a stand-in for the keyring's sealed secret record, staged in the
+// chunk's batch. It unseals and deletes the same records.
+type fakeSealer struct {
+	db     *storage.DB
+	sealed int
+}
+
+func reverse(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		out[len(b)-1-i] = c
+	}
+	return out
+}
+
+func (f *fakeSealer) ks() storage.Keyspace { ks, _ := f.db.Keyspace("gcpd"); return ks }
+
+func (f *fakeSealer) Seal(_ context.Context, b *storage.Batch, name string, raw []byte) error {
+	f.sealed++
+	ks := f.ks()
+	return b.Bind(ks).In(ks).Set([]byte("sealed/"+name), reverse(raw))
+}
+
+func (f *fakeSealer) Unseal(ctx context.Context, name string) ([]byte, error) {
+	v, err := f.ks().Get(ctx, []byte("sealed/"+name))
+	return reverse(v), err
+}
+
+func (f *fakeSealer) DeleteSealed(_ context.Context, b *storage.Batch, name string) error {
+	ks := f.ks()
+	return b.Bind(ks).In(ks).Delete([]byte("sealed/" + name))
+}
+
+// bootCutover opens the cutover build over fs with the quarantine writer
+// built from sealer (nil = no sealer), runs P4b and returns the open store
+// or the boot's error. sf, when set, learns the store before P4b.
+func bootCutover(t *testing.T, fs vfs.FS, sealer storage.QuarantineSealer, sf *fakeSealer) (*storage.DB, error) {
+	t.Helper()
+	h := &cutoverHandles{}
+	return bootWith(t, fs, h, cutoverMigration(h), sealer, sf)
+}
+
+// bootWith is bootCutover with the step m, whose handles are h.
+func bootWith(t *testing.T, fs vfs.FS, h *cutoverHandles, m datamigrate.DataMigration, sealer storage.QuarantineSealer, sf *fakeSealer) (*storage.DB, error) {
+	t.Helper()
+	ctx := context.Background()
+	owners := cutoverOwners(storage.ClaimRetired)
+	cfg := DataMigrationsConfig{ChunkItems: 7, Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler),
+		Quarantine: storage.QuarantineWriter(sealer)}
+	dms, err := NewDataMigrations(cfg, owners, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: owners,
+		Build: "batcomputer-2", FreeSpaceMargin: 1, DataSteps: dms.Steps()})
+	if err != nil {
+		return nil, err
+	}
+	db, err := o.Prepare(ctx)
+	if err != nil {
+		return nil, errors.Join(err, o.Close())
+	}
+	h.ks, _ = db.Keyspace("gcpd")
+	if sf != nil {
+		sf.db = db
+	}
+	if err := db.Migrate(ctx); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return db, nil
+}
+
+// levelOwners is cutoverOwners with gcpd at level 1, raised by its level
+// step (storage.LevelStep): the store after M7.
+func levelOwners(mode storage.ClaimMode) []storage.OwnerSpec {
+	owners := cutoverOwners(mode)
+	owners[0].Spec.Level = 1
+	owners[0].Spec.Migrations = []storage.Migration{storage.LevelStep("gcpd", 1, 1)}
+	return owners
+}
+
+// bootOwners boots the store on fs with owners and no data steps, and
+// closes it.
+func bootOwners(t *testing.T, fs vfs.FS, owners []storage.OwnerSpec) (storage.Levels, error) {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: owners,
+		Build: "batcomputer-2", FreeSpaceMargin: 1})
+	if err != nil {
+		return nil, err
+	}
+	db, err := o.Prepare(ctx)
+	if err != nil {
+		return nil, errors.Join(err, o.Close())
+	}
+	if err := db.Migrate(ctx); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	levels := o.Levels()
+	return levels, db.Close()
+}
+
+// TestQuarantineCommands is F3-04's quarantine gate (05-storage §5S.3.13
+// "Quarantine", §5S.10): with no sealer wired a sensitive row fails the step
+// and its source row stays; with one, a sensitive row is stored only as a
+// sealed secret record staged in the chunk's batch, its quarantine record
+// naming the secret and holding no value; the listing never shows a value;
+// the export writes every value, sensitive ones opened through the
+// unsealer; the purge deletes one step's records and their sealed secrets
+// with its audit event in the same batch; health carries the warning in
+// Detail, never Reason, and clears once the quarantine is empty.
+func TestQuarantineCommands(t *testing.T) {
+	ctx := context.Background()
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	rows := cutoverRows(30, 4)
+	seedCutover(t, mem, rows)
+
+	// No sealer: the first sensitive row fails the step, nothing of it is
+	// quarantined and its source stays.
+	if db, err := bootCutover(t, mem, nil, nil); !errors.Is(err, storage.ErrQuarantineNoSealer) {
+		if db != nil {
+			_ = db.Close()
+		}
+		t.Fatalf("boot with no sealer = %v, want ErrQuarantineNoSealer", err)
+	}
+	if left := legacyKeys(t, mem, "case:vault/"); len(left) != 4 {
+		t.Fatalf("after the refused boot the sensitive source rows are %q, want all 4", left)
+	}
+	sf := &fakeSealer{}
+	db, err := bootCutover(t, mem, sf, sf)
+	if err != nil {
+		t.Fatalf("boot with the sealer: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	lr, _ := db.Legacy("gcpd")
+	for kv, err := range lr.Scan(ctx, storage.ScanOptions{Start: []byte("case:"), End: []byte("case;"), KeysOnly: true}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("source row %s survived the cutover", kv.Key)
+	}
+
+	entries, err := db.Quarantine(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sensitive, plain int
+	for _, e := range entries {
+		r := e.Record
+		want, ok := rows[string(r.Key)]
+		if !ok || r.Step != "gcpd.case-files" || r.Build != "batcomputer-2" || r.At.IsZero() {
+			t.Errorf("record %d = %+v: not a fixture row of the step with build and time", e.N, r)
+			continue
+		}
+		if strings.HasPrefix(string(r.Key), "case:vault/") {
+			sensitive++
+			if !r.Sensitive || !e.Sealed() || len(r.Value) != 0 || r.Secret != storage.QuarantineSecretName(e.N) {
+				t.Errorf("sensitive record %+v: want sealed as %s with no value", r, storage.QuarantineSecretName(e.N))
+			}
+			if got, err := sf.Unseal(ctx, r.Secret); err != nil || string(got) != want {
+				t.Errorf("sealed secret %s = %q, %v; want the row's bytes", r.Secret, got, err)
+			}
+		} else {
+			plain++
+			if r.Sensitive || e.Sealed() || string(r.Value) != want {
+				t.Errorf("plain record %+v: want its value and no secret", r)
+			}
+		}
+	}
+	if sensitive != 4 || plain != 6 || sf.sealed != 4 {
+		t.Fatalf("quarantined %d sensitive (sealed %d) and %d plain, want 4 (4) and 6", sensitive, sf.sealed, plain)
+	}
+	// No plaintext of a sensitive row anywhere under c/.
+	sks, _ := db.Keyspace("core/storage")
+	for kv, err := range sks.Scan(ctx, storage.ScanOptions{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(kv.Value, []byte("safe combination")) {
+			t.Errorf("c/storage/%s holds a sensitive row's plaintext", kv.Key)
+		}
+	}
+
+	// Health: the warning in Detail only.
+	res, err := StorageHealth(ctx, db, map[string]int64{"gcpd.case-files": 2}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != health.StatusUp || res.Reason != "" || !strings.Contains(res.Detail, "step=gcpd.case-files rows=10 sensitive=4") ||
+		!strings.Contains(res.Detail, "orphaned_refs=2") {
+		t.Errorf("health = %+v, want Up with the quarantine in Detail only", res)
+	}
+
+	// Export: every value, the sensitive ones unsealed.
+	var out bytes.Buffer
+	n, err := db.ExportQuarantine(ctx, "gcpd.case-files", sf, &out)
+	if err != nil || n != 10 {
+		t.Fatalf("export = %d, %v; want 10", n, err)
+	}
+	exported := map[string]string{}
+	for line := range strings.SplitSeq(strings.TrimSpace(out.String()), "\n") {
+		var r storage.QuarantineRecord
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatalf("export line %q: %v", line, err)
+		}
+		exported[string(r.Key)] = string(r.Value)
+	}
+	for k, v := range exported {
+		if rows[k] != v {
+			t.Errorf("export of %s = %q, want %q", k, v, rows[k])
+		}
+	}
+	if _, err := db.ExportQuarantine(ctx, "gcpd.case-files", nil, &bytes.Buffer{}); err == nil {
+		t.Error("export of sealed rows with no unsealer succeeded")
+	}
+
+	// Purge: fails closed with no deleter for sealed rows; then deletes the
+	// step's records and sealed secrets with the audit event.
+	if _, err := PurgeQuarantine(ctx, db, "gcpd.case-files", nil, "alfred", nil); err == nil {
+		t.Fatal("purge of sealed rows with no secret deleter succeeded")
+	}
+	if got, _ := db.Quarantine(ctx, ""); len(got) != 10 {
+		t.Fatalf("a refused purge deleted records: %d left", len(got))
+	}
+	n, err = PurgeQuarantine(ctx, db, "gcpd.case-files", sf, "alfred", nil)
+	if err != nil || n != 10 {
+		t.Fatalf("purge = %d, %v; want 10", n, err)
+	}
+	if got, _ := db.Quarantine(ctx, ""); len(got) != 0 {
+		t.Errorf("purge left %d records", len(got))
+	}
+	for _, e := range entries {
+		if e.Sealed() {
+			if v, err := sf.ks().Get(ctx, []byte("sealed/"+e.Record.Secret)); !errors.Is(err, storage.ErrNotFound) {
+				t.Errorf("sealed secret %s survived the purge: %q, %v", e.Record.Secret, v, err)
+			}
+		}
+	}
+	as, err := buildAudit(ctx, db, slog.New(slog.DiscardHandler), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events int
+	for rec, err := range as.Query(ctx, audit.Filter{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.Action == "core.storage.quarantine_purge" && rec.Actor.Username == "alfred" {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Errorf("purge audit events = %d, want 1", events)
+	}
+	res, err = StorageHealth(ctx, db, nil, time.Now())
+	if err != nil || res.Detail != "" {
+		t.Errorf("health after the purge = %+v, %v; want the warning cleared", res, err)
+	}
+}
+
+// legacyKeys opens the store read-only and lists gcpd's legacy keys under
+// prefix.
+func legacyKeys(t *testing.T, fs vfs.FS, prefix string) []string {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: cutoverOwners(storage.ClaimRetired),
+		Build: "batcomputer-2", FreeSpaceMargin: 1, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = o.Close() }()
+	src, err := o.PreflightSource("gcpd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := []byte(prefix)
+	end[len(end)-1]++
+	var out []string
+	for kv, err := range src.Scan(ctx, storage.ScanOptions{Start: []byte(prefix), End: end, KeysOnly: true}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(kv.Key))
+	}
+	return out
+}
+
+// blockedMigration is the fixture's cutover step with a Preflight that
+// reads one source row and reports it as a blocker.
+func blockedMigration(h *cutoverHandles) datamigrate.DataMigration {
+	m := cutoverMigration(h)
+	m.Preflight = func(ctx context.Context, r storage.Reader) ([]datamigrate.Blocker, error) {
+		if _, err := r.Get(ctx, []byte("case:vault/001")); err != nil {
+			return nil, err
+		}
+		return []datamigrate.Blocker{{Key: []byte("case:vault/001"), Family: "gcpd.vault",
+			Reason: "Bane's account merge in progress", Fix: "finish or undo the merge on the pre-freeze release"}}, nil
+	}
+	return m
+}
+
+// preflightOnce opens the store writable with owners and runs the P4a
+// preflight of m through DataMigrations, as the boot does before Prepare.
+func preflightOnce(t *testing.T, fs vfs.FS, owners []storage.OwnerSpec, m datamigrate.DataMigration, log *slog.Logger) error {
+	t.Helper()
+	ctx := context.Background()
+	dms, err := NewDataMigrations(DataMigrationsConfig{Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler),
+		Preflight: CutoverPreflight(log)}, owners, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: owners,
+		Build: "batcomputer-2", FreeSpaceMargin: 1, DataSteps: dms.Steps()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = o.Close() }()
+	return dms.Preflight(ctx, o)
+}
+
+// dmRecord reports whether the store holds step's c/storage/dm/ record.
+func dmRecord(t *testing.T, fs vfs.FS, step string) bool {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: cutoverOwners(storage.ClaimRetired),
+		Build: "batcomputer-2", FreeSpaceMargin: 1, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = o.Close() }()
+	db, err := o.Offline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.RewriteRecord(ctx, step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state != ""
+}
+
+// TestPreflight_RunsOnlyBeforeCutoverStarts: a pending cutover step whose
+// Preflight returns a blocker refuses the boot with ErrCutoverBlocked (exit
+// 78), logs the report naming storage cutover-blockers, never a value, and
+// writes nothing (no record, every source row in place, and the pre-freeze
+// build still opens the store); the same store with the step's c/storage/
+// dm/ record, or with the owner's level at the step's target, skips the
+// preflight.
+func TestPreflight_RunsOnlyBeforeCutoverStarts(t *testing.T) {
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	seedCutover(t, mem, cutoverRows(30, 4))
+	var logged bytes.Buffer
+	err := preflightOnce(t, mem, cutoverOwners(storage.ClaimRetired), blockedMigration(&cutoverHandles{}), slog.New(slog.NewTextHandler(&logged, nil)))
+	if !errors.Is(err, storage.ErrCutoverBlocked) || ExitCode(err) != ExitConfig || ExitConfig != 78 {
+		t.Fatalf("preflight = %v (exit %d), want ErrCutoverBlocked and exit 78", err, ExitCode(err))
+	}
+	if be, ok := errors.AsType[*storage.CutoverBlockedError](err); !ok || len(be.Blockers) != 1 || be.Blockers[0].Step != "gcpd.case-files" {
+		t.Fatalf("refusal = %#v, want one blocker of gcpd.case-files", err)
+	}
+	if out := logged.String(); !strings.Contains(out, "storage cutover-blockers") || !strings.Contains(out, "Bane's account merge") ||
+		strings.Contains(out, "safe combination") {
+		t.Errorf("preflight log = %q, want the report naming storage cutover-blockers and no value", out)
+	}
+	if dmRecord(t, mem, "gcpd.case-files") {
+		t.Error("the refusal wrote the step's record")
+	}
+	if got := legacyKeys(t, mem, "case:"); len(got) != 34 {
+		t.Errorf("after the refusal %d source rows, want 34", len(got))
+	}
+	seedCutover(t, mem, nil) // the pre-freeze build opens the store
+
+	// An error inside the step leaves its record: the preflight is skipped.
+	h := &cutoverHandles{}
+	failing := cutoverMigration(h)
+	inner := failing.Step
+	failing.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		if string(kv.Key) == "case:file/020" {
+			return errors.New("scarecrow's toxin: the importer fails")
+		}
+		return inner(ctx, kv, w)
+	}
+	sf := &fakeSealer{}
+	if db, err := bootWith(t, mem, h, failing, sf, sf); err == nil {
+		_ = db.Close()
+		t.Fatal("the failing cutover boot succeeded")
+	}
+	if !dmRecord(t, mem, "gcpd.case-files") {
+		t.Fatal("the failed cutover left no record; the case proves nothing")
+	}
+	if err := preflightOnce(t, mem, cutoverOwners(storage.ClaimRetired), blockedMigration(&cutoverHandles{}), nil); err != nil {
+		t.Errorf("preflight with the step's record = %v, want skipped", err)
+	}
+
+	// A raised level skips it too: a store whose owner is already at the
+	// cutover step's level (M7 committed), with no record.
+	lvl := vfs.NewMem()
+	lvl.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	seedCutover(t, lvl, cutoverRows(3, 1))
+	raised := levelOwners(storage.ClaimRetired)
+	m := blockedMigration(&cutoverHandles{})
+	m.RaisesLevel = 1
+	if err := preflightOnce(t, lvl, raised, m, nil); !errors.Is(err, storage.ErrCutoverBlocked) {
+		t.Fatalf("control: preflight below the level = %v, want ErrCutoverBlocked", err)
+	}
+	if levels, err := bootOwners(t, lvl, raised); err != nil || levels["gcpd"] != 1 {
+		t.Fatalf("the level step boot = %v, %v; want gcpd at level 1", levels, err)
+	}
+	if err := preflightOnce(t, lvl, raised, m, nil); err != nil {
+		t.Errorf("preflight at the raised level = %v, want skipped", err)
+	}
+	if err := preflightOnce(t, mem, levelOwners(storage.ClaimRetired), m, nil); err != nil {
+		t.Errorf("preflight with the record (level not raised) = %v, want skipped", err)
+	}
+}
