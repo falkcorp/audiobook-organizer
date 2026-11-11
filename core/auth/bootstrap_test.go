@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a0d8c64-2f1b-4e7a-9b35-6c8e1d4f7a20
 // last-edited: 2026-11-11
 
@@ -361,9 +361,7 @@ func TestBootstrapRedeemedOnce_Concurrent(t *testing.T) {
 	var wins, refused atomic.Int32
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := f.svc.RedeemBootstrap(context.Background(), tok, from("192.0.2."+string(rune('1'+i))+"0"))
 			switch {
 			case err == nil:
@@ -373,7 +371,7 @@ func TestBootstrapRedeemedOnce_Concurrent(t *testing.T) {
 			default:
 				t.Errorf("redeem: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins.Load() != 1 || refused.Load() != 7 {
@@ -498,9 +496,7 @@ func TestSetup_ConcurrentCreatesOneAdmin(t *testing.T) {
 	var wins atomic.Int32
 	var wg sync.WaitGroup
 	for _, name := range []string{"jason-todd", "tim-drake", "stephanie-brown", "cassandra-cain"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := f.svc.Setup(context.Background(), auth.SetupInput{Username: name, Password: "gotham-nights-26", Client: loopback()})
 			switch {
 			case err == nil:
@@ -509,7 +505,7 @@ func TestSetup_ConcurrentCreatesOneAdmin(t *testing.T) {
 			default:
 				t.Errorf("Setup %s: %v", name, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins.Load() != 1 || f.userCount() != 1 {

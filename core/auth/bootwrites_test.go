@@ -1,5 +1,5 @@
 // file: core/auth/bootwrites_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2d9b6f84-a317-4c5e-b0e2-8f61c3a7d905
 // last-edited: 2026-11-11
 
@@ -153,7 +153,7 @@ func TestBootWrites_AuthNewWritesNothing(t *testing.T) {
 // bootstrap is switched off or when there is no state filesystem to carry it.
 func TestBootWrites_BootstrapDisabledOrNoFiles(t *testing.T) {
 	f, files := bootFx(t)
-	f.setSettings(auth.Settings{BootstrapEnabled: boolp(false)})
+	f.setSettings(auth.Settings{BootstrapEnabled: new(false)})
 	f.mustBootWrites(files)
 	if got := files.file(auth.BootstrapTokenLabel, auth.BootstrapTokenFile); got != "" {
 		t.Fatalf("a token was written with bootstrap disabled: %q", got)
