@@ -200,6 +200,29 @@ func oneTimeKey(k auth.OneTimeKind, h string) []byte {
 	return keys.Join(keys.Str(segOneTime), keys.Str(string(k)), keys.Str(h))
 }
 
+// keyDesc describes key for an error: its family and its length, never its
+// bytes. Session, API-key and one-time keys embed a credential's SHA-256,
+// and an error can reach a log (the stage-12 touch's Warn), which must never
+// carry a credential or its hash (STOP 3). storage.keyRef follows the same
+// rule for the engine's own errors.
+func keyDesc(key []byte) string {
+	family := "unrecognised"
+	if segs, err := keys.Split(key); err == nil && len(segs) > 0 {
+		switch top := string(segs[0]); top {
+		case segUser, segKey, segIdentity, segAllow, segSession, segOneTime:
+			family = top
+			if len(segs) > 2 {
+				switch sub := string(segs[1]); sub {
+				case segName, segHash, segByUser, segID,
+					string(auth.OneTimeInvite), string(auth.OneTimeTempLogin), string(auth.OneTimeBootstrap):
+					family += "/" + sub
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%s key len=%d", family, len(key))
+}
+
 // ---------------------------------------------------------------------------
 // Low-level reads and staged writes.
 
@@ -212,7 +235,7 @@ func (s *Store) committed(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: read %q: %w", auth.ErrStoreUnavailable, key, err)
+		return nil, fmt.Errorf("%w: read %s: %w", auth.ErrStoreUnavailable, keyDesc(key), err)
 	}
 	return raw, nil
 }
@@ -234,10 +257,10 @@ func (s *Store) get(ctx context.Context, key []byte) ([]byte, error) {
 func (s *Store) set(b *storage.Batch, key, want, raw []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
-		return fmt.Errorf("authstore: expect %q: %w", key, err)
+		return fmt.Errorf("authstore: expect %s: %w", keyDesc(key), err)
 	}
 	if err := b.In(s.ks).Set(key, raw); err != nil {
-		return fmt.Errorf("authstore: stage %q: %w", key, err)
+		return fmt.Errorf("authstore: stage %s: %w", keyDesc(key), err)
 	}
 	return nil
 }
@@ -246,10 +269,10 @@ func (s *Store) set(b *storage.Batch, key, want, raw []byte) error {
 func (s *Store) del(b *storage.Batch, key, want []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
-		return fmt.Errorf("authstore: expect %q: %w", key, err)
+		return fmt.Errorf("authstore: expect %s: %w", keyDesc(key), err)
 	}
 	if err := b.In(s.ks).Delete(key); err != nil {
-		return fmt.Errorf("authstore: stage delete %q: %w", key, err)
+		return fmt.Errorf("authstore: stage delete %s: %w", keyDesc(key), err)
 	}
 	return nil
 }
@@ -514,7 +537,7 @@ func (s *Store) ScanUsers(ctx context.Context) iter.Seq2[*auth.User, error] {
 				continue // the username index
 			}
 			if !ok || len(ss) != 2 {
-				if !yield(nil, fmt.Errorf("%w: key %q is not user/<id>", auth.ErrUndecodableRecord, kv.Key)) {
+				if !yield(nil, fmt.Errorf("%w: %s is not user/<id>", auth.ErrUndecodableRecord, keyDesc(kv.Key))) {
 					return
 				}
 				continue
