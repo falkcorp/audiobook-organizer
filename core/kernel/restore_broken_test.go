@@ -310,6 +310,9 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		if !res.Reset || res.Reapplied != 0 || res.FailedClosed || hres.Ran {
 			t.Fatalf("reset %v, re-applied %d, failed closed %v, hooks ran %v", res.Reset, res.Reapplied, res.FailedClosed, hres.Ran)
 		}
+		if res.HeadBefore.Seq != 1 {
+			t.Errorf("head_before = %+v: it is read before the gap line is appended", res.HeadBefore)
+		}
 		if g.keyStatus("key-batmobile") != auth.KeyActive || g.userRow(g.robin).CredentialEpoch != epoch {
 			t.Errorf("another install's line was applied: batmobile %q", g.keyStatus("key-batmobile"))
 		}

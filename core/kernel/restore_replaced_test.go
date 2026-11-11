@@ -20,8 +20,9 @@ import (
 // head 0 and a later revocation, so the live store and the archive differ.
 type gotham struct {
 	*rxFx
-	robin   string // Tim Drake, the owner of the keys
-	archive string // snapshot at head 0, served_boot n 1
+	robin    string // Tim Drake, the owner of the keys
+	archive  string // snapshot at head 0, served_boot n 1
+	archive2 string // a second copy of it, for a second restore
 }
 
 func newGotham(t *testing.T) *gotham {
@@ -32,7 +33,7 @@ func newGotham(t *testing.T) *gotham {
 	fx.key("key-redrobin", g.robin, auth.KeyActive)
 	fx.key("key-spoiler", g.robin, auth.KeyActive)
 	fx.key("key-batmobile", g.robin, auth.KeyActive)
-	g.archive = fx.snapshot("archive")
+	g.archive, g.archive2 = fx.snapshot("archive"), fx.snapshot("archive2")
 	fx.revokeKey("key-spoiler") // journal line 1, head 1
 	fx.restart()
 	fx.boot(nil, nil) // served_boot 2, anchor head 1
@@ -167,9 +168,13 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 
 	t.Run("a location file for another store describes nothing", func(t *testing.T) {
 		g := newGotham(t)
-		g.setLocation(func(l *journal.Location) { l.DBPath = "/gotham/other.pebble"; l.ServedBoot.N += 9; l.Head.Seq += 9 })
+		g.setLocation(func(l *journal.Location) {
+			l.DBPath, l.Journal = "/gotham/other.pebble", "/elsewhere/gotham_revocations.journal"
+			l.ServedBoot.N += 9
+			l.Head.Seq += 9
+		})
 		res, hres := g.boot(nil, nil)
-		if res.Class != classSame || hres.Ran {
+		if res.Class != classSame || hres.Ran || res.Moved != "" || res.Path != g.journalPath() {
 			t.Errorf("class %q (%s), hooks ran %v: another store's marker is no evidence", res.Class, res.Why, hres.Ran)
 		}
 		if loc := g.location(); loc.DBPath != g.dbPath {
@@ -310,5 +315,32 @@ func TestCommittedHeadAnchorDetectsInPlaceCopy(t *testing.T) {
 	}
 	if g.keyStatus("key-batmobile") != auth.KeyRevoked || g.keyStatus("key-redrobin") != auth.KeyRevoked {
 		t.Errorf("the tail after the copy's head was not re-applied: batmobile %q, redrobin %q", g.keyStatus("key-batmobile"), g.keyStatus("key-redrobin"))
+	}
+}
+
+// TestReplacedStore_CrashBeforeMarkersReusesLine: a crash after the external
+// restore line and before step 2 wrote the markers reads replaced again at the
+// next boot; that boot finds the line that still owes its hooks and runs them,
+// and never appends a second line.
+func TestReplacedStore_CrashBeforeMarkersReusesLine(t *testing.T) {
+	g := newGotham(t)
+	g.swapIn(g.archive)
+	boom := errors.New("the hook crashed")
+	failing := func(hookEnv) ([]journal.RestoreHook, error) {
+		return []journal.RestoreHook{func(context.Context, journal.RestoreContext) (map[string]int, error) { return nil, boom }}, nil
+	}
+	if _, _, err := g.tryBoot(nil, nil, failing); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	line := g.externalLine()
+	g.restart()
+	// The markers step 2 wrote are lost, as by a crash a moment earlier.
+	g.setLocation(func(l *journal.Location) { l.ServedBoot = journal.ServedBoot{N: 99, Nonce: "ra's"} })
+	res, hres := g.boot(nil, nil)
+	if res.Class != classReplaced || !hres.Ran || len(res.Owed) != 1 || res.RestoreLine != line.Seq {
+		t.Fatalf("class %q, hooks ran %v, owed %d, line %d (want %d)", res.Class, hres.Ran, len(res.Owed), res.RestoreLine, line.Seq)
+	}
+	if n := len(g.restoreLines()); n != 1 || !g.hooked(line.Seq) {
+		t.Errorf("%d restore line(s), hooked %v", n, g.hooked(line.Seq))
 	}
 }
