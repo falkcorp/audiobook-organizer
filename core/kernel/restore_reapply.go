@@ -513,17 +513,33 @@ func servedOlder(store, file journal.ServedBoot) bool {
 	return store.N < file.N || (store.N == file.N && store.Nonce != file.Nonce)
 }
 
-// journalShowsReplaced is evidence (c)'s second half: head_before is below the
-// journal's last revocation line (a store with no head while the journal has
-// revocation lines included), or the journal holds a gap line or a restore
-// line after head_before; a restore line a restore_aborted line closes, or
-// whose restore journal reads swapped_back, does not count (DATA6-3).
+// journalShowsReplaced is evidence (c)'s second half: the store has not seen
+// every revocation line of the journal (head_before is below the last one, or
+// below the lines retention dropped, or the store has no head while the journal
+// has revocation lines), or the journal holds a gap or restore line after
+// head_before. A restore line a restore_aborted line closes, or whose restore
+// journal reads swapped_back, does not count (DATA6-3), and neither do the hook
+// lines that restore wrote: they narrowed a store that was swapped away
+// (DATA8-7), so they say nothing about whether this one is current. A chain
+// that does not verify speaks through what it claims (Chain.Behind).
 func journalShowsReplaced(chain *journal.Chain, head journal.Head, aborted map[uint64]bool) bool {
-	if chain.Behind(head.Seq) {
+	if chain.Break != nil {
+		if chain.Behind(head.Seq) {
+			return true
+		}
+	} else if chain.HasHeader && head.Seq < chain.Header.BaseSeq {
 		return true
 	}
 	return chain.Has(head.Seq, func(l journal.Line) bool {
-		return l.Kind == journal.Gap || (l.Kind == journal.Restore && !aborted[l.Seq])
+		switch {
+		case l.Kind == journal.Gap:
+			return true
+		case l.Kind == journal.Restore:
+			return !aborted[l.Seq]
+		case journal.IsRevocation(l.Kind):
+			return !(l.RestoreSeq != 0 && aborted[l.RestoreSeq])
+		}
+		return false
 	})
 }
 
