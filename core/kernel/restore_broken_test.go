@@ -120,6 +120,26 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 		}
 	})
 
+	t.Run("a truncated journal is reported even when it cannot be opened for appends", func(t *testing.T) {
+		g := newGotham(t)
+		g.restart()
+		truncateJournal(t, g.journalPath(), 0)
+		// Another holder of the journal's lock: Bind fails with the lock, not
+		// with the truncation, so only the boot's own reading can name it.
+		held, err := journal.OpenFile(g.ctx, journal.FileOptions{Path: g.journalPath(), Keyspace: g.bks(), Keys: g.keys, InstallID: g.install, App: rxApp})
+		if held == nil || !errors.Is(err, journal.ErrCorrupt) {
+			t.Fatalf("setup: OpenFile = %v, %v, want a broken File holding the lock", held, err)
+		}
+		defer held.Close()
+		res, _ := g.boot(nil, nil)
+		if res.Broken == nil || errors.Is(res.Broken, journal.ErrLocked) || res.FailedClosed {
+			t.Errorf("broken %v, failed closed %v: want the truncation reported, not the lock", res.Broken, res.FailedClosed)
+		}
+		if !g.hasHealth(journal.HealthBroken) {
+			t.Errorf("health = %v, want revocation_journal_broken", g.health())
+		}
+	})
+
 	t.Run("a journal that starts above the store's head", func(t *testing.T) {
 		fx := newRxFx(t, nil)
 		fx.boot(nil, nil)
@@ -136,6 +156,9 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 		res, _ := fx.boot(nil, nil)
 		if !res.FailedClosed || fx.keyStatus("key-redrobin") != auth.KeyNeedsConfirmation {
 			t.Errorf("failed closed %v, redrobin %q: lines between the head and the base are gone", res.FailedClosed, fx.keyStatus("key-redrobin"))
+		}
+		if !fx.hasHealth(journal.HealthBroken) {
+			t.Errorf("health = %v, want revocation_journal_broken: the journal opens fine, only the boot knows the lines are gone", fx.health())
 		}
 	})
 
@@ -178,6 +201,9 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 		}
 		if got := g.keyStatus("key-batmobile"); got != auth.KeyNeedsConfirmation {
 			t.Errorf("key-batmobile = %q: a line of another timeline is never applied", got)
+		}
+		if !g.hasHealth(journal.HealthBroken) {
+			t.Errorf("health = %v, want revocation_journal_broken", g.health())
 		}
 	})
 
@@ -287,10 +313,12 @@ func TestJournalReapplyVerifiesWithKeyring(t *testing.T) {
 // revocation_journal_reset is reported.
 func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 	// The other install's journal, written with this one's keyring.
-	foreign := func(t *testing.T, g *gotham) []byte {
-		other := newRxFx(t, g.keys)
+	foreignWith := func(t *testing.T, keys journal.Keys, revoke bool) []byte {
+		other := newRxFx(t, keys)
 		other.boot(nil, nil)
-		other.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-batmobile")})
+		if revoke {
+			other.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-batmobile")})
+		}
 		other.restart()
 		raw, err := os.ReadFile(other.journalPath())
 		if err != nil {
@@ -298,6 +326,7 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		}
 		return raw
 	}
+	foreign := func(t *testing.T, g *gotham) []byte { return foreignWith(t, g.keys, true) }
 	t.Run("set aside", func(t *testing.T) {
 		g := newGotham(t)
 		g.restart()
@@ -376,6 +405,58 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		}
 		if got, _ := os.ReadFile(g.journalPath()); string(got) != string(raw) {
 			t.Error("the other install's journal was modified")
+		}
+	})
+
+	t.Run("that cannot be set aside and ends below the store's head still fails closed", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		g := newGotham(t)
+		g.restart()
+		// A journal of another install with no line at the store's head: it
+		// neither verifies the store's chain nor holds anything to compare.
+		raw := foreignWith(t, g.keys, false)
+		if err := os.WriteFile(g.journalPath(), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(g.backup, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(g.backup, 0o700) })
+		res, _ := g.boot(nil, nil)
+		if res.Reset || res.Broken == nil || !res.FailedClosed || g.keyStatus("key-batmobile") != auth.KeyNeedsConfirmation {
+			t.Errorf("reset %v, broken %v, failed closed %v, batmobile %q: the store's own journal is gone",
+				res.Reset, res.Broken, res.FailedClosed, g.keyStatus("key-batmobile"))
+		}
+	})
+
+	t.Run("that cannot be set aside leaves a store that never journaled alone", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		fx := newRxFx(t, nil)
+		robin := fx.user("tim-drake")
+		fx.key("key-batmobile", robin, auth.KeyActive)
+		// Its seqs are not this store's: a line at seq 1 says nothing about a
+		// store whose head is 0, so the store is not behind it.
+		raw := foreignWith(t, fx.keys, true)
+		if err := os.WriteFile(fx.journalPath(), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(fx.backup, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(fx.backup, 0o700) })
+		res, _ := fx.boot(nil, nil)
+		if res.Reset || res.Reapplied != 0 || res.Broken == nil || res.FailedClosed {
+			t.Errorf("reset %v, re-applied %d, broken %v, failed closed %v", res.Reset, res.Reapplied, res.Broken, res.FailedClosed)
+		}
+		if got := fx.keyStatus("key-batmobile"); got != auth.KeyActive {
+			t.Errorf("key-batmobile = %q: another install's line is never applied, and nothing was lost", got)
+		}
+		if !fx.hasHealth(journal.HealthBroken) {
+			t.Errorf("health = %v, want revocation_journal_broken: the journal cannot be written", fx.health())
 		}
 	})
 }
