@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/par/passthrough/passthrough.go
-// version: 1.0.0
+// file: core/archtest/guards/testdata/par/passthrough/passthrough.go
+// version: 1.0.1
 // guid: fc0a663f-4fcf-41aa-9703-a1e389ccd720
 // last-edited: 2026-11-10
 

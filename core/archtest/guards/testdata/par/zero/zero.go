@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/par/zero/zero.go
-// version: 1.0.0
+// file: core/archtest/guards/testdata/par/zero/zero.go
+// version: 1.0.1
 // guid: 5aeb8513-a6a3-443a-902a-f54534d2c227
 // last-edited: 2026-11-10
 

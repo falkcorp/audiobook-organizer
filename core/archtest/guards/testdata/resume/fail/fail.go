@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/resume/fail/fail.go
-// version: 1.0.1
+// file: core/archtest/guards/testdata/resume/fail/fail.go
+// version: 1.0.2
 // guid: 922e1b1a-dd7e-4c5e-999d-0dcb29c00aa9
 // last-edited: 2026-11-10
 

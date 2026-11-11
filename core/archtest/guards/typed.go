@@ -1,9 +1,15 @@
-// file: core/archtest/typed.go
-// version: 1.0.0
+// file: core/archtest/guards/typed.go
+// version: 1.0.1
 // guid: d05ebb1a-8c11-4fa1-8826-7f6e33b47618
 // last-edited: 2026-11-10
 
-package archtest
+// Package guards holds archtest's type-aware guards over core/tasks
+// definitions and loops (05-tasks §5T.3.2, §5T.3.6, §5T.8.2): they load
+// packages with golang.org/x/tools/go/packages, so they live apart from
+// archtest itself, which coretest links into every module's tests; x/tools
+// stays out of coretest's graph (TestTasklint_TestSupportOnly). Test-support
+// only (03 §3.5 R4): no non-test package imports it.
+package guards
 
 import (
 	"fmt"

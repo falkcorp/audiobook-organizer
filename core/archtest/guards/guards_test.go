@@ -1,9 +1,9 @@
-// file: core/archtest/guards_test.go
-// version: 1.0.0
+// file: core/archtest/guards/guards_test.go
+// version: 1.0.1
 // guid: 72447f4d-bf7d-4e3d-8cb9-1efecea9b890
 // last-edited: 2026-11-10
 
-package archtest
+package guards
 
 import (
 	"bufio"
@@ -72,7 +72,7 @@ func checkWants(t *testing.T, dir string, findings []GuardFinding) {
 }
 
 func guardFixture(name string) string {
-	return "./" + filepath.ToSlash(filepath.Join("testdata", "guards", name))
+	return "./" + filepath.ToSlash(filepath.Join("testdata", name))
 }
 
 // TestResumeContinueCheckpoints_SelfTest: one passing and one failing case per
@@ -87,7 +87,7 @@ func TestResumeContinueCheckpoints_SelfTest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkWants(t, filepath.Join("testdata", "guards", c), f)
+			checkWants(t, filepath.Join("testdata", c), f)
 		})
 	}
 	if _, err := resumeContinueFindings(nil); err == nil {
@@ -107,10 +107,10 @@ func TestRunItemsDeclareParallelism_SelfTest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkWants(t, filepath.Join("testdata", "guards", c), f)
+			checkWants(t, filepath.Join("testdata", c), f)
 		})
 	}
-	if _, err := parallelismFindings([]string{"./testdata/guards/does-not-exist"}); err == nil {
+	if _, err := parallelismFindings([]string{"./testdata/does-not-exist"}); err == nil {
 		t.Error("an unloadable pattern was accepted")
 	}
 }
@@ -136,7 +136,7 @@ func TestArchtest_ZeroLiteralFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkWants(t, filepath.Join("testdata", "guards", "par", "zero"), f)
+	checkWants(t, filepath.Join("testdata", "par", "zero"), f)
 }
 
 // TestGuards_Wrappers: the exported guards fail t on a finding and pass a
