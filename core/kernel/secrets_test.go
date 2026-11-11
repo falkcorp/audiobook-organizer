@@ -446,7 +446,7 @@ func TestKernelSecrets_NeverFormatsSecrets(t *testing.T) {
 	var leaks []string
 	add := func(b []byte) {
 		leaks = append(leaks, string(b), hex.EncodeToString(b), strings.Trim(fmt.Sprint(b), "[]"),
-			base64.StdEncoding.EncodeToString(b), strings.Trim(fmt.Sprintf("%#v", b), "[]uint8{}")[:20])
+			base64.StdEncoding.EncodeToString(b), strings.TrimPrefix(fmt.Sprintf("%#v", b), "[]byte{")[:20])
 	}
 	add([]byte(secretsFixture))
 	add([]byte(operator))
