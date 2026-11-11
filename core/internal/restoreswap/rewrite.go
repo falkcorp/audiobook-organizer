@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e4287385-23de-4df7-b1bb-31ac3240dac4
 // last-edited: 2026-11-11
 
@@ -25,19 +25,27 @@ import (
 // copy, the in-process reopen); this file derives M8's phase and runs the
 // KindRewrite swap in process with the one journaled swap's own steps.
 //
-// The phase is derived from the KindRewrite journals whose StepID is this
-// M8's own (rejected ones skipped), newest first, not from the copy (whose
-// own record reads copied, §5S.3.13):
+// The phase is derived from M8's record on the live store and from the
+// KindRewrite journals of this store (DBPath) whose StepID is this M8's own
+// (rejected and retired ones skipped), newest first. The copy carries the
+// record at copied (§5S.3.13 phase 2), so a store that reads copied is the
+// copy, swapped in; the original reads pending until M8 is done:
 //
 //   - record done: nothing;
-//   - no journal: phases 1 (compact), 2 (copy) and 3 (the swap), then 4,
-//     all in this boot, so the copy that is swapped in is always one taken
-//     from the store as this boot found it;
-//   - newest journal swapped, opened or applied: phase 4 without a second
-//     swap;
-//   - newest journal swapped_back: phases 1-4 once more;
-//   - the two newest journals both swapped_back: storage.ErrRewriteSwappedBack
-//     (exit 78), nothing staged. M8 never loops.
+//   - newest journal swapped or opened (the swap in flight): phase 4
+//     without a second swap; a store not at copied there is
+//     ErrJournalCorrupt (the journal says the copy is in place and it is
+//     not);
+//   - newest journal applied and the record copied (a kill between the
+//     journal's end and the record's): phase 4;
+//   - the two newest journals of this attempt (Attempt, the boot's
+//     checkpoint) both swapped_back: storage.ErrRewriteSwappedBack (exit
+//     78), nothing staged. M8 never loops. A store restored since is a new
+//     attempt, and storage restore-offline retires the journals as well;
+//   - otherwise (no journal, one swapped_back, an applied one of a store
+//     restored since): phases 1 (compact), 2 (copy) and 3 (the swap), then
+//     4, all in this boot, so the copy that is swapped in is always one
+//     taken from the store as this boot found it.
 //
 // A swap-back moves no checkpoint (the checkpoint area is not a set-aside)
 // and starts no clock (no record of the checkpoint area is touched).
@@ -57,17 +65,44 @@ const (
 // process within moments, so an older one is a crash's leftover.
 const rewriteExpiry = time.Hour
 
-// rewriteJournal is one of M8's own journals: its id and last step.
+// rewriteJournal is one of M8's own journals: its id, staged time, last
+// step and attempt.
 type rewriteJournal struct {
-	id   string
-	at   time.Time
-	last string
+	id      string
+	at      time.Time
+	last    string
+	attempt string
 }
 
 // rewriteJournals lists the KindRewrite journals under restore/ whose staged
-// record names stepID, newest first (by the staged record's time, then by
-// id), skipping rejected ones: a rejected intent moved nothing.
-func (s *Swapper) rewriteJournals(stepID string) ([]rewriteJournal, error) {
+// record names stepID and the store at dbPath, newest first (by the staged
+// record's time, then by id), skipping rejected ones (a rejected intent
+// moved nothing) and retired ones (of a store restore-offline replaced).
+func (s *Swapper) rewriteJournals(stepID, dbPath string) ([]rewriteJournal, error) {
+	js, err := s.kindRewriteJournals(stepID, dbPath)
+	if err != nil {
+		return nil, err
+	}
+	out := js[:0]
+	for _, j := range js {
+		if j.last != StepRejected && j.last != StepRetired {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+// kindRewriteJournals is every KindRewrite journal of the store at dbPath
+// (and of M8 stepID; "" is any), newest first. A journal that does not read
+// (ErrJournalCorrupt) is skipped only when its first record proves it is
+// not one of these, another kind, step or store: the journal is a swap's
+// only record of what moved, so one that may be M8's halts M8.
+func (s *Swapper) kindRewriteJournals(stepID, dbPath string) ([]rewriteJournal, error) {
+	dbPath = filepath.Clean(dbPath)
+	mine := func(r restorejournal.Record) bool {
+		return r.Step == StepStaged && r.Note == string(restorejournal.KindRewrite) &&
+			(stepID == "" || r.StepID == stepID) && filepath.Clean(r.DBPath) == dbPath
+	}
 	dir := restorejournal.Dir(s.o.StateDir)
 	names, err := s.fs.List(dir)
 	if err != nil {
@@ -88,16 +123,15 @@ func (s *Swapper) rewriteJournals(stepID string) ([]rewriteJournal, error) {
 		}
 		recs, err := ReadJournal(s.fs, s.o.StateDir, n)
 		if err != nil {
+			if first, ok := firstRecord(s.fs, journalPath(s.o.StateDir, n)); ok && !mine(first) {
+				continue
+			}
 			return nil, err
 		}
-		if len(recs) == 0 || recs[0].Step != StepStaged || recs[0].Note != string(restorejournal.KindRewrite) || recs[0].StepID != stepID {
+		if len(recs) == 0 || !mine(recs[0]) {
 			continue
 		}
-		last := lastStep(recs)
-		if last == StepRejected {
-			continue
-		}
-		out = append(out, rewriteJournal{id: n, at: recs[0].At, last: last})
+		out = append(out, rewriteJournal{id: n, at: recs[0].At, last: lastStep(recs), attempt: recs[0].Attempt})
 	}
 	slices.SortFunc(out, func(a, b rewriteJournal) int {
 		if c := b.at.Compare(a.at); c != 0 {
@@ -119,20 +153,33 @@ func (s *Swapper) RunRewrite(ctx context.Context, db *storage.DB, step storage.R
 	if err != nil || state == storage.DataMigrationDone {
 		return err
 	}
-	js, err := s.rewriteJournals(step.ID)
+	js, err := s.rewriteJournals(step.ID, db.Path())
 	if err != nil {
 		return err
 	}
+	attempt := db.AttemptCheckpoint()
+	var cur []rewriteJournal // this attempt's
+	for _, j := range js {
+		if j.attempt == attempt {
+			cur = append(cur, j)
+		}
+	}
 	switch {
-	case len(js) >= 2 && js[0].last == StepSwappedBack && js[1].last == StepSwappedBack:
-		return fmt.Errorf("%w (journals %s and %s)", storage.ErrRewriteSwappedBack, js[0].id, js[1].id)
-	case len(js) > 0 && (js[0].last == StepSwapped || js[0].last == StepOpened || js[0].last == StepApplied):
+	case len(js) > 0 && (js[0].last == StepSwapped || js[0].last == StepOpened):
+		if state != storage.RewriteCopied {
+			return fmt.Errorf("%w: KindRewrite journal %s of %s is at %q but the store at %s is not the copy (M8's record reads %q)",
+				ErrJournalCorrupt, js[0].id, step.ID, js[0].last, db.Path(), state)
+		}
 		return s.rewriteFinish(ctx, db, step, js[0].id)
-	case len(js) > 0 && js[0].last == StepSwappedBack:
-		s.o.Logger.Warn("restoreswap: the store rewrite swapped back once; restarting it from the compaction",
-			"step", step.ID, "journal", js[0].id)
-	case len(js) > 0:
+	case len(js) > 0 && js[0].last == StepApplied && state == storage.RewriteCopied:
+		return s.rewriteFinish(ctx, db, step, js[0].id)
+	case len(cur) >= 2 && cur[0].last == StepSwappedBack && cur[1].last == StepSwappedBack:
+		return fmt.Errorf("%w (journals %s and %s, attempt %q)", storage.ErrRewriteSwappedBack, cur[0].id, cur[1].id, attempt)
+	case len(js) > 0 && js[0].last != StepSwappedBack && js[0].last != StepApplied:
 		return fmt.Errorf("%w: KindRewrite journal %s of %s at %q with no swap in flight", ErrJournalCorrupt, js[0].id, step.ID, js[0].last)
+	case len(cur) > 0 && cur[0].last == StepSwappedBack:
+		s.o.Logger.Warn("restoreswap: the store rewrite swapped back once; restarting it from the compaction",
+			"step", step.ID, "journal", cur[0].id, "attempt", attempt)
 	}
 	if err := s.rewriteCopy(ctx, db, step); err != nil {
 		return err
@@ -200,7 +247,7 @@ func (s *Swapper) rewriteSwap(ctx context.Context, db *storage.DB, step storage.
 		ID: id, Kind: restorejournal.KindRewrite, DBPath: dbPath,
 		Targets:       []restorejournal.Target{{From: storage.RewriteDir(dbPath), To: dbPath}},
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(rewriteExpiry),
-		RequestedBy: "core/storage " + step.ID, RequestedAt: now, StepID: step.ID,
+		RequestedBy: "core/storage " + step.ID, RequestedAt: now, StepID: step.ID, Attempt: db.AttemptCheckpoint(),
 	}
 	if err := restorejournal.ValidateTargets(s.o.StateDir, in, s.legacySuffixes()); err != nil {
 		return "", err
@@ -250,7 +297,7 @@ func (s *Swapper) stageRewrite(ctx context.Context, in restorejournal.Intent) er
 	}); err != nil {
 		return err
 	}
-	return s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID})
+	return s.appendRec(ctx, in.ID, stagedRecord(in))
 }
 
 // rewriteFinish is phase 4, idempotent: the swap's set-aside deleted at once

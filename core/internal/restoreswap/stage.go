@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/stage.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: f8808c55-579d-4ed5-81e1-2c5276a578b9
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -115,7 +115,7 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 		// S5: a create without this record is completed by P0a
 		// (ensureStaged), so its failure does not make the staged intent a
 		// failed Stage.
-		if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}); err != nil {
+		if err := s.appendRec(ctx, in.ID, stagedRecord(in)); err != nil {
 			s.o.Logger.Warn("restoreswap: intent staged; its staged record was not written and P0a writes it",
 				"id", in.ID, "kind", string(in.Kind), "err", err)
 		}

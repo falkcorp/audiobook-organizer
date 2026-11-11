@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -391,7 +391,7 @@ func (s *Swapper) ensureStaged(ctx context.Context, in restorejournal.Intent) ([
 	}); err != nil {
 		return nil, err
 	}
-	rec := restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}
+	rec := stagedRecord(in)
 	if err := s.appendRec(ctx, in.ID, rec); err != nil {
 		return nil, err
 	}

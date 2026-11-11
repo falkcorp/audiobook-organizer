@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/offline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d41e6b3-0a27-4c95-b13f-6e2a9c7d5f08
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -74,6 +74,10 @@ type OfflineResult struct {
 	// with Linked false (R1-25 review SF3). An escape journals no staging
 	// path, so it never links: what it staged is copies.
 	Linked bool
+	// Warnings are what the restore could not finish beyond the swap,
+	// which stands: the replaced store's KindRewrite journals left
+	// unretired (retireRewriteJournals).
+	Warnings []string
 }
 
 // CheckOffline is RestoreOffline's slot check, read without writing
@@ -118,7 +122,47 @@ func (s *Swapper) CheckOffline(dbPath string, kind restorejournal.Kind) (escape 
 //
 // No post-restore hook is due in release R1, which has no revocation
 // journal, so the restore always finishes at applied_offline itself.
+//
+// A restore that placed its source (an escape too) then retires the
+// KindRewrite journals of the store it replaced (retireRewriteJournals), so
+// the restored store's M8 counts none of that store's swap-backs; a retire
+// that fails is a warning, since the restored store's next boot is a new
+// upgrade attempt and M8 counts only its attempt's swap-backs anyway.
 func (s *Swapper) RestoreOffline(ctx context.Context, dbPath, requestedBy string, src OfflineSource) (OfflineResult, error) {
+	res, err := s.restoreOffline(ctx, dbPath, requestedBy, src)
+	if err != nil {
+		return res, err
+	}
+	if err := s.retireRewriteJournals(ctx, dbPath, res.ID); err != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("the replaced store's M8 journals were not retired: %v; "+
+			"the restored store's next boot is a new upgrade attempt, so M8 counts none of their swap-backs", err))
+	}
+	return res, nil
+}
+
+// retireRewriteJournals journals retired after every KindRewrite journal
+// of the store at dbPath that ended (applied or swapped_back): restore id
+// replaced that store (§5S.3.13 "M8 never loops"; RunRewrite). A swap in
+// flight refuses the restore before it stages anything, so no such journal
+// is in flight here.
+func (s *Swapper) retireRewriteJournals(ctx context.Context, dbPath, id string) error {
+	js, err := s.kindRewriteJournals("", dbPath)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, j := range js {
+		if j.last != StepApplied && j.last != StepSwappedBack {
+			continue
+		}
+		if err := s.appendRec(ctx, j.id, restorejournal.Record{Step: StepRetired, Note: "replaced by storage restore-offline " + id}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Swapper) restoreOffline(ctx context.Context, dbPath, requestedBy string, src OfflineSource) (OfflineResult, error) {
 	if src.Kind != restorejournal.KindCheckpoint && src.Kind != restorejournal.KindArchive {
 		return OfflineResult{}, fmt.Errorf("restoreswap: an offline restore swaps in a checkpoint or an archive, not %q", src.Kind)
 	}
