@@ -375,12 +375,12 @@ const maxEnvFileBytes = 1 << 20
 
 // readEnvFile is the default <NAME>_FILE reader: it reads at most one byte
 // past maxEnvFileBytes, so an oversized file is refused without being loaded.
-func readEnvFile(path string) ([]byte, error) {
+func readEnvFile(path string) (b []byte, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	return io.ReadAll(io.LimitReader(f, maxEnvFileBytes+1))
 }
 
