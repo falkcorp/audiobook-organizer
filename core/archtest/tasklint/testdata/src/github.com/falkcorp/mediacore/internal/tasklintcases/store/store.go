@@ -1,11 +1,12 @@
-// file: tools/cmd/oplint/testdata/src/github.com/falkcorp/audiobook-organizer/internal/books/store/database.go
-// version: 1.0.1
+// file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/store/store.go
+// version: 2.0.0
 // guid: 2d631d45-bd9f-40bb-a2b2-b34bcecbfb09
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
-// Package database is a minimal stub of internal/books/store for the oplint
-// analysistest fixtures.
-package database
+// Package store is a minimal module store for the tasklint fixtures: the
+// analyzer's -stores flag names it, so its Store interface is the wide store
+// and its write-named methods are module writes.
+package store
 
 type Book struct{ ID, Title string }
 
