@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5a0d8c64-2f1b-4e7a-9b35-6c8e1d4f7a20
 // last-edited: 2026-11-11
 
@@ -16,8 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/argon2"
+
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/password"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -539,5 +542,81 @@ func TestBootstrap_OwnerDemotedBeforeCommitIsRepicked(t *testing.T) {
 	}
 	if res.User.ID != dick.ID || f.key(res.KeyID).Owner != dick.ID {
 		t.Fatalf("the key went to %s, want the remaining admin %s", res.User.ID, dick.ID)
+	}
+}
+
+// countingHasher is a lowered-cost hasher that counts its derivations.
+func countingHasher(n *atomic.Int32) *password.Hasher {
+	return password.New(password.Options{
+		Time: 1, MemoryKiB: 64,
+		Compute: func(pw, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+			n.Add(1)
+			return argon2.IDKey(pw, salt, time, memory, threads, keyLen)
+		},
+	})
+}
+
+// TestBootstrap_DisabledRefusesRedeemAndSetup (§4.6 item 1, §8): with
+// core.auth.bootstrap.enabled false a stored token cannot be redeemed, nor
+// presented to Setup, and is not spent by trying; a tokenless loopback setup
+// is governed by setup_requires_token alone. Turning the switch back on
+// restores redemption.
+func TestBootstrap_DisabledRefusesRedeemAndSetup(t *testing.T) {
+	f, _ := bootFx(t)
+	ctx := context.Background()
+	tok := f.bootToken(auth.DefaultBootstrapTokenTTL)
+	f.setSettings(auth.Settings{BootstrapEnabled: new(false)})
+
+	_, err := f.svc.RedeemBootstrap(ctx, tok, from("192.0.2.61"))
+	wantErr(t, "a redeem with bootstrap disabled", err, auth.ErrBootstrapInvalid)
+	in := auth.SetupInput{Username: "lucius-fox", Password: "wayne-tech-2026", BootstrapToken: tok, Client: from("192.0.2.61")}
+	_, err = f.svc.Setup(ctx, in)
+	wantErr(t, "a token-bearing setup with bootstrap disabled", err, auth.ErrSetupClosed)
+	if !f.tokenStored(tok) || f.svc.HasUsers() {
+		t.Fatalf("a refused attempt spent the token (%v) or made a user (%v)", f.tokenStored(tok), f.svc.HasUsers())
+	}
+	f.audit.mu.Lock()
+	var reasons []string
+	for _, e := range f.audit.emitted {
+		reasons = append(reasons, e.Reason)
+	}
+	f.audit.mu.Unlock()
+	if len(reasons) != 2 || reasons[0] != "bootstrap_disabled" || reasons[1] != "bootstrap_disabled" {
+		t.Fatalf("audited reasons %v, want two bootstrap_disabled", reasons)
+	}
+	// Nothing was charged to the source: it still redeems once re-enabled.
+	f.setSettings(auth.Settings{})
+	if _, err := f.svc.RedeemBootstrap(ctx, tok, from("192.0.2.61")); err != nil {
+		t.Fatalf("redeem after re-enabling: %v", err)
+	}
+
+	// Tokenless local setup is not a bootstrap redemption.
+	g, _ := bootFx(t)
+	g.setSettings(auth.Settings{BootstrapEnabled: new(false), SetupRequiresToken: new(false)})
+	if _, err := g.svc.Setup(ctx, auth.SetupInput{Username: "lucius-fox", Password: "wayne-tech-2026", Client: loopback()}); err != nil {
+		t.Fatalf("tokenless loopback setup with bootstrap disabled: %v", err)
+	}
+}
+
+// A guessed or malformed token is refused before the password is hashed: an
+// unauthenticated caller must not cost an argon2 run per guess (N2).
+func TestSetup_RefusesABadTokenBeforeHashing(t *testing.T) {
+	f, _ := bootFx(t)
+	var derivations atomic.Int32
+	f.hasher = countingHasher(&derivations)
+	f.svc = f.serviceWith(f.st, &stateFilesFake{})
+	ctx := context.Background()
+	bad := auth.SetupInput{Username: "lucius-fox", Password: "wayne-tech-2026", BootstrapToken: "mcb_not-a-token", Client: from("192.0.2.62")}
+	_, err := f.svc.Setup(ctx, bad)
+	wantErr(t, "a malformed token", err, auth.ErrBootstrapInvalid)
+	if n := derivations.Load(); n != 0 {
+		t.Fatalf("a refused token cost %d derivations", n)
+	}
+	bad.BootstrapToken = f.bootToken(auth.DefaultBootstrapTokenTTL)
+	if _, err := f.svc.Setup(ctx, bad); err != nil {
+		t.Fatalf("a good token: %v", err)
+	}
+	if n := derivations.Load(); n != 1 {
+		t.Fatalf("a good setup cost %d derivations, want 1", n)
 	}
 }

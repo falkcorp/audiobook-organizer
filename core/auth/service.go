@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -137,7 +137,9 @@ type Settings struct {
 	// Options.DefaultDisabledAllowRemote. Read once, by New.
 	DisabledAllowRemote *bool
 	// BootstrapEnabled is core.auth.bootstrap.enabled (§4.6 item 1): nil takes
-	// the default, true. Read by BootWrites.
+	// the default, true. BootWrites reads it at start (a disabled switch
+	// deletes the stored token and file); RedeemBootstrap and a token-bearing
+	// Setup read it live and refuse while it is false.
 	BootstrapEnabled *bool
 	// ReadOnlyKey and ReadOnlyKeyScopes are core.auth.bootstrap.readonly_key
 	// .enabled (default false) and .scopes (default ["core:system.view"]):

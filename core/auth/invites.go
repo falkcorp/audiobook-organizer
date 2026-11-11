@@ -1,5 +1,5 @@
 // file: core/auth/invites.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 50c00e01-9428-42af-bc4e-b9e9aee83e64
 // last-edited: 2026-11-11
 
@@ -293,11 +293,15 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 				Details: map[string]any{"why": denied.Error()},
 			})
 		}
-		if denied := s.inviteRefusal(ctx, t, now); denied != nil {
+		creator, denied := s.inviteRefusal(ctx, t, now)
+		if denied != nil {
 			if !errors.Is(denied, ErrInviteInvalid) {
 				return denied
 			}
 			return refuse(denied)
+		}
+		if err := s.d.Store.GuardUser(b, creator); err != nil {
+			return err
 		}
 		u := &User{
 			ID: UserID(id), Username: t.Username, Email: t.Email, HasPassword: true,
@@ -345,21 +349,24 @@ var (
 )
 
 // inviteRefusal is why accepting t, as just taken, yields nothing (wrapping
-// ErrInviteInvalid), a store failure (not wrapping it), or nil when it may.
-func (s *Service) inviteRefusal(ctx context.Context, t *OneTimeToken, now time.Time) error {
+// ErrInviteInvalid), a store failure (not wrapping it), or, when it may, the
+// creator row it was judged against, which the caller guards in the accept
+// batch so a concurrent demotion or disable of the creator conflicts the
+// commit instead of racing it (Store.GuardUser).
+func (s *Service) inviteRefusal(ctx context.Context, t *OneTimeToken, now time.Time) (*User, error) {
 	if !now.Before(t.ExpiresAt) {
-		return fmt.Errorf("%w: the invite expired", ErrInviteInvalid)
+		return nil, fmt.Errorf("%w: the invite expired", ErrInviteInvalid)
 	}
 	creator, err := s.d.Store.GetUser(ctx, t.CreatedBy)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return fmt.Errorf("%w: %w", ErrInviteInvalid, errCreatorGone)
+		return nil, fmt.Errorf("%w: %w", ErrInviteInvalid, errCreatorGone)
 	case err != nil:
-		return err
+		return nil, err
 	case creator.Status != StatusActive:
-		return fmt.Errorf("%w: its creator is %s", ErrInviteInvalid, creator.Status)
+		return nil, fmt.Errorf("%w: its creator is %s", ErrInviteInvalid, creator.Status)
 	case creator.CredentialEpoch != t.CredentialEpoch:
-		return fmt.Errorf("%w: its creator's credentials changed since it was made", ErrInviteInvalid)
+		return nil, fmt.Errorf("%w: its creator's credentials changed since it was made", ErrInviteInvalid)
 	}
 	// The creator's epoch does not cover a demotion: role changes bump no
 	// epoch (§4.12), so this re-check is what voids an invite whose creator
@@ -368,17 +375,17 @@ func (s *Service) inviteRefusal(ctx context.Context, t *OneTimeToken, now time.T
 	// moved to a role that still holds every scope of t.Role would pass.
 	checker := s.d.RBAC.Compile(rbac.CheckerInput{Roles: creator.Roles, Interactive: true})
 	if !checker.Has(permUsersManage) {
-		return fmt.Errorf("%w: %w: its creator no longer holds %s", ErrInviteInvalid, errCannotAssign, permUsersManage)
+		return nil, fmt.Errorf("%w: %w: its creator no longer holds %s", ErrInviteInvalid, errCannotAssign, permUsersManage)
 	}
 	if err := s.d.RBAC.CanAssign(checker, []rbac.RoleName{t.Role}); err != nil {
-		return fmt.Errorf("%w: %w (%s): %w", ErrInviteInvalid, errCannotAssign, t.Role, err)
+		return nil, fmt.Errorf("%w: %w (%s): %w", ErrInviteInvalid, errCannotAssign, t.Role, err)
 	}
 	_, err = s.d.Store.UserByUsername(ctx, FoldUsername(t.Username))
 	switch {
 	case err == nil:
-		return fmt.Errorf("%w: %w: username %q is taken", ErrInviteInvalid, ErrUserExists, t.Username)
+		return nil, fmt.Errorf("%w: %w: username %q is taken", ErrInviteInvalid, ErrUserExists, t.Username)
 	case !errors.Is(err, ErrNotFound):
-		return err
+		return nil, err
 	}
-	return nil
+	return creator, nil
 }

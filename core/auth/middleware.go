@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -192,12 +192,15 @@ func (s *Service) writeUnavailable(w http.ResponseWriter, r *http.Request) {
 // httpapi's resolver, else the TCP peer as both address and peer, and HTTPS
 // only from the connection: no forwarding header is believed without a
 // trusted-proxy list (HEAD handlers/auth.go isHTTPSRequest believed
-// X-Forwarded-Proto from any peer).
+// X-Forwarded-Proto from any peer). Forwarded is set when any forwarding
+// header is present, so ClientInfo.Local refuses the request: without a
+// resolver auth cannot tell a proxied request from a direct one, and the
+// loopback exceptions (setup without a token, auth off) must fail closed.
 func (s *Service) client(r *http.Request) ClientInfo {
 	if s.d.Client != nil {
 		return s.d.Client(r)
 	}
-	c := ClientInfo{UserAgent: r.UserAgent(), HTTPS: r.TLS != nil}
+	c := ClientInfo{UserAgent: r.UserAgent(), HTTPS: r.TLS != nil, Forwarded: forwarded(r)}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -206,6 +209,19 @@ func (s *Service) client(r *http.Request) ClientInfo {
 		c.Addr, c.Peer = a.Unmap(), a.Unmap()
 	}
 	return c
+}
+
+// forwarded reports whether r carries any header a proxy or tunnel adds,
+// which marks it as not a direct loopback request when no resolver is wired.
+func forwarded(r *http.Request) bool {
+	for _, h := range [...]string{
+		"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "CF-Connecting-IP", "True-Client-IP",
+	} {
+		if len(r.Header.Values(h)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func addrString(a netip.Addr) string {

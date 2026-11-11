@@ -1,5 +1,5 @@
 // file: core/auth/templogin_creator_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2a7c3e-9b14-4f60-8e21-3c7a9d0b6f45
 // last-edited: 2026-11-11
 
@@ -8,6 +8,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,8 +44,8 @@ func (f *fx) lastConsume() audit.Event {
 	f.t.Helper()
 	f.audit.mu.Lock()
 	defer f.audit.mu.Unlock()
-	for i := len(f.audit.recorded) - 1; i >= 0; i-- {
-		if e := f.audit.recorded[i]; e.Action == "core.templogin.consume" {
+	for _, e := range slices.Backward(f.audit.recorded) {
+		if e.Action == "core.templogin.consume" {
 			return e
 		}
 	}
