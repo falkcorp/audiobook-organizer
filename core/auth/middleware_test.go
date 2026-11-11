@@ -468,7 +468,8 @@ func TestStage12_ExtensionPermsIgnored(t *testing.T) {
 }
 
 // §3.3: only ext:<name> methods register as extensions, OwnerSet comes with
-// OwnerVerifier, no app hand-off, no core order, no duplicate.
+// OwnerVerifier, no app hand-off, no core order, nothing before the API-key
+// authenticator (§4.2: the key wins), no duplicate.
 func TestExtension_RegistrationRules(t *testing.T) {
 	f := newFx(t)
 	ok := auth.Extension{Authenticator: fakeExt{}, Spec: auth.MethodSpec{Method: "ext:signal"}, Order: 150}
@@ -477,6 +478,8 @@ func TestExtension_RegistrationRules(t *testing.T) {
 		"module-shaped method":   {Authenticator: fakeExt{}, Spec: auth.MethodSpec{Method: "gotham.abs"}, Order: 150},
 		"owner without OwnerSet": {Authenticator: fakeExt{}, Spec: auth.MethodSpec{Method: "ext:signal", OwnerVerifier: true}, Order: 150},
 		"core order":             {Authenticator: fakeExt{}, Spec: ok.Spec, Order: auth.OrderSession},
+		"the key's order":        {Authenticator: fakeExt{}, Spec: ok.Spec, Order: auth.OrderAPIKey},
+		"before the key":         {Authenticator: fakeExt{}, Spec: ok.Spec, Order: auth.OrderAPIKey - 1},
 	} {
 		if _, err := f.withExtensions(t, e); !errors.Is(err, auth.ErrMethodSpec) {
 			t.Errorf("%s: New = %v, want ErrMethodSpec", name, err)
@@ -487,5 +490,10 @@ func TestExtension_RegistrationRules(t *testing.T) {
 	}
 	if _, err := f.withExtensions(t, ok); err != nil {
 		t.Errorf("a well-formed extension was refused: %v", err)
+	}
+	late := ok
+	late.Order = auth.OrderSession + 1
+	if _, err := f.withExtensions(t, late); err != nil {
+		t.Errorf("an extension after the session authenticator was refused: %v", err)
 	}
 }
