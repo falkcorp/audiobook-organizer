@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -374,12 +374,21 @@ func checkURL(field, raw string) error {
 	return nil
 }
 
+// defaultDestinations is the signature of an instance with no destination
+// set anywhere (every destination at the adapter's default). It is not ""
+// so that a recorded "no destination" differs from an origin never
+// recorded: a row whose SecretsOrigin is "" serves no stored secret, and
+// one written for the adapter defaults stops serving it once any layer sets
+// a destination. No origin renders as it (an origin has a scheme).
+const defaultDestinations = "adapter-default"
+
 // signature renders a destination origin map as one string: the one origin
-// when there is one destination, else "key=origin" pairs in key order.
-// LocalOrigin and SecretsOrigin hold it.
+// when there is one destination, defaultDestinations when there is none,
+// else "key=origin" pairs in key order. LocalOrigin and SecretsOrigin hold
+// it.
 func signature(origins map[string]string) string {
 	if len(origins) == 0 {
-		return ""
+		return defaultDestinations
 	}
 	if len(origins) == 1 {
 		for _, o := range origins {

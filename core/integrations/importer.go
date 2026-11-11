@@ -1,5 +1,5 @@
 // file: core/integrations/importer.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4d4c4598-17e3-44ff-83be-ad14e5b9b4d9
 // last-edited: 2026-11-11
 
@@ -146,9 +146,14 @@ func checkImport(inst StoredInstance) error {
 	if err := c.Adapter.Validate(); err != nil {
 		return err
 	}
+	holdsSecret := false
 	for _, k := range slices.Sorted(maps.Keys(c.Settings)) {
+		if _, ok := refName(c.Settings[k]); ok {
+			holdsSecret = true
+		}
 		switch v := c.Settings[k].(type) {
 		case secrets.Ref:
+			holdsSecret = true
 			if v.Name() != secretName(c.Ref, k) {
 				return invalidf("settings field %q of %s names the secret %q; an instance's secret field names only %q", k, c.Ref, v.Name(), secretName(c.Ref, k))
 			}
@@ -165,7 +170,15 @@ func checkImport(inst StoredInstance) error {
 	if c.Local && inst.LocalOrigin == "" {
 		return invalidf("%s is imported with Local but no LocalOrigin: Local is bound to the origin it was granted for", c.Ref)
 	}
-	for _, o := range append([]string{inst.LocalOrigin}, slices.Collect(maps.Values(inst.OperatorSecretOrigin))...) {
+	if holdsSecret && inst.SecretsOrigin == "" {
+		return invalidf("%s is imported with a secret but no SecretsOrigin: a stored secret is served only to the destinations it was written for", c.Ref)
+	}
+	for _, o := range []string{inst.LocalOrigin, inst.SecretsOrigin} {
+		if o != "" && o != defaultDestinations && !wellFormedOrigin(o) {
+			return invalidf("%s: trust origin %q is not %s, scheme://host[:port] or key=origin pairs", c.Ref, o, defaultDestinations)
+		}
+	}
+	for _, o := range inst.OperatorSecretOrigin {
 		if o != "" && !wellFormedOrigin(o) {
 			return invalidf("%s: trust origin %q is not scheme://host[:port] or key=origin pairs", c.Ref, o)
 		}

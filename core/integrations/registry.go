@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -153,6 +153,11 @@ type Registry struct {
 
 	hmu  sync.Mutex
 	last map[Ref]Health
+
+	// secretsMu orders stored-secret reads against writes: a commit and
+	// the publish of its row run write-held, secretFor's row check and
+	// secret read run read-held (commitAndPublish).
+	secretsMu sync.RWMutex
 
 	met *instruments
 }

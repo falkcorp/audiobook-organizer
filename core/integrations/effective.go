@@ -1,5 +1,5 @@
 // file: core/integrations/effective.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4cea2446-663d-448f-b1e5-1ba9259adfc6
 // last-edited: 2026-11-11
 
@@ -236,9 +236,10 @@ func (r *Registry) bind(s *slot, opSource map[string]bool) {
 
 	// Stored secrets follow only the destination they were written for,
 	// whichever layer moved it (SEC-15): an operator overlay that moves the
-	// destination withholds them too, until a Put re-supplies them.
+	// destination withholds them too, until a Put re-supplies them. A row
+	// that recorded no SecretsOrigin serves none: effSig is never "".
 	if s.row != nil {
-		s.storedSecrets = s.row.SecretsOrigin == "" || s.row.SecretsOrigin == effSig
+		s.storedSecrets = s.row.SecretsOrigin == effSig
 	}
 
 	// Operator secrets bind to origin plus provenance (SEC7-3, R8-5).
@@ -346,8 +347,11 @@ func (sr secretReader) Secret(ctx context.Context, field string) (secrets.Value,
 // the stored secret the row's ref names while the row's destinations are
 // the ones it was written for and the committed row still carries the
 // SecretsOrigin s was built against (a draining slot never reads a secret
-// written for the destination a later Put moved the instance to). Any other
-// case refuses before sending.
+// written for the destination a later Put moved the instance to). The row
+// check and the secret read run under secretsMu read-held, and a write
+// commits and publishes under it write-held, so the read sees the row it
+// checked: never the old row with the new secret. Any other case refuses
+// before sending.
 func (r *Registry) secretFor(ctx context.Context, s *slot, field string) (secrets.Value, error) {
 	ref := s.cfg.Ref
 	if v, ok := s.given[field]; ok {
@@ -366,6 +370,8 @@ func (r *Registry) secretFor(ctx context.Context, s *slot, field string) (secret
 	if !ok || sref.Name() != secretName(ref, field) {
 		return secrets.Value{}, &Error{Ref: ref, Op: "secret", Class: ClassAuth, Err: fmt.Errorf("%w: secret field %q is not set", ErrNotConfigured, field)}
 	}
+	r.secretsMu.RLock()
+	defer r.secretsMu.RUnlock()
 	if cur, ok := r.snap.Load().rows[ref]; !ok || cur.Malformed != "" || cur.SecretsOrigin != s.secretsOrigin {
 		return secrets.Value{}, refused(ref, "secret", fmt.Errorf("%w: the stored secret of field %q was rewritten for another destination", ErrNotConfigured, field))
 	}

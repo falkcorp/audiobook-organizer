@@ -1,5 +1,5 @@
 // file: core/integrations/write.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
 // last-edited: 2026-11-11
 
@@ -246,7 +246,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 	oldO, newO := fs.origins(overlayValues(fs, storedSettings, ops)), fs.origins(sh.view)
 	readable := stored != nil && stored.Malformed == ""
 	destChanged := readable && !sameOrigins(keys, oldO, newO)
-	keepStored := readable && !destChanged && (stored.SecretsOrigin == "" || stored.SecretsOrigin == signature(oldO))
+	keepStored := readable && !destChanged && stored.SecretsOrigin == signature(oldO)
 
 	var p putPlan
 	target := instanceEntity(ref)
@@ -377,13 +377,12 @@ func (r *Registry) commitPut(ctx context.Context, p putPlan) (err error) {
 	if err := r.stage(ctx, b, p.writes, p.events); err != nil {
 		return err
 	}
-	if err := commit(ctx, b, ref); err != nil {
-		return err
-	}
 	row := p.row
 	row.Config.Version = v
 	row.Config.Stored = true
-	r.applyRow(ref, &row)
+	if err := r.commitAndPublish(ctx, b, ref, &row); err != nil {
+		return err
+	}
 	if p.newCredentials && r.o.ReleaseAuthHold != nil {
 		if err := r.o.ReleaseAuthHold(ctx, ref); err != nil {
 			r.log.Warn("integrations: new credentials were stored but the auth hold was not released", "instance", ref.String(), "error", err)
@@ -428,6 +427,22 @@ func commit(ctx context.Context, b *storage.Batch, ref Ref) error {
 		return fmt.Errorf("%w: another writer changed %s first: %w", ErrVersionConflict, ref, err)
 	}
 	return fmt.Errorf("%w: commit %s: %w", ErrUnavailable, ref, err)
+}
+
+// commitAndPublish commits b and publishes ref's new row (nil: none) as one
+// step for the stored-secret readers: secretsMu is write-held across both,
+// and secretFor read-holds it across its row check and its secret read, so
+// a reader sees the old row with the old secret or the new row with the new
+// secret, never the old row with a secret the commit wrote for another
+// destination. The caller holds r.mu.
+func (r *Registry) commitAndPublish(ctx context.Context, b *storage.Batch, ref Ref, row *StoredInstance) error {
+	r.secretsMu.Lock()
+	defer r.secretsMu.Unlock()
+	if err := commit(ctx, b, ref); err != nil {
+		return err
+	}
+	r.applyRow(ref, row)
+	return nil
 }
 
 // applyRow publishes a snapshot holding row as ref's stored row (nil: no
@@ -502,11 +517,7 @@ func (r *Registry) delete(ctx context.Context, w writer, ref Ref) (err error) {
 	if err := r.stage(ctx, b, writes, []audit.Event{ev}); err != nil {
 		return err
 	}
-	if err := commit(ctx, b, ref); err != nil {
-		return err
-	}
-	r.applyRow(ref, nil)
-	return nil
+	return r.commitAndPublish(ctx, b, ref, nil)
 }
 
 // test is Test's body: it builds a throwaway slot as the Put would leave
@@ -548,7 +559,7 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 	if err != nil {
 		return TestResult{}, err
 	}
-	sameDest := readable && !destChanged && (stored.SecretsOrigin == "" || stored.SecretsOrigin == signature(oldO))
+	sameDest := readable && !destChanged && stored.SecretsOrigin == signature(oldO)
 	given := map[string]secrets.Value{}
 	for _, f := range fs.secrets {
 		name := secretName(ref, f)

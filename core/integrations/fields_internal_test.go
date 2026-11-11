@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -45,7 +45,8 @@ func TestSignature(t *testing.T) {
 		in   map[string]string
 		want string
 	}{
-		{nil, ""},
+		{nil, "adapter-default"},
+		{map[string]string{}, "adapter-default"},
 		{map[string]string{"url": "http://192.0.2.1:80"}, "http://192.0.2.1:80"},
 		{map[string]string{"url": "http://192.0.2.1:80", "callback": "https://192.0.2.2:443"}, "callback=https://192.0.2.2:443 url=http://192.0.2.1:80"},
 	} {

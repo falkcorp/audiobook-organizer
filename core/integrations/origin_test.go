@@ -1,5 +1,5 @@
 // file: core/integrations/origin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 394052ef-66a7-48bf-a8f2-6fb61af1e689
 // last-edited: 2026-11-11
 
@@ -371,5 +371,155 @@ func TestRegistry_SetOverlayAfterClose(t *testing.T) {
 	}
 	if err := r.SetOverlay(ctx, overlay("integrations.notify.gcpd-roof.channel", "batcave")); !errors.Is(err, integrations.ErrClosed) {
 		t.Errorf("SetOverlay after Close: %v", err)
+	}
+}
+
+// TestRegistry_DefaultDestinationSecretNotServedOnceSet: a secret stored
+// with every destination at the adapter default is bound to "no
+// destination", not to any: once a layer sets a host it is withheld, and a
+// row that recorded no SecretsOrigin at all serves none.
+func TestRegistry_DefaultDestinationSecretNotServedOnceSet(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	r := e.registry(t, nil, nil)
+	mustPut(t, admin(), r, integrations.InstanceConfig{Ref: oracleRef, Adapter: oracle, Enabled: true, Settings: map[string]any{}}, cred("alfred-1"))
+	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "adapter-default" {
+		t.Fatalf("SecretsOrigin of an instance at the adapter defaults = %q", row.SecretsOrigin)
+	}
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK || sentWith(e, "alfred-1") != 1 {
+		t.Fatalf("Health at the adapter defaults = %+v", h)
+	}
+	if err := r.SetOverlay(ctx, overlay("integrations.metadata.clocktower.host", "192.0.2.60")); err != nil {
+		t.Fatal(err)
+	}
+	inst, release := lease(t, r, oracleRef)
+	if _, err := inst.Env.Secrets.Secret(ctx, "password"); err == nil {
+		t.Error("a secret stored for the adapter defaults followed an operator host")
+	}
+	release()
+	_, _ = r.Health(ctx, oracleRef)
+	if n := sentWith(e, "alfred-1"); n != 1 {
+		t.Errorf("the stored secret was sent to the operator's host (%d sends)", n)
+	}
+
+	// A row that recorded no SecretsOrigin serves no stored secret, even
+	// at the adapter defaults.
+	e2 := newEnv(t)
+	mustPut(t, admin(), e2.registry(t, nil, nil), integrations.InstanceConfig{Ref: oracleRef, Adapter: oracle, Enabled: true, Settings: map[string]any{}}, cred("alfred-1"))
+	rewriteRow(t, e2, oracleRef, func(row *integrations.StoredInstance) { row.SecretsOrigin = "" })
+	unrecorded, release := lease(t, e2.registry(t, nil, nil), oracleRef)
+	defer release()
+	if _, err := unrecorded.Env.Secrets.Secret(ctx, "password"); err == nil {
+		t.Error("a row without a SecretsOrigin served its stored secret")
+	}
+
+	// The importer refuses a record that holds a secret but names no
+	// SecretsOrigin.
+	im := integrations.NativeImporter(e2.ks, integrations.ImportAudit(e2.rec))
+	b := e2.ks.NewBatch()
+	defer func() { _ = b.Close() }()
+	rec := integrations.StoredInstance{Config: integrations.InstanceConfig{
+		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "arkham"}, Adapter: batsignal, Enabled: true,
+		Settings: map[string]any{"password": secrets.RefTo("integrations.notify.arkham.password")},
+	}}
+	if err := im.ImportInstance(ctx, b, rec); !errors.Is(err, integrations.ErrInvalid) {
+		t.Errorf("an import with a secret and no SecretsOrigin: %v", err)
+	}
+	rec.SecretsOrigin = "adapter-default"
+	if err := im.ImportInstance(ctx, b, rec); err != nil {
+		t.Errorf("an import bound to the adapter defaults: %v", err)
+	}
+}
+
+// parkingStore parks the next secret read until the test releases it.
+type parkingStore struct {
+	integrations.SecretStore
+	mu     sync.Mutex
+	park   chan struct{}
+	parked chan struct{}
+}
+
+// arm parks the next Get: parked is closed once it parks, and release lets
+// it read.
+func (s *parkingStore) arm() (parked <-chan struct{}, release func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.park, s.parked = make(chan struct{}), make(chan struct{})
+	p := s.park
+	return s.parked, func() { close(p) }
+}
+
+func (s *parkingStore) Get(ctx context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
+	s.mu.Lock()
+	park, parked := s.park, s.parked
+	s.park, s.parked = nil, nil
+	s.mu.Unlock()
+	if park != nil {
+		close(parked)
+		<-park
+	}
+	return s.SecretStore.Get(ctx, n)
+}
+
+// TestRegistry_ParkedSecretReadNeverGetsTheMovedSecret (SEC-15, M1.6): a
+// draining instance's stored-secret read and a Put that moves the instance
+// and writes a new secret do not interleave: the Put cannot commit while the
+// read is in flight, so the read returns the secret written for the old
+// destination, and every read after the move is refused.
+func TestRegistry_ParkedSecretReadNeverGetsTheMovedSecret(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	ps := &parkingStore{}
+	r := e.registry(t, nil, func(o *integrations.Options) {
+		ps.SecretStore = o.Secrets
+		o.Secrets = ps
+	})
+	mustPut(t, admin(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+	held, release := lease(t, r, signalRef)
+	defer release()
+	moved := withURL(current(t, r, signalRef), "http://192.0.2.99/")
+
+	type read struct {
+		v   string
+		err error
+	}
+	parked, unpark := ps.arm()
+	got := make(chan read, 1)
+	go func() {
+		v, err := held.Env.Secrets.Secret(ctx, "password")
+		got <- read{v.Reveal(), err}
+	}()
+	<-parked
+	putDone := make(chan error, 1)
+	go func() {
+		_, err := r.Put(admin(), moved, cred("alfred-2"))
+		putDone <- err
+	}()
+	committedWhileParked := false
+	var putErr error
+	select {
+	case putErr = <-putDone:
+		committedWhileParked = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	unpark()
+	res := <-got
+	if !committedWhileParked {
+		putErr = <-putDone
+	}
+	if putErr != nil {
+		t.Fatalf("the move: %v", putErr)
+	}
+	if committedWhileParked {
+		t.Error("a Put committed while a stored-secret read was in flight")
+	}
+	if res.v == "alfred-2" {
+		t.Fatal("the parked read of the old instance returned the secret written for the new destination")
+	}
+	if res.err == nil && res.v != "alfred-1" {
+		t.Errorf("the parked read = %q", res.v)
+	}
+	if _, err := held.Env.Secrets.Secret(ctx, "password"); err == nil || integrations.ClassOf(ctx, err) != integrations.ClassRefusedLocal {
+		t.Errorf("a read by the old instance after the move: %v", err)
 	}
 }
