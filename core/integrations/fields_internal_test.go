@@ -8,6 +8,7 @@ package integrations
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/config"
@@ -229,5 +230,129 @@ func TestCloneConfig(t *testing.T) {
 	c.Settings["a"], c.Locked["a"], c.Limits.RPS = 2, "env B", 2
 	if src.Settings["a"] != 1 || src.Locked["a"] != "env A" || src.Limits.RPS != 1 {
 		t.Errorf("the clone aliases its source: %+v", src)
+	}
+}
+
+// proxySettings is a nested object holding a URL-typed field.
+type proxySettings struct {
+	Endpoint string `json:"endpoint,omitempty" schema:"format=uri"`
+}
+
+// TestAnalyze_RefusesHiddenDestinations (SEC-15): a property that reads as
+// a destination is a URL-typed string field or the host of a host-and-port
+// pair, and no secret or destination hides below the top level; anything
+// else fails registration, as a secret-named non-secret field does.
+func TestAnalyze_RefusesHiddenDestinations(t *testing.T) {
+	refused := map[string]func() (config.Schema, error){
+		"base_url without format": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				BaseURL string `json:"base_url"`
+			}]()
+		},
+		"webhook": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Webhook string `json:"webhook"`
+			}]()
+		},
+		"prefixed host beside a port": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				SMTPHost string `json:"smtp_host"`
+				Port     int    `json:"port"`
+			}]()
+		},
+		"host without a port": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Host string `json:"host"`
+			}]()
+		},
+		"a list of URLs": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				MirrorURLs []string `json:"mirror_urls"`
+			}]()
+		},
+		"nested URL field": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Proxy proxySettings `json:"proxy"`
+			}]()
+		},
+		"nested secret": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Auth struct {
+					Key secrets.Ref `json:"key"`
+				} `json:"auth"`
+			}]()
+		},
+		"nested destination name": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Upstream struct {
+					Server string `json:"server"`
+				} `json:"upstream"`
+			}]()
+		},
+		"array of objects with a URL": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Mirrors []proxySettings `json:"mirrors"`
+			}]()
+		},
+	}
+	for name, build := range refused {
+		s, err := build()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := analyze(s); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: analyze = %v, want ErrInvalid", name, err)
+		}
+	}
+
+	s, err := config.SchemaFor[struct {
+		BaseURL  string      `json:"base_url,omitempty" schema:"format=uri"`
+		Host     string      `json:"host,omitempty"`
+		Port     int         `json:"port,omitempty"`
+		Password secrets.Ref `json:"password"`
+		Retry    struct {
+			Attempts int `json:"attempts"`
+		} `json:"retry"`
+	}]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := analyze(s)
+	if err != nil {
+		t.Fatalf("a schema with only visible destinations: %v", err)
+	}
+	if !slices.Equal(fs.urls, []string{"base_url"}) || !fs.hostPort {
+		t.Errorf("analyze = %+v", fs)
+	}
+}
+
+// TestURLLike pins which property names read as destinations.
+func TestURLLike(t *testing.T) {
+	for name, want := range map[string]bool{
+		"url": true, "base_url": true, "baseurl": true, "webhook_url": true, "callback-uri": true,
+		"endpoint": true, "endpoints": true, "host": true, "smtp_host": true, "hostname": true,
+		"webhook": true, "href": true, "server": true, "urls": true,
+		"channel": false, "port": false, "timeout": false, "retries": false, "tokens_used": false,
+		"password": false, "status": false, "hosting_plan": false,
+	} {
+		if urlLike(name) != want {
+			t.Errorf("urlLike(%q) = %v", name, !want)
+		}
+	}
+}
+
+// TestWellFormedHostPort pins the host-and-port origins the importer
+// accepts.
+func TestWellFormedHostPort(t *testing.T) {
+	for o, ok := range map[string]bool{
+		"smtp://192.0.2.60:9000": true, "smtp://:9000": true, "smtp://192.0.2.60:": true, "smtp://[2001:db8::1]:25": true,
+		"smtp://:": false, "smtp://Oracle.Example:25": false, "smtp://192.0.2.60": false,
+	} {
+		if got := wellFormedHostPort(o) || originOf(o) == o; got != ok {
+			t.Errorf("%q well-formed = %v, want %v", o, got, ok)
+		}
+	}
+	if !wellFormedOrigin("host=smtp://:2525") {
+		t.Error("an origin with the host unset was refused")
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/integrations/importer.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 4d4c4598-17e3-44ff-83be-ad14e5b9b4d9
 // last-edited: 2026-11-11
 
@@ -30,10 +30,15 @@ import (
 // row and its audit record into b, so the row commits with the step's
 // deletion of the rows it came from. A record whose adapter this binary does
 // not register is imported and kept, as M1.4 step 2 keeps one; a record that
-// fails schema validation is imported with Malformed set and reported,
-// rather than refused into the quarantine, because the Registry already
-// serves such a row as misconfigured. It writes no secret: the secrets the refs name were written by the
-// config-and-secrets step before it (05-config).
+// fails schema validation is imported and reported rather than refused into
+// the quarantine, because the Registry already serves such a row as
+// misconfigured. The spec has such a record "imported with Malformed set";
+// this importer never sets Malformed (it clears whatever the step passes):
+// Malformed means "the stored value cannot be decoded", which a row this
+// importer encodes never is, and the Registry reports the schema mismatch
+// at Load as HealthMisconfigured (ReasonInvalidSettings). It writes no
+// secret: the secrets the refs name were written by the config-and-secrets
+// step before it (05-config).
 //
 // What the native importer can see (F7-01): NativeImporter takes a keyspace
 // only, so it holds no adapter schema. It validates what a row alone shows,
@@ -169,14 +174,15 @@ func checkImport(inst StoredInstance) error {
 }
 
 // wellFormedOrigin reports whether o is an origin (or a signature of
-// key=origin pairs) as the Registry renders them.
+// key=origin pairs) as the Registry renders them: a URL origin, or a
+// host-and-port origin whose host or port may be unset.
 func wellFormedOrigin(o string) bool {
 	for part := range strings.FieldsSeq(o) {
 		_, origin, ok := strings.Cut(part, "=")
 		if !ok {
 			origin = part
 		}
-		if originOf(origin) != origin {
+		if originOf(origin) != origin && !wellFormedHostPort(origin) {
 			return false
 		}
 	}

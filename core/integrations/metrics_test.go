@@ -1,5 +1,5 @@
 // file: core/integrations/metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6470e005-c798-4bff-a592-f6c0acba60de
 // last-edited: 2026-11-11
 
@@ -69,6 +69,23 @@ func TestIntegrationsSeries_Golden(t *testing.T) {
 	} {
 		if got, ok := values[key]; !ok || got != want {
 			t.Errorf("%s = %v (present %v), want %v", key, got, ok, want)
+		}
+	}
+
+	// A closed Registry's gauges are no longer observed.
+	if err := r.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mfs, err = p.Gatherer().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "mediacore_integrations_instances", "mediacore_integrations_health_status":
+			if len(mf.GetMetric()) > 0 {
+				t.Errorf("%s is still observed after Close", mf.GetName())
+			}
 		}
 	}
 }
