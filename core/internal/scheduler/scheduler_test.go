@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/scheduler_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0c0f39f5-0a37-4c1b-a1f0-7d6c5b7b8e52
 // last-edited: 2026-11-11
 
@@ -911,9 +911,13 @@ func TestRunStop(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Run(context.Background()) }()
 	ticks <- day(1, 0, 0) // first poll seeds
+	// The poll reads the fixture's clock, not the tick: a second send proves
+	// the seeding poll returned before the clock moves, or it could read
+	// 01:00, seed there and leave the next poll nothing to fire.
+	ticks <- day(1, 0, 0)
 	f.setNow(day(1, 1, 0))
-	ticks <- day(1, 1, 0) // second poll fires
-	ticks <- day(1, 1, 0) // a third send proves the second poll returned
+	ticks <- day(1, 1, 0) // a poll at 01:00 fires (once: the clock advances)
+	ticks <- day(1, 1, 0) // a further send proves that poll returned
 	if err := s.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
