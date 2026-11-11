@@ -1,5 +1,5 @@
 // file: core/auth/ceiling.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a42f3d77-303a-4d7b-93d2-3877302aa52a
 // last-edited: 2026-11-10
 
@@ -44,10 +44,10 @@ import (
 //     global levels. Throttle's per-source budget follows the same rule.
 //   - Once a ceiling is spent, any other login is not refused by the ceiling
 //     itself. It is admitted saturated (LoginAdmission.Saturated), and the
-//     caller delays it before password work by SaturationPolicy, progressively
-//     with the failures already on the submitted username, up to a few
-//     seconds. Only a username that has already failed DefaultSoftThreshold
-//     times, or a visitor past its own budget, is refused, and the decision is
+//     caller delays it before password work by Throttle.SaturationPolicy,
+//     progressively with the failures already on the submitted username, up
+//     to a few seconds. Only a username that has already failed the
+//     throttle's SoftThreshold times, or a visitor past its own budget, is refused, and the decision is
 //     the same whether or not the username exists. Admission of saturated
 //     requests is bounded in three ways: PER VISITOR (the saturated key, a
 //     public IPv6 visitor per /48, ClientInfo.saturatedKey): a visitor holds at
@@ -116,19 +116,6 @@ const (
 	SaturationDelayMax = 3 * time.Second
 )
 
-// SaturationPolicy is what a saturated login for an account with
-// accountFailures failures of its own in the window gets: a delay to apply
-// before password work, or a refusal once the account has failed
-// DefaultSoftThreshold times. accountFailures is 0 for an unknown username,
-// so the answer is decided by the SUBMITTED name and does not reveal whether
-// it exists.
-func SaturationPolicy(accountFailures int) (delay time.Duration, refuse bool) {
-	if accountFailures >= DefaultSoftThreshold {
-		return 0, true
-	}
-	return min(SaturationDelayBase+time.Duration(accountFailures)*SaturationDelayStep, SaturationDelayMax), false
-}
-
 // The saturated-admission bucket's settings (core.auth.login.saturated_rate
 // and saturated_burst, 05-authn §8; HEAD's LOGIN_SATURATED_RATE and
 // LOGIN_SATURATED_BURST).
@@ -191,7 +178,7 @@ const (
 	LoginFailed
 	// LoginSucceeded is a successful sign-in (HTTP 2xx).
 	LoginSucceeded
-	// LoginSaturationRefused is SaturationPolicy's refusal of a saturated
+	// LoginSaturationRefused is Throttle.SaturationPolicy's refusal of a saturated
 	// login: a failure while saturated, like LoginFailed.
 	LoginSaturationRefused
 )
@@ -414,7 +401,8 @@ type LoginAdmission struct {
 }
 
 // Saturated reports whether the login was admitted while a ceiling is
-// spent: the caller then applies SaturationPolicy before password work.
+// spent: the caller then applies Throttle.SaturationPolicy before password
+// work.
 func (a *LoginAdmission) Saturated() bool { return a.saturated }
 
 // Admit admits one login from visitor (the throttle key,
