@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package restoreswap
 
@@ -80,6 +80,13 @@ type Options struct {
 	Logger *slog.Logger
 	// Actor is every record's Actor; "" = "core/kernel".
 	Actor string
+	// RewriteStep is the step ID of the build's registered M8 (05-storage
+	// §5S.3.13; F3-07 sets it when it registers books.rewrite): P0a then
+	// finishes or swaps back an in-flight KindRewrite journal of that step
+	// and rejects a KindRewrite intent a crash left staged, and RunRewrite
+	// runs it. "" = the build has no M8, and any KindRewrite intent or
+	// journal halts boot (ErrRewriteNotInThisBuild).
+	RewriteStep string
 }
 
 // Swapper is the one journaled swap of 05-backup §5B.3.4 and 05-storage
@@ -136,6 +143,12 @@ const (
 	// BootResetApplied: a KindReset journal at applied: the fresh install
 	// is done and only hook_done is owed, after P4b.
 	BootResetApplied
+	// BootRewrite: a KindRewrite journal of the build's M8 at swapped or
+	// opened (a kill inside M8's phase 3, which P0a took forward): the store
+	// at the DB path is M8's copy, and M8's phase 4 (RunRewrite) deletes
+	// the set-aside, journals applied and removes the in-flight file. The
+	// kernel owes the journal nothing itself.
+	BootRewrite
 )
 
 // Outcome is what P0a did and what it leaves the kernel.
@@ -161,8 +174,14 @@ func (s *Swapper) legacySuffixes() []string {
 	return out
 }
 
-// setAsides is step c's list for a restore intent.
+// setAsides is step c's list for a restore intent. A KindRewrite swap sets
+// aside the DB directory alone: the copy keeps the store's stamps, so the
+// sidecars stay in place and step e rewrites them from the copy.
 func (s *Swapper) setAsides(in restorejournal.Intent) []restorejournal.Target {
+	if in.Kind == restorejournal.KindRewrite {
+		db := filepath.Clean(in.DBPath)
+		return []restorejournal.Target{{From: db, To: restorejournal.SetAsideDest(s.o.StateDir, db, in.ID, db)}}
+	}
 	return restorejournal.SetAsides(s.o.StateDir, in, s.legacySuffixes())
 }
 
@@ -288,7 +307,10 @@ func (s *Swapper) RunP0a(ctx context.Context) (Outcome, error) {
 		return Outcome{}, err
 	}
 	if in.Kind == restorejournal.KindRewrite {
-		return Outcome{}, fmt.Errorf("%w (intent %s)", ErrRewriteNotInThisBuild, in.ID)
+		if s.o.RewriteStep == "" || in.StepID != s.o.RewriteStep {
+			return Outcome{}, fmt.Errorf("%w (intent %s)", ErrRewriteNotInThisBuild, in.ID)
+		}
+		return s.rejectRewritePending(ctx, in)
 	}
 	if ok, err := exists(s.fs, s.rejectedPath(in.ID)); err != nil {
 		return Outcome{}, err
@@ -467,12 +489,15 @@ func (s *Swapper) resume(ctx context.Context, id string) (Outcome, error) {
 	if in.ID != id {
 		return Outcome{}, fmt.Errorf("%w: restore/%s/inflight.json holds intent %s", ErrSlotConflict, id, in.ID)
 	}
-	if in.Kind == restorejournal.KindRewrite {
+	if in.Kind == restorejournal.KindRewrite && (s.o.RewriteStep == "" || in.StepID != s.o.RewriteStep) {
 		return Outcome{}, fmt.Errorf("%w (journal %s)", ErrRewriteNotInThisBuild, id)
 	}
 	recs, err := s.durableJournal(ctx, id)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if in.Kind == restorejournal.KindRewrite {
+		return s.resumeRewrite(ctx, in, recs)
 	}
 	if in.Kind == restorejournal.KindReset {
 		return s.resumeReset(ctx, in, recs)

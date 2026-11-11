@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package storage
 
@@ -269,14 +269,18 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		}
 		stateBytes += uint64(fi.Size())
 	}
-	need := storeBytes + stateBytes + st.opts.FreeSpaceMargin
+	var rewriteBytes uint64
+	if db.planHoldsRewrite() {
+		rewriteBytes = storeBytes // M8's copy beside the store (§5S.3.12 "Free space")
+	}
+	need := storeBytes + stateBytes + st.opts.FreeSpaceMargin + rewriteBytes
 	avail, err := st.opts.freeSpace(filepath.Dir(st.opts.Path))
 	if err != nil {
 		return fmt.Errorf("storage: free space on the DB's filesystem: %w", err)
 	}
 	if avail < need {
-		return fmt.Errorf("%w: need %d bytes (store %d + state files %d + margin %d), %d available",
-			ErrCheckpointFreeSpace, need, storeBytes, stateBytes, st.opts.FreeSpaceMargin, avail)
+		return fmt.Errorf("%w: need %d bytes (store %d + state files %d + margin %d + the store rewrite's copy %d), %d available",
+			ErrCheckpointFreeSpace, need, storeBytes, stateBytes, st.opts.FreeSpaceMargin, rewriteBytes, avail)
 	}
 	same, err := st.opts.sameDevice(st.opts.Path, existingAncestor(fs, dir))
 	if err != nil {
