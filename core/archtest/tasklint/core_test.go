@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
 // last-edited: 2026-11-10
 
@@ -27,7 +27,7 @@ func TestTasklint_Core(t *testing.T) {
 // §5T.3.2, §5T.3.6; 03 R7).
 func TestTasklint_CoreGuards(t *testing.T) {
 	guards.RunItemsDeclareParallelism(t, core+"/...")
-	guards.ResumeContinueCheckpoints(t, core+"/...")
+	guards.ResumeContinueCheckpoints(t, nil, core+"/...") // core allows no from-zero kind
 }
 
 // TestTasklint_TestSupportOnly: no non-test core package imports

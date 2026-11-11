@@ -1,5 +1,5 @@
 // file: core/archtest/guards/resumecontinue.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0f9870cc-093b-48cb-82a9-77a7a0753d38
 // last-edited: 2026-11-10
 
@@ -22,14 +22,6 @@ import (
 // (05-tasks §5T.3.6). It goes on the tasks.Task call's line or the line above.
 const ResumeFromZeroDirective = "//archtest:resume-from-zero"
 
-// MaxResumeFromZero is the shrink-only ceiling on ResumeFromZeroDirective uses:
-// HEAD's allowlist (internal/arch/resume_restart_guard_test.go,
-// restartWithoutCheckpoint) has 21 entries, carried over as this count. A
-// conversion moves an entry's reason from that map onto its converted
-// definition as the directive; lower this constant when an entry is fixed
-// instead, never raise it.
-const MaxResumeFromZero = 21
-
 // ResumeContinueCheckpoints fails t when a Task-shape definition in the
 // packages pkgs names declares Resume: tasks.ResumeContinue and its Run reaches
 // neither a .Checkpoint( call on *tasks.RC nor a tasks.RunItems/RunSeq call
@@ -37,9 +29,17 @@ const MaxResumeFromZero = 21
 // definition carries ResumeFromZeroDirective with a reason (05-tasks §5T.3.6,
 // successor of ABO's internal/arch/resume_restart_guard_test.go). Batch and
 // Fixer pass by construction (the runner's chunk ledger).
-func ResumeContinueCheckpoints(t testing.TB, pkgs ...string) {
+//
+// fromZero is the caller's shrink-only allowlist, by kind: only a listed kind
+// may carry the directive, and its kind must be a constant. A directive on an
+// unlisted kind and a listed kind no definition marks both fail, so moving the
+// directive from one kind to another is caught, not just a change in the
+// count. Core passes nil. ABO's 21-entry allowlist (HEAD's
+// restartWithoutCheckpoint) becomes its list, entry by entry, as each kind
+// converts with its reason moved onto the definition.
+func ResumeContinueCheckpoints(t testing.TB, fromZero []string, pkgs ...string) {
 	t.Helper()
-	findings, err := resumeContinueFindings(pkgs)
+	findings, err := resumeContinueFindings(pkgs, fromZero)
 	if err != nil {
 		t.Fatalf("ResumeContinueCheckpoints: %v", err)
 		return
@@ -49,14 +49,21 @@ func ResumeContinueCheckpoints(t testing.TB, pkgs ...string) {
 	}
 }
 
-func resumeContinueFindings(patterns []string) ([]GuardFinding, error) {
+func resumeContinueFindings(patterns, fromZero []string) ([]GuardFinding, error) {
 	pkgs, err := loadTyped(patterns)
 	if err != nil {
 		return nil, err
 	}
 	idx := indexFuncDecls(pkgs)
 	var out []GuardFinding
-	directiveUses := 0
+	listed := map[string]bool{}
+	for _, k := range fromZero {
+		if listed[k] {
+			out = append(out, GuardFinding{File: "(fromZero)", Msg: fmt.Sprintf("%s is listed twice", k)})
+		}
+		listed[k] = true
+	}
+	marks := map[string]bool{}
 	for _, p := range pkgs {
 		if underTasks(p.PkgPath) {
 			continue
@@ -96,14 +103,21 @@ func resumeContinueFindings(patterns []string) ([]GuardFinding, error) {
 				if run, ok := fields["Run"]; ok {
 					reaches = reachesCheckpoint(p, idx, run)
 				}
+				constKind, isConst := constString(p.TypesInfo, call.Args[0])
+				if marked && isConst {
+					marks[constKind] = true
+				}
 				switch {
 				case reaches && marked:
 					report("%s checkpoints; delete its %s directive", kind, ResumeFromZeroDirective)
 				case reaches:
 				case marked && reason == "":
 					report("%s: %s needs the reason a from-zero restart is safe", kind, ResumeFromZeroDirective)
+				case marked && !isConst:
+					report("%s: %s needs a constant kind, so the fromZero list can name it", kind, ResumeFromZeroDirective)
+				case marked && !listed[constKind]:
+					report("%s carries %s but is not in the fromZero list; the list may only shrink, so checkpoint it instead (a directive does not move between kinds)", kind, ResumeFromZeroDirective)
 				case marked:
-					directiveUses++
 				default:
 					report("%s declares tasks.ResumeContinue but its Run reaches no rc.Checkpoint call and no RunItems/RunSeq with a Watermark, so a resume starts from zero; checkpoint, pick another Resume policy, or add %s <reason>", kind, ResumeFromZeroDirective)
 				}
@@ -111,18 +125,29 @@ func resumeContinueFindings(patterns []string) ([]GuardFinding, error) {
 			})
 		}
 	}
-	if directiveUses > MaxResumeFromZero {
-		out = append(out, GuardFinding{File: "(packages)", Msg: fmt.Sprintf("%d %s directives, above the shrink-only ceiling MaxResumeFromZero = %d", directiveUses, ResumeFromZeroDirective, MaxResumeFromZero)})
+	for _, k := range fromZero {
+		if !marks[k] {
+			out = append(out, GuardFinding{File: "(fromZero)", Msg: fmt.Sprintf("%s is in the fromZero list but no definition of that kind carries %s; delete the entry", k, ResumeFromZeroDirective)})
+			marks[k] = true // one finding per entry, even when listed twice
+		}
 	}
 	sortFindings(out)
 	return out, nil
 }
 
 func kindText(info *types.Info, e ast.Expr) string {
-	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-		return constant.StringVal(tv.Value)
+	if k, ok := constString(info, e); ok {
+		return k
 	}
 	return "a Task definition"
+}
+
+// constString returns e's value when it is a constant string.
+func constString(info *types.Info, e ast.Expr) (string, bool) {
+	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+		return constant.StringVal(tv.Value), true
+	}
+	return "", false
 }
 
 // resumeIsContinue reads Common's Resume: from a tasks.Common literal, a
