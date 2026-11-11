@@ -1,5 +1,5 @@
 // file: core/kernel/dryrun.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f63ab3a5-e55e-4498-a2d2-ffd73ac392be
 // last-edited: 2026-11-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -391,9 +392,7 @@ func (r *dryRunRecorder) fill(ctx context.Context, db *storage.DB, stats []stora
 	for _, st := range stats {
 		s := r.step(st.ID)
 		s.State, s.Took = st.State, st.Took
-		for o, n := range st.Items {
-			s.Items[o] = n
-		}
+		maps.Copy(s.Items, st.Items)
 		for _, e := range q {
 			if e.Record.Step == st.ID {
 				s.Quarantine = append(s.Quarantine, storage.DryRunItem{Key: storage.PrintableKey(e.Record.Key), Reason: e.Record.Reason, Sensitive: e.Record.Sensitive})
