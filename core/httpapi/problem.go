@@ -1,7 +1,7 @@
 // file: core/httpapi/problem.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 58d791ab-c222-4ab1-b523-0444ce052274
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -98,6 +98,20 @@ func Forbidden(scope rbac.Permission) *Error {
 // Unavailable is a 503 unavailable with a Retry-After header (0 omits it).
 func Unavailable(detail string, retryAfter time.Duration) *Error {
 	return &Error{Status: http.StatusServiceUnavailable, Code: "unavailable", Detail: detail, retryAfter: retryAfter}
+}
+
+// WithRetryAfter sets the Retry-After header the answer carries (rounded up to
+// whole seconds; 0 or less omits it) and returns e: for a refusal that is not
+// Unavailable, such as a 429 or a 503 with its own code.
+func (e *Error) WithRetryAfter(d time.Duration) *Error {
+	e.retryAfter = d
+	return e
+}
+
+// Throttled is a 429 throttled with a Retry-After header (at least one
+// second): a sign-in or one-time-token budget that is spent (05-authn §4.9).
+func Throttled(retryAfter time.Duration) *Error {
+	return (&Error{Status: http.StatusTooManyRequests, Code: "throttled"}).WithRetryAfter(max(retryAfter, time.Second))
 }
 
 // Sentinel causes that modules may wrap; core maps them without a constructor.
